@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "url": "https://api.privy.io/v1/wallets/wallet_dummy_public_01/transfer",
+  "method": "POST",
+  "headers": {
+    "privy-app-id": "app_dummy_public_01",
+    "privy-idempotency-key": "idempotency_dummy_public_0001",
+    "privy-request-expiry": "1893456000000"
+  },
+  "body": {
+    "amount_type": "exact_input",
+    "source": {
+      "asset": "usdc",
+      "amount": "1.25",
+      "chain": "base"
+    },
+    "destination": {
+      "address": "0x1111111111111111111111111111111111111111"
+    },
+    "nonce": "nonce_dummy_public_000000000001"
+  }
+}
