@@ -1,6 +1,429 @@
 {
-  "schema_version": "loop.provider-lock/v2",
+  "schema_version": "loop.provider-lock/v4",
   "checked_at": "2026-08-23",
+  "whole_app_reuse_policy": {
+    "github_reuse_definition": "mature_application_level_business_capability_or_managed_service",
+    "ui_component_library_counts_as_whole_app_reuse": false,
+    "example_or_starter_counts_as_runtime": false,
+    "unknown_license_code_copy_allowed": false,
+    "candidate_counts_as_runtime_before_gate_selection": false,
+    "runtime_core_authorities": {
+      "wallet": "privy_service",
+      "signature": "privy_service",
+      "chat": "stream_service",
+      "perp": "hyperliquid_service"
+    },
+    "forbidden_secondary_core": [
+      "wallet",
+      "signature",
+      "chat",
+      "perp"
+    ]
+  },
+  "notification_runtime_selection": {
+    "gate": "notification_inbox",
+    "status": "PENDING",
+    "runtime_selected": null,
+    "candidate_ids": [
+      "novu_notification_candidate",
+      "courier_notification_candidate"
+    ],
+    "single_runtime_required": true,
+    "dual_runtime_forbidden": true
+  },
+  "provider_event_trust_boundary": {
+    "gate": "provider_event_ingestion",
+    "status": "PENDING",
+    "ingress_candidate": "hookdeck_event_gateway_candidate",
+    "ingress_role": "untrusted_reliability_only",
+    "raw_forwarding": "byte_and_required_headers_lossless_conformance_required",
+    "verifier_owner": "provider_specific_thin_bff",
+    "verifier_contract": "current_provider_official_algorithm_or_sdk",
+    "verification_checks": [
+      "cryptographic_signature",
+      "timestamp_when_required_by_provider_contract",
+      "replay_when_required_by_provider_contract"
+    ],
+    "before_verification": [
+      "payload_untrusted",
+      "no_transform",
+      "no_business_side_effect"
+    ],
+    "failure_action": "quarantine_security_record_only_no_trusted_event",
+    "hyperliquid_path": "separate_official_websocket_adapter_not_hookdeck"
+  },
+  "candidates": [
+    {
+      "id": "supabase_app_data_candidate",
+      "gate_ids": [
+        "social_profile_store",
+        "watchlist_store"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "Privy-DID-keyed social profile extension, privacy ACL, watchlist ordering and alert definitions on Postgres/RLS/Realtime",
+      "deployment": [
+        "Supabase Cloud",
+        "self-host"
+      ],
+      "repository": "https://github.com/supabase/supabase",
+      "tag": "v1.26.08",
+      "commit": "86854671e95be31e24fa0785cded0579fe692fcb",
+      "release_date": "2026-08-07",
+      "license": "Apache-2.0",
+      "license_source": "https://github.com/supabase/supabase/blob/v1.26.08/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_ARTIFACT_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v1.26.08 published 2026-08-07; canonical repository pushed 2026-08-23 and was not archived when checked",
+      "data_exit": "supabase_db_dump_to_standard_postgres_and_credentialed_restore_drill",
+      "core_conflict_guard": [
+        "Privy_remains_identity_and_auth_authority",
+        "Supabase_Auth_forbidden",
+        "watchlist_and_alert_definitions_are_not_market_price_facts"
+      ],
+      "credentialed_gates": [
+        "exact_artifact_and_license_integrity",
+        "Privy_DID_JWT_and_RLS_tenant_isolation",
+        "delete_export_and_restore",
+        "watchlist_concurrency_offline_reconciliation",
+        "DPA_region_retention_SLA_cost_and_kill_switch"
+      ],
+      "sources": [
+        "https://github.com/supabase/supabase/releases/tag/v1.26.08",
+        "https://supabase.com/docs/guides/getting-started/quickstarts/flutter",
+        "https://supabase.com/docs/guides/self-hosting/restore-from-platform"
+      ]
+    },
+    {
+      "id": "novu_notification_candidate",
+      "gate_ids": [
+        "notification_inbox"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "durable notification inbox, read state, preferences and workflows; no official Flutter Inbox SDK",
+      "deployment": [
+        "Novu Cloud",
+        "self-host"
+      ],
+      "repository": "https://github.com/novuhq/novu",
+      "tag": "v3.19.0",
+      "commit": "fe53c481acb005925b990fe2484fcb6aea396e28",
+      "release_date": "2026-08-07",
+      "license": "MIT core; enterprise folders use commercial terms",
+      "license_source": "https://github.com/novuhq/novu/blob/v3.19.0/LICENSE-MIT",
+      "artifact_integrity": "PENDING_EXACT_ARTIFACT_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v3.19.0 published 2026-08-07; canonical repository pushed 2026-08-23 and was not archived when checked",
+      "data_exit": "self_host_database_backup_restore_or_cloud_export_delete_contract_and_drill",
+      "core_conflict_guard": [
+        "Novu_Chat_channel_forbidden",
+        "Stream_remains_chat_authority",
+        "FCM_is_delivery_transport_only"
+      ],
+      "credentialed_gates": [
+        "exact_artifact_and_license_integrity",
+        "thin_REST_WebSocket_Flutter_adapter_maintenance_budget",
+        "tenant_authorization_at_or_above_3_18_fix",
+        "reconnect_pagination_offline_read_unread_preferences",
+        "delete_export_backup_restore_DPA_region_SLA_cost"
+      ],
+      "sources": [
+        "https://github.com/novuhq/novu/releases/tag/v3.19.0",
+        "https://github.com/novuhq/novu/blob/v3.19.0/LICENSE-ENTERPRISE",
+        "https://github.com/novuhq/novu/security/advisories/GHSA-wjx8-c9gq-37gg"
+      ]
+    },
+    {
+      "id": "courier_notification_candidate",
+      "gate_ids": [
+        "notification_inbox"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "hosted notification Inbox, Preferences and Push with official Flutter SDK",
+      "deployment": [
+        "Courier hosted service"
+      ],
+      "repository": "https://github.com/trycourier/courier-flutter",
+      "tag": "v5.0.3",
+      "commit": "65559b81504420ef6ab5efe81ce579b054964d3a",
+      "release_date": "2026-06-02",
+      "license": "MIT Flutter SDK; Courier service commercial terms",
+      "license_source": "https://github.com/trycourier/courier-flutter/blob/v5.0.3/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_ARTIFACT_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v5.0.3 published 2026-06-02; canonical repository pushed 2026-08-05 and was not archived when checked",
+      "data_exit": "PENDING_hosted_bulk_export_delete_retention_and_migration_contract_plus_drill",
+      "core_conflict_guard": [
+        "Courier_chat_or_direct_message_capability_forbidden",
+        "Stream_remains_chat_authority",
+        "FCM_is_delivery_transport_only"
+      ],
+      "credentialed_gates": [
+        "exact_pub_artifact_repository_and_license_integrity",
+        "current_Flutter_Dart_intl_compatibility",
+        "backend_JWT_issuance_rotation_and_client_refresh",
+        "tenant_isolation_reconnect_pagination_offline_read_unread_preferences",
+        "bulk_export_delete_retention_DPA_region_subprocessors_SLA_cost"
+      ],
+      "sources": [
+        "https://www.courier.com/docs/sdk-libraries/flutter",
+        "https://github.com/trycourier/courier-flutter/releases/tag/v5.0.3",
+        "https://www.courier.com/docs/platform/analytics/message-logs"
+      ]
+    },
+    {
+      "id": "trigger_dev_scheduler_candidate",
+      "gate_ids": [
+        "price_alert_scheduler"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "durable schedules, retries, idempotency and workflow observability for price alerts",
+      "deployment": [
+        "Trigger.dev Cloud",
+        "self-host"
+      ],
+      "repository": "https://github.com/triggerdotdev/trigger.dev",
+      "tag": "v4.5.12",
+      "commit": "ce40d0259fead12ac2bad8fc6f8ca574b221228a",
+      "release_date": "2026-08-20",
+      "license": "Apache-2.0",
+      "license_source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.5.12/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_ARTIFACT_IMAGE_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v4.5.12 published 2026-08-20; canonical repository pushed 2026-08-21 and was not archived when checked",
+      "data_exit": "cloud_to_self_host_workflow_configuration_and_database_backup_restore_drill",
+      "core_conflict_guard": [
+        "scheduler_never_creates_or_overrides_market_price_facts",
+        "price_facts_only_from_approved_CoinGecko_DEX_Screener_or_Hyperliquid_adapters",
+        "scheduler_never_signs_or_submits_wallet_or_perp_actions"
+      ],
+      "credentialed_gates": [
+        "exact_package_image_and_license_integrity",
+        "high_cardinality_schedule_load",
+        "idempotent_delivery_duplicate_and_missed_run_drill",
+        "stale_price_fail_closed",
+        "tenant_isolation_export_restore_DPA_region_SLA_cost"
+      ],
+      "sources": [
+        "https://github.com/triggerdotdev/trigger.dev/releases/tag/v4.5.12",
+        "https://trigger.dev/docs/tasks/scheduled",
+        "https://trigger.dev/docs/idempotency"
+      ]
+    },
+    {
+      "id": "hookdeck_event_gateway_candidate",
+      "gate_ids": [
+        "provider_event_ingestion"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "managed webhook receiving, queueing, routing, rate control, transport retry/replay and observability only",
+      "deployment": [
+        "Hookdeck managed Event Gateway"
+      ],
+      "repository": "https://github.com/hookdeck/hookdeck-cli",
+      "tag": "v2.5.0",
+      "commit": "1840423741f9a739f2dc380e35a5b324d9e3d13a",
+      "release_date": "2026-08-13",
+      "license": "Apache-2.0 CLI; managed Event Gateway commercial terms",
+      "license_source": "https://github.com/hookdeck/hookdeck-cli/blob/v2.5.0/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_CLI_ARTIFACT_LICENSE_AND_MANAGED_CONTRACT",
+      "maintenance_evidence": "GitHub release v2.5.0 published 2026-08-13; canonical CLI repository pushed 2026-08-21 and was not archived when checked; CLI evidence does not prove an OSS self-hosted Gateway",
+      "data_exit": "app_owned_raw_event_ledger_plus_provider_replay; managed_Gateway_retention_and_export_contract_pending",
+      "core_conflict_guard": [
+        "Hookdeck_is_untrusted_reliability_ingress_only",
+        "provider_specific_thin_BFF_verifies_official_signature_timestamp_and_replay_contract",
+        "no_transform_or_business_side_effect_before_verification",
+        "Hyperliquid_WebSocket_uses_separate_official_adapter"
+      ],
+      "credentialed_gates": [
+        "raw_body_byte_and_required_header_lossless_conformance",
+        "provider_official_signature_timestamp_replay_vectors",
+        "retry_replay_out_of_order_poison_event_and_dedupe_after_authenticity",
+        "retention_export_delete_DPA_region_SLA_cost",
+        "reject_gateway_for_provider_when_raw_preservation_fails"
+      ],
+      "sources": [
+        "https://hookdeck.com/",
+        "https://github.com/hookdeck/hookdeck-cli/releases/tag/v2.5.0",
+        "https://getstream.io/docs/platform/webhooks/"
+      ]
+    },
+    {
+      "id": "meilisearch_index_candidate",
+      "gate_ids": [
+        "federated_search_indexing"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "federated indexing, ranking, tenant tokens and rebuildable search projections",
+      "deployment": [
+        "Meilisearch Cloud",
+        "Community Edition self-host"
+      ],
+      "repository": "https://github.com/meilisearch/meilisearch",
+      "tag": "v1.53.1",
+      "commit": "577f7af28942b71782eab1e59f44ad8296ce0a92",
+      "release_date": "2026-08-13",
+      "license": "MIT Community Edition; BUSL-1.1 Enterprise Edition",
+      "license_source": "https://github.com/meilisearch/meilisearch/blob/v1.53.1/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_ARTIFACT_IMAGE_AND_EDITION_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v1.53.1 published 2026-08-13; canonical repository pushed 2026-08-14 and was not archived when checked",
+      "data_exit": "CE_dump_snapshot_export_or_full_rebuild_from_authoritative_providers",
+      "core_conflict_guard": [
+        "index_is_disposable_and_never_source_of_truth",
+        "index_ranking_never_overrides_provider_facts",
+        "Stream_message_search_remains_Stream_and_Hyperliquid_market_facts_remain_Hyperliquid"
+      ],
+      "credentialed_gates": [
+        "exact_binary_image_edition_and_license_integrity",
+        "tenant_token_and_private_query_isolation",
+        "delete_propagation_and_full_rebuild",
+        "partial_provider_failure_and_timestamp_provenance",
+        "Cloud_export_DPA_region_SLA_cost_or_CE_restore"
+      ],
+      "sources": [
+        "https://github.com/meilisearch/meilisearch/releases/tag/v1.53.1",
+        "https://www.meilisearch.com/docs/resources/self_hosting/data_backup/dumps",
+        "https://www.meilisearch.com/docs/capabilities/security/overview"
+      ]
+    },
+    {
+      "id": "chatwoot_support_candidate",
+      "gate_ids": [
+        "hosted_support"
+      ],
+      "status": "PENDING",
+      "application_level": true,
+      "capability": "support inbox, tickets, agents and help-center workflow; Flutter client integration is a separately blocked component dependency",
+      "deployment": [
+        "Chatwoot Cloud",
+        "self-host"
+      ],
+      "repository": "https://github.com/chatwoot/chatwoot",
+      "tag": "v4.17.0",
+      "commit": "b34f5b71a4d7f41fa87cf2b32260e2c887817e54",
+      "release_date": "2026-08-20",
+      "license": "mixed boundary: non-enterprise community code is MIT Expat; enterprise/** is governed by the separate Chatwoot Enterprise License; third-party components retain their own licenses",
+      "license_source": "https://github.com/chatwoot/chatwoot/blob/v4.17.0/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_SERVER_IMAGE_EDITION_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v4.17.0 published 2026-08-20; canonical server repository pushed 2026-08-23 and was not archived when checked; this server record makes no Flutter artifact readiness claim",
+      "data_exit": "Contacts_Conversations_API_export_or_self_host_Postgres_Redis_backup_restore",
+      "core_conflict_guard": [
+        "H2_support_scope_only",
+        "Chatwoot_must_not_replace_Stream_peer_group_or_audio_video_communication",
+        "Privy_DID_identity_binding_is_app_controlled"
+      ],
+      "credentialed_gates": [
+        "exact_server_image_edition_and_mixed_license_integrity",
+        "chatwoot_flutter_component_candidate_selected_and_conformant",
+        "Privy_DID_identity_binding_and_tenant_isolation",
+        "support_only_routing_regression",
+        "ticket_export_delete_backup_restore",
+        "DPA_region_retention_SLA_cost_and_kill_switch"
+      ],
+      "sources": [
+        "https://github.com/chatwoot/chatwoot/releases/tag/v4.17.0",
+        "https://github.com/chatwoot/chatwoot/blob/v4.17.0/LICENSE",
+        "https://github.com/chatwoot/chatwoot/blob/v4.17.0/enterprise/LICENSE",
+        "https://github.com/chatwoot/chatwoot/blob/develop/swagger/swagger.json"
+      ]
+    },
+    {
+      "id": "stream_feeds_candidate",
+      "gate_ids": [
+        "relationship_graph",
+        "activity_feed"
+      ],
+      "status": "PENDING_MUST_REMAIN",
+      "application_level": true,
+      "capability": "hosted relationship follow graph and activity/notification feed",
+      "deployment": [
+        "Stream hosted Feeds"
+      ],
+      "repository": "https://github.com/GetStream/stream-feeds-flutter",
+      "tag": "v0.5.1",
+      "commit": "3817bdd720b55ca128db8e924d969997d3a995b4",
+      "release_date": "2026-01-14",
+      "license": "Stream Source Code License",
+      "license_source": "https://github.com/GetStream/stream-feeds-flutter/blob/v0.5.1/packages/stream_feeds/LICENSE",
+      "artifact_integrity": "PENDING_EXACT_PUB_ARTIFACT_AND_LICENSE_HASH",
+      "maintenance_evidence": "GitHub release v0.5.1 published 2026-01-14; canonical repository pushed 2026-08-18 and was not archived when checked; official Flutter package still identifies closed alpha and discourages production use",
+      "data_exit": "Stream_user_feed_follow_activity_export_JSONL_contract_and_delete_drill",
+      "core_conflict_guard": [
+        "Stream_Chat_and_Video_remain_communication_authority",
+        "Feeds_does_not_copy_chat_messages_into_a_second_chat_core",
+        "Flutter_closed_alpha_forbids_production_readiness_claim"
+      ],
+      "credentialed_gates": [
+        "exact_pub_artifact_commit_and_license_integrity",
+        "Flutter_GA_and_production_support",
+        "commercial_license_acceptance",
+        "follow_block_visibility_tenant_isolation_and_200k_graph_R0",
+        "export_delete_migration_DPA_region_SLA_cost"
+      ],
+      "sources": [
+        "https://github.com/GetStream/stream-feeds-flutter/releases/tag/v0.5.1",
+        "https://pub.dev/packages/stream_feeds",
+        "https://getstream.io/docs/platform/gdpr/"
+      ]
+    }
+  ],
+  "candidate_components": [
+    {
+      "id": "chatwoot_flutter_component_candidate",
+      "parent_candidate": "chatwoot_support_candidate",
+      "status": "PENDING_ARTIFACT_SELECTION",
+      "capability": "Flutter support client dependency; no official or ready artifact claim",
+      "repository": "https://github.com/chatwoot/chatwoot-flutter-sdk",
+      "tag": null,
+      "commit": "544025790ec0ff30ce44e3dc527453b22c30eb49",
+      "release_evidence": "canonical repository has no Git tags and no GitHub releases; exact commit is evidence only and is not a selected runtime artifact",
+      "package_name": "chatwoot_sdk",
+      "package_version": "0.0.9",
+      "package_archive": "https://pub.dev/api/archives/chatwoot_sdk-0.0.9.tar.gz",
+      "package_integrity": "sha256:77248ecffddc15711b050767913426396af7b36b4982a2ce60fc095e7cd5d1f9",
+      "package_published": "2023-01-24T10:13:21.838556Z",
+      "package_repository_binding": "PENDING_same_version_repo_content_drift_and_no_tag_binds_archive",
+      "rejected_alias_artifacts": [
+        "chatwoot_flutter_sdk@0.1.1_points_to_noncanonical_lordkkjmix_repository"
+      ],
+      "license": "MIT",
+      "license_source": "https://github.com/chatwoot/chatwoot-flutter-sdk/blob/544025790ec0ff30ce44e3dc527453b22c30eb49/LICENSE",
+      "license_integrity": "sha256:0a68ac469d389dacbb97a7e396a4d6cbd577479c6ac51a03c06d8e69a2493c2b",
+      "archive_license_integrity": "sha256:0a68ac469d389dacbb97a7e396a4d6cbd577479c6ac51a03c06d8e69a2493c2b",
+      "maintenance_evidence": "pub.dev chatwoot_sdk 0.0.9 was published 2023-01-24 with Dart >=2.12.0 <3.0.0; canonical repository HEAD at the recorded commit also declares 0.0.9 but Dart ^3.5.3, so identical version text does not bind repository content to the archive",
+      "credentialed_gates": [
+        "exact_tag_or_signed_attestation_binding_archive_to_commit",
+        "current_Flutter_and_Dart_compatibility",
+        "transitive_dependency_lock_SBOM_and_license_review",
+        "native_or_WebView_auth_reconnect_and_file_upload_conformance",
+        "privacy_export_delete_and_kill_switch"
+      ],
+      "sources": [
+        "https://github.com/chatwoot/chatwoot-flutter-sdk",
+        "https://github.com/chatwoot/chatwoot-flutter-sdk/releases",
+        "https://pub.dev/api/packages/chatwoot_sdk",
+        "https://pub.dev/api/archives/chatwoot_sdk-0.0.9.tar.gz"
+      ]
+    }
+  ],
+  "candidate_component_dependencies": {
+    "chatwoot_support_candidate": [
+      "chatwoot_flutter_component_candidate"
+    ]
+  },
+  "chatwoot_server_license_boundary": {
+    "candidate_id": "chatwoot_support_candidate",
+    "tag": "v4.17.0",
+    "community_scope": "non_enterprise_code",
+    "community_license": "MIT Expat",
+    "community_license_url": "https://github.com/chatwoot/chatwoot/blob/v4.17.0/LICENSE",
+    "community_license_sha256": "602d38a808315f221a5e72e2e90e40cb9300f09aa4b317a6a8f1a0c7a3d2175d",
+    "enterprise_scope": "enterprise/**",
+    "enterprise_license": "Chatwoot Enterprise License",
+    "enterprise_license_url": "https://github.com/chatwoot/chatwoot/blob/v4.17.0/enterprise/LICENSE",
+    "enterprise_license_sha256": "4c7b8e19559f923835d564cd7830b7a8f5c46c65855dccca5203383782470207"
+  },
   "providers": [
     {
       "id": "privy_service",
@@ -1036,7 +1459,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "supabase_app_data_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "relationship_graph",
@@ -1048,7 +1475,7 @@
       ],
       "profile": "profile_local",
       "authority": "whole_app_core_selection_pending",
-      "status": "PENDING",
+      "status": "PENDING_MUST_REMAIN",
       "default": "deny_runtime_implementation",
       "prohibited_fallback": "custom_core_or_unreviewed_fork",
       "required_evidence": [
@@ -1059,7 +1486,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "stream_feeds_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "watchlist_store",
@@ -1081,7 +1512,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "supabase_app_data_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "notification_inbox",
@@ -1103,7 +1538,12 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "novu_notification_candidate",
+        "courier_notification_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "price_alert_scheduler",
@@ -1125,7 +1565,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "trigger_dev_scheduler_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "provider_event_ingestion",
@@ -1148,7 +1592,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "hookdeck_event_gateway_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "activity_feed",
@@ -1159,7 +1607,7 @@
       ],
       "profile": "dashboard",
       "authority": "whole_app_core_selection_pending",
-      "status": "PENDING",
+      "status": "PENDING_MUST_REMAIN",
       "default": "deny_runtime_implementation",
       "prohibited_fallback": "custom_core_or_unreviewed_fork",
       "required_evidence": [
@@ -1170,7 +1618,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "stream_feeds_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "federated_search_indexing",
@@ -1193,7 +1645,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "meilisearch_index_candidate"
+      ],
+      "runtime_selected": null
     },
     {
       "id": "hosted_support",
@@ -1215,7 +1671,11 @@
         "security_and_privacy",
         "migration_and_export",
         "credentialed_conformance"
-      ]
+      ],
+      "candidate_ids": [
+        "chatwoot_support_candidate"
+      ],
+      "runtime_selected": null
     }
   ]
 }

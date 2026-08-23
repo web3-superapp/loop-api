@@ -7,6 +7,9 @@
       "wave": 0,
       "order": 1,
       "provider_slice": "Flutter routing, local state, permissions and policy-copy foundation",
+      "candidate_reuse": [
+        "supabase_app_data_candidate"
+      ],
       "depends_on": [],
       "owns": [
         "lib/platform/foundation/**",
@@ -37,6 +40,7 @@
       "wave": 1,
       "order": 1,
       "provider_slice": "GoPlus facts, bounded Chainalysis sanctions, provider preview and regional policy",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation"
       ],
@@ -59,6 +63,7 @@
       "wave": 1,
       "order": 2,
       "provider_slice": "Privy identity, embedded wallet, external wallet and receive-address boundary",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation"
       ],
@@ -87,6 +92,9 @@
       "wave": 1,
       "order": 3,
       "provider_slice": "Stream Chat and Video audio-room communication",
+      "candidate_reuse": [
+        "stream_feeds_candidate"
+      ],
       "depends_on": [
         "platform_foundation"
       ],
@@ -110,6 +118,7 @@
       "wave": 1,
       "order": 4,
       "provider_slice": "provider market data plus licensed JavaScript chart renderers through Flutter WebView",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation"
       ],
@@ -133,6 +142,12 @@
       "wave": 1,
       "order": 5,
       "provider_slice": "Firebase delivery with Sentry and PostHog policy boundaries",
+      "candidate_reuse": [
+        "novu_notification_candidate",
+        "courier_notification_candidate",
+        "trigger_dev_scheduler_candidate",
+        "hookdeck_event_gateway_candidate"
+      ],
       "depends_on": [
         "platform_foundation"
       ],
@@ -155,6 +170,9 @@
       "wave": 1,
       "order": 6,
       "provider_slice": "hosted support provider selection and offline help",
+      "candidate_reuse": [
+        "chatwoot_support_candidate"
+      ],
       "depends_on": [
         "platform_foundation"
       ],
@@ -174,6 +192,7 @@
       "wave": 2,
       "order": 1,
       "provider_slice": "Hyperliquid core-whitelist read-only market plus region-gated trading mutations",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation",
         "risk_preview_compliance",
@@ -198,6 +217,7 @@
       "wave": 2,
       "order": 2,
       "provider_slice": "Privy transfer, swap and Relay bridge with unified F11 review composition",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation",
         "risk_preview_compliance",
@@ -226,6 +246,7 @@
       "wave": 2,
       "order": 3,
       "provider_slice": "MoonPay signed hosted widget inside an audited Flutter WebView only",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation",
         "risk_preview_compliance"
@@ -247,6 +268,7 @@
       "wave": 2,
       "order": 4,
       "provider_slice": "isolated WebView with Privy confirmation handoff",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation",
         "risk_preview_compliance",
@@ -269,6 +291,7 @@
       "wave": 2,
       "order": 5,
       "provider_slice": "GoPlus approval facts with Privy-bound revoke and unified review handoff",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation",
         "risk_preview_compliance",
@@ -291,6 +314,10 @@
       "wave": 3,
       "order": 1,
       "provider_slice": "cross-provider dashboard and federated search projections",
+      "candidate_reuse": [
+        "stream_feeds_candidate",
+        "meilisearch_index_candidate"
+      ],
       "depends_on": [
         "platform_foundation",
         "privy_identity_wallet",
@@ -318,6 +345,7 @@
       "wave": 4,
       "order": 1,
       "provider_slice": "explicitly disabled Phase 2 surface",
+      "candidate_reuse": [],
       "depends_on": [
         "platform_foundation"
       ],

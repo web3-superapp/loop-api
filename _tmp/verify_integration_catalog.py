@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, dependency-free v4 verifier for the LOOP A-I whole-app reuse catalog."""
+"""Strict, dependency-free v6 verifier for the LOOP A-I whole-app reuse catalog."""
 
 from __future__ import annotations
 
@@ -66,7 +66,9 @@ EXPECTED_SLICE_IDS = {
 CANONICAL_BINDING_SHA256 = "564e2b53b4632d5d877bde1a745b055b81878aeb768788842ecd4e22aa11dc14"
 CANONICAL_PROVIDER_SHA256 = "c375c78f57215de1e40f8077ddb5f1c972d1e4d31e12093ee6f39ab416774cb0"
 CANONICAL_PROFILE_SHA256 = "073c5ff0bdac3ee9443d2e25777cad3b0279e8ed2addf24a9c526f331900868a"
-CANONICAL_SELECTION_GATE_SHA256 = "dc43c48c38a91a3410bb76d8d163d2e1df2a0588cb3dacd519c4ed3921b8e4ac"
+CANONICAL_CANDIDATE_SHA256 = "b3b99bfa6a1439b1b49db5c8097b5025f14f4917f5cf87bea24646ca0a4d5f6c"
+CANONICAL_COMPONENT_SHA256 = "1ee233515d6da8f229b8e9880c5bccb112d14913ce62877d66c449bf50f7e123"
+CANONICAL_SELECTION_GATE_SHA256 = "7026abbf4b76fc04f9a88a6001d35dc8f34eb1240f7aeefbf9befd68b9a23886"
 EXPECTED_PROVIDER_IDS = {
     "privy_service", "stream_service", "hyperliquid_service", "alchemy_service", "privy_preview_service",
     "blockaid_service", "goplus_service", "chainalysis_service", "coingecko_service", "dexscreener_service",
@@ -93,6 +95,42 @@ EXPECTED_SELECTION_GATE_IDS = {
     "social_profile_store", "relationship_graph", "watchlist_store", "notification_inbox",
     "price_alert_scheduler", "provider_event_ingestion", "activity_feed", "federated_search_indexing",
     "hosted_support",
+}
+EXPECTED_CANDIDATE_IDS = {
+    "supabase_app_data_candidate", "novu_notification_candidate", "courier_notification_candidate",
+    "trigger_dev_scheduler_candidate", "hookdeck_event_gateway_candidate", "meilisearch_index_candidate",
+    "chatwoot_support_candidate", "stream_feeds_candidate",
+}
+EXPECTED_COMPONENT_IDS = {"chatwoot_flutter_component_candidate"}
+EXPECTED_GATE_CANDIDATES = {
+    "social_profile_store": ["supabase_app_data_candidate"],
+    "relationship_graph": ["stream_feeds_candidate"],
+    "watchlist_store": ["supabase_app_data_candidate"],
+    "notification_inbox": ["novu_notification_candidate", "courier_notification_candidate"],
+    "price_alert_scheduler": ["trigger_dev_scheduler_candidate"],
+    "provider_event_ingestion": ["hookdeck_event_gateway_candidate"],
+    "activity_feed": ["stream_feeds_candidate"],
+    "federated_search_indexing": ["meilisearch_index_candidate"],
+    "hosted_support": ["chatwoot_support_candidate"],
+}
+EXPECTED_SLICE_CANDIDATES = {
+    "platform_foundation": ["supabase_app_data_candidate"],
+    "risk_preview_compliance": [],
+    "privy_identity_wallet": [],
+    "stream_communication": ["stream_feeds_candidate"],
+    "market_data_charts": [],
+    "notifications_observability": [
+        "novu_notification_candidate", "courier_notification_candidate",
+        "trigger_dev_scheduler_candidate", "hookdeck_event_gateway_candidate",
+    ],
+    "hosted_support": ["chatwoot_support_candidate"],
+    "hyperliquid_core_perp": [],
+    "privy_funds": [],
+    "moonpay_onramp": [],
+    "dapp_browser_isolation": [],
+    "approval_revoke": [],
+    "dashboard_search": ["stream_feeds_candidate", "meilisearch_index_candidate"],
+    "phase2_hold": [],
 }
 ALLOWED_CUSTOM = {"ui", "orchestration", "state_projection", "policy_mapping", "thin_adapter", "copy"}
 ALLOWED_CREDENTIALS = {
@@ -261,9 +299,134 @@ def validate_inventory(document):
 
 
 def validate_provider_lock(document):
-    exact_keys(document, ["schema_version", "checked_at", "providers", "capability_selection_gates"], "provider-lock")
-    require(document["schema_version"] == "loop.provider-lock/v2", "provider lock schema")
+    exact_keys(document, ["schema_version", "checked_at", "whole_app_reuse_policy", "notification_runtime_selection", "provider_event_trust_boundary", "candidates", "candidate_components", "candidate_component_dependencies", "chatwoot_server_license_boundary", "providers", "capability_selection_gates"], "provider-lock")
+    require(document["schema_version"] == "loop.provider-lock/v4", "provider lock schema")
     require(document["checked_at"] == "2026-08-23", "provider lock check date")
+    require(document["whole_app_reuse_policy"] == {
+        "github_reuse_definition": "mature_application_level_business_capability_or_managed_service",
+        "ui_component_library_counts_as_whole_app_reuse": False,
+        "example_or_starter_counts_as_runtime": False,
+        "unknown_license_code_copy_allowed": False,
+        "candidate_counts_as_runtime_before_gate_selection": False,
+        "runtime_core_authorities": {
+            "wallet": "privy_service", "signature": "privy_service",
+            "chat": "stream_service", "perp": "hyperliquid_service",
+        },
+        "forbidden_secondary_core": ["wallet", "signature", "chat", "perp"],
+    }, "whole-app GitHub reuse policy or core authorities weakened")
+    require(document["notification_runtime_selection"] == {
+        "gate": "notification_inbox", "status": "PENDING", "runtime_selected": None,
+        "candidate_ids": ["novu_notification_candidate", "courier_notification_candidate"],
+        "single_runtime_required": True, "dual_runtime_forbidden": True,
+    }, "notification runtime must remain unselected and single-runtime")
+    require(document["provider_event_trust_boundary"] == {
+        "gate": "provider_event_ingestion",
+        "status": "PENDING",
+        "ingress_candidate": "hookdeck_event_gateway_candidate",
+        "ingress_role": "untrusted_reliability_only",
+        "raw_forwarding": "byte_and_required_headers_lossless_conformance_required",
+        "verifier_owner": "provider_specific_thin_bff",
+        "verifier_contract": "current_provider_official_algorithm_or_sdk",
+        "verification_checks": [
+            "cryptographic_signature",
+            "timestamp_when_required_by_provider_contract",
+            "replay_when_required_by_provider_contract",
+        ],
+        "before_verification": ["payload_untrusted", "no_transform", "no_business_side_effect"],
+        "failure_action": "quarantine_security_record_only_no_trusted_event",
+        "hyperliquid_path": "separate_official_websocket_adapter_not_hookdeck",
+    }, "provider event trust boundary weakened or Hookdeck promoted to verifier")
+    candidates = document["candidates"]
+    require(type(candidates) is list and len(candidates) == 8, "candidate lock must contain exact 8 records")
+    require({item.get("id") for item in candidates if type(item) is dict} == EXPECTED_CANDIDATE_IDS, "candidate ID set drift")
+    candidate_keys = [
+        "id", "gate_ids", "status", "application_level", "capability", "deployment",
+        "repository", "tag", "commit", "release_date", "license", "license_source",
+        "artifact_integrity", "maintenance_evidence", "data_exit", "core_conflict_guard",
+        "credentialed_gates", "sources",
+    ]
+    candidate_result = {}
+    for index, candidate in enumerate(candidates):
+        exact_keys(candidate, candidate_keys, f"candidate[{index}]")
+        candidate_id = candidate["id"]
+        require(candidate_id not in candidate_result, f"duplicate candidate {candidate_id}")
+        require(candidate["status"] in {"PENDING", "PENDING_MUST_REMAIN"}, f"candidate pretends runtime readiness {candidate_id}")
+        require(candidate["application_level"] is True, f"UI component masquerades as application reuse {candidate_id}")
+        require(type(candidate["gate_ids"]) is list and candidate["gate_ids"], f"candidate gate coverage missing {candidate_id}")
+        require(set(candidate["gate_ids"]) <= EXPECTED_SELECTION_GATE_IDS, f"unknown candidate gate {candidate_id}")
+        for field in ["capability", "repository", "tag", "commit", "release_date", "license", "license_source", "artifact_integrity", "maintenance_evidence", "data_exit"]:
+            nonempty_string(candidate[field], f"{candidate_id}.{field}")
+        require(candidate["repository"].startswith("https://github.com/") and candidate["repository"].count("/") == 4, f"noncanonical candidate repository {candidate_id}")
+        require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", candidate["tag"]), f"candidate must use exact release tag, not latest or branch {candidate_id}")
+        require(re.fullmatch(r"[0-9a-f]{40}", candidate["commit"]), f"candidate exact commit missing {candidate_id}")
+        require(re.fullmatch(r"2026-[0-9]{2}-[0-9]{2}", candidate["release_date"]), f"candidate release date missing {candidate_id}")
+        require(not any(term in candidate["license"].lower() for term in ["unknown", "noassertion", "pending"]), f"candidate license unknown {candidate_id}")
+        require(candidate["license_source"].startswith(candidate["repository"] + "/blob/" + candidate["tag"] + "/"), f"candidate license is not exact-tag scoped {candidate_id}")
+        require(candidate["artifact_integrity"].startswith("PENDING_EXACT_"), f"candidate incorrectly presents an approved artifact pin {candidate_id}")
+        require("GitHub release " + candidate["tag"] in candidate["maintenance_evidence"], f"candidate maintenance release evidence missing {candidate_id}")
+        require(type(candidate["deployment"]) is list and candidate["deployment"] and all(type(x) is str and x for x in candidate["deployment"]), f"candidate deployment missing {candidate_id}")
+        require(any(term in candidate["data_exit"].lower() for term in ["export", "dump", "backup", "rebuild", "ledger"]), f"candidate migration/export exit missing {candidate_id}")
+        for field in ["core_conflict_guard", "credentialed_gates", "sources"]:
+            require(type(candidate[field]) is list and candidate[field] and all(type(x) is str and x for x in candidate[field]), f"candidate {field} missing {candidate_id}")
+        require(len(candidate["credentialed_gates"]) >= 5, f"candidate credentialed gate matrix incomplete {candidate_id}")
+        require(all(source.startswith("https://") for source in candidate["sources"]), f"candidate source URL invalid {candidate_id}")
+        candidate_result[candidate_id] = candidate
+    require(candidate_result["stream_feeds_candidate"]["status"] == "PENDING_MUST_REMAIN", "Stream Feeds promoted before GA")
+    require("no official Flutter Inbox SDK" in candidate_result["novu_notification_candidate"]["capability"], "Novu Flutter SDK gap hidden")
+    require("official Flutter SDK" in candidate_result["courier_notification_candidate"]["capability"], "Courier Flutter comparison evidence missing")
+    require("scheduler_never_creates_or_overrides_market_price_facts" in candidate_result["trigger_dev_scheduler_candidate"]["core_conflict_guard"], "scheduler usurps provider price facts")
+    require("index_is_disposable_and_never_source_of_truth" in candidate_result["meilisearch_index_candidate"]["core_conflict_guard"], "search index usurps provider facts")
+    require("Hookdeck_is_untrusted_reliability_ingress_only" in candidate_result["hookdeck_event_gateway_candidate"]["core_conflict_guard"], "Hookdeck trust role drift")
+    chatwoot = candidate_result["chatwoot_support_candidate"]
+    require(chatwoot["license"] == "mixed boundary: non-enterprise community code is MIT Expat; enterprise/** is governed by the separate Chatwoot Enterprise License; third-party components retain their own licenses", "Chatwoot server mixed license boundary collapsed")
+    require("Flutter client integration is a separately blocked component dependency" in chatwoot["capability"], "Chatwoot Flutter dependency hidden")
+    require("official Flutter integration" not in json.dumps(chatwoot, ensure_ascii=False), "Chatwoot server claims official Flutter integration readiness")
+    candidate_digest = hashlib.sha256(json.dumps(candidates, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    require(candidate_digest == CANONICAL_CANDIDATE_SHA256, f"canonical candidate records drift: {candidate_digest}")
+    components = document["candidate_components"]
+    require(type(components) is list and len(components) == 1, "candidate component lock must contain exact 1 record")
+    require({item.get("id") for item in components if type(item) is dict} == EXPECTED_COMPONENT_IDS, "candidate component ID set drift")
+    component = components[0]
+    component_keys = [
+        "id", "parent_candidate", "status", "capability", "repository", "tag", "commit",
+        "release_evidence", "package_name", "package_version", "package_archive", "package_integrity",
+        "package_published", "package_repository_binding", "rejected_alias_artifacts", "license",
+        "license_source", "license_integrity", "archive_license_integrity", "maintenance_evidence",
+        "credentialed_gates", "sources",
+    ]
+    exact_keys(component, component_keys, "candidate component")
+    require(component["parent_candidate"] == "chatwoot_support_candidate", "Chatwoot Flutter parent candidate drift")
+    require(component["status"] == "PENDING_ARTIFACT_SELECTION", "Chatwoot Flutter component promoted before artifact binding")
+    require(component["capability"] == "Flutter support client dependency; no official or ready artifact claim", "Chatwoot Flutter readiness claim drift")
+    require(component["repository"] == "https://github.com/chatwoot/chatwoot-flutter-sdk", "Chatwoot Flutter canonical repository drift")
+    require(component["tag"] is None, "Chatwoot Flutter fake tag/release pin")
+    require(component["commit"] == "544025790ec0ff30ce44e3dc527453b22c30eb49", "Chatwoot Flutter exact commit evidence drift")
+    require(component["package_name"] == "chatwoot_sdk" and component["package_version"] == "0.0.9", "Chatwoot Flutter package identity drift")
+    require(component["package_archive"] == "https://pub.dev/api/archives/chatwoot_sdk-0.0.9.tar.gz", "Chatwoot Flutter archive URL drift")
+    require(component["package_integrity"] == "sha256:77248ecffddc15711b050767913426396af7b36b4982a2ce60fc095e7cd5d1f9", "Chatwoot Flutter archive integrity drift")
+    require(component["package_repository_binding"] == "PENDING_same_version_repo_content_drift_and_no_tag_binds_archive", "Chatwoot Flutter repository/archive binding falsely closed")
+    require(component["license_source"] == "https://github.com/chatwoot/chatwoot-flutter-sdk/blob/544025790ec0ff30ce44e3dc527453b22c30eb49/LICENSE", "Chatwoot Flutter immutable license URL drift")
+    require(component["license_integrity"] == "sha256:0a68ac469d389dacbb97a7e396a4d6cbd577479c6ac51a03c06d8e69a2493c2b", "Chatwoot Flutter commit license integrity drift")
+    require(component["archive_license_integrity"] == component["license_integrity"], "Chatwoot Flutter archive/commit license bytes differ")
+    require(component["rejected_alias_artifacts"] == ["chatwoot_flutter_sdk@0.1.1_points_to_noncanonical_lordkkjmix_repository"], "Chatwoot Flutter noncanonical alias rejection drift")
+    require(type(component["credentialed_gates"]) is list and len(component["credentialed_gates"]) >= 5, "Chatwoot Flutter component gates incomplete")
+    require(all(type(source) is str and source.startswith("https://") for source in component["sources"]), "Chatwoot Flutter source URL invalid")
+    component_digest = hashlib.sha256(json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    require(component_digest == CANONICAL_COMPONENT_SHA256, f"canonical component record drift: {component_digest}")
+    require(document["candidate_component_dependencies"] == {"chatwoot_support_candidate": ["chatwoot_flutter_component_candidate"]}, "Chatwoot capability dependency missing or duplicated")
+    boundary = document["chatwoot_server_license_boundary"]
+    require(boundary == {
+        "candidate_id": "chatwoot_support_candidate",
+        "tag": "v4.17.0",
+        "community_scope": "non_enterprise_code",
+        "community_license": "MIT Expat",
+        "community_license_url": "https://github.com/chatwoot/chatwoot/blob/v4.17.0/LICENSE",
+        "community_license_sha256": "602d38a808315f221a5e72e2e90e40cb9300f09aa4b317a6a8f1a0c7a3d2175d",
+        "enterprise_scope": "enterprise/**",
+        "enterprise_license": "Chatwoot Enterprise License",
+        "enterprise_license_url": "https://github.com/chatwoot/chatwoot/blob/v4.17.0/enterprise/LICENSE",
+        "enterprise_license_sha256": "4c7b8e19559f923835d564cd7830b7a8f5c46c65855dccca5203383782470207",
+    }, "Chatwoot server tag-scoped mixed license evidence drift")
     providers = document["providers"]
     require(type(providers) is list and len(providers) == 46, "provider lock must contain exact 46 records")
     require({item.get("id") for item in providers if type(item) is dict} == EXPECTED_PROVIDER_IDS, "provider ID set drift")
@@ -315,12 +478,16 @@ def validate_provider_lock(document):
     require({item.get("id") for item in gates if type(item) is dict} == EXPECTED_SELECTION_GATE_IDS, "selection gate ID set drift")
     gate_profiles = {}
     for gate in gates:
-        exact_keys(gate, ["id", "covers", "profile", "authority", "status", "default", "prohibited_fallback", "required_evidence"], "capability selection gate")
+        exact_keys(gate, ["id", "covers", "profile", "authority", "status", "default", "prohibited_fallback", "required_evidence", "candidate_ids", "runtime_selected"], "capability selection gate")
         require(type(gate["covers"]) is list and gate["covers"] and all(type(x) is str and x for x in gate["covers"]), f"selection gate coverage {gate['id']}")
         require(gate["authority"] == "whole_app_core_selection_pending", f"selection gate authority {gate['id']}")
-        require(gate["status"] == "PENDING" and gate["default"] == "deny_runtime_implementation", f"selection gate bypass {gate['id']}")
+        expected_status = "PENDING_MUST_REMAIN" if gate["id"] in {"relationship_graph", "activity_feed"} else "PENDING"
+        require(gate["status"] == expected_status and gate["default"] == "deny_runtime_implementation", f"selection gate bypass {gate['id']}")
         require(gate["prohibited_fallback"] == "custom_core_or_unreviewed_fork", f"selection fallback weakened {gate['id']}")
         require(set(gate["required_evidence"]) == {"official_or_canonical_github_identity", "exact_release_and_integrity", "license", "maintenance", "security_and_privacy", "migration_and_export", "credentialed_conformance"}, f"selection evidence drift {gate['id']}")
+        require(gate["candidate_ids"] == EXPECTED_GATE_CANDIDATES[gate["id"]], f"selection candidate mapping drift {gate['id']}")
+        require(gate["runtime_selected"] is None, f"candidate promoted before selection gate {gate['id']}")
+        require(all(gate["id"] in candidate_result[candidate_id]["gate_ids"] for candidate_id in gate["candidate_ids"]), f"candidate reverse gate mapping drift {gate['id']}")
         gate_profiles.setdefault(gate["profile"], []).append(gate["id"])
     gate_digest = hashlib.sha256(json.dumps(gates, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     require(gate_digest == CANONICAL_SELECTION_GATE_SHA256, f"canonical selection gates drift: {gate_digest}")
@@ -359,15 +526,25 @@ def validate_provider_lock(document):
         require((provider["package_name"], provider["version"]) == expected, f"upgrade candidate drift {provider_id}")
         require(provider["status"] == "PENDING", f"upgrade candidate bypassed slice audit {provider_id}")
         require("upgrade_candidate_pending_slice_audit" in provider["authority_scope"], f"upgrade role missing {provider_id}")
-    return result, gate_profiles
+    return result, candidate_result, gate_profiles
 
 
 def validate_budget(document):
-    exact_keys(document, ["schema_version", "policy", "allowed_custom_categories", "forbidden_reimplementations", "exception_gate"], "custom budget")
-    require(document["schema_version"] == "loop.custom-code-budget/v2", "custom budget schema")
+    exact_keys(document, ["schema_version", "policy", "reuse_acceptance", "allowed_custom_categories", "forbidden_reimplementations", "exception_gate"], "custom budget")
+    require(document["schema_version"] == "loop.custom-code-budget/v3", "custom budget schema")
     require(document["policy"] == "LOOP code is limited to UI, orchestration, state projection, policy mapping, thin adapters and copy; durable whole-app business cores require an approved official provider or maintained OSS", "custom budget policy")
     require(set(document["allowed_custom_categories"]) == ALLOWED_CUSTOM, "allowed custom categories changed")
     require(set(document["forbidden_reimplementations"]) == FORBIDDEN_TERMS, "forbidden reimplementations changed")
+    require(document["reuse_acceptance"] == {
+        "qualifying_github_reuse": "mature_application_level_business_capability_or_managed_service",
+        "non_qualifying_as_whole_app_reuse": ["UI_component_library", "screen_template", "demo_or_example_app", "unknown_license_code"],
+        "unknown_license_copy": "forbidden",
+        "candidate_before_selection_gate": "PENDING_default_deny_not_runtime",
+        "required_before_copy_or_import": [
+            "canonical_repository_identity", "exact_tag_and_commit", "artifact_integrity",
+            "license_and_NOTICE", "SBOM", "upgrade_gate",
+        ],
+    }, "GitHub whole-app reuse acceptance policy weakened")
     gate = document["exception_gate"]
     exact_keys(gate, ["required_status", "required_evidence", "owner_approval"], "exception gate")
     require(gate["required_status"] == "PENDING" and gate["owner_approval"] == "explicit_written_required", "exception gate weakened")
@@ -396,8 +573,9 @@ def validate_fixtures(document, profiles):
 
 
 def validate_catalog(document, inventory, providers, gate_profiles):
-    exact_keys(document, ["schema_version", "authorities", "credential_categories", "intent_review_composition", "profiles", "screen_mappings"], "catalog")
-    require(document["schema_version"] == "loop.integration-catalog/v2", "catalog schema")
+    exact_keys(document, ["schema_version", "whole_app_reuse_policy_ref", "authorities", "credential_categories", "intent_review_composition", "profiles", "screen_mappings"], "catalog")
+    require(document["schema_version"] == "loop.integration-catalog/v3", "catalog schema")
+    require(document["whole_app_reuse_policy_ref"] == "provider-lock.json#whole_app_reuse_policy", "catalog reuse policy reference drift")
     require(document["authorities"] == CORE_AUTHORITY, "Privy/Stream/Hyperliquid authorities changed")
     require(set(document["credential_categories"]) == ALLOWED_CREDENTIALS, "credential categories changed")
     profiles = {}
@@ -527,7 +705,7 @@ def validate_catalog(document, inventory, providers, gate_profiles):
     return profiles
 
 
-def validate_slices(document, profiles, mappings):
+def validate_slices(document, profiles, candidates, mappings):
     exact_keys(document, ["schema_version", "ordering", "slices"], "implementation slices")
     require(document["schema_version"] == "loop.integration-slices/v2", "slice schema")
     require(document["ordering"] == "ascending_wave_then_order; equal-wave slices are parallel-safe", "slice ordering")
@@ -538,15 +716,19 @@ def validate_slices(document, profiles, mappings):
     last = (-1, -1)
     positions = {}
     profile_counts = Counter()
+    candidate_counts = Counter()
     by_id = {}
     for item in slices:
-        exact_keys(item, ["id", "wave", "order", "provider_slice", "depends_on", "owns", "profiles", "credentialed_gate", "status"], "slice")
+        exact_keys(item, ["id", "wave", "order", "provider_slice", "candidate_reuse", "depends_on", "owns", "profiles", "credentialed_gate", "status"], "slice")
         require(type(item["wave"]) is int and type(item["order"]) is int, f"slice ordering types {item['id']}")
         require((item["wave"], item["order"]) > last, "slices not strictly sorted or duplicate position")
         last = (item["wave"], item["order"])
         require(item["id"] not in by_id, f"duplicate slice ID {item['id']}")
         by_id[item["id"]] = item
         positions[item["id"]] = (item["wave"], item["order"])
+        require(item["candidate_reuse"] == EXPECTED_SLICE_CANDIDATES[item["id"]], f"slice candidate mapping drift {item['id']}")
+        require(all(candidate_id in candidates for candidate_id in item["candidate_reuse"]), f"unknown candidate in slice {item['id']}")
+        candidate_counts.update(item["candidate_reuse"])
         require(type(item["depends_on"]) is list and len(item["depends_on"]) == len(set(item["depends_on"])), f"slice dependency list {item['id']}")
         require(type(item["owns"]) is list and item["owns"], f"slice owns empty {item['id']}")
         for owner in item["owns"]:
@@ -563,6 +745,7 @@ def validate_slices(document, profiles, mappings):
             require(item["status"] == "PENDING", f"slice masks PENDING profile {item['id']}")
         nonempty_string(item["credentialed_gate"], f"slice gate {item['id']}")
     require(set(profile_counts) == set(profiles) and all(count == 1 for count in profile_counts.values()), "each profile must belong to exactly one slice")
+    require(set(candidate_counts) == set(candidates), "every candidate must map to at least one slice")
     for slice_id, item in by_id.items():
         for dependency in item["depends_on"]:
             require(dependency in by_id, f"unknown slice dependency {slice_id}->{dependency}")
@@ -602,6 +785,8 @@ def validate_documents(providers):
         require(500 <= len(text) <= 100_000, f"{name} length")
         require("custom_code_budget" in text and "HIP-3" in text and "PENDING" in text, f"{name} missing binding terms")
         require("Privy" in text and "Stream" in text and "Hyperliquid" in text, f"{name} missing authorities")
+        for term in ["GitHub", "UI component", "未知", "runtime_selected", "Hookdeck", "raw", "PENDING_MUST_REMAIN"]:
+            require(term.lower() in text.lower(), f"{name} missing v5 whole-app reuse term {term}")
     sources = (CONTRACT / "sources.md").read_text("utf-8")
     require("provider-lock.json is the single machine-readable pin truth" in sources, "sources single-truth declaration missing")
     require("sha256" not in sources.lower() and "sha512" not in sources.lower(), "sources duplicates integrity values")
@@ -624,12 +809,12 @@ def load_documents():
 
 def validate_all(documents):
     inventory = validate_inventory(documents["inventory"])
-    providers, gate_profiles = validate_provider_lock(documents["providers"])
+    providers, candidates, gate_profiles = validate_provider_lock(documents["providers"])
     validate_budget(documents["budget"])
     profiles = validate_catalog(documents["catalog"], inventory, providers, gate_profiles)
     validate_fixtures(documents["fixtures"], profiles)
-    validate_slices(documents["slices"], profiles, documents["catalog"]["screen_mappings"])
-    return inventory, providers, profiles
+    validate_slices(documents["slices"], profiles, candidates, documents["catalog"]["screen_mappings"])
+    return inventory, providers, candidates, profiles
 
 
 def mutation_suite(documents):
@@ -643,6 +828,12 @@ def mutation_suite(documents):
 
     def provider(d, provider_id):
         return next(item for item in d["providers"]["providers"] if item["id"] == provider_id)
+
+    def candidate_item(d, candidate_id):
+        return next(item for item in d["providers"]["candidates"] if item["id"] == candidate_id)
+
+    def candidate_component(d, component_id):
+        return next(item for item in d["providers"]["candidate_components"] if item["id"] == component_id)
 
     def mapping(d, screen_id):
         return next(item for item in d["catalog"]["screen_mappings"] if item["screen_id"] == screen_id)
@@ -769,6 +960,34 @@ def mutation_suite(documents):
     add("a1-owner-drift", lambda d: mapping(d, "A1").__setitem__("thin_adapter_owner", "lib/platform/app_shell/*"))
     add("f3-owner-drift", lambda d: mapping(d, "F3").__setitem__("thin_adapter_owner", "lib/integrations/privy/transfer/*"))
     add("d12-owner-drift", lambda d: mapping(d, "D12").__setitem__("thin_adapter_owner", "lib/features/perp_risk/*"))
+    add("whole-app-ui-library-masquerade", lambda d: d["providers"]["whole_app_reuse_policy"].__setitem__("ui_component_library_counts_as_whole_app_reuse", True))
+    add("whole-app-example-promoted-runtime", lambda d: d["providers"]["whole_app_reuse_policy"].__setitem__("example_or_starter_counts_as_runtime", True))
+    add("whole-app-second-wallet-core", lambda d: d["providers"]["whole_app_reuse_policy"]["runtime_core_authorities"].__setitem__("wallet", "second_wallet_service"))
+    add("whole-app-second-signature-core", lambda d: d["providers"]["whole_app_reuse_policy"]["runtime_core_authorities"].__setitem__("signature", "second_signer_service"))
+    add("whole-app-second-chat-core", lambda d: d["providers"]["whole_app_reuse_policy"]["runtime_core_authorities"].__setitem__("chat", "second_chat_service"))
+    add("whole-app-second-perp-core", lambda d: d["providers"]["whole_app_reuse_policy"]["runtime_core_authorities"].__setitem__("perp", "second_perp_service"))
+    add("unknown-license-copy-policy", lambda d: d["providers"]["whole_app_reuse_policy"].__setitem__("unknown_license_code_copy_allowed", True))
+    add("unknown-license-candidate", lambda d: candidate_item(d, "supabase_app_data_candidate").__setitem__("license", "UNKNOWN"))
+    add("candidate-latest-pin", lambda d: candidate_item(d, "trigger_dev_scheduler_candidate").__setitem__("tag", "latest"))
+    add("candidate-branch-pin", lambda d: candidate_item(d, "meilisearch_index_candidate").__setitem__("tag", "main"))
+    add("candidate-promoted-before-gate", lambda d: selection_gate(d, "social_profile_store").__setitem__("runtime_selected", "supabase_app_data_candidate"))
+    add("notification-dual-runtime", lambda d: d["providers"]["notification_runtime_selection"].__setitem__("runtime_selected", ["novu_notification_candidate", "courier_notification_candidate"]))
+    add("notification-single-runtime-disabled", lambda d: d["providers"]["notification_runtime_selection"].__setitem__("single_runtime_required", False))
+    add("hookdeck-self-claims-signature-verification", lambda d: d["providers"]["provider_event_trust_boundary"].__setitem__("verifier_owner", "hookdeck_event_gateway_candidate"))
+    add("hookdeck-raw-forwarding-optional", lambda d: d["providers"]["provider_event_trust_boundary"].__setitem__("raw_forwarding", "parsed_JSON_is_sufficient"))
+    add("hookdeck-transform-before-verification", lambda d: d["providers"]["provider_event_trust_boundary"]["before_verification"].__setitem__(1, "transform_allowed"))
+    add("hookdeck-side-effect-before-verification", lambda d: d["providers"]["provider_event_trust_boundary"]["before_verification"].__setitem__(2, "business_side_effect_allowed"))
+    add("feeds-candidate-premature-GA", lambda d: candidate_item(d, "stream_feeds_candidate").__setitem__("status", "PENDING"))
+    add("feeds-gate-premature-GA", lambda d: selection_gate(d, "relationship_graph").__setitem__("status", "PENDING"))
+    add("candidate-migration-export-missing", lambda d: candidate_item(d, "chatwoot_support_candidate").__setitem__("data_exit", ""))
+    add("chatwoot-license-collapse", lambda d: d["providers"]["chatwoot_server_license_boundary"].__setitem__("enterprise_license", "MIT Expat"))
+    add("chatwoot-capability-dependency-dropped", lambda d: d["providers"]["candidate_component_dependencies"].__setitem__("chatwoot_support_candidate", []))
+    add("chatwoot-capability-dependency-fake-pin", lambda d: candidate_component(d, "chatwoot_flutter_component_candidate").__setitem__("package_integrity", "sha256:" + "0" * 64))
+    add("chatwoot-flutter-premature-ready", lambda d: candidate_component(d, "chatwoot_flutter_component_candidate").__setitem__("status", "READY"))
+    add("index-usurps-provider-facts", lambda d: candidate_item(d, "meilisearch_index_candidate")["core_conflict_guard"].__setitem__(0, "index_is_source_of_truth"))
+    add("scheduler-usurps-price-facts", lambda d: candidate_item(d, "trigger_dev_scheduler_candidate")["core_conflict_guard"].__setitem__(0, "scheduler_creates_market_price_facts"))
+    add("slice-candidate-mapping-dropped", lambda d: slice_item(d, "hosted_support").__setitem__("candidate_reuse", []))
+    add("budget-unknown-license-copy", lambda d: d["budget"]["reuse_acceptance"].__setitem__("unknown_license_copy", "allowed"))
 
     for name, mutate in mutations:
         candidate = copy.deepcopy(documents)
@@ -794,7 +1013,7 @@ def main():
     try:
         validate_tree()
         documents = load_documents()
-        inventory, providers, profiles = validate_all(documents)
+        inventory, providers, candidates, profiles = validate_all(documents)
         validate_documents(providers)
         count = mutation_suite(documents) if "--mutations" in sys.argv else 0
     except (Violation, OSError) as error:
@@ -803,7 +1022,7 @@ def main():
     print(
         "PASS: integration catalog "
         f"screens={len(inventory)} A={sum(v['priority']=='A' for v in inventory.values())} "
-        f"providers={len(providers)} profiles={len(profiles)} mutations={count} tree={tree_hash()}"
+        f"providers={len(providers)} candidates={len(candidates)} components={len(documents['providers']['candidate_components'])} profiles={len(profiles)} mutations={count} tree={tree_hash()}"
     )
     return 0
 

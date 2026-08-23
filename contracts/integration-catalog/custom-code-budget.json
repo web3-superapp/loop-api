@@ -1,6 +1,25 @@
 {
-  "schema_version": "loop.custom-code-budget/v2",
+  "schema_version": "loop.custom-code-budget/v3",
   "policy": "LOOP code is limited to UI, orchestration, state projection, policy mapping, thin adapters and copy; durable whole-app business cores require an approved official provider or maintained OSS",
+  "reuse_acceptance": {
+    "qualifying_github_reuse": "mature_application_level_business_capability_or_managed_service",
+    "non_qualifying_as_whole_app_reuse": [
+      "UI_component_library",
+      "screen_template",
+      "demo_or_example_app",
+      "unknown_license_code"
+    ],
+    "unknown_license_copy": "forbidden",
+    "candidate_before_selection_gate": "PENDING_default_deny_not_runtime",
+    "required_before_copy_or_import": [
+      "canonical_repository_identity",
+      "exact_tag_and_commit",
+      "artifact_integrity",
+      "license_and_NOTICE",
+      "SBOM",
+      "upgrade_gate"
+    ]
+  },
   "allowed_custom_categories": [
     "ui",
     "orchestration",

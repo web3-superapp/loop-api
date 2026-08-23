@@ -1,5 +1,6 @@
 {
-  "schema_version": "loop.integration-catalog/v2",
+  "schema_version": "loop.integration-catalog/v3",
+  "whole_app_reuse_policy_ref": "provider-lock.json#whole_app_reuse_policy",
   "authorities": {
     "wallet": "privy_service",
     "communication": "stream_service",
