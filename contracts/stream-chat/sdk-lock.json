@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "resolved_at": "2026-08-23",
+  "publisher": "getstream.io",
+  "repository": "https://github.com/GetStream/stream-chat-flutter",
+  "release_tag": "v10.3.0",
+  "release_commit": "34cd23c2b7be77f3788e65698072dbecb0ddd077",
+  "video_repository": "https://github.com/GetStream/stream-video-flutter",
+  "video_release_tag": "v1.4.3",
+  "video_release_commit": "c0bb3bce2d0503145b29a10eaea5df37929a131a",
+  "install_status": "declared_not_installed",
+  "license_review": "R0_REQUIRED_BEFORE_INSTALL_OR_PRODUCTION_USE",
+  "audited_source_files": {
+    "stream_chat_client": {
+      "path": "packages/stream_chat/lib/src/client/client.dart",
+      "source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/packages/stream_chat/lib/src/client/client.dart",
+      "sha256": "b166b4f63f1a99b5996569acc02372b4c6aef2f1765c31d859f63270394574b6",
+      "evidence": "queryChannels_online_impl_submits_to_ChannelDeliveryReporter_and_markChannelsDelivered_callback_calls_provider_API"
+    },
+    "channel_delivery_reporter": {
+      "path": "packages/stream_chat/lib/src/client/channel_delivery_reporter.dart",
+      "source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/packages/stream_chat/lib/src/client/channel_delivery_reporter.dart",
+      "sha256": "5a6b8f69ec994c738c8cfbce65fe5c2a95849edcab24f7a8357dc1394afe5efe",
+      "evidence": "submitForDelivery_schedules_candidates_and_invokes_onMarkChannelsDelivered"
+    }
+  },
+  "packages": {
+    "stream_chat_flutter": {
+      "version": "10.3.0",
+      "source": "https://pub.dev/api/archives/stream_chat_flutter-10.3.0.tar.gz",
+      "archive_sha256": "4075c2412a092f02f40ce3b9c1272cecf4ae4f81c81a502ed10a8dbdb6745f14",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/LICENSE",
+      "license_sha256": "2ae19400d4ddde4d4a54e6194f6a089184fe35d415abebb61020b9ba485672bc"
+    },
+    "stream_chat_flutter_core": {
+      "version": "10.3.0",
+      "source": "https://pub.dev/api/archives/stream_chat_flutter_core-10.3.0.tar.gz",
+      "archive_sha256": "5f1b2134f3d6bf0e0d9e8ebb0a907508646fb43f57d0290980cba79030b7d559",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/LICENSE",
+      "license_sha256": "2ae19400d4ddde4d4a54e6194f6a089184fe35d415abebb61020b9ba485672bc"
+    },
+    "stream_chat": {
+      "version": "10.3.0",
+      "source": "https://pub.dev/api/archives/stream_chat-10.3.0.tar.gz",
+      "archive_sha256": "276fd564da7939e8be024efe11d0329523925b0ce96762e89885b62873f0e812",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/LICENSE",
+      "license_sha256": "2ae19400d4ddde4d4a54e6194f6a089184fe35d415abebb61020b9ba485672bc"
+    },
+    "stream_chat_persistence": {
+      "version": "10.3.0",
+      "source": "https://pub.dev/api/archives/stream_chat_persistence-10.3.0.tar.gz",
+      "archive_sha256": "ecba2583f33fa0b56228acc41f14e2ec5e04e4afcbf4edfab3e6252b148bda2e",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-chat-flutter/v10.3.0/LICENSE",
+      "license_sha256": "2ae19400d4ddde4d4a54e6194f6a089184fe35d415abebb61020b9ba485672bc"
+    },
+    "stream_video_flutter": {
+      "version": "1.4.3",
+      "source": "https://pub.dev/api/archives/stream_video_flutter-1.4.3.tar.gz",
+      "archive_sha256": "d2e8456a68ab65c3f33166a7b8f658a0310fa04f74b39f529a714b14eee7d622",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-video-flutter/v1.4.3/LICENSE",
+      "license_sha256": "9cdb667ca0efaecfbcabea9bed4da1e33e182effbb76f2cd1878034eedddba00"
+    },
+    "stream_video": {
+      "version": "1.4.3",
+      "source": "https://pub.dev/api/archives/stream_video-1.4.3.tar.gz",
+      "archive_sha256": "df6d6da21bdfd1b3170d1b7eec0fd33d017d06e26b32b9ee9918f8721c70cc35",
+      "license": "Stream Source Code License Agreement",
+      "license_source": "https://raw.githubusercontent.com/GetStream/stream-video-flutter/v1.4.3/LICENSE",
+      "license_sha256": "9cdb667ca0efaecfbcabea9bed4da1e33e182effbb76f2cd1878034eedddba00"
+    }
+  }
+}

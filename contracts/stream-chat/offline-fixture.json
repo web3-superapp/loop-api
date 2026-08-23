@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "mode": "offline_fixture",
+  "authority": "non_production_stream_shaped_fixture",
+  "label": "Offline fixture — Stream credentials not connected",
+  "network": "disabled",
+  "mutable": false,
+  "generated_at": "2026-08-23T00:00:00.000Z",
+  "current_user": {"id": "loop_fixture_user_7", "name": "Voyager_7"},
+  "channels": [
+    {"cid": "messaging:glyph-hunters", "name": "Glyph Hunters", "member_count": 1247, "unread_count": 12, "muted": false},
+    {"cid": "messaging:eth-holders", "name": "ETH Holders Lounge", "member_count": 8400, "unread_count": 3, "muted": false}
+  ],
+  "messages": [
+    {"id": "fixture_m_001", "cid": "messaging:glyph-hunters", "user_id": "loop_fixture_nightowl", "alias": "NightOwl", "text": "gm degens. small cap find; DYOR", "created_at": "2026-08-23T14:02:00.000Z", "parent_id": null, "attachments": []},
+    {"id": "fixture_m_002", "cid": "messaging:glyph-hunters", "user_id": "loop_fixture_user_7", "alias": "Voyager_7", "text": "watch the liquidity unlock", "created_at": "2026-08-23T14:05:00.000Z", "parent_id": null, "attachments": []},
+    {"id": "fixture_m_003", "cid": "messaging:glyph-hunters", "user_id": "loop_fixture_sable", "alias": "0xSable", "text": "contract facts attached", "created_at": "2026-08-23T14:07:00.000Z", "parent_id": "fixture_m_001", "attachments": [{"type": "token_card", "asset_id": "GLYPH", "snapshot": "offline_fixture"}]}
+  ],
+  "audio_rooms": [
+    {"call_cid": "audio_room:glyph-watch-party", "name": "ETH ETF watch party", "status": "offline_fixture", "participant_count": 214, "speaker_count": 8, "microphone_enabled": false}
+  ],
+  "scenarios": {
+    "connection": "offline_fixture",
+    "message_send": "disabled_without_stream_credentials",
+    "attachment_upload": "disabled_without_stream_credentials",
+    "moderation": "disabled_without_stream_credentials",
+    "audio_room_join": "disabled_without_stream_credentials"
+  }
+}

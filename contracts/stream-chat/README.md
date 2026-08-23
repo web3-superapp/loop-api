@@ -1,0 +1,78 @@
+# LOOP Stream Chat contract
+
+Stream is the sole communication authority for production Chat and Stream Video/Audio Rooms. LOOP does not implement a parallel message store, socket protocol, delivery engine, member database, moderation service, attachment CDN, token issuer, participant presence system, SFU/WebRTC transport, or media reconnect engine. This directory is a reviewable provider contract, not a chat backend or RTC backend.
+
+## Delivery state
+
+- **credentials later:** the owner has not supplied a Stream application, public API key, secret, or Enterprise entitlements.
+- Production therefore **fails closed** (`fail closed`). Missing API key, server token endpoint, token provider, injected official SDK bridge, role grant, or channel capability leaves Chat unavailable; it never falls back to a custom transport or the fixture.
+- The production thin boundary is bundled exactly once from `src/stream-chat-provider.js`, after `wallet-transfer.js` and before `app.js`. It remains fail closed and makes no connected/ready success claim.
+- The **explicit offline fixture** lives only at `src/test-fixtures/stream-chat-offline-fixture.js`. Tests may load it directly; `build.py` excludes it and `app.html` must contain neither its bytes nor its label. It is deterministic read-only review data, never evidence of a connected Stream environment.
+- This slice performs **no SDK install/import**. It records exact future Flutter pins and verifies an injected bridge contract without adding package/build dependencies.
+
+## Boundary
+
+The app authenticates to LOOP first. `POST /v1/chat/token` uses the existing same-origin authenticated session and CSRF protection; it accepts no client-selected `user_id`. The BFF derives a random opaque internal chat subject matching exactly `^loop_[a-z0-9_-]{8,58}$`, mints an expiring Stream user token with the server-only secret, and returns `Cache-Control: no-store`. Flutter supplies that endpoint as the official SDK token provider. The OpenAPI schema, JavaScript boundary, runtime tests, and fixture identities use this one grammar.
+
+The thin LOOP adapter delegates only the pinned client's direct `queryMembers` and `getMessage` API queries, same-provider-object reconciliation, independent Chat/Video disconnect, and Audio Room operations to injected official SDK bridges. It implements no Chat transport or state engine. Stream's Chat controllers/channel state and Video `CallState` remain authoritative. Channel listing is not delegated: the pinned client path has a delivery side effect, while a proven no-write official server/BFF listing path is still PENDING.
+
+## Every Chat provider mutation is gated
+
+The gate is deliberately broader than message sends and classifies operations by the pinned SDK's actual call graph, not by names such as “query” or flags such as `watch: false`. In the official SDK, `connectUser` upserts the user, `channel.watch()` is get-or-create, and `queryChannels(watch: false)` still submits returned channels to `ChannelDeliveryReporter`, which schedules `markChannelsDelivered` calls. These persistent provider writes make `connect_user`, `watch_channel`, and `query_channels` mutations; all fail closed alongside message, thread, reaction, read/unread, moderation, and attachment mutations. The production bridge contains none of `connectUser`, `watchChannel`, `queryChannels`, `markChannelsDelivered`, `markRead`, or `markUnread`; the public `connect`, `watchChannel`, and `queryChannels` surfaces always throw `STREAM_CHAT_PROVIDER_MUTATION_PENDING`. No boolean enables them, and no side-effect alias is exposed.
+
+`watch: false` is not proof of a read-only channel list. The locked `stream_chat` 10.3.0 `client.dart` and `channel_delivery_reporter.dart` hashes in `sdk-lock.json` prove the delivery-receipt path. Channel listing remains PENDING until an official server/BFF query is pinned and both source inspection and credentialed runtime evidence prove that it performs no provider write. No guessed substitute or ordinary client `queryChannels` alias may bypass that gate. The remaining `queryMembers` and `getMessage` bridges are classified from their direct pinned-source API calls, which contain no client mark-read, watch, or delivery-reporter hook.
+
+## RetryQueue and ambiguous writes
+
+The pinned `stream_chat` 10.3.0 source is explicit: `RetryQueue` listens for `connection.recovered`, then calls `channel.state?.retryFailedMessages()`. `Channel.sendMessage` also places retriable network failures in that retry queue. This candidate has no credentialed Flutter evidence that the automatic retry path can be safely suppressed or avoided. It therefore does not claim `refresh_do_not_replay` as an implemented behavior: every exposed production Chat provider mutation is **disabled and PENDING** with `STREAM_CHAT_PROVIDER_MUTATION_PENDING` until the real bridge is audited.
+
+The future integration must assign the Stream `Message.id` before first submission and retain that same provider stable ID across the submit, response receipt, and authoritative `getMessage` query. An ambiguous result is held and reconciled with that same provider stable ID. Releasing the ID, refreshing, and replaying it is forbidden; changing to a new ID without fresh user reconfirmation is also forbidden. If the official SDK retry cannot be made safe under this model, Chat writes stay fail closed.
+
+## Lossless events and exact Video projections
+
+LOOP does not use milliseconds, event categories, or a synthetic object version to discard Stream signals. Every admitted official signal is projected in arrival order. Repeated signals are allowed; convergence comes from the provider object identity and a fresh official SDK projection/query. Thus distinct `reaction.new` and `reaction.updated` signals in the same millisecond are both retained. A stable provider event ID may be carried for observability, but the adapter does not turn it into a parallel state authority.
+
+For Stream Video 1.4.3, the exact participant events are `call.session_participant_joined` and `call.session_participant_left`. They normalize to a fresh participant projection. Connection comes from `StreamVideo.state.connection`; call status comes from `CallState.status`; real-time participants come only from `CallState.callParticipants`. That participant projection is documented by Stream as truncated to 250 entries, while `CallState.participantCount` supplies the count. `queryMembers` is not treated as real-time participant presence, and rooms requiring a complete live roster over 250 stay PENDING.
+
+Attachments remain Stream-owned. The picker mirrors the server's allowlist and size policy for early UX, while Stream settings are final. Signed channel URLs are member-scoped and expire; URLs/tokens are not persisted. An expired message attachment is refreshed through `getMessage`. Cleanup runs only for a definitively unsent/cancelled upload; an ambiguous send is refreshed before deletion.
+
+Privacy uses a random internal ID, never a wallet address. Alias and avatar are mutable presentation fields. Tokens, signed URLs, wallet addresses, private keys, phrases, and other secrets are excluded from persistent state and logs. Export and deletion are authenticated server workflows using Stream tasks.
+
+## Dependency and license gate
+
+The official Chat Flutter package family is pinned to `10.3.0` (tag commit `34cd23c2b7be77f3788e65698072dbecb0ddd077`) and Stream Video/UI Kit to `1.4.3` (tag commit `c0bb3bce2d0503145b29a10eaea5df37929a131a`) with pub.dev archive SHA-256 values in `sdk-lock.json`.
+
+Important: the current `v10.3.0` repository license is the proprietary **Stream Source Code License Agreement**, not BSD/MIT. It requires a current Stream customer and contains use/distribution restrictions. Procurement/legal acceptance and the signed Stream commercial terms are an R0 **license review** gate before downloading/installing the SDK or shipping it. No auxiliary OSS adapter is used in this slice.
+
+## Credentialed R0 release gates
+
+1. Token identity binding, expiry/refresh, CSRF, rate limits, logout, replay resistance, and secret/log scans.
+2. Credentialed proof for `connectUser` identity/upsert behavior, real channel creation/membership/capability/role tests, and `channel.watch()` get-or-create behavior; server calls bypass client permission checks and need separate authorization tests. Channel listing needs a pinned official server/BFF no-write implementation plus negative evidence against ordinary `queryChannels(watch: false)` delivery writes, or it remains disabled.
+3. Credentialed source/runtime proof for either safe suppression/avoidance of the official RetryQueue auto-retry path or continued production mutation disablement; two-device message/update/delete, thread, reaction, mark-read/unread, pagination, reconnect, same-ID reconciliation, and ambiguous-outcome tests.
+4. Upload type/size policy, progress/cancel, orphan cleanup, signed URL membership denial, 14-day expiry refresh, and deletion tests.
+5. Flag/mute/ban/moderator/hard-delete workflows and audit evidence.
+6. Privacy retention, export, pruning/hard deletion, and incident-log redaction tests.
+7. Stream Enterprise large-channel proof for the target 200k-member group: partitioning, messages, replies, reactions, mentions, read semantics, member pagination, concurrent connections, rate limits, and sales-confirmed pricing/SLA.
+8. Stream Audio Room proof for target audience tiers: role/capability grants, backstage/go-live, join/leave, request-to-speak, microphone permissions, moderator mute/kick/block/end, interruption/background/audio-route behavior, reconnection failure, participant privacy, the 250-entry real-time projection boundary, and the sales-confirmed 500/5,000/50,000 listener delivery model.
+
+Until all R0 evidence passes, the bundled production seam stays fail closed and production Chat stays unavailable. The labelled offline fixture remains test-only and is never bundled into `app.html`.
+
+## Official sources checked 2026-08-23
+
+- Flutter SDK overview and server/client split: https://getstream.io/chat/docs/flutter-dart/
+- Production authentication checklist: https://getstream.io/chat/docs/sdk/flutter/guides/go-live-checklist/
+- Platform token provider and expiry: https://getstream.io/docs/platform/authentication/
+- Reconnect recovery: https://getstream.io/chat/docs/sdk/flutter/stream-chat-flutter-core/stream-chat-core/
+- Events: https://getstream.io/chat/docs/flutter-dart/event_object/
+- Channels and members: https://getstream.io/chat/docs/flutter-dart/creating-channels/ and https://getstream.io/chat/docs/flutter-dart/channel-members/
+- Threads, reactions, unread: https://getstream.io/chat/docs/flutter-dart/threads/ , https://getstream.io/chat/docs/flutter-dart/send_reaction/ , https://getstream.io/chat/docs/flutter-dart/unread/
+- Attachments: https://getstream.io/chat/docs/flutter-dart/file-uploads/
+- Moderation and permissions: https://getstream.io/chat/docs/sdk/flutter/guides/moderation/ and https://getstream.io/docs/platform/permissions/
+- Privacy export/delete: https://getstream.io/chat/docs/flutter-dart/exporting_channels/ and https://getstream.io/chat/docs/flutter-dart/update_users/
+- Official package metadata: https://pub.dev/packages/stream_chat_flutter
+- Official Chat RetryQueue source at v10.3.0: https://github.com/GetStream/stream-chat-flutter/blob/v10.3.0/packages/stream_chat/lib/src/client/retry_queue.dart
+- Official Chat Channel send/retry source at v10.3.0: https://github.com/GetStream/stream-chat-flutter/blob/v10.3.0/packages/stream_chat/lib/src/client/channel.dart
+- Official Chat client source at v10.3.0 (`queryChannels` to delivery reporter and `markChannelsDelivered`): https://github.com/GetStream/stream-chat-flutter/blob/v10.3.0/packages/stream_chat/lib/src/client/client.dart
+- Official Chat delivery reporter source at v10.3.0: https://github.com/GetStream/stream-chat-flutter/blob/v10.3.0/packages/stream_chat/lib/src/client/channel_delivery_reporter.dart
+- Stream Video Flutter overview, exact call events, Audio Room tutorial, call state, and moderation: https://getstream.io/video/docs/flutter/ , https://getstream.io/video/docs/flutter/guides/call-events/ , https://getstream.io/video/sdk/flutter/tutorial/audio-room/ , https://getstream.io/video/docs/flutter/guides/call-and-participant-state/ , https://getstream.io/video/docs/flutter/guides/permissions-and-moderation/
+- Official Video package metadata: https://pub.dev/packages/stream_video_flutter

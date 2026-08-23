@@ -99,14 +99,14 @@ Responsibility split:
 - `wallet-provider.js`: raw Privy DTO documentation, frozen normalized DTO schemas, simulator fixtures, wallet capability resolution, no DOM.
 - `wallet-review.js`: F11 local review controller, session map, transitions, formatting of normalized fields, provider handoff invocation.
 - `app.js`: routes, parameters, DOM rendering, event wiring, local copy and QR fallback.
-- `scripts-order.txt`: the only JavaScript concatenation manifest, exactly in this order: `vendor/qrcode-generator-1.4.4.js`, `wallet-provider.js`, `wallet-review.js`, `app.js`.
+- `scripts-order.txt`: the only JavaScript concatenation manifest. The original wallet slice used `vendor/qrcode-generator-1.4.4.js`, `wallet-provider.js`, `wallet-review.js`, `app.js`; the current integrated manifest is exactly `vendor/qrcode-generator-1.4.4.js`, `wallet-provider.js`, `wallet-review.js`, `wallet-transfer.js`, `stream-chat-provider.js`, `app.js`.
 - `vendor-lock.json`: exact dependency name/version, upstream source URL, MIT license identifier, and SHA-256 of the vendored bytes; the adjacent license file preserves the upstream notice.
 - HTML fragments: semantic structure only.
 - CSS: visual, responsive, focus, inert, loading, error, and reduced-motion states.
 
 Production Flutter and BFF implementations are follow-on deliverables. The static HTML may implement only `SimulatedPrivyWalletAdapter`; naming, status copy, and tests must make that explicit.
 
-`build.py` must read and validate `scripts-order.txt`, reject duplicates/missing files/unlisted JavaScript under `src/` (excluding test fixtures), verify the vendored checksum from `vendor-lock.json`, and concatenate each file once inside the single existing inline `<script>` in manifest order. No dynamic script or CDN is introduced. The pinned QR dependency is `qrcode-generator` 1.4.4, MIT-licensed from its upstream repository; implementation must record the exact vendored-file digest rather than trusting the version label.
+`build.py` must read and validate `scripts-order.txt`, reject duplicates/missing files/unlisted JavaScript under `src/` (excluding only the exact top-level `src/test-fixtures/` boundary), verify the vendored checksum from `vendor-lock.json`, and concatenate each production file once inside the single existing inline `<script>` in manifest order. The Stream offline fixture stays under that test-only directory and is forbidden from `app.html`. No dynamic script or CDN is introduced. The pinned QR dependency is `qrcode-generator` 1.4.4, MIT-licensed from its upstream repository; implementation must record the exact vendored-file digest rather than trusting the version label.
 
 ## 5. Wallet-class capability matrix
 

@@ -30,7 +30,8 @@ SCREENS = [
     'tx-result', 'swap', 'dapp', 'profile',
 ]
 SCRIPTS = ['vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
-           'wallet-review.js', 'wallet-transfer.js', 'app.js']
+           'wallet-review.js', 'wallet-transfer.js',
+           'stream-chat-provider.js', 'app.js']
 SHELLS = ('send', 'send-to', 'send-confirm', 'tx-result')
 CANONICAL_STACKS = {
     'send': ['scr-wallet', 'scr-send'],
@@ -4354,7 +4355,7 @@ print('== Transfer source/build contract ==')
 screen_manifest = lines(SRC / 'screens-order.txt')
 script_manifest = lines(SRC / 'scripts-order.txt')
 check(screen_manifest == SCREENS, f'exact pinned 26-screen order: {screen_manifest}')
-check(script_manifest == SCRIPTS, f'exact pinned five-script order: {script_manifest}')
+check(script_manifest == SCRIPTS, f'exact pinned six-script order: {script_manifest}')
 screen_sources = sorted(p.stem for p in (SRC / 'screens').glob('*.html')
                         if not p.name.startswith('._'))
 script_sources = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob('*.js')
@@ -4467,7 +4468,7 @@ check('length>22' not in app_source and app_source.count('length>26') == 3,
 
 build_source = (ROOT / 'build.py').read_text()
 check('exact pinned 26-screen order' in build_source, 'builder pins 26-screen error text')
-check('exact pinned five-script order' in build_source, 'builder pins five-script error text')
+check('exact pinned six-script order' in build_source, 'builder pins six-script error text')
 build = subprocess.run([sys.executable, 'build.py'], cwd=ROOT, text=True,
                        capture_output=True, check=False)
 check(build.returncode == 0 and '26 screens' in build.stdout,

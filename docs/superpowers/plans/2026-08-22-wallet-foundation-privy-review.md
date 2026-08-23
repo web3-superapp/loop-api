@@ -50,6 +50,8 @@ wallet-review.js
 app.js
 ```
 
+That list records the original wallet-foundation checkpoint. The current integrated production manifest is six scripts and inserts `wallet-transfer.js` plus the fail-closed `stream-chat-provider.js` before `app.js`; `src/test-fixtures/stream-chat-offline-fixture.js` remains outside the production bundle.
+
 `src/vendor/vendor-lock.json` records:
 
 ```json

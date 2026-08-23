@@ -136,6 +136,14 @@
 - The remediated offline `docs.html` SHA-256 is `b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b`.
 - The prior Task 1 checkpoint hashes remain recorded above. The global goal remains incomplete; F3–F5/F12 behavior, Stream, Hyperliquid, and remaining A–I work are still pending/in progress.
 
+## Stream v5 build integration deterministic evidence
+
+- This is a production seam checkpoint, not a connected Stream provider or a final project checkpoint.
+- The current 26-screen, six-script `app.html` SHA-256 is `fc4041d2dfe986c34eedb0ac3f8fac2b2bfb73cf008b0e50c5dd60a63b169225`.
+- The offline `docs.html` remains `b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b`.
+- `stream-chat-provider.js` is bundled exactly once after `wallet-transfer.js` and before `app.js`; the offline fixture is test-only under `src/test-fixtures/` and is absent from `app.html`.
+- Credentials, official SDK installation, commercial/license acceptance, and credentialed R0 remain pending. The global goal remains incomplete.
+
 ## Task 1 route-shell post-spec-fix deterministic evidence
 
 - This is a post-spec-fix checkpoint, not F3–F5/F12 implementation or a final project checkpoint.

@@ -70,15 +70,18 @@ dapp
 profile
 ```
 
-The exact five-script order is:
+The current exact six-script production order is:
 
 ```text
 vendor/qrcode-generator-1.4.4.js
 wallet-provider.js
 wallet-review.js
 wallet-transfer.js
+stream-chat-provider.js
 app.js
 ```
+
+`stream-chat-provider.js` is a DOM-free, fail-closed Stream Chat/Video integration seam. The immutable offline fixture is test-only at `src/test-fixtures/stream-chat-offline-fixture.js`; the builder excludes that directory and `app.html` must never contain fixture bytes or connected/ready success claims.
 
 The transfer facade exposes constructors only; it never holds or returns provider capabilities:
 
@@ -146,7 +149,7 @@ For determinism, build `app.html` twice into a `mktemp -d` comparison copy and r
 
 **Files:** create `_tmp/verify_wallet_transfer.py` and four screen fragments; modify `build.py`, `src/screens-order.txt`, `src/scripts-order.txt`, `_tmp/verify_wallet_foundation.py`, `_tmp/verify_split.py`, `_tmp/verify_docs.py`, `README.md`, `findings.md`, `文档/页面清单.md`, `文档/开发进度安排.md`; create the minimal `src/wallet-transfer.js` frozen-facade shell.
 
-- [x] Add focused source/build assertions first: exact 26-screen order, exact five-script order, four unique semantic screen fragments, four routes, one F11 dialog, no second confirmation dialog, no orphan scripts/screens, and no new network/storage/signing primitive. Run `python3 _tmp/verify_wallet_transfer.py`; expected failure is missing screens/routes/script. Contract assertions are added only in Task 2.
+- [x] Add focused source/build assertions first: exact 26-screen order, then-exact five-script wallet skeleton (now evolved to the exact six-script production manifest above), four unique semantic screen fragments, four routes, one F11 dialog, no second confirmation dialog, no orphan scripts/screens, and no new network/storage/signing primitive. Run `python3 _tmp/verify_wallet_transfer.py`; expected failure is missing screens/routes/script. Contract assertions are added only in Task 2.
 - [x] Add Playwright RED checks for direct `#send`, `#send-to`, `#send-confirm`, `#tx-result`, exactly one active non-inert screen, canonical safe ancestry, zero console/page errors, and honest unavailable state without a closure binding.
 - [x] Create minimal fragments with one `.scr`, one visible H1, route-focus target, safe back control and semantic state containers. Do not add working buttons or fake provider data yet.
 - [x] Insert the screens after `asset` as `send`, `send-to`, `send-confirm`, then retain `receive`, insert `tx-result`, and keep the remaining order. Update `EXPECTED_SCREENS` and its exact `26-screen` failure text.

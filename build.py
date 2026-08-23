@@ -54,6 +54,7 @@ EXPECTED_SCRIPTS = (
     'wallet-provider.js',
     'wallet-review.js',
     'wallet-transfer.js',
+    'stream-chat-provider.js',
     'app.js',
 )
 EXPECTED_VENDOR_LOCK = {
@@ -125,7 +126,7 @@ def confined_source_file(relative, label, *, require_js=False):
 
 
 if scripts_order != list(EXPECTED_SCRIPTS):
-    sys.exit('scripts-order.txt must contain the exact pinned five-script order')
+    sys.exit('scripts-order.txt must contain the exact pinned six-script order')
 script_paths = {
     name: confined_source_file(name, 'script manifest entry', require_js=True)
     for name in scripts_order

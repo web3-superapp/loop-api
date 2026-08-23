@@ -28,6 +28,7 @@ EXPECTED_SCRIPTS = [
     'wallet-provider.js',
     'wallet-review.js',
     'wallet-transfer.js',
+    'stream-chat-provider.js',
     'app.js',
 ]
 EXPECTED_LOCK = {

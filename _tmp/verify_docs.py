@@ -431,12 +431,14 @@ task1_quality_remediation_app_hash = \
     '906e362ee659e95b4169302879959c87a100231a41fbe7e03dad2393b150366f'
 task1_post_spec_fix_app_hash = \
     '9553b2b354189b61c99be967d57ec0822e5d9d85277333ed3268ffd589fde153'
+stream_v5_integrated_app_hash = \
+    'fc4041d2dfe986c34eedb0ac3f8fac2b2bfb73cf008b0e50c5dd60a63b169225'
 task1_current_docs_hash = \
     'b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b'
 hashes_in_findings = re.findall(r'\b[a-f0-9]{64}\b', findings_doc)
 actual_app_hash = sha256(ROOT / 'app.html')
 actual_docs_hash = sha256(PAGE)
-check(actual_app_hash == task1_post_spec_fix_app_hash and
+check(actual_app_hash == stream_v5_integrated_app_hash and
       actual_docs_hash == task1_current_docs_hash and
       task1_quality_remediation_app_hash != task1_post_spec_fix_app_hash and
       app_pre_review_hash in findings_doc and
@@ -448,13 +450,14 @@ check(actual_app_hash == task1_post_spec_fix_app_hash and
       task1_docs_hash in findings_doc and
       task1_quality_remediation_app_hash in findings_doc and
       task1_post_spec_fix_app_hash in findings_doc and
+      stream_v5_integrated_app_hash in findings_doc and
       task1_current_docs_hash in findings_doc and
       set(hashes_in_findings) >= {
           app_pre_review_hash, docs_pre_review_hash, docs_post_remediation_hash,
           docs_quality_remediation_hash, docs_vendored_marked_hash,
           task1_app_hash, task1_docs_hash,
           task1_quality_remediation_app_hash, task1_post_spec_fix_app_hash,
-          task1_current_docs_hash} and
+          stream_v5_integrated_app_hash, task1_current_docs_hash} and
       all(term in findings_doc for term in (
           'Task 8 pre-review deterministic evidence',
           'pre-review evidence, not a final checkpoint',
@@ -471,8 +474,10 @@ check(actual_app_hash == task1_post_spec_fix_app_hash and
           'quality remediation, not F3–F5/F12 implementation',
           'Task 1 route-shell post-spec-fix deterministic evidence',
           'post-spec-fix checkpoint, not F3–F5/F12 implementation',
+          'Stream v5 build integration deterministic evidence',
+          'production seam checkpoint, not a connected Stream provider',
           'global goal remains incomplete')),
-      f'历史/Task 1 quality checkpoint SHA-256 已区分，当前实际 app/docs hash '
+      f'历史/Task 1/Stream v5 checkpoint SHA-256 已区分，当前实际 app/docs hash '
       f'与对应记录一致：{actual_app_hash}/{actual_docs_hash}')
 
 body_rows = [

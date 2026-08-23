@@ -4,8 +4,14 @@ import pathlib
 import sys
 from playwright.sync_api import sync_playwright
 
-APP = pathlib.Path(__file__).resolve().parent.parent / 'app.html'
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+APP = ROOT / 'app.html'
 URL = APP.as_uri()
+PRODUCTION_SCRIPTS = [
+    'vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
+    'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
+    'app.js',
+]
 
 HASHES = ['splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
           'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
@@ -28,6 +34,18 @@ def fresh(pg, h):
     pg.goto(f'{URL}#{h}')
     pg.wait_for_load_state('networkidle')
     pg.wait_for_timeout(260)
+
+
+manifest = (ROOT / 'src/scripts-order.txt').read_text().splitlines()
+generated = APP.read_text()
+check(manifest == PRODUCTION_SCRIPTS,
+      f'生产脚本为精确六项顺序: {manifest}')
+check(generated.count(
+    '/* ============ SCRIPT: stream-chat-provider.js ============ */') == 1,
+      '生成物恰好包含一次 Stream 生产适配器')
+check('StreamChatOfflineFixture' not in generated and
+      'Offline fixture — Stream credentials not connected' not in generated,
+      '测试专用 Stream 离线 fixture 未进入生产生成物')
 
 
 with sync_playwright() as p:
