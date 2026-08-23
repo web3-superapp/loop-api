@@ -1,0 +1,33 @@
+      <section class="scr" id="scr-swap">
+        <div class="pad">
+          <button class="back" onclick="back()">‹ Back</button>
+          <div class="h-row" style="margin-top:10px"><h1 class="h1">Swap</h1><span class="chip">Slippage 0.5% ▾</span></div>
+          <div class="swap-box">
+            <div class="sb-l"><span>You pay</span><span>Balance: 5,543.55</span></div>
+            <div class="sb-m">
+              <input id="pay-amt" value="500" readonly inputmode="decimal" aria-label="You pay">
+              <div class="coin-pick" id="pay-token" data-asset-id="USDC"><div class="tok-logo" style="background:linear-gradient(135deg,#5ac8ff,#3d7bf0)">$</div>USDC ▾</div>
+            </div>
+          </div>
+          <div class="swap-flip">⇅</div>
+          <div class="swap-box">
+            <div class="sb-l"><span>You receive · est.</span><span>Balance: 0</span></div>
+            <div class="sb-m">
+              <input id="receive-amt" value="216,450" readonly style="color:var(--mint)" aria-label="You receive estimated">
+              <div class="coin-pick" id="receive-token" data-asset-id="GLYPH"><div class="tok-logo" style="background:linear-gradient(135deg,var(--cyan),var(--mint))">G</div>GLYPH ▾</div>
+            </div>
+          </div>
+          <div class="swap-meta">
+            <div><span>Rate</span><b>1 GLYPH ≈ 0.00231 USDC</b></div>
+            <!-- Routing belongs to the wallet provider's built-in swap — do not imply an
+                 in-house router we are not building. See 文档/账号注册清单.md 决策 9. -->
+            <div><span>Route</span><b>Uniswap v3 · Ethereum</b></div>
+            <div><span>Network fee</span><b>≈ $1.84 · Ethereum</b></div>
+            <div><span>Price impact</span><b class="up">0.21%</b></div>
+          </div>
+          <div class="ai-ok">🛡️ <span>Simulated Privy quote available · review the exact output, minimum and fees before handoff</span></div>
+          <button class="btn btn-primary swap-cta" id="swap-submit" data-requires-signing onclick="doSwap(this)">Review swap</button>
+          <button class="btn btn-ghost completed-provider-fixture" id="completed-provider-fixture" type="button" aria-label="Show completed provider fixture" data-provider-fixture="completed">Show completed provider fixture</button>
+          <p id="swap-review-note" style="text-align:center;font-size:10.5px;color:var(--tx3);margin-top:12px">No swap has been submitted. A fresh simulated Privy quote opens the shared wallet review.</p>
+        </div>
+      </section>

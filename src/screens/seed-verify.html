@@ -1,0 +1,22 @@
+      <section class="scr account-screen" id="scr-seed-verify" aria-labelledby="seed-verify-title">
+        <div class="account-shell seed-verify-shell">
+          <p class="account-kicker">Final check</p>
+          <h1 id="seed-verify-title" tabindex="-1" data-route-focus>Verify your recovery phrase</h1>
+          <p id="seed-verify-help">Enter the requested words exactly as you recorded them.</p>
+          <form id="seed-verify-form">
+            <div class="seed-verify-fields">
+              <label for="seed-verify-3">Word 3</label>
+              <input id="seed-verify-3" name="seed-word-3" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="seed-verify-help" data-sensitive>
+              <label for="seed-verify-7">Word 7</label>
+              <input id="seed-verify-7" name="seed-word-7" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="seed-verify-help" data-sensitive>
+              <label for="seed-verify-11">Word 11</label>
+              <input id="seed-verify-11" name="seed-word-11" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="seed-verify-help" data-sensitive>
+            </div>
+            <p class="seed-verify-field-error" id="seed-verify-field-error" hidden>Check the marked word and try again.</p>
+            <p class="otp-status" id="seed-verify-status" role="status" aria-live="polite"></p>
+            <p class="account-note" id="seed-verify-attempts"></p>
+            <p class="account-note seed-verify-countdown" id="seed-verify-countdown" aria-live="off"></p>
+            <button class="btn btn-primary" id="seed-verify-submit" type="submit" disabled>Verify phrase</button>
+          </form>
+        </div>
+      </section>

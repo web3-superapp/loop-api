@@ -1,0 +1,11 @@
+{
+  "name": "marked",
+  "version": "18.0.10",
+  "license": "MIT",
+  "npm_integrity": "sha512-FJeH4bRpYoXiggcgriCGItKCSv3xkngJc4QCZ/rkQCogU3VYaLxYJoZl8Nw/b4+x7iij/pd+09mZ6A1dXzpL0A==",
+  "source": "https://registry.npmjs.org/marked/-/marked-18.0.10.tgz",
+  "file": "docs_vendor/marked-18.0.10.umd.js",
+  "sha256": "eaccee2fb9fb3b2c09e873a5504da82507850d9e677bd720122ac49e2a03982a",
+  "license_file": "docs_vendor/marked.LICENSE.md",
+  "license_sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+}

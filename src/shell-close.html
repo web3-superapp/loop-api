@@ -1,0 +1,114 @@
+    </div><!-- /viewport -->
+
+    <!-- Group chat header + composer live OUTSIDE the scroll container so they stay pinned.
+         Shown only while the group screen is active (see render()). -->
+    <div class="gc-head" id="gcHead" hidden>
+      <button class="back" onclick="back()" aria-label="Back">‹</button>
+      <div class="avatar" style="width:34px;height:34px;background:linear-gradient(135deg,var(--cyan),var(--mint))">🜁</div>
+      <div><p class="gc-title">Glyph Hunters</p><p class="gc-sub">1,247 members · 89 online · anonymous</p></div>
+      <div class="gc-call">
+        <button class="icon-btn" title="Voice room" aria-label="Voice room" onclick="openVoiceRoom()"><svg viewBox="0 0 24 24"><path d="M5 4h3l2 5-2.5 1.5a12 12 0 0 0 5 5L14 13l5 2v3a2 2 0 0 1-2 2A14 14 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></button>
+        <button class="icon-btn" title="Video" onclick="toast('Video &amp; meetings ship in P1')"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M15 10.5 21 7v10l-6-3.5"/></svg></button>
+      </div>
+    </div>
+
+    <div class="composer" id="composer" hidden>
+      <button class="icon-btn" style="border:0;background:none" aria-label="Attach"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <input placeholder="Message… ($ticker or 0x… auto-detects)" aria-label="Message" onkeydown="if(event.key==='Enter'){toast('Prototype: sending is disabled');this.value=''}">
+      <button class="icon-btn" style="border:0;background:none" title="Voice note" aria-label="Voice note"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button class="send" onclick="toast('Prototype: sending is disabled')" aria-label="Send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
+    </div>
+
+    <!-- global in-call bar — visible on every tab while connected -->
+    <div class="callbar" id="callbar" role="status" aria-live="polite">
+      <button class="cb-open" onclick="returnToVoiceRoom()" aria-label="Return to voice room">
+        <div class="eq"><i></i><i></i><i></i></div>
+        <div style="min-width:0">
+          <p class="cb-t">ETH ETF watch party</p>
+          <p class="cb-s" id="cbStatus">In voice · 00:00</p>
+        </div>
+      </button>
+      <button class="icon-btn" id="cbMuteBtn" onclick="toggleMute()" aria-pressed="false" aria-label="Mute microphone" title="Mute microphone">🎙️</button>
+      <button class="btn cb-leave" onclick="leaveVoiceRoom()">Leave</button>
+    </div>
+
+    <!-- tab bar -->
+    <nav class="tabbar">
+      <button class="tab on" data-tab="home" onclick="goTab('home')">
+        <svg viewBox="0 0 24 24"><path d="M4 11.2 12 4.5l8 6.7V19a1.3 1.3 0 0 1-1.3 1.3H15v-5.6H9v5.6H5.3A1.3 1.3 0 0 1 4 19z"/></svg><span>Home</span></button>
+      <button class="tab" data-tab="market" onclick="goTab('market')">
+        <svg viewBox="0 0 24 24"><path d="M4 15.5l5-5.2 3.5 3.2L20 6M20 6h-4.5M20 6v4.5M4 20h16"/></svg><span>Market</span></button>
+      <button class="tab" data-tab="launchpad" onclick="goTab('launchpad')">
+        <svg viewBox="0 0 24 24"><path d="M12 2L15.5 8.5L22 9.5L17 14.5L18 21L12 18L6 21L7 14.5L2 9.5L8.5 8.5L12 2Z"/></svg><span>Launch</span></button>
+      <button class="tab" data-tab="chat" onclick="goTab('chat')">
+        <span class="live-dot" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24"><path d="M12 4.3c4.8 0 8.7 3.1 8.7 7s-3.9 7-8.7 7c-.9 0-1.8-.1-2.6-.3L5 19.6l1.2-3A6.6 6.6 0 0 1 3.3 11.3c0-3.9 3.9-7 8.7-7z"/></svg><span>Chat</span></button>
+      <button class="tab" data-tab="wallet" onclick="goTab('wallet')">
+        <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><path d="M15 12h5v3h-5a1.5 1.5 0 0 1 0-3z"/></svg><span>Wallet</span></button>
+      <button class="tab" data-tab="profile" onclick="goTab('profile')">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 20c1.3-3.6 4-5.3 7.2-5.3s5.9 1.7 7.2 5.3"/></svg><span>Profile</span></button>
+    </nav>
+
+    <p class="watch-only-explanation" id="watch-only-explanation" role="status" hidden>Watch-only wallets cannot sign transactions.</p>
+    <p class="review-provider-banner" id="review-provider-banner" role="status" aria-live="polite" hidden></p>
+
+    <!-- sheets -->
+    <div class="sheet-veil" id="veil"></div>
+
+    <section class="review-dialog" id="review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-title" aria-describedby="review-summary" inert aria-hidden="true" hidden tabindex="-1">
+      <div class="review-head">
+        <span class="review-kind" id="review-kind">Wallet request</span>
+        <h2 id="review-title">Review wallet request</h2>
+      </div>
+      <p class="review-summary" id="review-summary"></p>
+      <dl class="review-fields" id="review-fields"></dl>
+      <label class="review-preview-ack" id="review-preview-ack" hidden>
+        <input id="review-preview-check" type="checkbox">
+        <span id="review-preview-copy">Action preview unavailable</span>
+      </label>
+      <p class="review-status" id="review-status" role="status" aria-live="polite"></p>
+      <div class="review-actions">
+        <button class="btn btn-ghost review-cancel" id="review-cancel" type="button">Cancel</button>
+        <button class="btn btn-ghost review-refresh" id="review-refresh" type="button" hidden>Refresh quote</button>
+        <button class="btn btn-primary review-continue" id="review-continue" type="button">Continue with Privy</button>
+      </div>
+    </section>
+
+    <div class="sheet" id="sheet-approve" role="dialog" aria-modal="true" aria-label="Approval intercepted" inert aria-hidden="true">
+      <div class="grab"></div>
+      <h3>⚠️ &nbsp;Approval intercepted</h3>
+      <p class="sh-sub"><b class="mono" style="color:var(--tx)">Swap.zone</b> is requesting permission to spend your USDC. LOOP decoded the immutable request before any wallet handoff.</p>
+      <div class="appr-amt"><span>Requested allowance</span><b>UNLIMITED USDC</b></div>
+      <div class="appr-sug"><span>Limited review option</span><b>1,000 USDC</b></div>
+      <p class="sh-sub" style="margin-top:12px">Unlimited approvals are the #1 cause of wallet drains. You only need 1,000 for this trade.</p>
+      <p class="approval-review-notice" id="approval-review-notice">No token approval has occurred. Your choice will be reviewed before any wallet request.</p>
+      <div class="row2">
+        <button class="btn btn-primary" id="approval-limit" data-requires-signing onclick="chooseApprovalReview(this)">Review 1,000 limit</button>
+        <button class="btn btn-ghost" id="approval-unlimited" data-requires-signing onclick="chooseApprovalReview(this)">Review unlimited request</button>
+      </div>
+    </div>
+
+    <div class="sheet" id="sheet-risk" role="dialog" aria-modal="true" aria-label="Risk analysis" inert aria-hidden="true">
+      <div class="grab"></div>
+      <h3>🔴 &nbsp;Contract facts</h3>
+      <p class="sh-sub mono" style="word-break:break-all">0x1f9e4c8ad98523631ae4a59f267346ea31fa31f</p>
+      <div class="card" style="margin-top:14px;padding:8px 16px">
+        <div class="sec-item"><span>🔴</span><span><b>Hidden mint</b> — owner can create unlimited supply</span></div>
+        <div class="sec-item"><span>🔴</span><span><b>Trading pausable</b> — owner can freeze all sells</span></div>
+        <div class="sec-item"><span>🟡</span><span><b>Top 3 wallets hold 61%</b> of circulating supply</span></div>
+        <div class="sec-item"><span>🟡</span><span><b>Contract deployed 6 hours ago</b>, unverified source</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
+        <span class="risk-pill risk-high" style="font-size:12px;padding:6px 13px">2 critical findings</span>
+        <span style="font-size:11px;color:var(--tx3)">checked in-chat, automatically</span>
+      </div>
+      <div class="row2">
+        <button class="btn btn-danger" onclick="closeSheets();toast('Contract blocked for this group &amp; reported')">Block &amp; report</button>
+        <button class="btn btn-ghost" onclick="closeSheets()">Close</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div></div>
+</div>
+<a class="to-plan-mobile" href="./index.html">‹ 方案</a>

@@ -1,0 +1,28 @@
+      <section class="scr account-screen" id="scr-auth-otp" aria-labelledby="auth-otp-title">
+        <div class="account-shell auth-otp-shell">
+          <p class="account-kicker">Verification</p>
+          <h1 id="auth-otp-title" tabindex="-1" data-route-focus>Enter your code</h1>
+          <p id="otp-auth-context">Enter the code sent using your selected sign-in method.</p>
+          <form id="otp-form" novalidate>
+            <fieldset class="otp-fieldset" aria-describedby="otp-help otp-status">
+              <legend>One-time code</legend>
+              <p class="account-note" id="otp-help">Enter the six-digit verification code.</p>
+              <div class="otp-inputs">
+                <label for="otp-digit-1"><span class="sr-only">Digit 1 of 6</span><input id="otp-digit-1" name="otp-digit-1" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" data-sensitive></label>
+                <label for="otp-digit-2"><span class="sr-only">Digit 2 of 6</span><input id="otp-digit-2" name="otp-digit-2" type="text" inputmode="numeric" autocomplete="off" maxlength="1" data-sensitive></label>
+                <label for="otp-digit-3"><span class="sr-only">Digit 3 of 6</span><input id="otp-digit-3" name="otp-digit-3" type="text" inputmode="numeric" autocomplete="off" maxlength="1" data-sensitive></label>
+                <label for="otp-digit-4"><span class="sr-only">Digit 4 of 6</span><input id="otp-digit-4" name="otp-digit-4" type="text" inputmode="numeric" autocomplete="off" maxlength="1" data-sensitive></label>
+                <label for="otp-digit-5"><span class="sr-only">Digit 5 of 6</span><input id="otp-digit-5" name="otp-digit-5" type="text" inputmode="numeric" autocomplete="off" maxlength="1" data-sensitive></label>
+                <label for="otp-digit-6"><span class="sr-only">Digit 6 of 6</span><input id="otp-digit-6" name="otp-digit-6" type="text" inputmode="numeric" autocomplete="off" maxlength="1" data-sensitive></label>
+              </div>
+            </fieldset>
+            <div class="account-status otp-status" id="otp-status" role="status" aria-live="polite" aria-atomic="true"></div>
+            <div class="account-note otp-lock-countdown" id="otp-lock-countdown" aria-live="off" hidden></div>
+            <button class="btn btn-primary" id="otp-verify" type="submit" disabled>Verify</button>
+          </form>
+          <div class="otp-resend-row">
+            <button class="btn" id="otp-resend" type="button" disabled>Resend code</button>
+            <span class="account-note" id="otp-resend-countdown">Available in 60 seconds</span>
+          </div>
+        </div>
+      </section>

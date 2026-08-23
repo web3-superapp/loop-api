@@ -1,0 +1,55 @@
+      <section class="scr" id="scr-home">
+        <div class="pad">
+          <h1 class="home-hi" id="home-title" tabindex="-1">gm, <b id="alias-home">Voyager_7</b> 🎭</h1>
+          <div class="networth">$46,806<span style="color:var(--tx3)">.55</span><small class="up">+2.6% today</small></div>
+          <div class="loop-strip">
+            <div class="loop-cell lc-m" onclick="goTab('market')"><b>MARKET</b><span>3 tokens moving in your watchlist</span></div>
+            <div class="loop-cell lc-c" onclick="goTab('chat')"><b>CHAT</b><span>2 groups discussing your holdings</span></div>
+            <div class="loop-cell lc-w" onclick="goTab('wallet')"><b>WALLET</b><span>1 unlimited approval needs review</span></div>
+          </div>
+          <div class="onboarding-notice onboarding-warning" id="backup-warning" hidden>
+            <span aria-hidden="true">⚠️</span>
+            <div><b>Wallet backup incomplete</b><p>Finish your recovery backup before relying on this wallet.</p></div>
+          </div>
+          <button class="home-pay" id="home-pay" data-requires-signing onclick="openPay()" aria-label="Open QR scanner to pay">
+            <span class="hp-ico"><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4M8 8h3v3H8zM14 8h2v2h-2zM8 14h2v2H8zM13 13h3v3h-3z"/></svg></span>
+            <span><b>Pay</b><span>Scan a QR code to pay</span></span>
+            <span class="hp-go">›</span>
+          </button>
+
+          <p class="label">Trending in your circles</p>
+          <div class="feed-item" onclick="openToken('GLYPH')">
+            <div class="fi-ico" style="background:var(--cyan-soft)">📈</div>
+            <div><p class="fi-t">$GLYPH is being discussed in 8 of your groups</p>
+            <p class="fi-s">+36.2% in 24h · LP unlocks in 3 days · 12.4k people talking</p></div>
+            <span class="fi-time">2m</span>
+          </div>
+          <div class="feed-item" onclick="openGroup()">
+            <div class="fi-ico" style="background:var(--amber-soft)">💬</div>
+            <div><p class="fi-t">NightOwl shared a new find in Glyph Hunters</p>
+            <p class="fi-s">"gm degens. new find today 👇" · token card attached</p></div>
+            <span class="fi-time">9m</span>
+          </div>
+          <div class="feed-item" onclick="openToken('ETH')">
+            <div class="fi-ico" style="background:var(--mint-soft)">🟢</div>
+            <div><p class="fi-t">ETH broke $3,800 — you hold 8.42 ETH</p>
+            <p class="fi-s">Up $412 since yesterday · view position or join the lounge</p></div>
+            <span class="fi-time">31m</span>
+          </div>
+
+          <p class="label">Security digest</p>
+          <div class="card" style="padding:6px 16px">
+            <div class="sec-item"><span>🛡️</span><span><b>Blocked an unlimited USDT approval</b> on a look-alike DEX domain — yesterday, 22:14</span></div>
+            <div class="sec-item"><span>⏳</span><span><b>$GLYPH liquidity unlocks in 3 days</b> — 41% of pool. Position alert armed.</span></div>
+            <div class="sec-item"><span>🔴</span><span><b>1 contract shared in your chats was flagged</b> as high-risk (hidden mint).</span></div>
+          </div>
+
+          <p class="label">Live now</p>
+          <div class="card live-room" onclick="returnToVoiceRoom()">
+            <div class="eq"><i></i><i></i><i></i></div>
+            <div style="flex:1"><p class="fi-t">ETH ETF watch party</p><p class="fi-s">214 listening · hosted by shadowfax.eth</p></div>
+            <button class="btn btn-ghost" style="height:34px;padding:0 16px;font-size:12px">Join</button>
+          </div>
+          <div style="height:16px"></div>
+        </div>
+      </section>

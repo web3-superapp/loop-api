@@ -1,0 +1,22 @@
+      <section class="scr account-screen" id="scr-wallet-import" aria-labelledby="wallet-import-title" aria-busy="false">
+        <div class="account-shell wallet-import-shell">
+          <p class="account-kicker">Existing wallet</p>
+          <h1 id="wallet-import-title" tabindex="-1" data-route-focus>Import your wallet</h1>
+          <p class="account-lede">Choose one local simulation. No wallet is created, queried, or connected.</p>
+          <fieldset class="import-mode-picker">
+            <legend>Import method</legend>
+            <label><input id="wallet-import-mode-phrase" name="wallet-import-mode" type="radio" value="phrase" checked>Recovery phrase</label>
+            <label><input id="wallet-import-mode-private" name="wallet-import-mode" type="radio" value="private">Private key</label>
+            <label><input id="wallet-import-mode-watch" name="wallet-import-mode" type="radio" value="watch">Watch only</label>
+          </fieldset>
+          <div class="field import-field" id="wallet-import-field-host">
+            <label for="wallet-import-value">Recovery phrase</label>
+            <textarea id="wallet-import-value" name="wallet-import-phrase" rows="4" autocomplete="off" spellcheck="false" data-sensitive aria-describedby="wallet-import-help wallet-import-status"></textarea>
+            <p class="account-note" id="wallet-import-help">Enter exactly 12 words from the labeled prototype fixture.</p>
+          </div>
+          <p class="account-note import-fixture" id="wallet-import-fixture"></p>
+          <div class="account-status field-error" id="wallet-import-status" role="alert" aria-live="polite"></div>
+          <button class="btn btn-primary" id="wallet-import-submit" type="button">Import wallet</button>
+          <p class="account-note">Prototype validation only. LOOP never sends, derives, stores, or copies this value.</p>
+        </div>
+      </section>

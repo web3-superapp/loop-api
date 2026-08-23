@@ -1,0 +1,3853 @@
+/* ---------- data ----------
+   No 0–100 risk score anywhere: a single number invites users to treat a heuristic as a verdict,
+   and it is the part of a "risk API" that is least defensible. We surface the underlying facts
+   (which functions exist, how concentrated supply is, when LP unlocks) and let the worst one
+   drive the badge. Capability is unchanged — only the framing is. See 文档/页面清单.md §5. */
+const TOKENS = {
+  GLYPH:{name:'Glyph',sym:'$GLYPH',logo:'G',grad:'linear-gradient(135deg,var(--cyan),var(--mint))',chain:'Ethereum',
+    price:'$0.00231',chg:'▲ +36.2% · 24h',up:true,liq:'$4.2M',hold:'28,421',vol:'$18.7M',
+    pill:['risk-med','LP unlock 3d'],
+    sec:[['🟢','Ownership renounced'],['🟢','No mint function'],['🟢','Sells not blocked'],['🟡','Top 3 wallets hold 41%'],['🔴','LP unlocks in 3 days']],
+    comm:['12,421 people','34','128','23'],seed:7,drift:.55},
+  ETH:{name:'Ethereum',sym:'$ETH',logo:'Ξ',grad:'linear-gradient(135deg,#7fd0ff,#4f7cff)',chain:'Ethereum',
+    price:'$3,842.16',chg:'▲ +2.4% · 24h',up:true,liq:'$1.2B',hold:'—',vol:'$14.2B',
+    pill:['risk-low','native asset'],
+    sec:[['🟢','Native asset — no contract'],['🟢','Deepest liquidity on LOOP'],['🟢','Staking position insured']],
+    comm:['214k people','512','2.1k','480'],seed:3,drift:.52},
+  SOL:{name:'Solana',sym:'$SOL',logo:'S',grad:'linear-gradient(135deg,#c78bff,#3de8c9)',chain:'Solana',
+    price:'$41.52',chg:'▼ −1.1% · 24h',up:false,liq:'$640M',hold:'—',vol:'$3.8B',
+    pill:['risk-low','native asset'],
+    sec:[['🟢','Native asset — no contract'],['🟢','Validator set healthy']],
+    comm:['96k people','301','1.4k','210'],seed:11,drift:.47},
+  PXL:{name:'Pixelmind',sym:'$PXL',logo:'P',grad:'linear-gradient(135deg,#ff9a5c,#ffd66e)',chain:'Base',
+    price:'$0.0184',chg:'▲ +12.8% · 24h',up:true,liq:'$9.1M',hold:'41,082',vol:'$6.2M',
+    pill:['risk-low','LP locked 12mo'],
+    sec:[['🟢','Ownership renounced'],['🟢','LP locked 12 months'],['🟡','Team tokens vest monthly']],
+    comm:['8,904 people','21','96','14'],seed:5,drift:.56}
+};
+const MKT = ['ETH','SOL','GLYPH','PXL'];
+
+/* ---------- app state (single source of truth) ---------- */
+const ROUTES = {
+  splash:{screen:'scr-splash',stack:['scr-splash'],parent:null,account:true},
+  auth:{screen:'scr-auth',stack:['scr-auth'],parent:'splash',account:true},
+  'auth-otp':{screen:'scr-auth-otp',stack:['scr-auth','scr-auth-otp'],defaultParent:'auth',account:true,sensitive:true},
+  'auth-wallet':{screen:'scr-auth-wallet',stack:['scr-auth','scr-auth-wallet'],parent:'auth',account:true},
+  'wallet-create':{screen:'scr-wallet-create',stack:['scr-auth','scr-wallet-create'],account:true,defaultParent:'auth'},
+  'wallet-backup':{screen:'scr-wallet-backup',stack:['scr-auth','scr-wallet-create','scr-wallet-backup'],parent:'wallet-create',account:true},
+  'seed-show':{screen:'scr-seed-show',stack:['scr-auth','scr-wallet-create','scr-wallet-backup','scr-seed-show'],parent:'wallet-backup',account:true,sensitive:true},
+  'seed-verify':{screen:'scr-seed-verify',stack:['scr-auth','scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify'],parent:'seed-show',account:true,sensitive:true},
+  'wallet-import':{screen:'scr-wallet-import',stack:['scr-auth','scr-wallet-import'],parent:'auth',account:true,sensitive:true},
+  home:{screen:'scr-home',stack:['scr-home'],root:true},
+  market:{screen:'scr-market',stack:['scr-market'],root:true},
+  launchpad:{screen:'scr-launchpad',stack:['scr-launchpad'],root:true},
+  chat:{screen:'scr-chat',stack:['scr-chat'],root:true},
+  wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
+  profile:{screen:'scr-profile',stack:['scr-profile'],root:true},
+  pay:{screen:'scr-pay',stack:['scr-home','scr-pay']},
+  token:{screen:'scr-token',stack:['scr-market','scr-token']},
+  group:{screen:'scr-group',stack:['scr-chat','scr-group']},
+  voiceroom:{screen:'scr-group',stack:['scr-chat','scr-group']},
+  asset:{screen:'scr-asset',stack:['scr-wallet','scr-asset']},
+  send:{screen:'scr-send',stack:['scr-wallet','scr-send']},
+  'send-to':{screen:'scr-send-to',stack:['scr-wallet','scr-send','scr-send-to']},
+  'send-confirm':{screen:'scr-send-confirm',stack:['scr-wallet','scr-send','scr-send-to','scr-send-confirm']},
+  receive:{screen:'scr-receive',stack:['scr-wallet','scr-receive']},
+  'tx-result':{screen:'scr-tx-result',stack:['scr-wallet','scr-tx-result']},
+  swap:{screen:'scr-swap',stack:['scr-wallet','scr-swap']},
+  dapp:{screen:'scr-dapp',stack:['scr-wallet','scr-dapp']}
+};
+const WALLET_ROUTE_DEFAULT=Object.freeze({asset:'ETH',chain:'ethereum'});
+const WALLET_ASSET_IDS=Object.freeze(['ETH','SOL','USDC','GLYPH']);
+const WALLET_CHAIN_IDS=Object.freeze(['ethereum','base','arbitrum','solana']);
+const WALLET_CHAINS=Object.freeze({
+  ethereum:Object.freeze({label:'Ethereum'}),
+  base:Object.freeze({label:'Base'}),
+  arbitrum:Object.freeze({label:'Arbitrum'}),
+  solana:Object.freeze({label:'Solana'})
+});
+const WALLET_ASSETS=Object.freeze({
+  ETH:Object.freeze({name:'Ethereum',symbol:'ETH',chains:Object.freeze(['ethereum','base','arbitrum'])}),
+  SOL:Object.freeze({name:'Solana',symbol:'SOL',chains:Object.freeze(['solana'])}),
+  USDC:Object.freeze({name:'USD Coin',symbol:'USDC',chains:Object.freeze(['ethereum','base','arbitrum'])}),
+  GLYPH:Object.freeze({name:'Glyph',symbol:'GLYPH',chains:Object.freeze(['base'])})
+});
+function capturePinnedQrFactory(factory){
+  try{
+    if(typeof factory!=='function') return null;
+    const probe=factory(1,'L');
+    if(!probe||typeof probe.addData!=='function'||typeof probe.make!=='function'||
+       typeof probe.createSvgTag!=='function') return null;
+    return factory;
+  }catch(_error){return null}
+}
+const PINNED_QR_FACTORY=capturePinnedQrFactory(globalThis.qrcode);
+let walletRouteParams={...WALLET_ROUTE_DEFAULT};
+const ROOTS = Object.fromEntries(Object.entries(ROUTES)
+  .filter(([,route])=>route.root)
+  .map(([hash,route])=>[hash,route.screen]));
+const ROOT_SCREENS = new Set(Object.values(ROOTS));
+const ACCOUNT_SCREENS = new Set(Object.values(ROUTES)
+  .filter(route=>route.account)
+  .map(route=>route.screen));
+const SCREEN_HASH = Object.entries(ROUTES).reduce((hashes,[hash,route])=>{
+  if(!hashes[route.screen]) hashes[route.screen]=hash;
+  return hashes;
+},{});
+const KNOWN_SCREENS = new Set(Object.values(ROUTES).flatMap(route=>route.stack));
+const SS_KEY = 'loop.proto.state';
+const ONBOARDING_KEYS={complete:'loop.proto.onboarding.complete',backupIncomplete:'loop.proto.onboarding.backupIncomplete',watchOnly:'loop.proto.onboarding.watchOnly',recoveryMethod:'loop.proto.onboarding.recoveryMethod'};
+const ONBOARDING_PREFIX = 'loop.proto.onboarding.';
+const onboardingMemory=Object.create(null);
+const RECOVERY_METHODS = new Set(['phrase','cloud-simulated','social-simulated','skipped']);
+const BACKUP_PANELS = new Set(['cloud-simulated','social-simulated','skipped']);
+const DEMO_PHRASE = Object.freeze(['orbit','velvet','cactus','harbor','lunar','maple','echo','raven','silver','tunnel','pixel','anchor']);
+const PROTOTYPE_SEED_WORDS = DEMO_PHRASE;
+const DEMO_BAD_CHECKSUM = 'orbit velvet cactus harbor lunar maple echo raven silver tunnel pixel pixel';
+const DEMO_PRIVATE_KEY = '0x'+'1'.repeat(64);
+const DEMO_EVM_ADDRESS = '0x1111111111111111111111111111111111111111';
+const DEMO_SOLANA_ADDRESS = '11111111111111111111111111111111';
+const DEMO_IMPORT_WORDS = new Set([...DEMO_PHRASE,'pixel']);
+const ACCOUNT_TIMING = Object.freeze({
+  splash:800,
+  socialAuth:450,
+  otpResend:60000,
+  otpLock:30000,
+  walletSignature:500,
+  walletTimeout:10000,
+  walletCreate:700,
+  seedVerifyLock:30000,
+  walletImport:500
+});
+const ACCOUNT_DEFAULTS = Object.freeze({
+  otp:'',
+  otpFailures:0,
+  otpLockedUntil:0,
+  otpExpiresAt:0,
+  selectedWallet:'',
+  walletState:'idle',
+  createState:'idle',
+  seedRevealed:false,
+  verifyFailures:0,
+  verifyLockedUntil:0,
+  importMode:'phrase',
+  importValue:'',
+  authMethod:'',
+  timers:Object.freeze([])
+});
+const account = {...ACCOUNT_DEFAULTS,timers:[]};
+let pendingAuthMethod='';
+
+function onboardingFlag(name){
+  const key=ONBOARDING_KEYS[name];
+  if(!key) return '';
+  if(Object.prototype.hasOwnProperty.call(onboardingMemory,name)){
+    const value=onboardingMemory[name];
+    return name==='recoveryMethod' ? value : value==='true';
+  }
+  let value='';
+  try{
+    value=sessionStorage.getItem(key)||'';
+    onboardingMemory[name]=value;
+  }catch(e){return ''}
+  return name==='recoveryMethod' ? (value||'') : value==='true';
+}
+function setOnboardingFlag(name,value){
+  const key=ONBOARDING_KEYS[name];
+  if(!key) return;
+  const stored=value===null||value===undefined||value==='' ? '' : String(value);
+  onboardingMemory[name]=stored;
+  try{
+    if(stored==='') sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key,stored);
+  }catch(e){}
+}
+function clearAccountTimers(){
+  account.timers.forEach(timer=>{clearTimeout(timer);clearInterval(timer)});
+  account.timers=[];
+  resetAuthProgress();
+}
+function accountTimeout(callback,delay){
+  const timer=setTimeout(()=>{
+    account.timers=account.timers.filter(candidate=>candidate!==timer);
+    callback();
+  },delay);
+  account.timers.push(timer);
+  return timer;
+}
+function accountInterval(callback,delay){
+  const timer=setInterval(callback,delay);
+  account.timers.push(timer);
+  return timer;
+}
+function clearAccountTimer(timer){
+  clearTimeout(timer);
+  clearInterval(timer);
+  account.timers=account.timers.filter(candidate=>candidate!==timer);
+}
+function clearSensitiveDom(){
+  document.querySelectorAll('[data-sensitive]').forEach(el=>{
+    if('value' in el){el.value='';el.removeAttribute('value')}
+    else el.textContent='';
+  });
+}
+function clearSensitiveAccountState(){
+  clearAccountTimers();
+  account.otp=ACCOUNT_DEFAULTS.otp;
+  account.otpFailures=ACCOUNT_DEFAULTS.otpFailures;
+  account.otpLockedUntil=ACCOUNT_DEFAULTS.otpLockedUntil;
+  account.otpExpiresAt=ACCOUNT_DEFAULTS.otpExpiresAt;
+  account.seedRevealed=ACCOUNT_DEFAULTS.seedRevealed;
+  account.verifyFailures=ACCOUNT_DEFAULTS.verifyFailures;
+  account.verifyLockedUntil=ACCOUNT_DEFAULTS.verifyLockedUntil;
+  account.importMode=ACCOUNT_DEFAULTS.importMode;
+  account.importValue=ACCOUNT_DEFAULTS.importValue;
+  clearSensitiveDom();
+  resetSeedShow();
+  resetSeedVerifyView();
+  resetWalletImportView();
+  const toastEl=document.getElementById('toast');
+  if(toastEl){toastEl.textContent='';toastEl.classList.remove('show')}
+}
+function resetAccountState(){
+  clearSensitiveAccountState();
+  Object.keys(account).forEach(key=>delete account[key]);
+  Object.assign(account,ACCOUNT_DEFAULTS,{timers:[]});
+  clearSensitiveDom();
+}
+
+function setSplashView(view){
+  document.querySelectorAll('[data-splash-view]').forEach(panel=>{panel.hidden=panel.dataset.splashView!==view});
+}
+function blockingSplashDemo(){
+  const demo=new URLSearchParams(location.search).get('demo');
+  return demo==='splash-force-update'||demo==='splash-maintenance';
+}
+function finishSplash(){
+  if(activeScr()!=='scr-splash'||blockingSplashDemo()) return;
+  clearAccountTimers();
+  navigate(ROUTES.auth.stack.slice(),{replace:true});
+}
+function startNormalSplash(){
+  setSplashView('normal');
+  const status=document.getElementById('splash-progress-copy');
+  if(status) status.textContent='Checking account status…';
+  accountTimeout(()=>{
+    if(activeScr()==='scr-splash'&&!blockingSplashDemo()) finishSplash();
+  },ACCOUNT_TIMING.splash);
+}
+function setupSplash(){
+  const demo=new URLSearchParams(location.search).get('demo');
+  if(demo==='splash-force-update'){
+    setSplashView('force-update');
+    return;
+  }
+  if(demo==='splash-maintenance'){
+    setSplashView('maintenance');
+    const copy=document.getElementById('splash-maintenance-copy');
+    const retry=document.getElementById('splash-retry');
+    if(copy) copy.textContent='The service is in maintenance. Your local prototype data is unchanged.';
+    if(retry) retry.disabled=false;
+    return;
+  }
+  startNormalSplash();
+}
+function retrySplashMaintenance(){
+  if(activeScr()!=='scr-splash' || new URLSearchParams(location.search).get('demo')!=='splash-maintenance') return;
+  clearAccountTimers();
+  const copy=document.getElementById('splash-maintenance-copy');
+  const retry=document.getElementById('splash-retry');
+  if(copy) copy.textContent='Checking service status…';
+  if(retry) retry.disabled=true;
+  accountTimeout(()=>{
+    if(activeScr()!=='scr-splash') return;
+    if(copy) copy.textContent='Maintenance is still in progress. Your local prototype data is unchanged.';
+    if(retry) retry.disabled=false;
+  },ACCOUNT_TIMING.splash);
+}
+function resetSplashDemo(){
+  if(activeScr()!=='scr-splash') return;
+  const url=new URL(location.href);
+  url.searchParams.delete('demo');
+  history.replaceState(history.state,'',url.href);
+  resetAccountState();
+  startNormalSplash();
+}
+
+function passkeyAvailable(){return typeof window.PublicKeyCredential!=='undefined'}
+function resetAuthProgress(){
+  pendingAuthMethod='';
+  document.querySelectorAll('[data-auth-method]').forEach(button=>{
+    button.disabled=button.dataset.authMethod==='passkey'&&!passkeyAvailable();
+    button.removeAttribute('aria-busy');
+    if(button.disabled){
+      button.setAttribute('aria-disabled','true');
+      if(button.dataset.authMethod==='passkey') button.setAttribute('aria-describedby','auth-passkey-note');
+    }else{
+      button.removeAttribute('aria-disabled');
+      if(button.dataset.authMethod==='passkey') button.removeAttribute('aria-describedby');
+    }
+    const status=button.querySelector('[data-method-status]');
+    if(status) status.textContent='';
+  });
+}
+function setupAuth(){
+  resetAuthProgress();
+  const note=document.getElementById('auth-passkey-note');
+  if(note) note.hidden=passkeyAvailable();
+}
+function beginSimulatedAuth(button,method){
+  if(pendingAuthMethod) return;
+  pendingAuthMethod=method;
+  account.authMethod=method;
+  document.querySelectorAll('[data-auth-method]').forEach(candidate=>candidate.disabled=true);
+  button.setAttribute('aria-busy','true');
+  const status=button.querySelector('[data-method-status]');
+  if(status) status.textContent='Signing in…';
+  accountTimeout(()=>{
+    if(activeScr()==='scr-auth'&&pendingAuthMethod===method) push('scr-wallet-create');
+  },ACCOUNT_TIMING.socialAuth);
+}
+function chooseAuthMethod(event){
+  const button=event.currentTarget;
+  const method=button.dataset.authMethod;
+  if(activeScr()!=='scr-auth'||button.disabled||pendingAuthMethod) return;
+  if(method==='google'||method==='apple'||method==='passkey'){
+    beginSimulatedAuth(button,method);
+    return;
+  }
+  account.authMethod=method;
+  if(method==='email'||method==='phone') push('scr-auth-otp');
+  else if(method==='wallet') push('scr-auth-wallet');
+  else if(method==='import') push('scr-wallet-import');
+}
+function otpInputs(){
+  return [...document.querySelectorAll('#scr-auth-otp .otp-inputs input')];
+}
+function setOtpStatus(message,{error=false}={}){
+  const status=document.getElementById('otp-status');
+  if(!status) return;
+  status.textContent=message;
+  status.classList.toggle('is-error',error);
+  otpInputs().forEach(input=>{
+    if(error){
+      input.setAttribute('aria-invalid','true');
+      input.setAttribute('aria-describedby','otp-help otp-status');
+    }else{
+      input.removeAttribute('aria-invalid');
+      input.setAttribute('aria-describedby','otp-help');
+    }
+  });
+}
+function clearOtpInputs(){
+  otpInputs().forEach(input=>{input.value='';input.removeAttribute('value')});
+  account.otp='';
+}
+function otpIsLocked(){return account.otpLockedUntil>Date.now()}
+function updateOtpControls(){
+  const locked=otpIsLocked();
+  otpInputs().forEach(input=>{input.disabled=locked});
+  const verify=document.getElementById('otp-verify');
+  if(verify) verify.disabled=locked||account.otp.length!==6;
+  const resend=document.getElementById('otp-resend');
+  if(resend) resend.disabled=locked||Date.now()<account.otpExpiresAt;
+}
+function syncOtpFromInputs(){
+  account.otp=otpInputs().map(input=>input.value).join('').replace(/\D/g,'').slice(0,6);
+  updateOtpControls();
+}
+function renderOtpResend(deadline){
+  const resend=document.getElementById('otp-resend');
+  const countdown=document.getElementById('otp-resend-countdown');
+  if(!resend||!countdown) return;
+  const remaining=Math.max(0,deadline-Date.now());
+  resend.disabled=otpIsLocked()||remaining>0;
+  countdown.textContent=remaining>0
+    ? `Available in ${Math.ceil(remaining/1000)} seconds`
+    : 'You can resend now';
+}
+function startOtpResendCountdown(){
+  const deadline=Date.now()+ACCOUNT_TIMING.otpResend;
+  account.otpExpiresAt=deadline;
+  renderOtpResend(deadline);
+  const ticker=accountInterval(()=>{
+    if(activeScr()!=='scr-auth-otp'||account.otpExpiresAt!==deadline) return;
+    renderOtpResend(deadline);
+  },1000);
+  accountTimeout(()=>{
+    clearAccountTimer(ticker);
+    if(activeScr()!=='scr-auth-otp'||account.otpExpiresAt!==deadline) return;
+    renderOtpResend(deadline);
+  },ACCOUNT_TIMING.otpResend);
+}
+function setupOtp(){
+  account.otpFailures=0;
+  account.otpLockedUntil=0;
+  clearOtpInputs();
+  setOtpStatus('');
+  renderOtpLockCountdown(Date.now());
+  const context=document.getElementById('otp-auth-context');
+  if(context){
+    context.textContent=account.authMethod==='email'
+      ? 'Enter the code sent to your email.'
+      : account.authMethod==='phone'
+        ? 'Enter the code sent to your phone.'
+        : 'Enter the code sent using your selected sign-in method.';
+  }
+  updateOtpControls();
+  startOtpResendCountdown();
+}
+function handleOtpInput(event){
+  if(otpIsLocked()||event.isComposing) return;
+  const inputs=otpInputs();
+  const index=inputs.indexOf(event.currentTarget);
+  const replacement=event.inputType==='insertReplacementText' ? event.data||'' : '';
+  const raw=replacement.length>event.currentTarget.value.length
+    ? replacement : event.currentTarget.value;
+  const digits=raw.replace(/\D/g,'');
+  if(digits.length>1){
+    distributeOtpDigits(index,digits);
+    return;
+  }
+  event.currentTarget.value=digits.slice(-1);
+  syncOtpFromInputs();
+  if(event.currentTarget.value&&index<inputs.length-1) inputs[index+1].focus();
+}
+function handleOtpKeydown(event){
+  const inputs=otpInputs();
+  const index=inputs.indexOf(event.currentTarget);
+  if(event.key==='Backspace'&&!event.currentTarget.value&&index>0){
+    event.preventDefault();
+    inputs[index-1].focus();
+  }else if(event.key==='ArrowLeft'&&index>0){
+    event.preventDefault();
+    inputs[index-1].focus();
+  }else if(event.key==='ArrowRight'&&index<inputs.length-1){
+    event.preventDefault();
+    inputs[index+1].focus();
+  }
+}
+function handleOtpPaste(event){
+  if(otpIsLocked()) return;
+  event.preventDefault();
+  const inputs=otpInputs();
+  const start=inputs.indexOf(event.currentTarget);
+  distributeOtpDigits(start,event.clipboardData?.getData('text')||'');
+}
+function distributeOtpDigits(start,value){
+  const inputs=otpInputs();
+  const digits=value.replace(/\D/g,'').slice(0,inputs.length-start);
+  inputs.slice(start).forEach(input=>{input.value=''});
+  [...digits].forEach((digit,offset)=>{inputs[start+offset].value=digit});
+  syncOtpFromInputs();
+  const destination=Math.min(start+Math.max(digits.length,1)-1,inputs.length-1);
+  inputs[destination].focus();
+}
+function handleOtpCompositionEnd(event){
+  if(otpIsLocked()) return;
+  const inputs=otpInputs();
+  const start=inputs.indexOf(event.currentTarget);
+  const composed=event.currentTarget.value.length>String(event.data||'').length
+    ? event.currentTarget.value : String(event.data||event.currentTarget.value);
+  distributeOtpDigits(start,composed);
+}
+function renderOtpLockCountdown(deadline){
+  const countdown=document.getElementById('otp-lock-countdown');
+  if(!countdown) return;
+  const remaining=Math.max(0,deadline-Date.now());
+  countdown.hidden=remaining<=0;
+  countdown.textContent=remaining>0
+    ? `Try again in ${Math.ceil(remaining/1000)} seconds`
+    : '';
+}
+function unlockOtp(deadline,ticker){
+  clearAccountTimer(ticker);
+  if(activeScr()!=='scr-auth-otp'||account.otpLockedUntil!==deadline) return;
+  account.otpFailures=0;
+  account.otpLockedUntil=0;
+  clearOtpInputs();
+  updateOtpControls();
+  renderOtpLockCountdown(deadline);
+  setOtpStatus('You can try again.');
+}
+function lockOtp(){
+  const deadline=Date.now()+ACCOUNT_TIMING.otpLock;
+  account.otpLockedUntil=deadline;
+  updateOtpControls();
+  setOtpStatus('Too many invalid attempts. Verification is temporarily locked.',{error:true});
+  renderOtpLockCountdown(deadline);
+  const updateCountdown=()=>{
+    if(activeScr()!=='scr-auth-otp'||account.otpLockedUntil!==deadline) return;
+    renderOtpLockCountdown(deadline);
+  };
+  const ticker=accountInterval(updateCountdown,1000);
+  accountTimeout(()=>unlockOtp(deadline,ticker),ACCOUNT_TIMING.otpLock);
+}
+function verifyOtp(event){
+  event.preventDefault();
+  if(activeScr()!=='scr-auth-otp'||otpIsLocked()||account.otp.length!==6) return;
+  if(account.otp==='246810'){
+    clearOtpInputs();
+    push('scr-wallet-create');
+    return;
+  }
+  if(account.otp==='000000'){
+    setOtpStatus('Code expired. Request a new code.',{error:true});
+    return;
+  }
+  if(account.otp==='999998'){
+    setOtpStatus('Service unavailable. Try again.',{error:true});
+    return;
+  }
+  account.otpFailures+=1;
+  if(account.otpFailures>=5){
+    lockOtp();
+    return;
+  }
+  setOtpStatus('Invalid code. Try again.',{error:true});
+  updateOtpControls();
+}
+function resendOtp(){
+  const resend=document.getElementById('otp-resend');
+  if(activeScr()!=='scr-auth-otp'||otpIsLocked()||!resend||resend.disabled||Date.now()<account.otpExpiresAt) return;
+  clearAccountTimers();
+  clearOtpInputs();
+  setOtpStatus('New code sent.');
+  updateOtpControls();
+  startOtpResendCountdown();
+}
+function walletDemoUnavailable(){
+  return new URLSearchParams(location.search).get('demo')==='wallet-none';
+}
+function setWalletStatus(message,{error=false}={}){
+  const status=document.getElementById('wallet-connect-state');
+  if(!status) return;
+  status.textContent=message;
+  status.classList.toggle('is-error',error);
+}
+function renderExternalWallet(message=''){
+  const idle=account.walletState==='idle';
+  const terminal=['rejected','timeout','error'].includes(account.walletState);
+  const signature=account.walletState==='signature';
+  document.querySelectorAll('#wallet-detected-list input[type="radio"]').forEach(option=>{
+    option.checked=option.value===account.selectedWallet;
+    option.disabled=!idle;
+  });
+  const connect=document.getElementById('wallet-connect');
+  if(connect) connect.disabled=!idle||!account.selectedWallet;
+  const approve=document.getElementById('wallet-sign-approve');
+  const reject=document.getElementById('wallet-sign-reject');
+  const retry=document.getElementById('wallet-connect-retry');
+  if(approve) approve.hidden=!signature;
+  if(reject) reject.hidden=!signature;
+  if(retry) retry.hidden=!terminal;
+  setWalletStatus(message,{error:terminal});
+}
+function setupExternalWallet(){
+  account.selectedWallet='';
+  account.walletState='idle';
+  const unavailable=walletDemoUnavailable();
+  const detected=document.getElementById('wallet-detected');
+  const empty=document.getElementById('wallet-empty-state');
+  const connect=document.getElementById('wallet-connect');
+  if(detected) detected.hidden=unavailable;
+  if(empty) empty.hidden=!unavailable;
+  if(connect) connect.hidden=unavailable;
+  renderExternalWallet();
+}
+function selectExternalWallet(event){
+  if(activeScr()!=='scr-auth-wallet'||account.walletState!=='idle') return;
+  account.selectedWallet=event.currentTarget.value;
+  renderExternalWallet();
+}
+function startExternalWalletConnection(){
+  if(activeScr()!=='scr-auth-wallet'||account.walletState!=='idle'||!account.selectedWallet) return;
+  const selected=account.selectedWallet;
+  account.walletState='waiting';
+  const label={demo:'Demo Wallet',timeout:'Timeout Wallet',failure:'Failure Wallet'}[selected];
+  renderExternalWallet(`Connecting to ${label}…`);
+  const delay=selected==='timeout' ? ACCOUNT_TIMING.walletTimeout : ACCOUNT_TIMING.walletSignature;
+  accountTimeout(()=>{
+    if(activeScr()!=='scr-auth-wallet'||account.walletState!=='waiting'||account.selectedWallet!==selected) return;
+    if(selected==='demo'){
+      account.walletState='signature';
+      renderExternalWallet('Approve the signature request in this prototype. No real signature is created.');
+      return;
+    }
+    if(selected==='timeout'){
+      account.walletState='timeout';
+      renderExternalWallet('Connection timed out. Try again.');
+      return;
+    }
+    account.walletState='error';
+    renderExternalWallet('Could not connect to this wallet. Try again.');
+  },delay);
+}
+function approveExternalWallet(){
+  if(activeScr()!=='scr-auth-wallet'||account.walletState!=='signature') return;
+  account.walletState='connected';
+  renderExternalWallet();
+  completeOnboarding();
+}
+function rejectExternalWallet(){
+  if(activeScr()!=='scr-auth-wallet'||account.walletState!=='signature') return;
+  account.walletState='rejected';
+  renderExternalWallet('Connection request rejected. No account was connected.');
+}
+function retryExternalWallet(){
+  if(activeScr()!=='scr-auth-wallet'||!['rejected','timeout','error'].includes(account.walletState)) return;
+  account.walletState='idle';
+  renderExternalWallet();
+}
+function setCreateStatus(message,{error=false}={}){
+  const status=document.getElementById('wallet-create-status');
+  if(!status) return;
+  status.textContent=message;
+  status.classList.toggle('is-error',error);
+}
+function renderWalletCreate(message=''){
+  const idle=account.createState==='idle';
+  const creating=account.createState==='creating';
+  const failed=account.createState==='error';
+  const start=document.getElementById('wallet-create-start');
+  const fail=document.getElementById('wallet-create-fail-demo');
+  const retry=document.getElementById('wallet-create-retry');
+  if(start) start.disabled=!idle;
+  if(fail) fail.disabled=!idle;
+  if(retry){retry.hidden=!failed;retry.disabled=!failed}
+  setCreateStatus(message,{error:failed});
+}
+function setupWalletCreate(){
+  account.createState='idle';
+  renderWalletCreate();
+}
+function scheduleWalletCreation(shouldFail){
+  account.createState='creating';
+  renderWalletCreate('Creating simulated wallet…');
+  accountTimeout(()=>{
+    if(activeScr()!=='scr-wallet-create'||account.createState!=='creating') return;
+    if(shouldFail){
+      account.createState='error';
+      renderWalletCreate('Wallet creation demo failed. Try again.');
+      return;
+    }
+    account.createState='created';
+    renderWalletCreate('Simulated wallet created.');
+    push('scr-wallet-backup');
+  },ACCOUNT_TIMING.walletCreate);
+}
+function beginWalletCreation(shouldFail=false){
+  if(activeScr()!=='scr-wallet-create'||account.createState!=='idle') return;
+  scheduleWalletCreation(shouldFail);
+}
+function retryWalletCreation(){
+  if(activeScr()!=='scr-wallet-create'||account.createState!=='error') return;
+  scheduleWalletCreation(false);
+}
+
+let pendingBackupChoice='';
+function isValidBackupPanel(value){
+  return typeof value==='string'&&BACKUP_PANELS.has(value);
+}
+function backupChoiceElement(panel){
+  return document.querySelector(`#scr-wallet-backup [data-backup-choice="${panel}"]`);
+}
+function showBackupChoices(){
+  pendingBackupChoice='';
+  const choices=document.getElementById('backup-choice-view');
+  const confirmation=document.getElementById('backup-confirmation');
+  if(choices) choices.hidden=false;
+  if(confirmation) confirmation.hidden=true;
+}
+function setupWalletBackup(){
+  const panel=history.state?.backupPanel;
+  if(isValidBackupPanel(panel)&&hasValidBackupPanelHistoryProvenance()){
+    renderBackupConfirmation(panel);
+    return;
+  }
+  if(panel!==undefined){
+    const safeState={...(history.state||{})};
+    delete safeState.backupPanel;
+    delete safeState.accountPushed;
+    delete safeState.accountEntryId;
+    history.replaceState(safeState,'',location.href);
+  }
+  showBackupChoices();
+}
+function renderBackupConfirmation(method){
+  if(!isValidBackupPanel(method)){
+    showBackupChoices();
+    return;
+  }
+  pendingBackupChoice=method;
+  const choices=document.getElementById('backup-choice-view');
+  const confirmation=document.getElementById('backup-confirmation');
+  const title=document.getElementById('backup-confirm-title');
+  const copy=document.getElementById('backup-confirm-copy');
+  const note=document.getElementById('backup-simulation-note');
+  const continueButton=document.getElementById('backup-confirm-continue');
+  const skipButton=document.getElementById('backup-skip-confirm');
+  if(choices) choices.hidden=true;
+  if(confirmation) confirmation.hidden=false;
+  if(method==='skipped'){
+    if(confirmation) confirmation.classList.add('state-panel-danger');
+    if(title) title.textContent='Back up later?';
+    if(copy) copy.textContent='If this device is lost or damaged, you may permanently lose access to the wallet and its assets.';
+    if(note) note.textContent='This first step does not complete setup. Use the separate destructive confirmation only if you accept permanent loss risk.';
+    if(continueButton) continueButton.hidden=true;
+    if(skipButton) skipButton.hidden=false;
+    if(title) title.focus({preventScroll:true});
+    return;
+  }
+  if(confirmation) confirmation.classList.remove('state-panel-danger');
+  if(title) title.textContent=method==='cloud-simulated' ? 'Cloud backup' : 'Social recovery 2-of-3';
+  if(copy) copy.textContent=method==='cloud-simulated'
+    ? 'Continue with a local cloud-backup simulation.'
+    : 'Continue with a local 2-of-3 social-recovery simulation. No guardians are configured.';
+  if(note) note.textContent='Designed for Privy · simulated in this prototype';
+  if(continueButton){continueButton.hidden=false;continueButton.disabled=false}
+  if(skipButton) skipButton.hidden=true;
+  if(title) title.focus({preventScroll:true});
+}
+function chooseBackupMethod(event){
+  if(activeScr()!=='scr-wallet-backup') return;
+  const method=event.currentTarget.dataset.backupChoice;
+  if(method==='phrase'){
+    push('scr-seed-show');
+    return;
+  }
+  if(!isValidBackupPanel(method)) return;
+  const nextState={...(history.state||{}),backupPanel:method};
+  const pushed=accountHistoryProof.push(nextState,location.href,{
+    kind:'backup-panel',route:'wallet-backup',stack:stack.slice(),panel:method,
+    accountPushed:nextState.accountPushed===true,
+  });
+  if(!pushed){
+    const safeState={...(history.state||{})};
+    delete safeState.backupPanel;
+    delete safeState.accountEntryId;
+    history.replaceState(safeState,'',location.href);
+  }
+  renderBackupConfirmation(method);
+}
+function cancelBackupConfirmation(){
+  if(activeScr()!=='scr-wallet-backup') return;
+  if(hasValidBackupPanelHistoryProvenance()){
+    history.back();
+    return;
+  }
+  showBackupChoices();
+}
+function confirmBackupMethod(){
+  if(activeScr()!=='scr-wallet-backup'||
+      !['cloud-simulated','social-simulated'].includes(pendingBackupChoice)) return;
+  completeOnboarding({recoveryMethod:pendingBackupChoice});
+}
+function confirmSkippedBackup(){
+  if(activeScr()!=='scr-wallet-backup'||pendingBackupChoice!=='skipped') return;
+  completeOnboarding({recoveryMethod:'skipped',backupIncomplete:true});
+}
+
+function resetSeedShow(){
+  const words=document.getElementById('seed-words');
+  if(words) words.replaceChildren();
+  account.seedRevealed=false;
+  const acknowledgement=document.getElementById('seed-show-ack');
+  const reveal=document.getElementById('seed-show-reveal');
+  const recorded=document.getElementById('seed-show-recorded');
+  const proceed=document.getElementById('seed-show-continue');
+  if(acknowledgement) acknowledgement.checked=false;
+  if(reveal){reveal.disabled=true;reveal.setAttribute('aria-expanded','false')}
+  if(recorded){recorded.checked=false;recorded.disabled=true}
+  if(proceed) proceed.disabled=true;
+}
+function setupSeedShow(){
+  resetSeedShow();
+}
+function updateSeedRevealGate(){
+  const acknowledgement=document.getElementById('seed-show-ack');
+  const reveal=document.getElementById('seed-show-reveal');
+  if(reveal) reveal.disabled=account.seedRevealed||!acknowledgement?.checked;
+}
+function revealPrototypeSeed(){
+  if(activeScr()!=='scr-seed-show'||account.seedRevealed||
+      !document.getElementById('seed-show-ack')?.checked) return;
+  const list=document.getElementById('seed-words');
+  if(!list) return;
+  const fragment=document.createDocumentFragment();
+  PROTOTYPE_SEED_WORDS.forEach(word=>{
+    const item=document.createElement('li');
+    item.textContent=word;
+    fragment.appendChild(item);
+  });
+  list.replaceChildren(fragment);
+  account.seedRevealed=true;
+  const reveal=document.getElementById('seed-show-reveal');
+  const recorded=document.getElementById('seed-show-recorded');
+  if(reveal) reveal.disabled=true;
+  if(reveal) reveal.setAttribute('aria-expanded','true');
+  if(recorded) recorded.disabled=false;
+}
+function updateSeedRecordedGate(){
+  const recorded=document.getElementById('seed-show-recorded');
+  const proceed=document.getElementById('seed-show-continue');
+  if(proceed) proceed.disabled=!account.seedRevealed||!recorded?.checked;
+}
+function continueSeedVerification(){
+  if(activeScr()!=='scr-seed-show'||!account.seedRevealed||
+      !document.getElementById('seed-show-recorded')?.checked) return;
+  resetSeedShow();
+  push('scr-seed-verify');
+}
+function blockSeedPhraseAction(event){
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+const SEED_VERIFY_POSITIONS = Object.freeze([3,7,11]);
+function seedVerifyInputs(){
+  return SEED_VERIFY_POSITIONS.map(position=>document.getElementById(`seed-verify-${position}`))
+    .filter(Boolean);
+}
+function seedVerifyIsLocked(){return account.verifyLockedUntil>Date.now()}
+function seedVerifyFieldError(){return document.getElementById('seed-verify-field-error')}
+function syncSeedVerifyFieldError(){
+  const error=seedVerifyFieldError();
+  if(error) error.hidden=!seedVerifyInputs().some(input=>input.getAttribute('aria-invalid')==='true');
+}
+function clearSeedVerifyInputError(input){
+  input.removeAttribute('aria-invalid');
+  input.setAttribute('aria-describedby','seed-verify-help');
+  syncSeedVerifyFieldError();
+}
+function markSeedVerifyInputError(input){
+  input.setAttribute('aria-invalid','true');
+  input.setAttribute('aria-describedby','seed-verify-help seed-verify-field-error');
+}
+function clearSeedVerifyErrors(){
+  seedVerifyInputs().forEach(input=>{
+    input.removeAttribute('aria-invalid');
+    input.setAttribute('aria-describedby','seed-verify-help');
+  });
+  const error=seedVerifyFieldError();
+  if(error) error.hidden=true;
+}
+function setSeedVerifyStatus(message,{error=false}={}){
+  const status=document.getElementById('seed-verify-status');
+  if(!status) return;
+  status.textContent=message;
+  status.classList.toggle('is-error',error);
+}
+function renderSeedVerifyAttempts(){
+  const attempts=document.getElementById('seed-verify-attempts');
+  if(!attempts) return;
+  const remaining=Math.max(0,5-account.verifyFailures);
+  attempts.textContent=`${remaining} attempt${remaining===1?'':'s'} remaining.`;
+}
+function renderSeedVerifyCountdown(deadline){
+  const countdown=document.getElementById('seed-verify-countdown');
+  if(!countdown) return;
+  const remaining=Math.max(0,deadline-Date.now());
+  countdown.textContent=remaining>0
+    ? `Try again in ${Math.ceil(remaining/1000)} seconds`
+    : '';
+}
+function updateSeedVerifyControls(){
+  const inputs=seedVerifyInputs();
+  const locked=seedVerifyIsLocked();
+  inputs.forEach(input=>{input.disabled=locked});
+  const submit=document.getElementById('seed-verify-submit');
+  if(submit) submit.disabled=locked||inputs.length!==3||inputs.some(input=>!input.value.trim());
+}
+function handleSeedVerifyInput(event){
+  clearSeedVerifyInputError(event.currentTarget);
+  updateSeedVerifyControls();
+}
+function resetSeedVerifyView(){
+  seedVerifyInputs().forEach(input=>{input.value='';input.removeAttribute('value');input.disabled=false});
+  clearSeedVerifyErrors();
+  account.verifyFailures=0;
+  account.verifyLockedUntil=0;
+  setSeedVerifyStatus('');
+  renderSeedVerifyAttempts();
+  renderSeedVerifyCountdown(0);
+  updateSeedVerifyControls();
+}
+function setupSeedVerify(){
+  resetSeedVerifyView();
+}
+function unlockSeedVerify(deadline,ticker){
+  clearAccountTimer(ticker);
+  if(activeScr()!=='scr-seed-verify'||account.verifyLockedUntil!==deadline) return;
+  seedVerifyInputs().forEach(input=>{input.value='';input.removeAttribute('value')});
+  clearSeedVerifyErrors();
+  account.verifyFailures=0;
+  account.verifyLockedUntil=0;
+  renderSeedVerifyAttempts();
+  renderSeedVerifyCountdown(deadline);
+  updateSeedVerifyControls();
+  setSeedVerifyStatus('You can try again.');
+}
+function lockSeedVerify(){
+  const deadline=Date.now()+ACCOUNT_TIMING.seedVerifyLock;
+  account.verifyLockedUntil=deadline;
+  updateSeedVerifyControls();
+  renderSeedVerifyAttempts();
+  renderSeedVerifyCountdown(deadline);
+  setSeedVerifyStatus('Too many incorrect attempts. Verification is locked for 30 seconds.',{error:true});
+  const ticker=accountInterval(()=>{
+    if(activeScr()==='scr-seed-verify'&&account.verifyLockedUntil===deadline){
+      renderSeedVerifyCountdown(deadline);
+    }
+  },1000);
+  accountTimeout(()=>unlockSeedVerify(deadline,ticker),ACCOUNT_TIMING.seedVerifyLock);
+}
+function verifySeedWords(event){
+  event.preventDefault();
+  if(activeScr()!=='scr-seed-verify'||seedVerifyIsLocked()) return;
+  const inputs=seedVerifyInputs();
+  if(inputs.length!==3||inputs.some(input=>!input.value.trim())) return;
+  const expected=SEED_VERIFY_POSITIONS.map(position=>PROTOTYPE_SEED_WORDS[position-1]);
+  const correct=inputs.map((input,index)=>input.value.trim().toLowerCase()===expected[index]);
+  if(correct.every(Boolean)){
+    inputs.forEach(input=>{input.value='';input.removeAttribute('value')});
+    clearSeedVerifyErrors();
+    account.verifyFailures=0;
+    account.verifyLockedUntil=0;
+    completeOnboarding({recoveryMethod:'phrase'});
+    return;
+  }
+  account.verifyFailures+=1;
+  inputs.forEach((input,index)=>{
+    if(correct[index]) clearSeedVerifyInputError(input);
+    else{
+      input.value='';
+      input.removeAttribute('value');
+      markSeedVerifyInputError(input);
+    }
+  });
+  syncSeedVerifyFieldError();
+  if(account.verifyFailures>=5){
+    lockSeedVerify();
+    return;
+  }
+  setSeedVerifyStatus('One or more words were incorrect. Try again.',{error:true});
+  renderSeedVerifyAttempts();
+  updateSeedVerifyControls();
+}
+const IMPORT_MODE_COPY = Object.freeze({
+  phrase:{label:'Recovery phrase',help:'Enter exactly 12 words from the labeled prototype fixture.',
+    fixture:()=>`Prototype test phrase: ${DEMO_PHRASE.join(' ')}`},
+  private:{label:'Private key',help:'Enter the labeled 0x-prefixed, 64-hex prototype key.',
+    fixture:()=>`Prototype test private key: ${DEMO_PRIVATE_KEY}`},
+  watch:{label:'Watch-only address',help:'Enter the labeled EVM or Solana prototype address.',
+    fixture:()=>`Prototype EVM: ${DEMO_EVM_ADDRESS} · Prototype Solana: ${DEMO_SOLANA_ADDRESS}`}
+});
+function importMode(){return Object.prototype.hasOwnProperty.call(IMPORT_MODE_COPY,account.importMode) ? account.importMode : 'phrase'}
+function setImportStatus(message,{error=false}={}){
+  const status=document.getElementById('wallet-import-status');
+  const field=document.getElementById('wallet-import-value');
+  if(status){status.textContent=message;status.classList.toggle('is-error',Boolean(error))}
+  if(field){
+    if(error) field.setAttribute('aria-invalid','true');
+    else field.removeAttribute('aria-invalid');
+  }
+}
+function setImportLoading(loading){
+  const screen=document.getElementById('scr-wallet-import');
+  const submit=document.getElementById('wallet-import-submit');
+  const field=document.getElementById('wallet-import-value');
+  if(screen) screen.setAttribute('aria-busy',String(Boolean(loading)));
+  document.querySelectorAll('[name="wallet-import-mode"]').forEach(option=>{option.disabled=Boolean(loading)});
+  if(submit){submit.disabled=Boolean(loading);submit.textContent=loading ? 'Importing…' : 'Import wallet'}
+  if(field) field.disabled=Boolean(loading);
+}
+function renderImportField(){
+  const host=document.getElementById('wallet-import-field-host');
+  const fixture=document.getElementById('wallet-import-fixture');
+  if(!host||!fixture) return;
+  const mode=importMode();
+  const copy=IMPORT_MODE_COPY[mode];
+  const label=document.createElement('label');
+  label.htmlFor='wallet-import-value';
+  label.textContent=copy.label;
+  const field=document.createElement(mode==='phrase' ? 'textarea' : 'input');
+  field.id='wallet-import-value';
+  field.name=`wallet-import-${mode}`;
+  field.autocomplete='off';
+  field.spellcheck=false;
+  field.setAttribute('data-sensitive','');
+  field.setAttribute('aria-describedby','wallet-import-help wallet-import-status');
+  if(mode==='phrase') field.rows=4;
+  else field.type=mode==='private' ? 'password' : 'text';
+  field.addEventListener('input',handleImportInput);
+  const help=document.createElement('p');
+  help.id='wallet-import-help';
+  help.className='account-note';
+  help.textContent=copy.help;
+  host.replaceChildren(label,field,help);
+  fixture.textContent=copy.fixture();
+}
+function resetWalletImportView(){
+  const fixture=document.getElementById('wallet-import-fixture');
+  const status=document.getElementById('wallet-import-status');
+  if(fixture) fixture.textContent='';
+  if(status){status.textContent='';status.classList.remove('is-error')}
+  document.querySelectorAll('[name="wallet-import-mode"]').forEach(option=>{
+    option.checked=option.value===ACCOUNT_DEFAULTS.importMode;
+  });
+  setImportLoading(false);
+}
+function setupWalletImport(){
+  account.importMode=ACCOUNT_DEFAULTS.importMode;
+  account.importValue='';
+  document.querySelectorAll('[name="wallet-import-mode"]').forEach(option=>{
+    option.checked=option.value===account.importMode;
+  });
+  setImportStatus('');
+  renderImportField();
+  setImportLoading(false);
+}
+function chooseImportMode(event){
+  const mode=event.currentTarget.value;
+  if(!Object.prototype.hasOwnProperty.call(IMPORT_MODE_COPY,mode)||mode===account.importMode) return;
+  clearAccountTimers();
+  setImportLoading(false);
+  const previous=document.getElementById('wallet-import-value');
+  if(previous){previous.value='';previous.removeAttribute('value')}
+  account.importValue='';
+  account.importMode=mode;
+  setImportStatus('');
+  renderImportField();
+}
+function handleImportInput(event){
+  account.importValue=event.currentTarget.value;
+  setImportStatus('');
+}
+function isDemoEvmAddress(value){return /^0x[0-9a-fA-F]{40}$/.test(value)}
+function isDemoSolanaAddress(value){return value===DEMO_SOLANA_ADDRESS}
+function validateImport(mode,value){
+  const v=value.trim();
+  if(mode==='phrase'){
+    const words=v.toLowerCase().split(/\s+/).filter(Boolean);
+    const normalized=words.join(' ');
+    if(words.length!==12) return 'Enter exactly 12 recovery words.';
+    if(words.some(word=>!DEMO_IMPORT_WORDS.has(word))) return 'One or more words are not recognized.';
+    if(normalized===DEMO_BAD_CHECKSUM) return 'The recovery phrase checksum is invalid.';
+    return '';
+  }
+  if(mode==='private'){
+    if(!/^0x[0-9a-fA-F]{64}$/.test(v)) return 'Enter 0x followed by 64 hexadecimal characters.';
+    return '';
+  }
+  if(!isDemoEvmAddress(v)&&!isDemoSolanaAddress(v)) return 'Enter a supported EVM or Solana address.';
+  return '';
+}
+function scheduleWalletImportResult(error,watchOnly){
+  setImportLoading(true);
+  accountTimeout(()=>{
+    if(activeScr()!=='scr-wallet-import') return;
+    setImportLoading(false);
+    if(error){
+      setImportStatus(error,{error:true});
+      document.getElementById('wallet-import-value')?.focus();
+      return;
+    }
+    completeOnboarding(watchOnly ? {watchOnly:true} : {});
+  },ACCOUNT_TIMING.walletImport);
+}
+function submitWalletImport(){
+  if(activeScr()!=='scr-wallet-import') return;
+  if(document.getElementById('scr-wallet-import').getAttribute('aria-busy')==='true') return;
+  const field=document.getElementById('wallet-import-value');
+  const mode=importMode();
+  const value=field ? field.value : '';
+  account.importValue=value;
+  const error=validateImport(mode,value);
+  if(field){field.value='';field.removeAttribute('value')}
+  account.importValue='';
+  setImportStatus('');
+  const fixture=document.getElementById('wallet-import-fixture');
+  if(fixture) fixture.textContent='';
+  scheduleWalletImportResult(error,mode==='watch');
+}
+function setupAccountScreen(screen){
+  if(!isAccountScreen(screen)) return;
+  clearAccountTimers();
+  if(screen==='scr-splash') setupSplash();
+  if(screen==='scr-auth') setupAuth();
+  if(screen==='scr-auth-otp') setupOtp();
+  if(screen==='scr-auth-wallet') setupExternalWallet();
+  if(screen==='scr-wallet-create') setupWalletCreate();
+  if(screen==='scr-wallet-backup') setupWalletBackup();
+  if(screen==='scr-seed-show') setupSeedShow();
+  if(screen==='scr-seed-verify') setupSeedVerify();
+  if(screen==='scr-wallet-import') setupWalletImport();
+}
+function focusActiveScreen({backupChoice=''}={}){
+  const screen=document.getElementById(activeScr());
+  if(!screen) return;
+  const watchNotice=document.getElementById('watch-only-notice');
+  let target=screen.id==='scr-home'
+    ? (watchNotice&&!watchNotice.hidden&&screen.contains(watchNotice)
+      ? watchNotice : document.getElementById('home-title'))
+    : screen.querySelector('[data-route-focus]')||screen.querySelector('h1,h2')||
+      screen.querySelector('input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button:not(:disabled)');
+  if(screen.id!=='scr-home'&&!screen.classList.contains('account-screen')) return;
+  if(target?.matches('h1,h2')&&!target.hasAttribute('tabindex')) target.setAttribute('tabindex','-1');
+  let focusImmediately=screen.id==='scr-home';
+  if(screen.id==='scr-wallet-backup'){
+    if(hasValidBackupPanelHistoryProvenance()){
+      target=document.getElementById('backup-confirm-title');
+      focusImmediately=true;
+    }else if(isValidBackupPanel(backupChoice)){
+      target=backupChoiceElement(backupChoice);
+      focusImmediately=true;
+    }
+  }
+  if(!target) return;
+  if(focusImmediately){
+    target.focus({preventScroll:true});
+    return;
+  }
+  requestAnimationFrame(()=>{
+    if(screen.id===activeScr()&&screen.classList.contains('active')&&!screen.hasAttribute('inert')){
+      target.focus({preventScroll:true});
+    }
+  });
+}
+function isAccountRoute(routeName){return Boolean(ROUTES[routeName]&&ROUTES[routeName].account)}
+function isAccountScreen(screen){return ACCOUNT_SCREENS.has(screen)}
+function isValidStack(value){
+  return Array.isArray(value)&&value.length>0&&
+    value.every(screen=>typeof screen==='string'&&KNOWN_SCREENS.has(screen))&&
+    Boolean(SCREEN_HASH[value[value.length-1]]);
+}
+function routeNameForAccountScreen(screen){
+  const entry=Object.entries(ROUTES).find(([,route])=>route.account&&route.screen===screen);
+  return entry ? entry[0] : '';
+}
+function sameStack(left,right){
+  return Array.isArray(left)&&Array.isArray(right)&&left.length===right.length&&
+    left.every((screen,index)=>screen===right[index]);
+}
+const accountHistoryProof=(()=>{
+  /* Keep runtime authorization bounded by both a conservative cap and the
+     browser history entries this document can still reach. */
+  const MAX_ACCOUNT_HISTORY_PROOFS=32;
+  const issued=new Map();
+  let fallbackSequence=0;
+  const currentEntryKey=()=>globalThis.navigation?.currentEntry?.key||'';
+  const accessibleEntryKeys=()=>{
+    if(typeof globalThis.navigation?.entries!=='function') return null;
+    try{
+      return new Set(globalThis.navigation.entries()
+        .map(entry=>entry?.key).filter(key=>typeof key==='string'&&key));
+    }catch(error){return null}
+  };
+  const accessibleHistoryBudget=()=>{
+    try{
+      const length=Number(history.length);
+      return Number.isFinite(length) ? Math.max(0,Math.floor(length)) : 0;
+    }catch(error){return 0}
+  };
+  const prune=()=>{
+    const keys=accessibleEntryKeys();
+    if(keys){
+      for(const [id,proof] of issued){
+        if(!keys.has(proof.entryKey)) issued.delete(id);
+      }
+    }
+    const browserBudget=keys ? Math.min(keys.size,accessibleHistoryBudget())
+      : accessibleHistoryBudget();
+    const limit=Math.min(MAX_ACCOUNT_HISTORY_PROOFS,browserBudget);
+    while(issued.size>limit){
+      issued.delete(issued.keys().next().value);
+    }
+  };
+  const opaqueId=()=>{
+    if(typeof globalThis.crypto?.randomUUID==='function') return globalThis.crypto.randomUUID();
+    const bytes=new Uint32Array(4);
+    if(typeof globalThis.crypto?.getRandomValues==='function'){
+      globalThis.crypto.getRandomValues(bytes);
+      return [...bytes].map(value=>value.toString(16).padStart(8,'0')).join('');
+    }
+    fallbackSequence+=1;
+    return `${Date.now().toString(36)}-${fallbackSequence.toString(36)}`;
+  };
+  const push=(state,url,descriptor)=>{
+    const previousEntryKey=currentEntryKey();
+    if(!previousEntryKey) return false;
+    let id=opaqueId();
+    while(issued.has(id)) id=opaqueId();
+    history.pushState({...state,accountEntryId:id},'',url);
+    const entryKey=currentEntryKey();
+    if(!entryKey||entryKey===previousEntryKey){
+      const safeState={...(history.state||{})};
+      delete safeState.accountEntryId;
+      delete safeState.accountPushed;
+      delete safeState.backupPanel;
+      history.replaceState(safeState,'',location.href);
+      return true;
+    }
+    issued.set(id,Object.freeze({
+      kind:descriptor.kind,
+      route:descriptor.route,
+      stack:Object.freeze(descriptor.stack.slice()),
+      panel:descriptor.panel||'',
+      accountPushed:descriptor.accountPushed===true,
+      entryKey,
+    }));
+    prune();
+    return true;
+  };
+  const matches=(state,descriptor)=>{
+    prune();
+    if(!state||typeof state.accountEntryId!=='string'||!state.accountEntryId) return false;
+    const proof=issued.get(state.accountEntryId);
+    if(!proof) return false;
+    const entryKey=currentEntryKey();
+    if(!entryKey||!proof.entryKey) return false;
+    return proof.kind===descriptor.kind&&proof.route===descriptor.route&&
+      sameStack(proof.stack,descriptor.stack)&&proof.panel===(descriptor.panel||'')&&
+      proof.accountPushed===(descriptor.accountPushed===true)&&
+      proof.entryKey===entryKey;
+  };
+  const clear=()=>issued.clear();
+  return Object.freeze({push,matches,clear});
+})();
+function isValidAccountHistoryStack(value){
+  if(!isValidStack(value)) return false;
+  const routeName=routeNameForAccountScreen(value.at(-1));
+  if(!routeName) return false;
+  const route=ROUTES[routeName];
+  if(sameStack(value,route.stack)) return true;
+  const otpBranchSuffix={
+    'wallet-create':['scr-wallet-create'],
+    'wallet-backup':['scr-wallet-create','scr-wallet-backup'],
+    'seed-show':['scr-wallet-create','scr-wallet-backup','scr-seed-show'],
+    'seed-verify':['scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify']
+  }[routeName];
+  return Boolean(otpBranchSuffix&&sameStack(
+    value,['scr-auth','scr-auth-otp',...otpBranchSuffix]));
+}
+function hasValidAccountHistoryProvenance(){
+  const state=history.state;
+  const route=routeNameForAccountScreen(activeScr());
+  return state?.accountPushed===true&&Boolean(route)&&
+    isValidAccountHistoryStack(state.stack)&&sameStack(state.stack,stack)&&
+    state.stack.at(-1)===activeScr()&&accountHistoryProof.matches(state,{
+      kind:'account-route',route,stack:state.stack,accountPushed:true,
+    });
+}
+function hasValidBackupPanelHistoryProvenance(){
+  const state=history.state;
+  return activeScr()==='scr-wallet-backup'&&isValidBackupPanel(state?.backupPanel)&&
+    isValidAccountHistoryStack(state.stack)&&sameStack(state.stack,stack)&&
+    state.stack.at(-1)==='scr-wallet-backup'&&accountHistoryProof.matches(state,{
+      kind:'backup-panel',route:'wallet-backup',stack:state.stack,panel:state.backupPanel,
+      accountPushed:state.accountPushed===true,
+    });
+}
+function accountParentStack(screen){
+  const routeName=routeNameForAccountScreen(screen);
+  if(!routeName) return null;
+  const route=ROUTES[routeName];
+  const hasParent=Object.prototype.hasOwnProperty.call(route,'parent');
+  const parentName=hasParent ? route.parent : route.defaultParent;
+  if(parentName===null) return null;
+  if(typeof parentName!=='string'||!parentName) return null;
+  const parent=ROUTES[parentName];
+  if(!parent?.account||parent.screen===screen||!isValidStack(parent.stack)||
+      parent.stack.at(-1)!==parent.screen) return null;
+  return parent.stack.slice();
+}
+function guardAccountRoute(routeName){
+  return onboardingFlag('complete')&&isAccountRoute(routeName) ? 'home' : routeName;
+}
+function guardAccountStack(nextStack){
+  return onboardingFlag('complete')&&nextStack.some(isAccountScreen) ? ROUTES.home.stack.slice() : nextStack;
+}
+
+function completeOnboarding({recoveryMethod='',backupIncomplete=false,watchOnly=false}={}){
+  clearSensitiveAccountState();
+  accountHistoryProof.clear();
+  setOnboardingFlag('complete',true);
+  setOnboardingFlag('backupIncomplete',Boolean(backupIncomplete));
+  setOnboardingFlag('watchOnly',Boolean(watchOnly));
+  if(RECOVERY_METHODS.has(recoveryMethod)) setOnboardingFlag('recoveryMethod',recoveryMethod);
+  else setOnboardingFlag('recoveryMethod','');
+  navigate(ROUTES.home.stack.slice(),{replace:true});
+}
+function restartOnboarding(){
+  accountHistoryProof.clear();
+  Object.keys(ONBOARDING_KEYS).forEach(name=>{onboardingMemory[name]=''});
+  Object.values(ONBOARDING_KEYS).forEach(key=>{
+    try{sessionStorage.removeItem(key)}catch(e){}
+  });
+  let length=0;
+  try{length=sessionStorage.length}catch(e){}
+  for(let i=length-1;i>=0;i-=1){
+    let key='';
+    try{key=sessionStorage.key(i)||''}catch(e){continue}
+    if(key&&key.startsWith(ONBOARDING_PREFIX)){
+      try{sessionStorage.removeItem(key)}catch(e){}
+    }
+  }
+  resetAccountState();
+  navigate(ROUTES.splash.stack.slice(),{replace:true});
+}
+
+/* voice: idle | joining | joined | reconnecting | error */
+const voice = {state:'idle', open:false, minimized:false, muted:true, hand:false, speaker:true,
+  listeners:214, speakers:8, joinedAt:0, weak:false};
+let stack = ['scr-home'];
+const navigationStorageProjection=(()=>{
+  const getOwnPropertyDescriptors=Object.getOwnPropertyDescriptors;
+  const getPrototypeOf=Object.getPrototypeOf;
+  const ownKeys=Reflect.ownKeys;
+  const reflectApply=Reflect.apply;
+  const hasOwnProperty=Object.prototype.hasOwnProperty;
+  const objectPrototype=Object.prototype;
+  const arrayPrototype=Array.prototype;
+  const arrayIsArray=Array.isArray;
+  const isInteger=Number.isInteger;
+  const setHas=Set.prototype.has;
+  const jsonStringify=JSON.stringify;
+  const freeze=Object.freeze;
+  const voiceKeys=freeze(['state','open','minimized','muted','hand','speaker',
+    'listeners','speakers','joinedAt','weak']);
+  const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
+  const defaults=freeze({state:'idle',open:false,minimized:false,muted:true,
+    hand:false,speaker:true,listeners:214,speakers:8,joinedAt:0,weak:false});
+  const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
+  const includes=(values,value)=>{
+    for(let index=0;index<values.length;index+=1){
+      if(values[index]===value)return true;
+    }
+    return false;
+  };
+  const exactKeys=(descriptors,expected)=>{
+    const keys=ownKeys(descriptors);
+    if(keys.length!==expected.length)return false;
+    for(let index=0;index<keys.length;index+=1){
+      if(typeof keys[index]!=='string'||!includes(expected,keys[index]))return false;
+    }
+    return true;
+  };
+  const ownData=(descriptors,key)=>{
+    const descriptor=descriptors[key];
+    return descriptor&&hasOwn(descriptor,'value')?descriptor.value:undefined;
+  };
+  const stackSnapshot=value=>{
+    try{
+      if(!arrayIsArray(value)||getPrototypeOf(value)!==arrayPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(value);
+      const length=ownData(descriptors,'length');
+      if(!isInteger(length)||length<1||length>26||ownKeys(descriptors).length!==length+1){
+        return null;
+      }
+      const safe=[];
+      for(let index=0;index<length;index+=1){
+        const screen=ownData(descriptors,String(index));
+        if(typeof screen!=='string'||!reflectApply(setHas,KNOWN_SCREENS,[screen]))return null;
+        safe[index]=screen;
+      }
+      return safe;
+    }catch(_error){return null}
+  };
+  const voiceSnapshot=(value,{exact})=>{
+    try{
+      if(!value||typeof value!=='object'||getPrototypeOf(value)!==objectPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(value);
+      if(exact&&!exactKeys(descriptors,voiceKeys))return null;
+      const state=ownData(descriptors,'state'),open=ownData(descriptors,'open'),
+        minimized=ownData(descriptors,'minimized'),muted=ownData(descriptors,'muted'),
+        hand=ownData(descriptors,'hand'),speaker=ownData(descriptors,'speaker'),
+        listeners=ownData(descriptors,'listeners'),speakers=ownData(descriptors,'speakers'),
+        joinedAt=ownData(descriptors,'joinedAt'),weak=ownData(descriptors,'weak');
+      if(!includes(voiceStates,state)||typeof open!=='boolean'||
+         typeof minimized!=='boolean'||typeof muted!=='boolean'||
+         typeof hand!=='boolean'||typeof speaker!=='boolean'||typeof weak!=='boolean'||
+         !isInteger(listeners)||listeners<0||!isInteger(speakers)||speakers<0||
+         !isInteger(joinedAt)||joinedAt<0)return null;
+      return {state,open,minimized,muted,hand,speaker,listeners,speakers,joinedAt,weak};
+    }catch(_error){return null}
+  };
+  const defaultVoice=()=>({state:defaults.state,open:defaults.open,
+    minimized:defaults.minimized,muted:defaults.muted,hand:defaults.hand,
+    speaker:defaults.speaker,listeners:defaults.listeners,speakers:defaults.speakers,
+    joinedAt:defaults.joinedAt,weak:defaults.weak});
+  const restore=candidate=>{
+    try{
+      if(!candidate||typeof candidate!=='object'||
+         getPrototypeOf(candidate)!==objectPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(candidate);
+      if(!exactKeys(descriptors,['stack','voice']))return null;
+      const safeStack=stackSnapshot(ownData(descriptors,'stack'));
+      if(!safeStack)return null;
+      return {stack:safeStack,
+        voice:voiceSnapshot(ownData(descriptors,'voice'),{exact:true})||defaultVoice()};
+    }catch(_error){return null}
+  };
+  const forWrite=(stackValue,voiceValue)=>({
+    stack:stackSnapshot(stackValue)||['scr-home'],
+    voice:voiceSnapshot(voiceValue,{exact:false})||defaultVoice()
+  });
+  const serialize=(stackValue,voiceValue)=>reflectApply(jsonStringify,JSON,
+    [forWrite(stackValue,voiceValue)]);
+  return freeze({restore,forWrite,serialize});
+})();
+
+function activeScr(){return stack[stack.length-1]}
+function inCall(){return voice.state==='joined'||voice.state==='joining'||voice.state==='reconnecting'}
+
+function renderOnboardingFlags(){
+  const backupIncomplete=onboardingFlag('backupIncomplete');
+  const backup=document.getElementById('backup-warning');
+  if(backup) backup.hidden=!backupIncomplete;
+  const watchOnly=onboardingFlag('watchOnly');
+  const watch=document.getElementById('watch-only-notice');
+  if(watch) watch.hidden=!watchOnly;
+  const explanation=document.getElementById('watch-only-explanation');
+  if(explanation) explanation.hidden=!watchOnly;
+
+  const detail=document.getElementById('profile-recovery-detail');
+  const status=document.getElementById('profile-recovery-status');
+  if(!detail||!status) return;
+  const recovery={
+    phrase:['Recovery phrase backed up','healthy','risk-low'],
+    'cloud-simulated':['Cloud backup simulated','simulated','risk-low'],
+    'social-simulated':['Social recovery simulated','simulated','risk-low'],
+    skipped:['Recovery setup skipped','skipped','risk-med']
+  }[onboardingFlag('recoveryMethod')]||['Recovery method not recorded','not set','risk-med'];
+  const shown=backupIncomplete ? ['Backup incomplete','action needed','risk-med'] : recovery;
+  detail.textContent=shown[0];
+  status.textContent=shown[1];
+  status.className='risk-pill '+shown[2];
+  status.style.marginLeft='auto';
+}
+
+function render(){
+  const cur = activeScr();
+  document.querySelectorAll('.scr').forEach(s=>{
+    const on = s.id===cur;
+    s.classList.toggle('active', on);
+    /* keep hidden screens out of the focus order + a11y tree */
+    if(on){s.removeAttribute('inert'); s.removeAttribute('aria-hidden')}
+    else {s.setAttribute('inert',''); s.setAttribute('aria-hidden','true')}
+  });
+  const tab = Object.keys(ROOTS).find(k=>ROOTS[k]===stack[0]);
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.tab===tab));
+
+  /* bottom/top chrome follows the screen: secondary pages drop the tab bar,
+     the group chat swaps it for a pinned header + composer */
+  const isRoot = ROOT_SCREENS.has(cur);
+  const isGroup = cur==='scr-group';
+  const isAccount = ACCOUNT_SCREENS.has(cur);
+  const phone = document.getElementById('phone');
+  phone.classList.toggle('sub', !isRoot);
+  phone.classList.toggle('group', isGroup);
+  phone.classList.toggle('account-flow', isAccount);
+  const tabbar = document.querySelector('.tabbar');
+  tabbar.hidden=isAccount;
+  if(isAccount){tabbar.setAttribute('inert','');tabbar.setAttribute('aria-hidden','true')}
+  else {tabbar.removeAttribute('inert');tabbar.removeAttribute('aria-hidden')}
+  const gh=document.getElementById('gcHead'), co=document.getElementById('composer');
+  gh.hidden=!isGroup; co.hidden=!isGroup;
+  if(isGroup){gh.removeAttribute('inert'); co.removeAttribute('inert')}
+  else {gh.setAttribute('inert',''); co.setAttribute('inert','')}
+
+  renderVoice();
+  renderOnboardingFlags();
+  renderWalletFoundation(cur);
+}
+
+function walletPairCompatible(asset,chain){
+  return Boolean(WALLET_ASSETS[asset]?.chains.includes(chain));
+}
+function canonicalWalletHash(routeName,params=walletRouteParams){
+  return `${routeName}?asset=${params.asset}&chain=${params.chain}`;
+}
+function strictHashRoute(rawInput){
+  const raw=rawInput===undefined?(location.hash||'').slice(1):rawInput;
+  if(typeof raw!=='string') return {target:'home',params:null,canonical:'home'};
+  const question=raw.indexOf('?');
+  const routeName=question<0?raw:raw.slice(0,question);
+  if(routeName!=='asset'&&routeName!=='receive'){
+    return {target:routeName,params:null,canonical:routeName};
+  }
+  const defaults={...WALLET_ROUTE_DEFAULT};
+  const rejected=()=>({target:routeName,params:defaults,
+    canonical:canonicalWalletHash(routeName,defaults)});
+  if(raw.length>256||/[\u0000-\u001f\u007f]/.test(raw)||
+     /%(?![0-9a-fA-F]{2})/.test(raw)) return rejected();
+  const query=question<0?'':raw.slice(question+1);
+  const values=Object.create(null);
+  const keys=new Set();
+  if(query){
+    for(const field of query.split('&')){
+      const equal=field.indexOf('=');
+      if(equal<0) return rejected();
+      let key;
+      let value;
+      try{
+        key=decodeURIComponent(field.slice(0,equal));
+        value=decodeURIComponent(field.slice(equal+1));
+      }catch(error){return rejected()}
+      if(/[\u0000-\u001f\u007f]/.test(key)||/[\u0000-\u001f\u007f]/.test(value)||
+         [...value].length>32||keys.has(key)) return rejected();
+      keys.add(key);
+      if(key==='asset'||key==='chain'){
+        if(value==='') return rejected();
+        values[key]=value;
+      }
+    }
+  }
+  const asset=typeof values.asset==='string'?values.asset.toUpperCase():defaults.asset;
+  const chain=typeof values.chain==='string'?values.chain.toLowerCase():defaults.chain;
+  if(!WALLET_ASSET_IDS.includes(asset)||!WALLET_CHAIN_IDS.includes(chain)||
+     !walletPairCompatible(asset,chain)) return rejected();
+  const params={asset,chain};
+  return {target:routeName,params,canonical:canonicalWalletHash(routeName,params)};
+}
+const NAVIGATION_VOICE_STATES=new Set(['idle','joining','joined','reconnecting','error']);
+function currentVoiceProjection(){
+  return {state:NAVIGATION_VOICE_STATES.has(voice.state)?voice.state:'idle',
+    open:voice.open===true,minimized:voice.minimized===true,muted:voice.muted===true};
+}
+function validatedVoiceProjection(candidate){
+  if(!candidate||typeof candidate!=='object'||Array.isArray(candidate)||
+     Object.getPrototypeOf(candidate)!==Object.prototype) return currentVoiceProjection();
+  const descriptors=Object.getOwnPropertyDescriptors(candidate);
+  const keys=Reflect.ownKeys(candidate);
+  const expected=['state','open','minimized','muted'];
+  if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+     !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+    return currentVoiceProjection();
+  }
+  const state=descriptors.state.value;
+  const open=descriptors.open.value;
+  const minimized=descriptors.minimized.value;
+  const muted=descriptors.muted.value;
+  if(!NAVIGATION_VOICE_STATES.has(state)||typeof open!=='boolean'||
+     typeof minimized!=='boolean'||typeof muted!=='boolean'){
+    return currentVoiceProjection();
+  }
+  return {state,open,minimized,muted};
+}
+function exactStack(value,expected){return sameStack(value,expected)}
+function snapshotOwnDataRecord(candidate,expectedKeys,expectedPrototype){
+  try{
+    if(!candidate||typeof candidate!=='object'||
+       Object.getPrototypeOf(candidate)!==expectedPrototype) return null;
+    const descriptors=Object.getOwnPropertyDescriptors(candidate);
+    const keys=Reflect.ownKeys(candidate);
+    if(keys.length!==expectedKeys.length||keys.some(key=>typeof key!=='string'||
+       !expectedKeys.includes(key)||
+       !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))) return null;
+    const result=Object.create(null);
+    expectedKeys.forEach(key=>{result[key]=descriptors[key].value});
+    return result;
+  }catch(error){return null}
+}
+function snapshotWalletStack(candidate){
+  try{
+    if(!Array.isArray(candidate)||Object.getPrototypeOf(candidate)!==Array.prototype) return null;
+    const descriptors=Object.getOwnPropertyDescriptors(candidate);
+    const keys=Reflect.ownKeys(candidate);
+    const lengthDescriptor=descriptors.length;
+    if(!lengthDescriptor||!Object.prototype.hasOwnProperty.call(lengthDescriptor,'value')||
+       !Number.isInteger(lengthDescriptor.value)||lengthDescriptor.value<1||
+       lengthDescriptor.value>3) return null;
+    const expected=[...Array(lengthDescriptor.value).keys()].map(String).concat('length');
+    if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+       !expected.includes(key)||
+       !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))) return null;
+    const result=expected.slice(0,-1).map(key=>descriptors[key].value);
+    return result.every(value=>typeof value==='string')?result:null;
+  }catch(error){return null}
+}
+function snapshotWalletHistoryState(candidate){
+  const outer=snapshotOwnDataRecord(candidate,['stack','voice'],Object.prototype);
+  if(!outer) return null;
+  const safeStack=snapshotWalletStack(outer.stack);
+  const safeVoice=snapshotOwnDataRecord(outer.voice,
+    ['state','open','minimized','muted'],Object.prototype);
+  if(!safeStack||!safeVoice||!NAVIGATION_VOICE_STATES.has(safeVoice.state)||
+     typeof safeVoice.open!=='boolean'||typeof safeVoice.minimized!=='boolean'||
+     typeof safeVoice.muted!=='boolean') return null;
+  return {stack:safeStack,voice:{state:safeVoice.state,open:safeVoice.open,
+    minimized:safeVoice.minimized,muted:safeVoice.muted}};
+}
+const walletPopstateStack=(()=>{
+  const MAX_PROOFS=32;
+  const MAX_ENTRY_KEY_LENGTH=256;
+  const issued=new Map();
+  const getOwnDescriptor=Object.getOwnPropertyDescriptor;
+  const getPrototypeOf=Object.getPrototypeOf;
+  const freeze=Object.freeze;
+  const hasOwnProperty=Object.prototype.hasOwnProperty;
+  const hasOwn=(value,key)=>hasOwnProperty.call(value,key);
+  const captureAccessor=descriptor=>{
+    if(!descriptor||typeof descriptor.get!=='function'||
+       hasOwn(descriptor,'value')) return null;
+    return freeze({get:descriptor.get,set:descriptor.set,
+      configurable:descriptor.configurable,enumerable:descriptor.enumerable});
+  };
+  const sameAccessor=(descriptor,captured)=>Boolean(descriptor&&captured&&
+    !hasOwn(descriptor,'value')&&descriptor.get===captured.get&&
+    descriptor.set===captured.set&&
+    descriptor.configurable===captured.configurable&&
+    descriptor.enumerable===captured.enumerable);
+  const initialNavigation=(()=>{
+    try{
+      const globalAccessor=captureAccessor(
+        getOwnDescriptor(globalThis,'navigation'));
+      if(!globalAccessor) return null;
+      const value=globalAccessor.get.call(globalThis);
+      if(!value||typeof value!=='object') return null;
+      const navigationPrototype=getPrototypeOf(value);
+      if(!navigationPrototype||hasOwn(value,'currentEntry')) return null;
+      const currentEntryAccessor=captureAccessor(
+        getOwnDescriptor(navigationPrototype,'currentEntry'));
+      if(!currentEntryAccessor) return null;
+      const entry=currentEntryAccessor.get.call(value);
+      if(!entry||typeof entry!=='object'||hasOwn(entry,'key')) return null;
+      const entryPrototype=getPrototypeOf(entry);
+      if(!entryPrototype) return null;
+      const keyAccessor=captureAccessor(
+        getOwnDescriptor(entryPrototype,'key'));
+      if(!keyAccessor) return null;
+      const initialKey=keyAccessor.get.call(entry);
+      if(typeof initialKey!=='string'||initialKey.length<1||
+         initialKey.length>MAX_ENTRY_KEY_LENGTH) return null;
+      return freeze({value,globalAccessor,navigationPrototype,
+        currentEntryAccessor,entryPrototype,keyAccessor});
+    }catch(error){return null}
+  })();
+  const currentKey=()=>{
+    try{
+      if(!initialNavigation) return '';
+      const descriptor=getOwnDescriptor(globalThis,'navigation');
+      if(!sameAccessor(descriptor,initialNavigation.globalAccessor)) return '';
+      const live=initialNavigation.globalAccessor.get.call(globalThis);
+      if(live!==initialNavigation.value||
+         getPrototypeOf(live)!==initialNavigation.navigationPrototype||
+         hasOwn(live,'currentEntry')) return '';
+      const currentEntryDescriptor=getOwnDescriptor(
+        initialNavigation.navigationPrototype,'currentEntry');
+      if(!sameAccessor(currentEntryDescriptor,
+        initialNavigation.currentEntryAccessor)) return '';
+      const entry=initialNavigation.currentEntryAccessor.get.call(live);
+      if(!entry||typeof entry!=='object'||hasOwn(entry,'key')||
+         getPrototypeOf(entry)!==initialNavigation.entryPrototype) return '';
+      const keyDescriptor=getOwnDescriptor(initialNavigation.entryPrototype,'key');
+      if(!sameAccessor(keyDescriptor,initialNavigation.keyAccessor)) return '';
+      const key=initialNavigation.keyAccessor.get.call(entry);
+      return typeof key==='string'&&key.length>0&&
+        key.length<=MAX_ENTRY_KEY_LENGTH?key:'';
+    }catch(error){return ''}
+  };
+  const extended=value=>exactStack(value,
+    ['scr-wallet','scr-asset','scr-receive']);
+  const rememberExtended=()=>{
+    const key=currentKey();
+    if(!key||!extended(stack)||activeScr()!=='scr-receive'||
+       strictHashRoute().target!=='receive') return;
+    issued.set(key,Object.freeze(stack.slice()));
+    while(issued.size>MAX_PROOFS) issued.delete(issued.keys().next().value);
+  };
+  const matches=value=>{
+    const stored=issued.get(currentKey());
+    return Boolean(stored&&extended(value)&&sameStack(stored,value));
+  };
+  let trustedAssetReceiveEvent=null;
+  document.addEventListener('click',event=>{
+    const control=document.getElementById('asset-receive');
+    trustedAssetReceiveEvent=event.isTrusted&&event.target===control&&
+      activeScr()==='scr-asset'&&exactStack(stack,['scr-wallet','scr-asset'])
+        ?event:null;
+  },{capture:true});
+  document.addEventListener('click',event=>{
+    if(trustedAssetReceiveEvent===event&&!event.defaultPrevented) rememberExtended();
+    trustedAssetReceiveEvent=null;
+  });
+  window.addEventListener('pagehide',event=>{if(!event.persisted) issued.clear()});
+  window.addEventListener('unload',()=>issued.clear());
+  return (routeName,candidate)=>{
+    if(routeName==='receive'&&extended(candidate)&&matches(candidate)){
+      return candidate.slice();
+    }
+    return ROUTES[routeName].stack.slice();
+  };
+})();
+
+/* hash is a projection of state, never a second source of truth */
+function syncHash(replace,{accountPushed=false}={}){
+  const url = '#'+expectedHash();
+  const st = {stack:stack.slice(), voice:{state:voice.state,open:voice.open,minimized:voice.minimized,muted:voice.muted}};
+  const sameEntry=location.hash===url&&Boolean(history.state);
+  if(activeScr()==='scr-wallet-backup'&&hasValidBackupPanelHistoryProvenance()){
+    st.backupPanel=history.state.backupPanel;
+    st.accountEntryId=history.state.accountEntryId;
+    if(history.state.accountPushed===true) st.accountPushed=true;
+  }
+  if(accountPushed&&!replace&&!sameEntry){
+    st.accountPushed=true;
+    const pushed=accountHistoryProof.push(st,url,{
+      kind:'account-route',route:routeNameForAccountScreen(activeScr()),
+      stack:stack.slice(),accountPushed:true,
+    });
+    if(!pushed){
+      delete st.accountPushed;
+      history.pushState(st,'',url);
+    }
+    return;
+  }
+  if(sameEntry){
+    history.replaceState(st,'',url);
+    return;
+  }
+  if(replace) history.replaceState(st,'',url); else history.pushState(st,'',url);
+}
+function persist(){
+  try{sessionStorage.setItem(SS_KEY,navigationStorageProjection.serialize(stack,voice))}catch(e){}
+}
+function navigate(nextStack,{replace=false, keepScroll=false, accountPushed=false}={}){
+  consumeReviewForNavigation();
+  clearSensitiveAccountState();
+  stack = nextStack;
+  render();
+  setupAccountScreen(activeScr());
+  focusActiveScreen();
+  if(!keepScroll){const el=document.getElementById(activeScr()); if(el) el.scrollTop=0}
+  syncHash(replace,{accountPushed});
+  persist();
+}
+function goTab(t){
+  if(stack[0]===ROOTS[t] && stack.length===1) return;
+  navigate([ROOTS[t]], {replace:stack.length===1});
+}
+function push(id){
+  if(activeScr()===id) return;
+  navigate(stack.concat(id),{accountPushed:isAccountScreen(id)});
+}
+/* in-app back = one level up the app hierarchy (not "undo last navigation").
+   the browser back button is handled separately by popstate, which retraces the real path. */
+function back(){
+  if(hasValidBackupPanelHistoryProvenance()){
+    history.back();
+    return;
+  }
+  if(activeScr()==='scr-wallet-backup'&&isValidBackupPanel(pendingBackupChoice)){
+    showBackupChoices();
+    return;
+  }
+  if(isAccountScreen(activeScr())&&hasValidAccountHistoryProvenance()){
+    clearSensitiveAccountState();
+    history.back();
+    return;
+  }
+  if(isAccountScreen(activeScr())){
+    const parentStack=accountParentStack(activeScr());
+    if(parentStack){
+      navigate(parentStack,{replace:true});
+      return;
+    }
+  }
+  if(stack.length<=1) return;
+  navigate(stack.slice(0,-1), {replace:true});
+}
+window.addEventListener('popstate',e=>{
+  if(handleReviewHistoryPopstate(e.state)) return;
+  const walletProjection=strictHashRoute();
+  if((walletProjection.target==='asset'||walletProjection.target==='receive')&&
+     walletProjection.params){
+    clearSensitiveAccountState();
+    walletRouteParams={...walletProjection.params};
+    const stateSnapshot=snapshotWalletHistoryState(e.state);
+    stack=walletPopstateStack(walletProjection.target,stateSnapshot?.stack);
+    const safeVoice=stateSnapshot?.voice||currentVoiceProjection();
+    Object.assign(voice,safeVoice);
+    const projection={stack:stack.slice(),voice:safeVoice};
+    history.replaceState(projection,'','#'+walletProjection.canonical);
+    render();
+    focusActiveScreen();
+    persist();
+    finishReviewOriginPopstate(e);
+    return;
+  }
+  const backupChoiceToRestore=activeScr()==='scr-wallet-backup'&&
+    isValidBackupPanel(pendingBackupChoice)&&e.state&&isValidStack(e.state.stack)&&
+    e.state.stack.at(-1)==='scr-wallet-backup'&&!isValidBackupPanel(e.state.backupPanel)
+      ? pendingBackupChoice : '';
+  clearSensitiveAccountState();
+  if(e.state && isValidStack(e.state.stack)){
+    /* a real history traversal — every entry we create carries state, so replay it verbatim
+       and never re-fire the demo side effects */
+    const nextStack=guardAccountStack(e.state.stack.slice());
+    if(nextStack[0]==='scr-home'&&e.state.stack.some(isAccountScreen)){
+      navigate(nextStack,{replace:true});
+      return;
+    }
+    stack = nextStack;
+    const projected=strictHashRoute();
+    const projectedRoute=SCREEN_HASH[stack.at(-1)]||'home';
+    const safeProjectedState=snapshotWalletHistoryState(e.state);
+    if((projectedRoute==='asset'||projectedRoute==='receive')&&
+       projected.target===projectedRoute&&projected.params&&safeProjectedState){
+      walletRouteParams={...projected.params};
+      if(location.hash!=='#'+projected.canonical){
+        history.replaceState(safeProjectedState,'','#'+projected.canonical);
+      }
+    }
+    if(e.state.voice){voice.open=e.state.voice.open; voice.minimized=e.state.voice.minimized}
+    render(); setupAccountScreen(activeScr()); focusActiveScreen({backupChoice:backupChoiceToRestore}); persist();
+    finishReviewOriginPopstate(e);
+  }else{
+    /* no state = an entry we did not create, i.e. a hash written from outside (address bar,
+       or `location.hash = …`). Chrome fires this before hashchange, so treat it as a fresh
+       deep link — demo side effects included. */
+    route();
+  }
+});
+
+/* ---------- Wallet foundation: normalized provider views ---------- */
+const walletViewState={chainFilter:'all',
+  selectedAsset:'ETH',selectedChain:'base',historyItems:[],historyCursor:null
+};
+const walletAuthority=(()=>{
+  const operations=Object.freeze({
+    'home-pay':'transfer','token-buy':'swap','group-token-buy':'swap',
+    'group-copy-trade':'swap','wallet-send':'transfer','wallet-swap':'swap',
+    'wallet-bridge':'bridge','wallet-dapps':'approve','swap-submit':'swap',
+    'dapp-approve':'approve',
+    'approval-limit':'approve',
+    'approval-unlimited':'approve'
+  });
+  const capabilityKeys=Object.freeze([
+    'balances','history','receive','transfer','swap','approve'
+  ]);
+  const expectedCapabilities=Object.freeze({
+    privy_embedded:Object.freeze({balances:'supported',history:'supported',
+      receive:'supported',transfer:'supported',swap:'supported',
+      approve:'spike_required'}),
+    connected_external:Object.freeze({balances:'provider_gap',history:'provider_gap',
+      receive:'supported',transfer:'external_provider',swap:'provider_gap',
+      approve:'external_provider'}),
+    watch_only:Object.freeze({balances:'provider_gap',history:'provider_gap',
+      receive:'supported',transfer:'unsupported',swap:'unsupported',
+      approve:'unsupported'})
+  });
+  const dataRecord=(value,keys)=>{
+    try{
+      if(!value||typeof value!=='object'||Array.isArray(value)||
+         Object.getPrototypeOf(value)!==Object.prototype) return null;
+      const descriptors=Object.getOwnPropertyDescriptors(value);
+      const ownKeys=Reflect.ownKeys(value);
+      if(ownKeys.length!==keys.length||ownKeys.some(key=>typeof key!=='string'||
+         !keys.includes(key)||
+         !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))) return null;
+      const result=Object.create(null);
+      keys.forEach(key=>{result[key]=descriptors[key].value});
+      return result;
+    }catch(error){return null}
+  };
+  const dataArray=value=>{
+    try{
+      if(!Array.isArray(value)||Object.getPrototypeOf(value)!==Array.prototype||
+         value.length<1||value.length>4) return null;
+      const descriptors=Object.getOwnPropertyDescriptors(value);
+      const expected=[...Array(value.length).keys()].map(String).concat('length');
+      const keys=Reflect.ownKeys(value);
+      if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+         !expected.includes(key)||
+         !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))) return null;
+      return expected.slice(0,-1).map(key=>descriptors[key].value);
+    }catch(error){return null}
+  };
+  const trustedProvider=(()=>{
+    try{
+      const provider=globalThis.LoopWalletProvider;
+      const facade=dataRecord(provider,['createSimulatedAdapter','normalizeBalanceResponse',
+        'normalizeTransactionPage','formatBaseUnits','addDecimalStrings']);
+      if(!facade||!Object.isFrozen(provider)||
+         typeof facade.createSimulatedAdapter!=='function') return null;
+      return Object.freeze({provider});
+    }catch(error){return null}
+  })();
+  const providerFactory=trustedProvider?dataRecord(trustedProvider.provider,
+    ['createSimulatedAdapter','normalizeBalanceResponse','normalizeTransactionPage',
+      'formatBaseUnits','addDecimalStrings']).createSimulatedAdapter:null;
+  const readOnboardingFlag=onboardingFlag;
+  const QueryParameters=globalThis.URLSearchParams;
+  const capturedReflectApply=(()=>{
+    try{
+      const candidate=globalThis.Reflect?.apply;
+      return typeof candidate==='function'&&candidate.name==='apply'&&
+        candidate.length===3&&
+        Function.prototype.toString.call(candidate).includes('[native code]')?
+          candidate:null;
+    }catch(error){return null}
+  })();
+  const queryGetDescriptor=(()=>{
+    try{
+      const descriptor=Object.getOwnPropertyDescriptor(QueryParameters?.prototype,'get');
+      const record=dataRecord(descriptor,
+        ['value','writable','enumerable','configurable']);
+      if(!record||typeof record.value!=='function'||record.value.name!=='get'||
+         record.value.length!==1||record.writable!==true||
+         record.enumerable!==true||record.configurable!==true||
+         !Function.prototype.toString.call(record.value).includes('[native code]')){
+        return null;
+      }
+      return Object.freeze(record);
+    }catch(error){return null}
+  })();
+  const queryGet=queryGetDescriptor?.value||null;
+  const completedControl=document.getElementById('completed-provider-fixture');
+  const completedParent=completedControl?.parentElement||null;
+  const completedScreen=completedControl?.closest('.scr')||null;
+  const completedPrevious=completedControl?.previousElementSibling||null;
+  const completedNext=completedControl?.nextElementSibling||null;
+  const completedLabelNode=completedControl?.firstChild||null;
+  const completedAttributes=Object.freeze({
+    class:'btn btn-ghost completed-provider-fixture',
+    id:'completed-provider-fixture',type:'button',
+    'aria-label':'Show completed provider fixture',
+    'data-provider-fixture':'completed'
+  });
+  let key='',adapter=null,walletResult=null,completedSelected=false;
+  const configuration=()=>{
+    try{
+      if(typeof QueryParameters!=='function'||!queryGet||!capturedReflectApply)return null;
+      const demo=capturedReflectApply(queryGet,
+        new QueryParameters(location.search),['demo'])||'';
+      if(readOnboardingFlag('watchOnly')===true||demo==='wallet-watch-only'){
+        return {walletClass:'watch_only',scenario:'watch_only',stale:false};
+      }
+      if(demo==='wallet-external-gap'){
+        return {walletClass:'connected_external',scenario:'external_gap',stale:false};
+      }
+      const scenarios={
+        'wallet-empty':'empty','wallet-loading':'loading','wallet-partial':'partial'
+      };
+      return {walletClass:'privy_embedded',
+        scenario:completedSelected?'provider_succeeded_demo':
+          scenarios[demo]||'normal',stale:demo==='wallet-stale'};
+    }catch(error){return null}
+  };
+  const snapshot=()=>{
+    try{
+      const config=configuration();
+      if(!trustedProvider||!providerFactory||!config) return null;
+      const nextKey=`${config.walletClass}:${config.scenario}:${config.stale}`;
+      if(key!==nextKey){
+        key=nextKey;
+        adapter=providerFactory.call(trustedProvider.provider,{
+          walletClass:config.walletClass,scenario:config.scenario
+        });
+        walletResult=adapter.getWalletSnapshot();
+        walletViewState.chainFilter='all';walletViewState.historyItems=[];
+        walletViewState.historyCursor=null;
+      }
+      return Object.freeze({...config,adapter,walletResult});
+    }catch(error){return null}
+  };
+  const normalizedWallet=()=>{
+    try{
+      const current=snapshot();
+      if(!current) return null;
+      const adapterRecord=dataRecord(current.adapter,['getWalletSnapshot','getBalanceSnapshot',
+        'getTransactionHistorySnapshot','getWalletActionSnapshot','getReceiveTarget',
+        'getReviewPreview','handoffReview']);
+      if(!adapterRecord||!Object.isFrozen(current.adapter)||
+         typeof adapterRecord.getWalletSnapshot!=='function') return null;
+      const result=dataRecord(current.walletResult,['ok','value','meta']);
+      if(!result||result.ok!==true) return null;
+      const meta=dataRecord(result.meta,
+        ['source','fetched_at_ms','stale','partial']);
+      const wallet=dataRecord(result.value,
+        ['wallet_class','wallet_ref','addresses','capabilities']);
+      if(!meta||!wallet||wallet.wallet_class!==current.walletClass||
+         typeof meta.source!=='string'||meta.source.length<1||meta.source.length>128||
+         typeof meta.fetched_at_ms!=='number'||!Number.isFinite(meta.fetched_at_ms)||
+         typeof meta.stale!=='boolean'||typeof meta.partial!=='boolean'||
+         !(wallet.wallet_ref===null||typeof wallet.wallet_ref==='string')) return null;
+      const capabilities=dataRecord(wallet.capabilities,capabilityKeys);
+      const expected=expectedCapabilities[wallet.wallet_class];
+      if(!capabilities||!expected||capabilityKeys.some(
+        key=>capabilities[key]!==expected[key])) return null;
+      const addresses=dataArray(wallet.addresses);
+      if(!addresses||addresses.some(address=>{
+        const item=dataRecord(address,['chain_type','address']);
+        return !item||!['ethereum','solana'].includes(item.chain_type)||
+          typeof item.address!=='string'||item.address.length<1||item.address.length>128;
+      })) return null;
+      return Object.freeze({walletClass:wallet.wallet_class,
+        capabilities:Object.freeze({...capabilities})});
+    }catch(error){return null}
+  };
+  const signingDecision=control=>{
+    try{
+      const operation=operations[control?.id]||'';
+      const wallet=normalizedWallet();
+      if(!wallet||!operation){
+        return {allowed:false,reason:'Wallet capability information is unavailable.',
+          walletClass:''};
+      }
+      if(wallet.walletClass==='watch_only'){
+        return {allowed:false,reason:'Watch-only wallets cannot sign transactions.',
+          walletClass:wallet.walletClass};
+      }
+      if(operation==='bridge'){
+        return {allowed:false,reason:'bridge',walletClass:wallet.walletClass};
+      }
+      const capability=wallet.capabilities[operation];
+      const allowed=operation==='transfer'?
+        capability==='supported'||capability==='external_provider':
+        operation==='swap'?capability==='supported':
+          capability==='supported'||capability==='external_provider'||
+            capability==='spike_required';
+      if(allowed) return {allowed:true,reason:'',walletClass:wallet.walletClass};
+      if(wallet.walletClass==='connected_external'&&operation==='swap'){
+        return {allowed:false,reason:'Swap is not available for this external wallet.',
+          walletClass:wallet.walletClass};
+      }
+      return {allowed:false,
+        reason:`${operation[0].toUpperCase()+operation.slice(1)} is not available for this wallet provider.`,
+        walletClass:wallet.walletClass};
+    }catch(error){
+      return {allowed:false,reason:'Wallet capability information is unavailable.',
+        walletClass:''};
+    }
+  };
+  const completedIntegrity=()=>{
+    try{
+      if(!completedControl||completedControl.tagName!=='BUTTON'||
+         completedControl!==document.getElementById('completed-provider-fixture')||
+         !completedControl.isConnected||completedControl.parentElement!==completedParent||
+         completedControl.closest('.scr')!==completedScreen||
+         completedPrevious!==completedControl.previousElementSibling||
+         completedNext!==completedControl.nextElementSibling||
+         completedControl.childNodes.length!==1||
+         completedControl.firstChild!==completedLabelNode||
+         completedLabelNode?.nodeType!==3||
+         completedLabelNode.data!=='Show completed provider fixture'||
+         completedControl.disabled||completedControl.hasAttribute('data-requires-signing')){
+        return false;
+      }
+      const attributes=Object.fromEntries([...completedControl.attributes]
+        .map(attribute=>[attribute.name,attribute.value]));
+      return JSON.stringify(attributes)===JSON.stringify(completedAttributes);
+    }catch(error){return false}
+  };
+  completedControl?.addEventListener('click',event=>{
+    if(event.isTrusted!==true||event.currentTarget!==completedControl||
+       event.target!==completedControl)return;
+    const config=configuration(),wallet=normalizedWallet();
+    if(!completedIntegrity()){
+      showReviewProviderState({ok:true,value:{state:'provider_blocked',
+        safe_message:'Completed provider fixture control integrity check failed.'}});
+      return;
+    }
+    if(!config||!wallet||config.walletClass!=='privy_embedded'||
+       config.scenario!=='normal'||wallet.walletClass!=='privy_embedded'){
+      showReviewProviderState({ok:true,value:{state:'provider_blocked',
+        safe_message:config?.walletClass==='watch_only'?
+          'Completed provider fixture is unavailable for watch-only wallets.':
+          'Completed provider fixture is unavailable for this wallet state.'}});
+      return;
+    }
+    completedSelected=true;key='';adapter=null;walletResult=null;
+    consumeReviewForNavigation();navigate(['scr-wallet'],{replace:true});
+    showReviewProviderState({ok:true,value:{state:'provider_succeeded',
+      safe_message:'Simulated provider succeeded'}});
+  });
+  return Object.freeze({snapshot,signingDecision});
+})();
+const ensureWalletAdapter=walletAuthority.snapshot;
+const walletSigningDecision=walletAuthority.signingDecision;
+function applySigningControlDecision(control,decision){
+  control.disabled=!decision.allowed;
+  if(decision.allowed){
+    control.removeAttribute('aria-disabled');
+    control.removeAttribute('aria-describedby');
+    control.removeAttribute('title');
+    return;
+  }
+  control.setAttribute('aria-disabled','true');
+  if(decision.reason==='bridge'){
+    control.setAttribute('aria-describedby','wallet-bridge-note');
+    control.removeAttribute('title');
+    return;
+  }
+  control.setAttribute('aria-describedby','watch-only-explanation');
+  control.title=decision.reason;
+}
+function renderWalletSigningCapabilities(){
+  const controls=[...document.querySelectorAll('[data-requires-signing]')];
+  const decisions=controls.map(control=>{
+    let decision=walletSigningDecision(control);
+    if(decision.reason==='bridge'&&control.closest('.scr')?.id!==activeScr()){
+      decision={...decision,allowed:true,reason:''};
+    }
+    applySigningControlDecision(control,decision);
+    return [control,decision];
+  });
+  const watchOnly=decisions.some(([,decision])=>
+    decision.walletClass==='watch_only');
+  const watch=document.getElementById('watch-only-notice');
+  if(watch) watch.hidden=!watchOnly;
+  const activeReason=decisions.find(([control,decision])=>
+    !decision.allowed&&decision.reason!=='bridge'&&control.closest('.scr')?.id===activeScr())?.[1].reason;
+  const explanation=document.getElementById('watch-only-explanation');
+  if(explanation){
+    explanation.textContent=watchOnly?'Watch-only wallets cannot sign transactions.':
+      activeReason||'Wallet capability information is unavailable.';
+    explanation.hidden=!(watchOnly||activeReason);
+  }
+}
+function walletSigningAllowed(controlId){
+  const control=document.getElementById(controlId);
+  const decision=walletSigningDecision(control);
+  if(control) applySigningControlDecision(control,decision);
+  if(!decision.allowed&&decision.reason!=='bridge'){
+    const explanation=document.getElementById('watch-only-explanation');
+    if(explanation){explanation.textContent=decision.reason;explanation.hidden=false}
+  }
+  return decision.allowed;
+}
+
+/* ---------- F11: one LOOP review surface over the captured provider adapter ---------- */
+const walletReviewFacade=(()=>{
+  try{
+    const facade=globalThis.LoopWalletReview;
+    if(!facade||!Object.isFrozen(facade)||Object.getPrototypeOf(facade)!==Object.prototype) return null;
+    const descriptors=Object.getOwnPropertyDescriptors(facade);
+    const keys=Reflect.ownKeys(facade);
+    if(keys.length!==2||!['decodeReviewSource','createController'].every(key=>
+      Object.prototype.hasOwnProperty.call(descriptors,key)&&
+      Object.prototype.hasOwnProperty.call(descriptors[key],'value')&&
+      typeof descriptors[key].value==='function')) return null;
+    return Object.freeze({createController:descriptors.createController.value});
+  }catch(error){return null}
+})();
+const reviewClockStart=performance.now();
+const sanitizeReviewProjectionForWrite=(()=>{
+  const getOwnPropertyDescriptors=Object.getOwnPropertyDescriptors;
+  const getPrototypeOf=Object.getPrototypeOf;
+  const ownKeys=Reflect.ownKeys;
+  const reflectApply=Reflect.apply;
+  const hasOwnProperty=Object.prototype.hasOwnProperty;
+  const objectPrototype=Object.prototype;
+  const arrayPrototype=Array.prototype;
+  const freeze=Object.freeze;
+  const isInteger=Number.isInteger;
+  const numberValue=Number;
+  const indexPattern=/^\d+$/;
+  const reviewIdPattern=/^[a-z0-9-]{1,128}$/;
+  const regexpTest=RegExp.prototype.test;
+  const knownScreens=freeze(['scr-splash','scr-auth','scr-auth-otp','scr-auth-wallet',
+    'scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify',
+    'scr-wallet-import','scr-home','scr-pay','scr-market','scr-token','scr-launchpad',
+    'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
+    'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile']);
+  const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
+  const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
+  const includes=(values,value)=>{
+    for(let index=0;index<values.length;index+=1){
+      if(values[index]===value)return true;
+    }
+    return false;
+  };
+  const stackSnapshot=value=>{
+    try{
+      if(!value||typeof value!=='object'||getPrototypeOf(value)!==arrayPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(value),keys=ownKeys(value);
+      const length=descriptors.length?.value;
+      if(!isInteger(length)||length<1||length>26||keys.length!==length+1)return null;
+      const result=[];
+      for(let index=0;index<length;index+=1){
+        const descriptor=descriptors[String(index)];
+        if(!descriptor||!hasOwn(descriptor,'value')||
+           typeof descriptor.value!=='string'||
+           !includes(knownScreens,descriptor.value))return null;
+        result[index]=descriptor.value;
+      }
+      for(let keyIndex=0;keyIndex<keys.length;keyIndex+=1){
+        const key=keys[keyIndex];
+        if(typeof key!=='string'||(key!=='length'&&
+           (!reflectApply(regexpTest,indexPattern,[key])||numberValue(key)>=length)))return null;
+      }
+      return freeze(result);
+    }catch(_error){return null}
+  };
+  const voiceSnapshot=value=>{
+    try{
+      if(!value||typeof value!=='object'||getPrototypeOf(value)!==objectPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(value);
+      const read=key=>{
+        const descriptor=descriptors[key];
+        return descriptor&&hasOwn(descriptor,'value')?descriptor.value:undefined;
+      };
+      const state=read('state'),open=read('open'),minimized=read('minimized'),
+        muted=read('muted');
+      if(!includes(voiceStates,state)||typeof open!=='boolean'||
+         typeof minimized!=='boolean'||typeof muted!=='boolean')return null;
+      return freeze({state,open,minimized,muted});
+    }catch(_error){return null}
+  };
+  const snapshot=candidate=>{
+    try{
+      if(!candidate||typeof candidate!=='object'||
+         getPrototypeOf(candidate)!==objectPrototype)return null;
+      const descriptors=getOwnPropertyDescriptors(candidate);
+      const stackDescriptor=descriptors.stack,voiceDescriptor=descriptors.voice;
+      if(!stackDescriptor||!voiceDescriptor||!hasOwn(stackDescriptor,'value')||
+         !hasOwn(voiceDescriptor,'value'))return null;
+      const safeStack=stackSnapshot(stackDescriptor.value);
+      const safeVoice=voiceSnapshot(voiceDescriptor.value);
+      return safeStack&&safeVoice?freeze({stack:safeStack,voice:safeVoice}):null;
+    }catch(_error){return null}
+  };
+  const clone=projection=>{
+    if(!projection)return null;
+    const safeStack=[];
+    for(let index=0;index<projection.stack.length;index+=1){
+      safeStack[index]=projection.stack[index];
+    }
+    return freeze({stack:freeze(safeStack),voice:freeze({state:projection.voice.state,
+      open:projection.voice.open,minimized:projection.voice.minimized,
+      muted:projection.voice.muted})});
+  };
+  const live=()=>snapshot({stack,voice:{state:voice.state,open:voice.open===true,
+    minimized:voice.minimized===true,muted:voice.muted===true}})||
+    freeze({stack:freeze(['scr-home']),voice:freeze({state:'idle',open:false,
+      minimized:false,muted:true})});
+  let ownedOrigin=null;
+  const projection=candidate=>clone(snapshot(candidate)||ownedOrigin||live());
+  const marker=(candidate,reviewId)=>{
+    const safe=projection(candidate);
+    const id=typeof reviewId==='string'&&
+      reflectApply(regexpTest,reviewIdPattern,[reviewId])?reviewId:'';
+    return id?freeze({stack:safe.stack,voice:safe.voice,loop_review:1,
+      review_id:id}):safe;
+  };
+  const captureOrigin=candidate=>{
+    ownedOrigin=snapshot(candidate)||live();
+    return clone(ownedOrigin);
+  };
+  const origin=()=>clone(ownedOrigin);
+  const clear=()=>{ownedOrigin=null};
+  return freeze({projection,marker,captureOrigin,origin,clear});
+})();
+const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',
+  returningId:'',cancellingId:'',triggerId:'',originEntryKey:'',markerEntryKey:'',markerIssued:false,
+  fallbackAllowed:false,result:null,expiryTimer:null,
+  legacyVeilOwned:false,background:new Map()});
+const reviewMarkerProof=(()=>{
+  const MAX_PROOFS=5;
+  const proofs=new Map();
+  const forget=markerKey=>{if(markerKey)proofs.delete(markerKey)};
+  const remember=(markerKey,reviewId,originKey,origin)=>{
+    if(typeof reviewId!=='string'||!markerKey||!originKey||markerKey===originKey)return false;
+    const projection=sanitizeReviewProjectionForWrite.projection(origin);
+    proofs.delete(markerKey);
+    proofs.set(markerKey,Object.freeze({reviewId,originKey,projection}));
+    while(proofs.size>MAX_PROOFS)proofs.delete(proofs.keys().next().value);
+    return true;
+  };
+  const bound=(markerKey,reviewId,originKey,origin)=>{
+    const proof=markerKey?proofs.get(markerKey):null;
+    return Boolean(proof&&proof.reviewId===reviewId&&proof.originKey===originKey&&
+      sameReviewProjection(proof.projection,origin));
+  };
+  const matches=(markerKey,reviewId,originKey,origin,candidate)=>
+    bound(markerKey,reviewId,originKey,origin)&&
+    sameReviewProjection(proofs.get(markerKey).projection,candidate);
+  const origin=(markerKey,reviewId,originKey,runtimeOrigin)=>{
+    if(!bound(markerKey,reviewId,originKey,runtimeOrigin))return null;
+    return sanitizeReviewProjectionForWrite.projection(proofs.get(markerKey).projection);
+  };
+  return Object.freeze({forget,remember,matches,origin,clear:()=>proofs.clear()});
+})();
+function reviewNow(){return 100000+Math.max(0,Math.floor(performance.now()-reviewClockStart))}
+function reviewOriginProjection(){
+  return sanitizeReviewProjectionForWrite.projection({stack,voice:currentVoiceProjection()});
+}
+const reviewEntryKey=(()=>{
+  const getOwnDescriptor=Object.getOwnPropertyDescriptor;
+  const getPrototypeOf=Object.getPrototypeOf;
+  const hasOwnProperty=Object.prototype.hasOwnProperty;
+  const hasOwn=(value,key)=>hasOwnProperty.call(value,key);
+  const captureAccessor=descriptor=>{
+    if(!descriptor||typeof descriptor.get!=='function'||hasOwn(descriptor,'value'))return null;
+    return Object.freeze({get:descriptor.get,set:descriptor.set,
+      configurable:descriptor.configurable,enumerable:descriptor.enumerable});
+  };
+  const sameAccessor=(descriptor,captured)=>Boolean(descriptor&&captured&&
+    !hasOwn(descriptor,'value')&&descriptor.get===captured.get&&
+    descriptor.set===captured.set&&descriptor.configurable===captured.configurable&&
+    descriptor.enumerable===captured.enumerable);
+  const captured=(()=>{
+    try{
+      const globalAccessor=captureAccessor(getOwnDescriptor(globalThis,'navigation'));
+      if(!globalAccessor)return null;
+      const navigationValue=globalAccessor.get.call(globalThis);
+      if(!navigationValue||typeof navigationValue!=='object')return null;
+      const navigationPrototype=getPrototypeOf(navigationValue);
+      if(!navigationPrototype||hasOwn(navigationValue,'currentEntry'))return null;
+      const currentEntryAccessor=captureAccessor(
+        getOwnDescriptor(navigationPrototype,'currentEntry'));
+      if(!currentEntryAccessor)return null;
+      const entry=currentEntryAccessor.get.call(navigationValue);
+      if(!entry||typeof entry!=='object'||hasOwn(entry,'key'))return null;
+      const entryPrototype=getPrototypeOf(entry);
+      if(!entryPrototype)return null;
+      const keyAccessor=captureAccessor(getOwnDescriptor(entryPrototype,'key'));
+      if(!keyAccessor)return null;
+      const key=keyAccessor.get.call(entry);
+      if(typeof key!=='string'||key.length<1||key.length>256)return null;
+      return Object.freeze({navigationValue,globalAccessor,navigationPrototype,
+        currentEntryAccessor,entryPrototype,keyAccessor});
+    }catch(error){return null}
+  })();
+  return ()=>{
+    try{
+      if(!captured)return '';
+      const globalDescriptor=getOwnDescriptor(globalThis,'navigation');
+      if(!sameAccessor(globalDescriptor,captured.globalAccessor))return '';
+      const navigationValue=captured.globalAccessor.get.call(globalThis);
+      if(navigationValue!==captured.navigationValue||
+         getPrototypeOf(navigationValue)!==captured.navigationPrototype||
+         hasOwn(navigationValue,'currentEntry'))return '';
+      const currentEntryDescriptor=getOwnDescriptor(
+        captured.navigationPrototype,'currentEntry');
+      if(!sameAccessor(currentEntryDescriptor,captured.currentEntryAccessor))return '';
+      const entry=captured.currentEntryAccessor.get.call(navigationValue);
+      if(!entry||typeof entry!=='object'||hasOwn(entry,'key')||
+         getPrototypeOf(entry)!==captured.entryPrototype)return '';
+      const keyDescriptor=getOwnDescriptor(captured.entryPrototype,'key');
+      if(!sameAccessor(keyDescriptor,captured.keyAccessor))return '';
+      const key=captured.keyAccessor.get.call(entry);
+      return typeof key==='string'&&key.length>0&&key.length<=256?key:'';
+    }catch(error){return ''}
+  };
+})();
+function forgetCurrentReviewMarkerProof(){
+  reviewMarkerProof.forget(reviewRuntime.markerEntryKey);
+}
+function rememberCurrentReviewMarkerProof(reviewId,origin){
+  const markerKey=reviewRuntime.markerEntryKey;
+  const originKey=reviewRuntime.originEntryKey;
+  if(typeof reviewId!=='string'||!markerKey||!originKey||markerKey===originKey||
+     !sameReviewProjection(origin,sanitizeReviewProjectionForWrite.origin()))return false;
+  return reviewMarkerProof.remember(markerKey,reviewId,originKey,origin);
+}
+function clearReviewEntryProof(){
+  forgetCurrentReviewMarkerProof();
+  reviewRuntime.originEntryKey='';reviewRuntime.markerEntryKey='';
+  reviewRuntime.markerIssued=false;reviewRuntime.fallbackAllowed=false;
+  sanitizeReviewProjectionForWrite.clear();
+}
+function currentReviewMarkerProofOrigin(reviewId){
+  const key=reviewEntryKey();
+  if(typeof reviewId!=='string'||!reviewRuntime.originEntryKey||
+     !reviewRuntime.markerEntryKey||reviewRuntime.originEntryKey===
+     reviewRuntime.markerEntryKey||key!==reviewRuntime.markerEntryKey)return null;
+  return reviewMarkerProof.origin(key,reviewId,reviewRuntime.originEntryKey,
+    sanitizeReviewProjectionForWrite.origin());
+}
+function validCurrentReviewMarkerEntry(reviewId,candidateProjection){
+  const key=reviewEntryKey();
+  return Boolean(typeof reviewId==='string'&&reviewRuntime.originEntryKey&&
+    reviewRuntime.markerEntryKey&&
+    reviewRuntime.originEntryKey!==reviewRuntime.markerEntryKey&&
+    key===reviewRuntime.markerEntryKey&&reviewMarkerProof.matches(key,reviewId,
+      reviewRuntime.originEntryKey,sanitizeReviewProjectionForWrite.origin(),
+      candidateProjection));
+}
+function reviewEndpoint(reviewId){
+  if(reviewId==='review-swap-external') return 'external_wallet:swap';
+  if(reviewId.startsWith('review-perp')) return 'hyperliquid:testnet';
+  if(reviewId.endsWith('-external')) return 'external_wallet:request';
+  if(reviewId.startsWith('review-approve')) return 'eth_sendTransaction';
+  return '/v1/wallets/fixture-wallet-1/actions';
+}
+function currentReviewLive(reviewId){
+  const config=ensureWalletAdapter();
+  const wallet=config.walletResult?.ok===true?config.walletResult.value:null;
+  if(!wallet) return null;
+  return {user_id:'fixture-user-1',wallet_id:wallet.wallet_ref,
+    wallet_class:wallet.wallet_class,endpoint:reviewEndpoint(reviewId)};
+}
+function ensureReviewController(){
+  const adapter=ensureWalletAdapter().adapter;
+  if(reviewRuntime.adapter===adapter&&reviewRuntime.controller) return reviewRuntime.controller;
+  if(reviewRuntime.openId&&reviewRuntime.controller){
+    reviewRuntime.controller.consume({review_id:reviewRuntime.openId});
+    closeReviewSurface(false);
+  }
+  reviewRuntime.adapter=adapter;
+  reviewRuntime.controller=walletReviewFacade?.createController({adapter})||null;
+  return reviewRuntime.controller;
+}
+function reviewDialog(){return document.getElementById('review-dialog')}
+function reviewSurfaceOpen(){return Boolean(reviewDialog()?.classList.contains('open'))}
+function rememberReviewBackground(){
+  if(reviewRuntime.background.size) return;
+  const dialog=reviewDialog(),veil=document.getElementById('veil');
+  reviewRuntime.legacyVeilOwned=Boolean(veil?.classList.contains('open')&&
+    document.querySelector('.sheet.open'));
+  const outside=[...document.getElementById('phone').children,
+    ...document.querySelectorAll('.pitch,.to-plan-mobile')];
+  outside.forEach(node=>{
+    if(node===dialog||node===veil) return;
+    reviewRuntime.background.set(node,{inert:node.hasAttribute('inert'),
+      ariaHidden:node.getAttribute('aria-hidden')});
+    node.setAttribute('inert','');node.setAttribute('aria-hidden','true');
+  });
+}
+function restoreReviewBackground(){
+  for(const [node,state] of reviewRuntime.background){
+    if(state.inert)node.setAttribute('inert','');else node.removeAttribute('inert');
+    if(state.ariaHidden===null)node.removeAttribute('aria-hidden');
+    else node.setAttribute('aria-hidden',state.ariaHidden);
+  }
+  reviewRuntime.background.clear();
+}
+function closeReviewSurface(restoreFocus=true){
+  if(reviewRuntime.expiryTimer!==null){
+    clearTimeout(reviewRuntime.expiryTimer);reviewRuntime.expiryTimer=null;
+  }
+  const dialog=reviewDialog();
+  if(dialog){dialog.classList.remove('open');dialog.hidden=true;
+    dialog.setAttribute('inert','');dialog.setAttribute('aria-hidden','true');
+    dialog.dataset.state='closed';}
+  const veil=document.getElementById('veil');
+  veil?.classList.remove('open');
+  restoreReviewBackground();
+  if(reviewRuntime.legacyVeilOwned&&document.querySelector('.sheet.open')){
+    veil?.classList.add('open');
+  }
+  reviewRuntime.legacyVeilOwned=false;
+  if(restoreFocus&&reviewRuntime.triggerId){
+    const trigger=document.getElementById(reviewRuntime.triggerId);
+    if(trigger&&!trigger.disabled&&trigger.isConnected)trigger.focus({preventScroll:true});
+  }
+}
+function reviewField(label,value,provenance){
+  const row=walletElement('div','review-field');row.dataset.provenance=provenance;
+  const term=walletElement('dt','',label),detail=walletElement('dd','',value);
+  detail.append(walletElement('small','',provenance==='unavailable'?
+    'Provider preview unavailable':'Digest-bound provider field'));
+  row.append(term,detail);return row;
+}
+function reviewNetworkLabel(chainId){return chainId==='ethereum'?'Ethereum':
+  chainId==='hyperliquid-testnet'?'Hyperliquid testnet':chainId}
+function reviewApprovalAmount(baseUnits,assetId){
+  const decimals=assetId==='USDC'?6:null;
+  if(decimals===null||typeof baseUnits!=='string'||!/^[0-9]+$/.test(baseUnits)){
+    return `${baseUnits} base units`;
+  }
+  const padded=baseUnits.padStart(decimals+1,'0');
+  const whole=padded.slice(0,-decimals).replace(/^0+(?=\d)/,'');
+  const fraction=padded.slice(-decimals).replace(/0+$/,'');
+  const grouped=whole.replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return `${grouped}${fraction?'.'+fraction:''} ${assetId}`;
+}
+function renderReviewFields(model){
+  const host=document.getElementById('review-fields');host.replaceChildren();
+  const common=[
+    ['Source',model.provenance,'digest_bound_provider'],
+    ['Network',reviewNetworkLabel(model.chain_id),'digest_bound_provider'],
+    ['Wallet',model.wallet_class==='privy_embedded'?
+      `Privy embedded · ${model.wallet_ref}`:model.fields.wallet_address,
+      model.fields.field_provenance.wallet]
+  ];
+  let fields=[];
+  if(model.kind==='transfer'){
+    fields=[['Destination',model.fields.destination,
+      model.fields.field_provenance.destination],
+    ['Amount',`${model.fields.amount_decimal} ${model.fields.asset_id} ${model.fields.amount_semantics}`,
+      model.fields.field_provenance.amount],
+    ['Amount type',model.fields.amount_type,model.fields.field_provenance.amount_type],
+    ['Fee',model.fields.fee_display||'Unavailable',model.fields.field_provenance.fee]];
+  }else if(model.kind==='approve'){
+    fields=[['Spender',`${model.fields.spender_label} · ${model.fields.spender_address}`,
+      model.fields.field_provenance.spender],
+    ['Origin',model.fields.dapp_origin,model.fields.field_provenance.origin],
+    ['Allowance',model.fields.allowance_kind==='unlimited'?'Unlimited':
+      reviewApprovalAmount(model.fields.limit_base_units,model.fields.asset_id),
+      model.fields.field_provenance.allowance]];
+  }else if(model.kind==='swap'){
+    fields=[['Spend',model.fields.input_amount_display,
+      model.fields.field_provenance.input],
+    ['Estimated output',model.fields.output_amount_display||'Unavailable',
+      model.fields.field_provenance.estimated_output],
+    ['Minimum output',model.fields.minimum_output_display||'Unavailable',
+      model.fields.field_provenance.minimum_output],
+    ['Fee',model.fields.fee_display||'Unavailable',model.fields.field_provenance.fees],
+    ['Quote deadline',String(model.fields.freshness_deadline_ms),
+      model.fields.field_provenance.deadline]];
+  }else{
+    fields=[['Provider',model.fields.provider,model.fields.field_provenance.provider],
+    ['Environment',model.fields.environment,model.fields.field_provenance.environment],
+    ['Market',model.fields.market,model.fields.field_provenance.market],
+    ['Side',model.fields.side==='buy'?'Buy':'Sell',model.fields.field_provenance.side],
+    ['Order type',model.fields.order_type==='market'?'Market':model.fields.order_type,
+      model.fields.field_provenance.order_type],
+    ['Reduce only',model.fields.reduce_only?'Yes':'No',
+      model.fields.field_provenance.reduce_only],
+    ['Size',model.fields.size,model.fields.field_provenance.size],
+    ['Leverage',`${model.fields.leverage}×`,model.fields.field_provenance.leverage]];
+  }
+  [...common,...fields,['Expiry',String(model.expires_at_ms),'digest_bound_provider']]
+    .forEach(field=>host.append(reviewField(...field)));
+}
+function renderReviewResult(result,{focus=false}={}){
+  const dialog=reviewDialog();
+  document.getElementById('review-cancel').disabled=false;
+  if(!result?.ok||!result.value?.model){
+    dialog.dataset.state='decode_failed';
+    document.getElementById('review-summary').textContent=
+      result?.error?.safe_message||'The wallet request could not be reviewed safely.';
+    document.getElementById('review-status').textContent='Review unavailable';
+    document.getElementById('review-fields').replaceChildren();
+    document.getElementById('review-preview-ack').hidden=true;
+    document.getElementById('review-continue').hidden=true;
+    document.getElementById('review-refresh').hidden=true;
+  }else{
+    const view=result.value,model=view.model;
+    reviewRuntime.result=result;dialog.dataset.state=view.state;
+    document.getElementById('review-kind').textContent={transfer:'Transfer',approve:'Approval',
+      swap:'Swap',perp_order:'Perp order'}[model.kind];
+    document.getElementById('review-title').textContent='Review wallet request';
+    document.getElementById('review-summary').textContent=model.summary;
+    renderReviewFields(model);
+    const ack=document.getElementById('review-preview-ack');
+    const check=document.getElementById('review-preview-check');
+    ack.hidden=!view.acknowledgement_required;check.checked=view.acknowledged===true;
+    const primary=document.getElementById('review-continue');
+    primary.textContent=model.primary_action||'Continue';
+    primary.hidden=view.state==='blocked';primary.disabled=!view.handoff_eligible;
+    const refresh=document.getElementById('review-refresh');
+    refresh.hidden=!view.refreshable;
+    document.getElementById('review-status').textContent=view.state==='blocked'?
+      model.blocking_error?.safe_message||'This request is blocked.':
+      view.state==='preview_unavailable'?'Action preview unavailable':'';
+  }
+  rememberReviewBackground();
+  document.getElementById('veil').classList.add('open');
+  dialog.hidden=false;dialog.removeAttribute('inert');
+  dialog.setAttribute('aria-hidden','false');dialog.classList.add('open');
+  if(reviewRuntime.expiryTimer!==null){
+    clearTimeout(reviewRuntime.expiryTimer);reviewRuntime.expiryTimer=null;
+  }
+  const view=result?.ok?result.value:null;
+  if(view?.state==='ready'&&view.model?.kind==='swap'){
+    const id=view.review_id,deadline=view.model.fields.freshness_deadline_ms;
+    reviewRuntime.expiryTimer=setTimeout(()=>{
+      reviewRuntime.expiryTimer=null;
+      if(reviewRuntime.openId!==id||!reviewRuntime.controller||!reviewSurfaceOpen())return;
+      const expired=reviewRuntime.controller.forward({review_id:id,
+        live_context:currentReviewLive(id),now_ms:reviewNow()});
+      if(expired.ok)renderReviewResult(expired);
+      else document.getElementById('review-status').textContent=expired.error.safe_message;
+    },Math.max(0,deadline-reviewNow()));
+  }
+  if(focus)document.getElementById('review-cancel').focus({preventScroll:true});
+}
+function openWalletReview(reviewId,trigger=document.activeElement){
+  const controller=ensureReviewController();
+  const live=currentReviewLive(reviewId);
+  const origin=sanitizeReviewProjectionForWrite.captureOrigin(reviewOriginProjection());
+  forgetCurrentReviewMarkerProof();
+  reviewRuntime.triggerId=trigger?.id||'';
+  reviewRuntime.originEntryKey=reviewEntryKey();reviewRuntime.markerEntryKey='';
+  reviewRuntime.markerIssued=false;reviewRuntime.fallbackAllowed=false;
+  const dialog=reviewDialog();dialog.dataset.state='decoding';
+  const result=controller?.open({review_id:reviewId,origin,live_context:live,
+    trigger_ref:reviewRuntime.triggerId||'review-trigger',now_ms:reviewNow()})||null;
+  if(!result?.ok){renderReviewResult(result,{focus:true});return false}
+  reviewRuntime.openId=reviewId;reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  renderReviewResult(result,{focus:true});
+  try{
+    history.pushState(sanitizeReviewProjectionForWrite.marker(origin,reviewId),'',location.href);
+    reviewRuntime.markerIssued=validReviewMarker(history.state,reviewId);
+    reviewRuntime.markerEntryKey=reviewEntryKey();
+    if(reviewRuntime.markerIssued&&!rememberCurrentReviewMarkerProof(reviewId,origin)){
+      reviewRuntime.markerIssued=false;
+    }
+  }catch(error){reviewRuntime.markerIssued=false;reviewRuntime.markerEntryKey='';
+    reviewRuntime.fallbackAllowed=true}
+  return true;
+}
+function acknowledgeWalletReview(){
+  if(!reviewRuntime.openId||!reviewRuntime.controller)return;
+  const checked=document.getElementById('review-preview-check').checked;
+  const result=reviewRuntime.controller.acknowledge({review_id:reviewRuntime.openId,
+    acknowledged:checked});
+  if(result.ok)renderReviewResult(result);
+}
+function cancelWalletReview(){
+  if(reviewRuntime.returningId||reviewRuntime.cancellingId)return;
+  if(!reviewRuntime.openId){
+    if(reviewSurfaceOpen()&&reviewDialog().dataset.state==='decode_failed'){
+      closeReviewSurface(true);reviewRuntime.result=null;
+      clearReviewEntryProof();
+    }
+    return;
+  }
+  const id=reviewRuntime.openId;
+  reviewRuntime.cancellingId=id;
+  const dialog=reviewDialog();dialog.dataset.state='cancelling_to_origin';
+  document.getElementById('review-cancel').disabled=true;
+  document.getElementById('review-continue').disabled=true;
+  reviewRuntime.controller?.consume({review_id:id});
+  if(validReviewMarker(history.state,id)){history.back();return}
+  const origin=sanitizeReviewProjectionForWrite.projection(
+    sanitizeReviewProjectionForWrite.origin()||reviewOriginProjection());
+  history.replaceState(origin,'','#'+expectedHash());
+  closeReviewSurface(true);reviewRuntime.openId='';reviewRuntime.cancellingId='';
+  reviewRuntime.result=null;clearReviewEntryProof();
+}
+function continueWalletReview(){
+  const id=reviewRuntime.openId;
+  if(!id||reviewRuntime.returningId||reviewRuntime.cancellingId||
+     !reviewRuntime.controller)return;
+  const marker=reviewMarkerInfo(history.state).snapshot;
+  const candidateProjection=marker&&marker.review_id===id?
+    {stack:marker.stack,voice:marker.voice}:null;
+  const validEntryProof=validCurrentReviewMarkerEntry(id,candidateProjection);
+  if((reviewRuntime.markerIssued&&
+      (!validReviewMarker(history.state,id)||!validEntryProof))||
+     (!reviewRuntime.markerIssued&&!reviewRuntime.fallbackAllowed)){
+    reviewRuntime.controller.consume({review_id:id});
+    const origin=sanitizeReviewProjectionForWrite.projection(
+      sanitizeReviewProjectionForWrite.origin()||reviewOriginProjection());
+    history.replaceState(origin,'','#'+expectedHash());
+    closeReviewSurface(true);reviewRuntime.openId='';reviewRuntime.result=null;
+    clearReviewEntryProof();return;
+  }
+  const result=reviewRuntime.controller.beginHandoff({review_id:id,
+    live_context:currentReviewLive(id),now_ms:reviewNow()});
+  if(!result.ok){document.getElementById('review-status').textContent=result.error.safe_message;return}
+  reviewRuntime.returningId=id;
+  const dialog=reviewDialog();dialog.dataset.state='returning_to_origin';
+  document.getElementById('review-continue').disabled=true;
+  document.getElementById('review-cancel').disabled=true;
+  if(reviewRuntime.markerIssued&&validEntryProof&&validReviewMarker(history.state,id)){
+    history.back();return;
+  }
+  const origin=sanitizeReviewProjectionForWrite.projection(
+    sanitizeReviewProjectionForWrite.origin()||reviewOriginProjection());
+  history.replaceState(origin,'','#'+expectedHash());
+  completeReviewOriginReturn(origin);
+}
+const SWAP_REFRESH_WINDOWS=Object.freeze([
+  Object.freeze({reviewId:'review-swap-refresh',received:100000,deadline:130000}),
+  ...[130000,160000,190000,220000,250000,280000,310000,340000,370000,
+    400000,430000,460000,490000].map(received=>Object.freeze({
+      reviewId:received===130000?'review-swap-refresh-late':
+        'review-swap-refresh-'+String(received/1000),
+      received,deadline:Math.min(500000,received+30000)}))
+]);
+function nextSwapRefreshReviewId(now){
+  const window=SWAP_REFRESH_WINDOWS.find(candidate=>
+    candidate.received<=now&&now<candidate.deadline);
+  return window?.reviewId||'';
+}
+function refreshWalletReview(){
+  const id=reviewRuntime.openId;
+  if(!id||!reviewRuntime.controller)return;
+  const now=reviewNow();
+  const replacementReviewId=nextSwapRefreshReviewId(now);
+  if(!replacementReviewId){
+    document.getElementById('review-status').textContent=
+      'No fresh immutable quote is available for this review session.';
+    return;
+  }
+  const result=reviewRuntime.controller.refresh({review_id:id,
+    replacement_review_id:replacementReviewId,
+    live_context:currentReviewLive(id),
+    trigger_ref:reviewRuntime.triggerId||'review-trigger',now_ms:now});
+  if(!result.ok){
+    document.getElementById('review-status').textContent=result.error.safe_message;
+    if(result.error.code==='SESSION_EXPIRED'){
+      const dialog=reviewDialog();if(dialog)dialog.dataset.state='blocked';
+      document.getElementById('review-refresh').hidden=true;
+      document.getElementById('review-continue').hidden=true;
+    }
+    return;
+  }
+  reviewRuntime.openId=result.value.review_id;
+  const refreshedOrigin=sanitizeReviewProjectionForWrite.captureOrigin(
+    reviewOriginProjection());
+  history.replaceState(sanitizeReviewProjectionForWrite.marker(refreshedOrigin,
+    reviewRuntime.openId),'',location.href);
+  if(reviewRuntime.markerIssued){
+    rememberCurrentReviewMarkerProof(reviewRuntime.openId,refreshedOrigin);
+  }
+  renderReviewResult(result);
+}
+function showReviewProviderState(result){
+  const banner=document.getElementById('review-provider-banner');
+  banner.dataset.state=result.ok?result.value.state:'provider_failed';
+  banner.textContent=result.ok?result.value.safe_message:result.error.safe_message;
+  banner.hidden=false;
+}
+function completeReviewOriginReturn(origin){
+  const id=reviewRuntime.returningId;
+  if(!id)return;
+  reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  closeReviewSurface(true);reviewRuntime.openId='';reviewRuntime.result=null;
+  clearReviewEntryProof();
+  const controller=reviewRuntime.controller;
+  const live=currentReviewLive(id);
+  const now=reviewNow();
+  queueMicrotask(()=>{
+    const request={review_id:id,live_context:live,origin,now_ms:now};
+    const pending=controller.handoff(request);
+    showReviewProviderState(pending);
+    if(!pending.ok||pending.value.state!=='handoff_pending')return;
+    queueMicrotask(()=>showReviewProviderState(controller.handoff(request)));
+  });
+}
+function consumeReviewForNavigation(){
+  if(!reviewRuntime.openId){
+    if(reviewSurfaceOpen())closeReviewSurface(false);
+    reviewRuntime.cancellingId='';clearReviewEntryProof();return;
+  }
+  reviewRuntime.controller?.consume({review_id:reviewRuntime.openId});
+  reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  reviewRuntime.result=null;
+  clearReviewEntryProof();
+  closeReviewSurface(false);
+}
+function restoreReviewFocusInside(){
+  const dialog=reviewDialog();
+  if(!reviewSurfaceOpen())return;
+  if(!dialog.contains(document.activeElement)){
+    const target=dialog.querySelector('button:not([hidden]):not(:disabled),input:not([hidden]):not(:disabled)');
+    (target||dialog).focus({preventScroll:true});
+  }
+}
+function handleReviewVeil(event){
+  if(reviewSurfaceOpen()){
+    event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();
+    restoreReviewFocusInside();return;
+  }
+  closeSheets();
+}
+function handleReviewKeys(event){
+  if(!reviewSurfaceOpen())return;
+  if(event.key==='Escape'){
+    event.preventDefault();event.stopPropagation();
+    if(!reviewRuntime.returningId&&!reviewRuntime.cancellingId)cancelWalletReview();return;
+  }
+  if(event.key!=='Tab')return;
+  const focusable=[...reviewDialog().querySelectorAll(
+    'button:not([hidden]):not(:disabled),input:not([hidden]):not(:disabled)')]
+    .filter(node=>node.offsetParent!==null);
+  if(!focusable.length){event.preventDefault();reviewDialog().focus();return}
+  const first=focusable[0],last=focusable.at(-1);
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}
+}
+function snapshotReviewStack(candidate){
+  try{
+    if(!Array.isArray(candidate)||Object.getPrototypeOf(candidate)!==Array.prototype) return null;
+    const descriptors=Object.getOwnPropertyDescriptors(candidate),keys=Reflect.ownKeys(candidate);
+    const length=descriptors.length?.value;
+    if(!Number.isInteger(length)||length<1||length>26)return null;
+    const expected=[...Array(length).keys()].map(String).concat('length');
+    if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+       !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+      return null;
+    }
+    const value=expected.slice(0,-1).map(key=>descriptors[key].value);
+    return isValidStack(value)?value:null;
+  }catch(error){return null}
+}
+function reviewMarkerInfo(candidate){
+  try{
+    if(!candidate||typeof candidate!=='object'||Array.isArray(candidate)||
+       Object.getPrototypeOf(candidate)!==Object.prototype)return {present:false,snapshot:null};
+    const descriptors=Object.getOwnPropertyDescriptors(candidate),keys=Reflect.ownKeys(candidate);
+    const present=Object.prototype.hasOwnProperty.call(descriptors,'loop_review')||
+      Object.prototype.hasOwnProperty.call(descriptors,'review_id');
+    if(!present)return {present:false,snapshot:null};
+    const expected=['stack','voice','loop_review','review_id'];
+    if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+       !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+      return {present:true,snapshot:null};
+    }
+    const safeStack=snapshotReviewStack(descriptors.stack.value);
+    const safeVoice=snapshotOwnDataRecord(descriptors.voice.value,
+      ['state','open','minimized','muted'],Object.prototype);
+    const id=descriptors.review_id.value;
+    if(!safeStack||!safeVoice||!NAVIGATION_VOICE_STATES.has(safeVoice.state)||
+       typeof safeVoice.open!=='boolean'||typeof safeVoice.minimized!=='boolean'||
+       typeof safeVoice.muted!=='boolean'||descriptors.loop_review.value!==1||
+       typeof id!=='string'||!/^[a-z0-9-]{1,128}$/.test(id)){
+      return {present:true,snapshot:null};
+    }
+    return {present:true,snapshot:{stack:safeStack,voice:{state:safeVoice.state,
+      open:safeVoice.open,minimized:safeVoice.minimized,muted:safeVoice.muted},
+      loop_review:1,review_id:id}};
+  }catch(error){return {present:true,snapshot:null}}
+}
+function validReviewMarker(candidate,reviewId){
+  const snapshot=reviewMarkerInfo(candidate).snapshot;
+  return Boolean(snapshot&&snapshot.review_id===reviewId);
+}
+function safeProjectionFromPossibleReview(candidate){
+  try{
+    if(candidate&&typeof candidate==='object'&&!Array.isArray(candidate)&&
+       Object.getPrototypeOf(candidate)===Object.prototype){
+      const descriptors=Object.getOwnPropertyDescriptors(candidate);
+      if(Object.prototype.hasOwnProperty.call(descriptors,'stack')&&
+         Object.prototype.hasOwnProperty.call(descriptors.stack,'value')&&
+         Object.prototype.hasOwnProperty.call(descriptors,'voice')&&
+         Object.prototype.hasOwnProperty.call(descriptors.voice,'value')){
+        const safeStack=snapshotReviewStack(descriptors.stack.value);
+        const safeVoice=snapshotOwnDataRecord(descriptors.voice.value,
+          ['state','open','minimized','muted'],Object.prototype);
+        if(safeStack&&safeVoice&&NAVIGATION_VOICE_STATES.has(safeVoice.state)&&
+           typeof safeVoice.open==='boolean'&&typeof safeVoice.minimized==='boolean'&&
+           typeof safeVoice.muted==='boolean'){
+          return {stack:safeStack,voice:{state:safeVoice.state,open:safeVoice.open,
+            minimized:safeVoice.minimized,muted:safeVoice.muted}};
+        }
+      }
+    }
+  }catch(error){}
+  return reviewOriginProjection();
+}
+function restoreReviewNavigation(projection){
+  const safeProjection=sanitizeReviewProjectionForWrite.projection(projection);
+  const safeStack=[];
+  for(let index=0;index<safeProjection.stack.length;index+=1){
+    safeStack[index]=safeProjection.stack[index];
+  }
+  stack=guardAccountStack(safeStack);
+  voice.state=safeProjection.voice.state;voice.open=safeProjection.voice.open;
+  voice.minimized=safeProjection.voice.minimized;voice.muted=safeProjection.voice.muted;
+  const projected=strictHashRoute(),routeName=SCREEN_HASH[stack[stack.length-1]]||'home';
+  if((routeName==='asset'||routeName==='receive')&&projected.target===routeName&&
+     projected.params)walletRouteParams={...projected.params};
+  render();setupAccountScreen(activeScr());persist();
+}
+function handleReviewHistoryPopstate(candidate){
+  const marker=reviewMarkerInfo(candidate);
+  if(!marker.present)return false;
+  if(!marker.snapshot){
+    const projection=sanitizeReviewProjectionForWrite.projection(
+      safeProjectionFromPossibleReview(candidate));
+    restoreReviewNavigation(projection);
+    history.replaceState(projection,'','#'+expectedHash());
+    if(reviewRuntime.openId)reviewRuntime.controller?.consume({review_id:reviewRuntime.openId});
+    reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+    reviewRuntime.result=null;
+    clearReviewEntryProof();
+    closeReviewSurface(true);return true;
+  }
+  const projection={stack:marker.snapshot.stack,voice:marker.snapshot.voice};
+  const controller=ensureReviewController();
+  const proofOrigin=currentReviewMarkerProofOrigin(marker.snapshot.review_id);
+  const proofValid=validCurrentReviewMarkerEntry(marker.snapshot.review_id,projection);
+  if(!proofValid){
+    const safeOrigin=sanitizeReviewProjectionForWrite.projection(proofOrigin||
+      sanitizeReviewProjectionForWrite.origin()||reviewOriginProjection());
+    restoreReviewNavigation(safeOrigin);
+    if(reviewRuntime.openId)controller?.consume({review_id:reviewRuntime.openId});
+    history.replaceState(safeOrigin,'','#'+expectedHash());
+    reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+    reviewRuntime.result=null;
+    clearReviewEntryProof();
+    closeReviewSurface(true);return true;
+  }
+  restoreReviewNavigation(projection);
+  const result=proofValid?controller?.forward({review_id:marker.snapshot.review_id,
+    live_context:currentReviewLive(marker.snapshot.review_id),now_ms:reviewNow()}):null;
+  if(!result?.ok){
+    if(reviewRuntime.openId)controller?.consume({review_id:reviewRuntime.openId});
+    const safeOrigin=sanitizeReviewProjectionForWrite.projection(proofOrigin||projection);
+    restoreReviewNavigation(safeOrigin);
+    history.replaceState(safeOrigin,'','#'+expectedHash());
+    reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+    reviewRuntime.result=null;
+    clearReviewEntryProof();
+    closeReviewSurface(true);return true;
+  }
+  reviewRuntime.openId=marker.snapshot.review_id;
+  sanitizeReviewProjectionForWrite.captureOrigin(projection);
+  reviewRuntime.fallbackAllowed=false;reviewRuntime.markerIssued=true;
+  renderReviewResult(result,{focus:true});return true;
+}
+function sameReviewProjection(left,right){
+  return Boolean(left&&right&&sameStack(left.stack,right.stack)&&
+    left.voice?.state===right.voice?.state&&left.voice?.open===right.voice?.open&&
+    left.voice?.minimized===right.voice?.minimized&&
+    left.voice?.muted===right.voice?.muted);
+}
+function finishReviewOriginPopstate(event){
+  const origin=reviewOriginProjection();
+  if(reviewRuntime.cancellingId){
+    const expected=sanitizeReviewProjectionForWrite.projection(
+      sanitizeReviewProjectionForWrite.origin()||origin);
+    if(!sameReviewProjection(origin,expected)||reviewMarkerInfo(history.state).present){
+      restoreReviewNavigation(expected);
+      history.replaceState(expected,'','#'+expectedHash());
+    }
+    reviewRuntime.openId='';reviewRuntime.cancellingId='';reviewRuntime.result=null;
+    clearReviewEntryProof();
+    closeReviewSurface(true);return;
+  }
+  if(reviewRuntime.returningId){
+    const expected=sanitizeReviewProjectionForWrite.projection(
+      sanitizeReviewProjectionForWrite.origin()||origin);
+    const key=reviewEntryKey();
+  const trusted=event?.isTrusted===true&&sameReviewProjection(origin,expected)&&
+      Boolean(reviewRuntime.originEntryKey)&&key===reviewRuntime.originEntryKey&&
+      !reviewMarkerInfo(history.state).present;
+    if(trusted){completeReviewOriginReturn(origin);return}
+    reviewRuntime.controller?.consume({review_id:reviewRuntime.returningId});
+    restoreReviewNavigation(expected);
+    history.replaceState(expected,'','#'+expectedHash());
+    reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+    reviewRuntime.result=null;
+    clearReviewEntryProof();
+    closeReviewSurface(true);return;
+  }
+  if(reviewRuntime.openId)closeReviewSurface(true);
+}
+function restoreReviewFromCurrentEntry(){
+  const marker=reviewMarkerInfo(history.state);
+  if(!marker.present)return;
+  if(!marker.snapshot){handleReviewHistoryPopstate(history.state);return}
+  const projection={stack:marker.snapshot.stack,voice:marker.snapshot.voice};
+  const controller=ensureReviewController();
+  const proofOrigin=currentReviewMarkerProofOrigin(marker.snapshot.review_id);
+  const proofValid=validCurrentReviewMarkerEntry(marker.snapshot.review_id,projection);
+  if(proofValid)restoreReviewNavigation(projection);
+  const result=proofValid?controller?.restore({
+    review_id:marker.snapshot.review_id,
+    live_context:currentReviewLive(marker.snapshot.review_id),now_ms:reviewNow()}):null;
+  if(!result?.ok){
+    if(reviewRuntime.openId)controller?.consume({review_id:reviewRuntime.openId});
+    const safeOrigin=sanitizeReviewProjectionForWrite.projection(proofOrigin||
+      sanitizeReviewProjectionForWrite.origin()||reviewOriginProjection());
+    restoreReviewNavigation(safeOrigin);
+    history.replaceState(safeOrigin,'','#'+expectedHash());
+    reviewRuntime.openId='';reviewRuntime.cancellingId='';reviewRuntime.markerIssued=false;
+    clearReviewEntryProof();closeReviewSurface(true);return;
+  }
+  reviewRuntime.openId=marker.snapshot.review_id;
+  sanitizeReviewProjectionForWrite.captureOrigin(projection);
+  reviewRuntime.cancellingId='';reviewRuntime.fallbackAllowed=false;
+  reviewRuntime.markerIssued=true;
+  renderReviewResult(result,{focus:true});
+}
+function walletElement(tag,className,textValue){
+  let element=null;
+  switch(tag){
+    case 'article':element=document.createElement('article');break;
+    case 'b':element=document.createElement('b');break;
+    case 'button':element=document.createElement('button');break;
+    case 'dd':element=document.createElement('dd');break;
+    case 'div':element=document.createElement('div');break;
+    case 'dt':element=document.createElement('dt');break;
+    case 'h2':element=document.createElement('h2');break;
+    case 'h3':element=document.createElement('h3');break;
+    case 'p':element=document.createElement('p');break;
+    case 'small':element=document.createElement('small');break;
+    case 'span':element=document.createElement('span');break;
+    case 'strong':element=document.createElement('strong');break;
+    default:return null;
+  }
+  if(className) element.className=className;
+  if(textValue!==undefined) element.textContent=textValue;
+  return element;
+}
+function walletClassLabel(walletClass){
+  return {privy_embedded:'Privy embedded',connected_external:'Connected external',
+    watch_only:'Watch-only'}[walletClass]||'Wallet unavailable';
+}
+function shortWalletAddress(address){
+  return address.length>16?`${address.slice(0,8)}…${address.slice(-6)}`:address;
+}
+function routeWalletPair(target,asset,chain,{replace=false}={}){
+  const params=walletPairCompatible(asset,chain)?{asset,chain}:{...WALLET_ROUTE_DEFAULT};
+  walletRouteParams=params;
+  const destination=ROUTES[target]?.screen;
+  if(!destination) return;
+  if(replace||activeScr()===destination){
+    navigate(stack.slice(),{replace:true,keepScroll:true});
+    return;
+  }
+  const next=stack[0]==='scr-wallet'?stack.concat(destination):ROUTES[target].stack.slice();
+  navigate(next);
+}
+function walletBalanceRequest(config){
+  return config.stale?{asset_id:'ETH',chain_id:'arbitrum'}:{};
+}
+function walletStateCopy(result,walletClass){
+  if(walletClass==='watch_only') return 'Watch-only — no signing actions are available';
+  if(!result.ok) return result.error.safe_message;
+  if(result.meta.stale) return 'Provider values are stale';
+  if(result.value.status==='loading') return 'Loading provider balances';
+  if(result.value.status==='empty') return 'No supported assets reported by Privy';
+  if(result.value.status==='partial') return 'Some provider data is unavailable';
+  return '';
+}
+function applyWalletCapabilityControls(wallet,address){
+  document.getElementById('wallet-receive').disabled=
+    wallet.capabilities.receive!=='supported'||!address;
+}
+function renderWalletAssets(result){
+  const host=document.getElementById('wallet-assets');
+  if(!host) return;
+  host.replaceChildren();
+  if(!result.ok) return;
+  if(result.value.status==='loading'){
+    const skeleton=walletElement('div','wallet-skeleton','Loading provider balances');
+    skeleton.setAttribute('aria-label','Loading provider balances');
+    host.append(skeleton);
+    return;
+  }
+  const shown=result.value.items.filter(item=>walletViewState.chainFilter==='all'||
+    item.chain_id===walletViewState.chainFilter);
+  if(!shown.length){
+    host.append(walletElement('p','wallet-empty-copy',
+      result.value.status==='empty'?'No supported assets reported by Privy':
+        'No holdings reported for this network'));
+    return;
+  }
+  shown.forEach(item=>{
+    const meta=WALLET_ASSETS[item.asset_id];
+    const button=walletElement('button','asset-row wallet-asset-button');
+    button.type='button';
+    button.dataset.asset=item.asset_id;
+    button.dataset.chain=item.chain_id;
+    button.setAttribute('aria-label',`${meta.name} on ${WALLET_CHAINS[item.chain_id].label}, ${item.amount_display}, ${item.fiat_value===null?'value unavailable':item.fiat_value+' USD'}`);
+    const logo=walletElement('span','tok-logo',meta.symbol.slice(0,1));
+    logo.setAttribute('aria-hidden','true');
+    const identity=walletElement('span','wallet-asset-identity');
+    identity.append(walletElement('strong','tok-name',meta.name),
+      walletElement('small','tok-sub',WALLET_CHAINS[item.chain_id].label));
+    const quantity=walletElement('span','qty');
+    quantity.append(walletElement('b','',item.amount_display),
+      walletElement('span','',item.fiat_value===null?'Value unavailable':`${item.fiat_value} USD`));
+    button.append(logo,identity,quantity);
+    button.addEventListener('click',()=>{
+      walletViewState.selectedAsset=item.asset_id;
+      walletViewState.selectedChain=item.chain_id;
+      routeWalletPair('asset',item.asset_id,item.chain_id);
+    });
+    host.append(button);
+  });
+}
+function renderWalletFilters(result){
+  const host=document.getElementById('wallet-chain-filters');
+  if(!host) return;
+  host.replaceChildren();
+  const available=result.ok?
+    [...new Set(result.value.items.map(item=>item.chain_id))]:[];
+  [['all','All'],...available.map(chain=>[chain,WALLET_CHAINS[chain].label])]
+    .forEach(([chain,label])=>{
+      const button=walletElement('button','chip',label);
+      button.type='button';
+      const selected=chain===walletViewState.chainFilter;
+      button.classList.toggle('on',selected);
+      button.setAttribute('aria-pressed',String(selected));
+      button.addEventListener('click',()=>{
+        walletViewState.chainFilter=chain;
+        renderWalletFilters(result);
+        renderWalletAssets(result);
+      });
+      host.append(button);
+    });
+}
+function renderWalletScreen(){
+  const config=ensureWalletAdapter();
+  const wallet=config.walletResult.value;
+  const address=wallet.addresses[0]?.address||'';
+  const request=walletBalanceRequest(config);
+  const balances=config.adapter.getBalanceSnapshot(request);
+  const content=document.getElementById('wallet-content');
+  content.dataset.walletClass=wallet.wallet_class;
+  content.dataset.provider=config.walletResult.meta.source;
+  document.querySelector('#scr-wallet [data-wallet-class]').textContent=
+    walletClassLabel(wallet.wallet_class);
+  document.querySelector('#scr-wallet [data-wallet-address]').textContent=address;
+  document.getElementById('wallet-address-short').textContent=address?shortWalletAddress(address):'Address unavailable';
+  const providerState=document.querySelector('#scr-wallet [data-provider-state]');
+  providerState.textContent=!balances.ok?'Provider capability unavailable':
+    balances.meta.stale?'Stale provider values':
+      balances.value.status==='ready'?'Provider data ready':`Provider data ${balances.value.status}`;
+  const totalLabel=document.querySelector('#scr-wallet [data-total-provenance]');
+  const totalValue=document.getElementById('wallet-total-value');
+  const disclosure=document.getElementById('wallet-total-disclosure');
+  if(balances.ok){
+    totalLabel.textContent=balances.value.loop_total.label;
+    totalValue.textContent=balances.value.loop_total.value===null?
+      'Value unavailable':`${balances.value.loop_total.value} USD`;
+    const excluded=balances.value.loop_total.excluded_asset_count;
+    disclosure.textContent=excluded?
+      `Excludes ${excluded} asset${excluded===1?'':'s'} without a provider USD value`:'';
+  }else{
+    totalLabel.textContent='LOOP total derived from Privy balances';
+    totalValue.textContent='Value unavailable';
+    disclosure.textContent='Provider balance total unavailable';
+  }
+  const state=document.getElementById('wallet-state');
+  state.replaceChildren();
+  const stateCopy=walletStateCopy(balances,wallet.wallet_class);
+  if(stateCopy) state.append(walletElement('p','wallet-state-copy',stateCopy));
+  if(balances.ok&&balances.meta.stale){
+    state.append(walletElement('p','wallet-stale-time',
+      `Last provider update: ${new Date(balances.meta.fetched_at_ms).toISOString()}`));
+    state.lastElementChild.id='wallet-stale-time';
+    const retry=walletElement('button','btn btn-ghost','Retry');
+    retry.id='wallet-retry';retry.type='button';
+    retry.addEventListener('click',()=>renderWalletScreen());
+    state.append(retry);
+  }
+  if(balances.ok&&balances.value.status==='partial'){
+    balances.value.chain_errors.forEach(error=>state.append(walletElement(
+      'p','wallet-chain-warning',`${WALLET_CHAINS[error.chain_id]?.label||'Unknown network'}: ${error.code}`)));
+  }
+  const first=balances.ok?balances.value.items[0]:null;
+  if(first){
+    walletViewState.selectedAsset=first.asset_id;
+    walletViewState.selectedChain=first.chain_id;
+  }
+  const sendButton=document.getElementById('wallet-send');
+  const receiveButton=document.getElementById('wallet-receive');
+  const swapButton=document.getElementById('wallet-swap');
+  applyWalletCapabilityControls(wallet,address);
+  sendButton.onclick=()=>routeWalletPair('asset',walletViewState.selectedAsset,walletViewState.selectedChain);
+  receiveButton.onclick=()=>routeWalletPair('receive',walletViewState.selectedAsset,walletViewState.selectedChain);
+  swapButton.onclick=()=>openSwap();
+  renderWalletFilters(balances);
+  renderWalletAssets(balances);
+}
+function assetCompatibleChains(asset){return WALLET_ASSETS[asset].chains.slice()}
+function renderSelectOptions(select,values,selected,labelFor){
+  select.replaceChildren();
+  values.forEach(value=>{
+    const option=document.createElement('option');
+    option.value=value;option.textContent=labelFor(value);option.selected=value===selected;
+    select.append(option);
+  });
+}
+function renderAssetBalance(balanceResult){
+  if(balanceResult===null) return;
+  const summary=document.getElementById('asset-summary');
+  const holdings=document.getElementById('asset-holdings');
+  summary.replaceChildren();holdings.replaceChildren();
+  const card=walletElement('div','asset-summary-card card');
+  card.append(walletElement('h2','asset-symbol',walletRouteParams.asset));
+  if(!balanceResult.ok){
+    card.append(walletElement('p','wallet-state-copy',balanceResult.error.safe_message));
+    holdings.append(walletElement('p','wallet-empty-copy','Per-chain holdings unavailable'));
+  }else if(balanceResult.value.status==='loading'){
+    card.append(walletElement('p','asset-quantity','Loading provider quantity…'));
+    card.append(walletElement('p','asset-fiat','Loading provider value…'));
+    card.append(walletElement('p','asset-provenance','Waiting for Privy balance data.'));
+    holdings.append(walletElement(
+      'p','wallet-state-copy','Loading supported holdings from the provider…'));
+  }else{
+    const selected=balanceResult.value.items.find(item=>item.chain_id===walletRouteParams.chain);
+    card.append(walletElement('p','asset-quantity',selected?.amount_display||'Provider quantity unavailable'));
+    card.append(walletElement('p','asset-fiat',selected?.fiat_value===null||!selected?
+      'Value unavailable':`${selected.fiat_value} USD`));
+    card.append(walletElement('p','asset-provenance',selected?
+      'Provider quantity from Privy balance data':'No quantity reported for the selected network'));
+    if(balanceResult.value.status==='partial'){
+      card.append(walletElement('p','wallet-state-copy','Some provider balance records were unavailable.'));
+    }
+    if(!balanceResult.value.items.length){
+      holdings.append(walletElement('p','wallet-empty-copy','No supported holdings reported for this asset'));
+    }else{
+      balanceResult.value.items.forEach(item=>{
+        const row=walletElement('div','holding-row');
+        row.append(walletElement('strong','',WALLET_CHAINS[item.chain_id].label),
+          walletElement('span','mono',item.amount_display),
+          walletElement('small','',item.fiat_value===null?'Value unavailable':`${item.fiat_value} USD`));
+        holdings.append(row);
+      });
+    }
+  }
+  summary.append(card);
+}
+function renderAssetHistory(historyResult,append){
+  const status=document.getElementById('asset-history-status');
+  const host=document.getElementById('asset-history');
+  const pagination=document.getElementById('asset-pagination');
+  if(!append){walletViewState.historyItems=[];host.replaceChildren()}
+  pagination.replaceChildren();
+  if(!historyResult.ok){
+    status.textContent=historyResult.error.safe_message;
+    walletViewState.historyCursor=null;
+    return;
+  }
+  if(historyResult.value.status==='loading'){
+    status.textContent='Loading provider transaction history…';
+    walletViewState.historyCursor=null;
+    return;
+  }
+  const known=new Set(walletViewState.historyItems.map(item=>item.id));
+  historyResult.value.items.forEach(item=>{
+    if(!known.has(item.id)){known.add(item.id);walletViewState.historyItems.push(item)}
+  });
+  host.replaceChildren();
+  walletViewState.historyItems.forEach(item=>{
+    const row=walletElement('article','transaction-row');
+    row.dataset.transactionId=item.id;
+    const pending=item.provider_status.toLowerCase()==='pending'||
+      item.details_present===false;
+    const activity=pending?'Transaction details pending':
+      item.direction==='other'?'Wallet activity':
+        item.direction==='incoming'?'Incoming':'Outgoing';
+    row.append(walletElement('h3','transaction-direction',activity),
+      walletElement('p','transaction-amount',item.amount_display||activity),
+      walletElement('p','transaction-counterparty',item.counterparty||'Counterparty unavailable'),
+      walletElement('p','transaction-status',item.provider_status));
+    host.append(row);
+  });
+  if(historyResult.value.status==='partial'){
+    status.textContent='Some transaction records were omitted because the provider supplied no ID.';
+  }else if(!walletViewState.historyItems.length){
+    status.textContent='No transaction history reported by the provider.';
+  }else{
+    status.textContent='Provider transaction history';
+  }
+  walletViewState.historyCursor=historyResult.value.next_cursor;
+  if(walletViewState.historyCursor!==null){
+    const more=walletElement('button','btn btn-ghost','Load more');
+    more.id='asset-load-more';more.type='button';
+    more.addEventListener('click',loadMoreAssetHistory);
+    pagination.append(more);
+  }
+}
+function renderAssetSnapshots(balanceResult,historyResult,append=false){
+  renderAssetBalance(balanceResult);
+  if(historyResult) renderAssetHistory(historyResult,append);
+}
+function loadMoreAssetHistory(){
+  if(walletViewState.historyCursor===null) return;
+  const result=ensureWalletAdapter().adapter.getTransactionHistorySnapshot({
+    asset_id:walletRouteParams.asset,chain_id:walletRouteParams.chain,
+    cursor:walletViewState.historyCursor
+  });
+  renderAssetSnapshots(null,result,true);
+}
+function renderAssetScreen(){
+  const config=ensureWalletAdapter();
+  const asset=walletRouteParams.asset;
+  const chain=walletRouteParams.chain;
+  const chainSelect=document.getElementById('asset-chain');
+  renderSelectOptions(chainSelect,assetCompatibleChains(asset),chain,
+    value=>WALLET_CHAINS[value].label);
+  chainSelect.onchange=()=>routeWalletPair('asset',asset,chainSelect.value,{replace:true});
+  const balances=config.adapter.getBalanceSnapshot({asset_id:asset});
+  const historyResult=config.adapter.getTransactionHistorySnapshot({
+    asset_id:asset,chain_id:chain
+  });
+  renderAssetSnapshots(balances,historyResult,false);
+  const receiveButton=document.getElementById('asset-receive');
+  receiveButton.onclick=()=>routeWalletPair('receive',asset,chain);
+  const review=document.getElementById('asset-review-transfer');
+  const note=document.getElementById('asset-action-note');
+  const walletClass=config.walletResult.value.wallet_class;
+  const providerLoading=balances.ok&&balances.value.status==='loading'||
+    historyResult.ok&&historyResult.value.status==='loading';
+  review.disabled=walletClass!=='privy_embedded'||providerLoading;
+  note.textContent=providerLoading?
+    'Provider data is still loading. Transfer review is unavailable.':
+    walletClass==='watch_only'?
+    'Watch-only wallets cannot authorize signing requests.':
+    walletClass==='connected_external'?
+      'Transfer review is not available through this provider in this slice.':'';
+  review.onclick=()=>{
+    if(!openWalletReview('review-transfer',review)){
+      note.textContent='The wallet request could not be reviewed safely.';
+    }
+  };
+}
+function receiveWarning(asset,chain){
+  return `Only send ${asset} on ${WALLET_CHAINS[chain].label} to this address. Using another asset or network may result in permanent loss.`;
+}
+function createPinnedReceiveQrSvg(factory,address,alternative){
+  if(!capturePinnedQrFactory(factory)) return null;
+  try{
+    const qr=factory(0,'M');
+    if(!qr||typeof qr.addData!=='function'||typeof qr.make!=='function'||
+       typeof qr.createSvgTag!=='function') return null;
+    qr.addData(address,'Byte');
+    qr.make();
+    const markup=qr.createSvgTag({cellSize:4,margin:4,scalable:true,alt:alternative});
+    if(typeof markup!=='string'||markup.length>200000||
+       /<(?:script|foreignObject)\b|\s(?:on\w+|href|src)\s*=/i.test(markup)) return null;
+    const parsed=new DOMParser().parseFromString(markup,'image/svg+xml');
+    if(parsed.querySelector('parsererror')) return null;
+    const svg=parsed.documentElement;
+    const allowedTags=new Set(['svg','description','rect','path']);
+    const allowedAttributes=new Set(['version','xmlns','viewBox','preserveAspectRatio',
+      'role','aria-labelledby','id','width','height','fill','cx','cy','d','stroke']);
+    const nodes=[svg,...svg.querySelectorAll('*')];
+    if(svg.localName!=='svg'||svg.namespaceURI!=='http://www.w3.org/2000/svg'||
+       nodes.some(node=>!allowedTags.has(node.localName)||
+         [...node.attributes].some(attribute=>!allowedAttributes.has(attribute.name)))){
+      return null;
+    }
+    const description=svg.querySelector('description');
+    if(!description||description.textContent!==alternative) return null;
+    const safeSvg=document.importNode(svg,true);
+    safeSvg.dataset.qrPayload=address;
+    safeSvg.setAttribute('aria-label',alternative);
+    return safeSvg;
+  }catch(_error){return null}
+}
+function renderReceiveQr(address,chain){
+  const host=document.getElementById('receive-qr');
+  host.replaceChildren();
+  const alternative=`Receive address ${address} on ${WALLET_CHAINS[chain].label}`;
+  const svg=createPinnedReceiveQrSvg(PINNED_QR_FACTORY,address,alternative);
+  if(!svg) return false;
+  host.replaceChildren(svg);
+  return true;
+}
+function manualReceiveCopy(addressField,status){
+  addressField.focus();
+  addressField.select();
+  status.textContent='Copy unavailable — select the address manually.';
+}
+function copyReceiveAddress(){
+  const address=document.getElementById('receive-address');
+  const status=document.getElementById('receive-copy-status');
+  if(!navigator.clipboard||typeof navigator.clipboard.writeText!=='function'){
+    manualReceiveCopy(address,status);
+    return;
+  }
+  navigator.clipboard.writeText(address.value).then(()=>{
+    status.textContent='Address copied.';
+  }).catch(()=>manualReceiveCopy(address,status));
+}
+function renderReceiveScreen(){
+  const config=ensureWalletAdapter();
+  const asset=walletRouteParams.asset;
+  const chain=walletRouteParams.chain;
+  const assetSelect=document.getElementById('receive-asset');
+  const chainSelect=document.getElementById('receive-chain');
+  renderSelectOptions(assetSelect,WALLET_ASSET_IDS,asset,value=>value);
+  renderSelectOptions(chainSelect,assetCompatibleChains(asset),chain,
+    value=>WALLET_CHAINS[value].label);
+  assetSelect.onchange=()=>{
+    const nextAsset=assetSelect.value;
+    routeWalletPair('receive',nextAsset,WALLET_ASSETS[nextAsset].chains[0],{replace:true});
+  };
+  chainSelect.onchange=()=>routeWalletPair('receive',asset,chainSelect.value,{replace:true});
+  document.getElementById('receive-wallet-class').textContent=
+    `${walletClassLabel(config.walletResult.value.wallet_class)} wallet`;
+  const target=config.adapter.getReceiveTarget({asset_id:asset,chain_id:chain});
+  const address=document.getElementById('receive-address');
+  const warning=document.getElementById('receive-warning');
+  const copy=document.getElementById('receive-copy');
+  document.getElementById('receive-copy-status').textContent='';
+  if(!target.ok){
+    address.value='';warning.textContent=target.error.safe_message;copy.disabled=true;
+    document.getElementById('receive-qr').replaceChildren();
+    return;
+  }
+  address.value=target.value.address;
+  warning.textContent=receiveWarning(asset,chain);
+  copy.disabled=false;copy.onclick=copyReceiveAddress;
+  if(!renderReceiveQr(target.value.address,chain)){
+    document.getElementById('receive-copy-status').textContent=
+      'QR unavailable — use the exact public address shown below.';
+  }
+}
+function renderWalletFoundation(screen){
+  if(screen==='scr-wallet') renderWalletScreen();
+  if(screen==='scr-asset') renderAssetScreen();
+  if(screen==='scr-receive') renderReceiveScreen();
+  renderWalletSigningCapabilities();
+}
+
+/* ---------- market list + sparklines ---------- */
+function rng(seed){let s=seed*9301+49297;return()=>{s=(s*1664525+1013904223)>>>0;return s/2**32}}
+function series(seed,drift,n){const r=rng(seed);let v=50,out=[];for(let i=0;i<n;i++){v=Math.max(8,v+(r()-drift)*-9);out.push(v)}return out}
+function sparkSVG(t){
+  const d=series(t.seed,t.drift,24),min=Math.min(...d),max=Math.max(...d);
+  const pts=d.map((v,i)=>`${(i/(d.length-1)*64).toFixed(1)},${(24-((v-min)/(max-min+.001))*22).toFixed(1)}`).join(' ');
+  const c=t.up?'var(--mint)':'var(--red)';
+  return `<svg class="spark" viewBox="0 0 64 26"><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+}
+function buildMarket(){
+  document.getElementById('mkt-list').innerHTML = MKT.map(k=>{const t=TOKENS[k];return `
+  <div class="tok-row" onclick="openToken('${k}')">
+    <div class="tok-logo" style="background:${t.grad}">${t.logo}</div>
+    <div><p class="tok-name">${t.name}</p><p class="tok-sub"><span class="mono">${t.sym}</span> · ${t.chain} · <span class="risk-pill ${t.pill[0]}" style="padding:1px 7px;font-size:9px">${t.pill[1]}</span></p></div>
+    ${sparkSVG(t)}
+    <div class="tok-price"><p class="p">${t.price}</p><p class="c ${t.up?'up':'dn'}">${t.chg.split(' · ')[0]}</p></div>
+  </div>`}).join('');
+}
+
+/* ---------- token detail ---------- */
+let curTok='GLYPH';
+function fillToken(k){
+  curTok=k; const t=TOKENS[k];
+  tkset('tk-name',t.name); tkset('tk-sym',t.sym); tkset('tk-price',t.price);
+  tkset('tk-chain',t.chain); tkset('tk-liq',t.liq); tkset('tk-hold',t.hold); tkset('tk-vol',t.vol);
+  tkset('tk-comm-n',t.comm[0]); tkset('tk-groups',t.comm[1]); tkset('tk-ch',t.comm[2]); tkset('tk-kol',t.comm[3]);
+  const chg=document.getElementById('tk-chg'); chg.textContent=t.chg; chg.className='tk-chg '+(t.up?'up':'dn');
+  const lg=document.getElementById('tk-logo'); lg.textContent=t.logo; lg.style.background=t.grad;
+  const rp=document.getElementById('tk-riskpill'); rp.className='risk-pill '+t.pill[0]; rp.style.marginLeft='auto'; rp.textContent=t.pill[1];
+  /* The badge counts findings instead of assigning an opaque numeric score. */
+  const flags=t.sec.filter(([i])=>i!=='🟢').length;
+  const crit=t.sec.filter(([i])=>i==='🔴').length;
+  const fc=document.getElementById('tk-factcount');
+  fc.textContent = flags ? `${flags} to review` : 'nothing flagged';
+  fc.className = 'risk-pill ' + (crit ? 'risk-high' : flags ? 'risk-med' : 'risk-low');
+  document.getElementById('tk-sec').innerHTML=t.sec.map(([i,s])=>`<div class="sec-item"><span>${i}</span><span><b>${s}</b></span></div>`).join('');
+}
+function openToken(k){
+  fillToken(k);
+  push('scr-token');
+  requestAnimationFrame(()=>drawChart());
+}
+function tkset(id,v){document.getElementById(id).textContent=v}
+function toggleWatch(b){const on=b.textContent.includes('★');b.textContent=on?'☆ Watch':'★ Watching';toast(on?'Removed from watchlist':TOKENS[curTok].sym+' added to watchlist')}
+
+/* candles */
+function drawChart(){
+  const cv=document.getElementById('chart'); const t=TOKENS[curTok];
+  const w=cv.clientWidth, h=190, dpr=window.devicePixelRatio||1;
+  cv.width=w*dpr; cv.height=h*dpr;
+  const x=cv.getContext('2d'); x.scale(dpr,dpr); x.clearRect(0,0,w,h);
+  const r=rng(t.seed*13+1); let p=50; const cd=[];
+  for(let i=0;i<36;i++){const o=p,c2=Math.max(6,o+(r()-t.drift)*-11);cd.push({o,c:c2,hi:Math.max(o,c2)+r()*3,lo:Math.min(o,c2)-r()*3});p=c2}
+  const all=cd.flatMap(c=>[c.hi,c.lo]),mn=Math.min(...all),mx=Math.max(...all);
+  const Y=v=>10+(1-(v-mn)/(mx-mn))*(h-30);
+  x.strokeStyle='rgba(255,255,255,.05)';x.lineWidth=1;
+  for(let g=0;g<4;g++){const gy=10+g*(h-30)/3;x.beginPath();x.moveTo(0,gy);x.lineTo(w,gy);x.stroke()}
+  const bw=w/36;
+  cd.forEach((c,i)=>{
+    const cx=i*bw+bw/2, up=c.c>=c.o, col=up?'#3df0ae':'#ff5c7a';
+    x.strokeStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(cx,Y(c.hi));x.lineTo(cx,Y(c.lo));x.stroke();
+    x.fillStyle=col; const y1=Y(Math.max(c.o,c.c)), y2=Y(Math.min(c.o,c.c));
+    x.globalAlpha=up?1:.9; x.fillRect(cx-bw*.32,y1,bw*.64,Math.max(2,y2-y1)); x.globalAlpha=1;
+  });
+  const last=Y(cd[cd.length-1].c);
+  x.setLineDash([3,4]);x.strokeStyle='rgba(233,238,244,.35)';x.beginPath();x.moveTo(0,last);x.lineTo(w,last);x.stroke();x.setLineDash([]);
+}
+document.querySelectorAll('.tf').forEach(f=>f.onclick=()=>{document.querySelectorAll('.tf').forEach(x=>x.classList.remove('on'));f.classList.add('on');TOKENS[curTok].seed+=2;drawChart()});
+
+/* ---------- flows ---------- */
+function openGroup(){
+  if(activeScr()==='scr-group') return;
+  navigate(['scr-chat','scr-group'], {replace:false});
+}
+
+/* ---------- voice room: explicit state machine ---------- */
+const VR_SEATS = [
+  {n:'shadowfax', e:'🦊', g:'linear-gradient(135deg,#ffd66e,#ff9a5c)', host:true},
+  {n:'trader_42', e:'🎯', g:'linear-gradient(135deg,var(--cyan),var(--mint))'},
+  {n:'moondev',   e:'🌙', g:'linear-gradient(135deg,#c78bff,#7f5cff)'},
+  {n:'volt_88',   e:'⚡', g:'linear-gradient(135deg,#ff5c7a,#ff9a5c)'}
+];
+let vrTick=null;
+
+function openVoiceRoom(){
+  voice.open=true; voice.minimized=false;
+  const card=document.getElementById('voiceRoomCard');
+  card.style.display='block';
+  renderVoice(); syncHash(true); persist();
+  setTimeout(()=>card.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
+}
+function toggleVoiceRoom(){
+  voice.minimized=!voice.minimized;
+  renderVoice(); syncHash(true); persist();
+}
+function returnToVoiceRoom(){
+  if(activeScr()!=='scr-group'){ navigate(['scr-chat','scr-group']); }
+  voice.open=true; voice.minimized=false;
+  document.getElementById('voiceRoomCard').style.display='block';
+  renderVoice(); syncHash(true); persist();
+  setTimeout(()=>document.getElementById('voiceRoomCard').scrollIntoView({behavior:'smooth',block:'nearest'}),120);
+}
+function setVoice(s){
+  voice.state=s;
+  if(s==='joined' && !voice.joinedAt) voice.joinedAt=Date.now();
+  if(s==='idle'){voice.joinedAt=0; voice.hand=false; voice.muted=true}
+  renderVoice(); persist();
+  if(inCall() && !vrTick) vrTick=setInterval(renderVoiceTimer,1000);
+  if(!inCall() && vrTick){clearInterval(vrTick); vrTick=null}
+}
+function joinVoiceRoom(){
+  if(inCall()) return;
+  setVoice('joining');
+  toast('Connecting to voice room… (simulated — Agora RTC lands in Phase 1)');
+  setTimeout(()=>{
+    if(voice.state!=='joining') return;
+    voice.listeners=215;
+    setVoice('joined');
+    toast('You are in the room · mic muted by default');
+  },1100);
+}
+function leaveVoiceRoom(){
+  if(!inCall()) return;
+  voice.listeners=214;
+  setVoice('idle');
+  toast('Left the voice room · mic released');
+}
+function toggleMute(){
+  if(!inCall()) return;
+  voice.muted=!voice.muted;
+  renderVoice(); persist();
+  toast(voice.muted?'Microphone muted':'Microphone live — you are speaking to 215 people');
+}
+function toggleHand(){
+  if(!inCall()) return;
+  voice.hand=!voice.hand; renderVoice(); persist();
+  toast(voice.hand?'Hand raised — host notified':'Hand lowered');
+}
+function toggleSpeaker(){
+  if(!inCall()) return;
+  voice.speaker=!voice.speaker; renderVoice(); persist();
+  toast(voice.speaker?'Speaker on':'Speaker off — room muted for you');
+}
+function simulateDrop(){
+  if(voice.state!=='joined') return;
+  voice.weak=true; setVoice('reconnecting');
+  toast('Network dropped — reconnecting…');
+  setTimeout(()=>{
+    if(voice.state!=='reconnecting') return;
+    voice.weak=false; setVoice('joined'); toast('Reconnected · audio restored');
+  },2200);
+}
+
+function renderVoiceTimer(){
+  if(!voice.joinedAt) return;
+  const s=Math.floor((Date.now()-voice.joinedAt)/1000);
+  const mm=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+  const lbl = voice.state==='reconnecting' ? 'Reconnecting…' : (voice.muted?'In voice · muted':'In voice · live');
+  const el=document.getElementById('cbStatus'); if(el) el.textContent=`${lbl} · ${mm}:${ss}`;
+}
+
+function renderVoice(){
+  const card=document.getElementById('voiceRoomCard');
+  if(!card) return;
+  const phone=document.getElementById('phone');
+  const joined=voice.state==='joined'||voice.state==='reconnecting';
+
+  card.style.display = voice.open ? 'block' : 'none';
+  card.classList.toggle('minimized', voice.minimized);
+
+  /* minimize control reflects its real state */
+  const tg=document.getElementById('vrToggleBtn');
+  tg.textContent = voice.minimized ? '+' : '−';
+  tg.setAttribute('aria-expanded', String(!voice.minimized));
+  const tgl = (voice.minimized?'Expand':'Minimize')+' voice room';
+  tg.setAttribute('aria-label', tgl); tg.title=tgl;
+
+  /* status badge */
+  const badge=document.getElementById('vrBadge');
+  const bs={idle:['live',''],joining:['connecting','warn'],joined:['you are in',''],reconnecting:['reconnecting','warn'],error:['failed','err']}[voice.state];
+  badge.hidden=false; badge.textContent=bs[0]; badge.className='vr-badge'+(bs[1]?' '+bs[1]:'');
+
+  document.getElementById('vrCounts').textContent = `${voice.listeners} listening · ${voice.speakers} speaking`;
+
+  /* seats — self tile appears once joined */
+  const seats = VR_SEATS.map(s=>({...s, mic:true}));
+  if(joined) seats.push({n:'You', e:'🕶️', g:'linear-gradient(135deg,var(--mint),var(--cyan))', me:true, mic:!voice.muted, hand:voice.hand});
+  document.getElementById('vrSeats').innerHTML = seats.map(s=>`
+    <div class="vr-seat${s.me?' me':''}">
+      <div class="avatar" style="background:${s.g}">${s.e}
+        <span class="mic${s.mic?'':' off'}" aria-hidden="true">${s.mic?'●':'✕'}</span>
+      </div>
+      <p>${s.hand?'✋ ':''}${s.n}${s.host?' · host':''}</p>
+    </div>`).join('');
+
+  /* join button vs live controls */
+  const jb=document.getElementById('vrJoinBtn'), ct=document.getElementById('vrCtrls'), net=document.getElementById('vrNet');
+  if(voice.state==='idle'||voice.state==='error'){
+    jb.hidden=false; ct.hidden=true; net.hidden=true;
+    jb.textContent = voice.state==='error' ? '↻ Retry connection' : '🎙️ Join room';
+    jb.disabled=false; jb.style.opacity=1;
+  }else if(voice.state==='joining'){
+    jb.hidden=false; ct.hidden=true; net.hidden=true;
+    jb.textContent='Connecting…'; jb.disabled=true; jb.style.opacity=.6;
+  }else{
+    jb.hidden=true; ct.hidden=false; net.hidden=false;
+  }
+
+  /* live controls */
+  const mb=document.getElementById('vrMuteBtn');
+  mb.setAttribute('aria-pressed', String(voice.muted));
+  mb.textContent = voice.muted?'🔇':'🎙️';
+  const mlbl = voice.muted?'Unmute microphone':'Mute microphone';
+  mb.setAttribute('aria-label', mlbl); mb.title=mlbl;
+
+  const hb=document.getElementById('vrHandBtn');
+  hb.setAttribute('aria-pressed', String(voice.hand));
+  const hlbl = voice.hand?'Lower hand':'Raise hand';
+  hb.setAttribute('aria-label', hlbl); hb.title=hlbl;
+
+  const sb=document.getElementById('vrSpkBtn');
+  sb.setAttribute('aria-pressed', String(voice.speaker));
+  sb.textContent = voice.speaker?'🔊':'🔈';
+  const slbl = voice.speaker?'Speaker on':'Speaker off';
+  sb.setAttribute('aria-label', slbl); sb.title=slbl;
+
+  net.classList.toggle('weak', voice.weak);
+  document.getElementById('vrNetTxt').textContent = voice.state==='reconnecting' ? 'Reconnecting…' : (voice.weak?'Weak connection':'Good connection');
+
+  /* global call bar + chat tab dot */
+  phone.classList.toggle('in-call', inCall() && !(activeScr()==='scr-group' && voice.open && !voice.minimized));
+  phone.classList.toggle('voice-live', inCall());
+  const cbm=document.getElementById('cbMuteBtn');
+  cbm.setAttribute('aria-pressed', String(voice.muted));
+  cbm.textContent = voice.muted?'🔇':'🎙️';
+  cbm.setAttribute('aria-label', mlbl); cbm.title=mlbl;
+  renderVoiceTimer();
+}
+function openSwap(){push('scr-swap')}
+function openDapp(){push('scr-dapp')}
+function openPay(){navigate(['scr-home','scr-pay'])}
+function openSheet(id){
+  document.getElementById('veil').classList.add('open');
+  const s=document.getElementById(id); s.classList.add('open'); s.removeAttribute('inert'); s.removeAttribute('aria-hidden');
+}
+function openRiskSheet(){openSheet('sheet-risk')}
+function openApproveSheet(){
+  if(!walletSigningAllowed('dapp-approve')) return;
+  openSheet('sheet-approve');
+}
+function closeSheets(){
+  document.getElementById('veil').classList.remove('open');
+  document.querySelectorAll('.sheet').forEach(s=>{s.classList.remove('open'); s.setAttribute('inert',''); s.setAttribute('aria-hidden','true')});
+}
+function chooseApprovalReview(button){
+  const limited=document.getElementById('approval-limit');
+  const unlimited=document.getElementById('approval-unlimited');
+  const semantic=button===limited?'limited':button===unlimited?'unlimited':'';
+  if(!semantic||!button.isConnected||
+     !document.getElementById('sheet-approve').classList.contains('open'))return;
+  const decision=walletSigningDecision(button);applySigningControlDecision(button,decision);
+  const ids={privy_embedded:{limited:'review-approve-limited',
+    unlimited:'review-approve-unlimited'},connected_external:{
+    limited:'review-approve-external',
+    unlimited:'review-approve-unlimited-external'}};
+  const expected=decision.allowed?ids[decision.walletClass]?.[semantic]||'':'';
+  if(!expected){
+    const notice=document.getElementById('approval-review-notice');
+    if(notice)notice.textContent='The active wallet authority could not select a safe review.';
+    return;
+  }
+  closeSheets();
+  if(!openWalletReview(expected,button)){
+    const notice=document.getElementById('approval-review-notice');
+    if(notice)notice.textContent='The wallet request could not be reviewed safely.';
+  }
+}
+
+function doSwap(btn){
+  const control=document.getElementById('swap-submit');
+  const pay=document.getElementById('pay-amt');
+  const receive=document.getElementById('receive-amt');
+  const payToken=document.getElementById('pay-token');
+  const receiveToken=document.getElementById('receive-token');
+  const exactScreen=pay?.tagName==='INPUT'&&pay.readOnly===true&&
+    pay.getAttribute('value')==='500'&&pay.value==='500'&&pay.inputMode==='decimal'&&
+    receive?.tagName==='INPUT'&&receive.readOnly===true&&
+    receive.getAttribute('value')==='216,450'&&receive.value==='216,450'&&
+    payToken?.dataset.assetId==='USDC'&&payToken.textContent.trim().endsWith('USDC ▾')&&
+    receiveToken?.dataset.assetId==='GLYPH'&&
+    receiveToken.textContent.trim().endsWith('GLYPH ▾');
+  if(!control||btn!==control||control.tagName!=='BUTTON'||
+     !control.isConnected||control.textContent.trim()!=='Review swap'||!exactScreen||
+     !walletSigningAllowed('swap-submit')){
+    const note=document.getElementById('swap-review-note');
+    if(note)note.textContent='The fixed simulated Privy quote no longer matches this Swap screen.';
+    return;
+  }
+  if(!openWalletReview('review-swap-fresh',control)){
+    const note=document.getElementById('swap-review-note');
+    if(note)note.textContent='The simulated Privy quote could not be reviewed safely.';
+  }
+}
+/* alias */
+const ALIASES=['Voyager_7','Nomad_42','Cipher_9','Drift_88','Umbra_3','Halcyon_5'];
+let ai=0;
+function shuffleAlias(){ai=(ai+1)%ALIASES.length;const a=ALIASES[ai];
+  ['alias-home','alias-chat','alias-pf'].forEach(id=>document.getElementById(id).textContent=a);
+  toast('New anonymous identity: '+a)}
+
+/* toast */
+let toastT;
+function toast(msg){const t=document.getElementById('toast');t.textContent=String(msg);t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2600)}
+
+/* ---------- guided demos (desktop aside) ---------- */
+function demoTokenCard(){openGroup();toast('Tickers in chat become live, executable cards')}
+function demoSecurity(){goTab('market');setTimeout(()=>{openToken('GLYPH');toast('AI security is a layer, not a tab — it follows the token')},350)}
+function demoApproval(){goTab('wallet');setTimeout(()=>{openDapp();setTimeout(()=>{openApproveSheet();toast('Choose an allowance to review in the shared wallet flow')},700)},350)}
+function demoBuy(){openGroup();toast('Tap Buy on the $GLYPH card → swap → wallet')}
+
+/* ---------- phone scaling ---------- */
+function fit(){
+  const ph=document.getElementById('phone');
+  if(window.innerWidth<=640){ph.style.transform='';return}
+  const s=Math.min(1,(window.innerHeight-48)/880);
+  ph.style.transform=`scale(${s})`;
+}
+window.addEventListener('resize',fit);
+
+/* ---------- routing: hash → state (deep links from the plan page) ---------- */
+function route({silent=false}={}){
+  consumeReviewForNavigation();
+  const parsed=strictHashRoute();
+  const h=parsed.target;
+  let target = h ? (ROUTES[h] ? h : 'home') : (onboardingFlag('complete')?'home':'splash');
+  if(!h&&!onboardingFlag('complete')) resetAccountState();
+  target=guardAccountRoute(target);
+  if((target==='asset'||target==='receive')&&parsed.params){
+    walletRouteParams={...parsed.params};
+  }
+  if(target==='token') fillToken('GLYPH');
+  closeSheets();
+  navigate(ROUTES[target].stack.slice(), {replace:true});
+  if(target==='token') requestAnimationFrame(drawChart);
+  if(target==='voiceroom') openVoiceRoom();
+  /* the #dapp deep link exists to show the approval firewall — keep that on hand-entered hashes,
+     but never re-fire it while the user is traversing browser history */
+  if(target==='dapp' && !silent) setTimeout(openApproveSheet,900);
+}
+function expectedHash(){
+  let h = SCREEN_HASH[activeScr()] || 'home';
+  if(h==='asset'||h==='receive') h=canonicalWalletHash(h);
+  if(activeScr()==='scr-group' && voice.open && !voice.minimized) h='voiceroom';
+  return h;
+}
+/* an externally edited hash (address bar) re-enters through here */
+window.addEventListener('hashchange',()=>{
+  if((location.hash||'').slice(1)!==expectedHash()) route();
+});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden&&activeScr()==='scr-seed-show') resetSeedShow();
+});
+window.addEventListener('pagehide',event=>{
+  clearSensitiveAccountState();
+  if(!event.persisted){
+    accountHistoryProof.clear();
+    reviewMarkerProof.clear();
+  }
+});
+window.addEventListener('unload',()=>{
+  accountHistoryProof.clear();
+  reviewMarkerProof.clear();
+});
+window.addEventListener('pageshow',event=>{
+  if(!event.persisted) return;
+  setupAccountScreen(activeScr());
+  focusActiveScreen();
+  restoreReviewFromCurrentEntry();
+});
+
+/* ---------- session restore ---------- */
+function restore(){
+  let s=null;
+  try{s=JSON.parse(sessionStorage.getItem(SS_KEY)||'null')}catch(e){}
+  const restored=navigationStorageProjection.restore(s);
+  if(!restored) return false;
+  const restoredStack=guardAccountStack(restored.stack);
+  const parsed=strictHashRoute();
+  const h=parsed.target;
+  const expect = SCREEN_HASH[restoredStack[restoredStack.length-1]] || 'home';
+  /* only restore when the URL still points at the same place we left */
+  if(h!==expect && !(h==='voiceroom' &&
+     restoredStack[restoredStack.length-1]==='scr-group')) return false;
+  if((h==='asset'||h==='receive')&&parsed.params){
+    walletRouteParams={...parsed.params};
+  }
+  voice.state=restored.voice.state;voice.open=restored.voice.open;
+  voice.minimized=restored.voice.minimized;voice.muted=restored.voice.muted;
+  voice.hand=restored.voice.hand;voice.speaker=restored.voice.speaker;
+  voice.listeners=restored.voice.listeners;voice.speakers=restored.voice.speakers;
+  voice.joinedAt=restored.voice.joinedAt;voice.weak=restored.voice.weak;
+  if(voice.state==='joining') voice.state='joined';
+  if(voice.state==='joined'||voice.state==='reconnecting'){
+    voice.joinedAt = voice.joinedAt || Date.now();
+    if(!vrTick) vrTick=setInterval(renderVoiceTimer,1000);
+  }
+  if(restoredStack[restoredStack.length-1]==='scr-token') fillToken(curTok);
+  navigate(restoredStack, {replace:true});
+  if(restoredStack[restoredStack.length-1]==='scr-token') requestAnimationFrame(drawChart);
+  if(voice.open) document.getElementById('voiceRoomCard').style.display='block';
+  renderVoice();
+  return true;
+}
+
+buildMarket(); fit();
+document.getElementById('splash-retry').addEventListener('click',retrySplashMaintenance);
+document.getElementById('splash-reset').addEventListener('click',resetSplashDemo);
+document.querySelectorAll('[data-auth-method]').forEach(button=>button.addEventListener('click',chooseAuthMethod));
+document.getElementById('otp-form').addEventListener('submit',verifyOtp);
+document.getElementById('otp-resend').addEventListener('click',resendOtp);
+otpInputs().forEach(input=>{
+  input.addEventListener('input',handleOtpInput);
+  input.addEventListener('keydown',handleOtpKeydown);
+  input.addEventListener('paste',handleOtpPaste);
+  input.addEventListener('compositionend',handleOtpCompositionEnd);
+});
+document.querySelectorAll('#wallet-detected-list input[type="radio"]')
+  .forEach(option=>option.addEventListener('change',selectExternalWallet));
+document.getElementById('wallet-connect').addEventListener('click',startExternalWalletConnection);
+document.getElementById('wallet-sign-approve').addEventListener('click',approveExternalWallet);
+document.getElementById('wallet-sign-reject').addEventListener('click',rejectExternalWallet);
+document.getElementById('wallet-connect-retry').addEventListener('click',retryExternalWallet);
+document.getElementById('wallet-create-start').addEventListener('click',()=>beginWalletCreation(false));
+document.getElementById('wallet-create-fail-demo').addEventListener('click',()=>beginWalletCreation(true));
+document.getElementById('wallet-create-retry').addEventListener('click',retryWalletCreation);
+document.querySelectorAll('[data-backup-choice]').forEach(button=>button.addEventListener('click',chooseBackupMethod));
+document.getElementById('backup-confirm-continue').addEventListener('click',confirmBackupMethod);
+document.getElementById('backup-skip-confirm').addEventListener('click',confirmSkippedBackup);
+document.getElementById('backup-confirm-cancel').addEventListener('click',cancelBackupConfirmation);
+document.getElementById('seed-show-ack').addEventListener('change',updateSeedRevealGate);
+document.getElementById('seed-show-reveal').addEventListener('click',revealPrototypeSeed);
+document.getElementById('seed-show-recorded').addEventListener('change',updateSeedRecordedGate);
+document.getElementById('seed-show-continue').addEventListener('click',continueSeedVerification);
+['copy','cut','contextmenu'].forEach(type=>
+  document.getElementById('seed-phrase-panel').addEventListener(type,blockSeedPhraseAction));
+document.getElementById('seed-verify-form').addEventListener('submit',verifySeedWords);
+seedVerifyInputs().forEach(input=>input.addEventListener('input',handleSeedVerifyInput));
+document.querySelectorAll('[name="wallet-import-mode"]')
+  .forEach(option=>option.addEventListener('change',chooseImportMode));
+document.getElementById('wallet-import-submit').addEventListener('click',submitWalletImport);
+document.getElementById('veil').addEventListener('click',handleReviewVeil);
+document.getElementById('review-preview-check').addEventListener('change',acknowledgeWalletReview);
+document.getElementById('review-cancel').addEventListener('click',cancelWalletReview);
+document.getElementById('review-continue').addEventListener('click',continueWalletReview);
+document.getElementById('review-refresh').addEventListener('click',refreshWalletReview);
+document.getElementById('review-dialog').addEventListener('keydown',handleReviewKeys);
+document.addEventListener('click',event=>{
+  const signingControl=event.target.closest?.('[data-requires-signing]');
+  if(!signingControl) return;
+  const decision=walletSigningDecision(signingControl);
+  applySigningControlDecision(signingControl,decision);
+  if(decision.allowed) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const explanation=document.getElementById('watch-only-explanation');
+  if(explanation&&decision.reason!=='bridge'){
+    explanation.textContent=decision.reason;
+    explanation.hidden=false;
+  }
+},{capture:true});
+if(!restore()) route();

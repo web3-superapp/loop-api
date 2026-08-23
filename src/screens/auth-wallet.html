@@ -1,0 +1,43 @@
+      <section class="scr account-screen" id="scr-auth-wallet" aria-labelledby="auth-wallet-title">
+        <div class="account-shell wallet-connect-shell">
+          <p class="account-kicker">External wallet</p>
+          <h1 id="auth-wallet-title" tabindex="-1" data-route-focus>Connect a wallet</h1>
+          <p>Select a deterministic demo path. This prototype never contacts a wallet or creates a real signature.</p>
+
+          <div id="wallet-empty-state" class="wallet-empty" role="note" hidden>No detected wallets. You can use the simulated WalletConnect alternative below.</div>
+
+          <fieldset id="wallet-detected" class="wallet-detected">
+            <legend>Detected wallets</legend>
+            <div id="wallet-detected-list" class="wallet-option-list">
+              <label class="wallet-option" for="wallet-option-demo">
+                <input id="wallet-option-demo" name="detected-wallet" type="radio" value="demo">
+                <span class="wallet-option-copy"><strong>Demo Wallet</strong> <small>Success · signature request</small></span>
+              </label>
+              <label class="wallet-option" for="wallet-option-timeout">
+                <input id="wallet-option-timeout" name="detected-wallet" type="radio" value="timeout">
+                <span class="wallet-option-copy"><strong>Timeout Wallet</strong> <small>Simulated timeout</small></span>
+              </label>
+              <label class="wallet-option" for="wallet-option-failure">
+                <input id="wallet-option-failure" name="detected-wallet" type="radio" value="failure">
+                <span class="wallet-option-copy"><strong>Failure Wallet</strong> <small>Simulated connection error</small></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div id="wallet-connect-state" class="account-status wallet-connect-state" role="status" aria-live="polite"></div>
+          <button class="btn btn-primary" id="wallet-connect" type="button" disabled>Connect selected wallet</button>
+          <div class="wallet-sign-actions">
+            <button class="btn btn-primary" id="wallet-sign-approve" type="button" hidden>Approve</button>
+            <button class="btn btn-ghost" id="wallet-sign-reject" type="button" hidden>Reject</button>
+          </div>
+          <button class="btn btn-ghost" id="wallet-connect-retry" type="button" hidden>Retry connection</button>
+
+          <div class="walletconnect-card" aria-labelledby="walletconnect-title">
+            <div class="walletconnect-qr" aria-hidden="true">▦</div>
+            <div>
+              <h2 id="walletconnect-title">WalletConnect</h2>
+              <p id="walletconnect-placeholder">WalletConnect QR placeholder — nonfunctional and simulated.</p>
+            </div>
+          </div>
+        </div>
+      </section>

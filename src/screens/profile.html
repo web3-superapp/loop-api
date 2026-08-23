@@ -1,0 +1,53 @@
+      <section class="scr" id="scr-profile">
+        <div class="pad">
+          <div class="pf-head">
+            <div class="pf-ava"><div>🎭</div></div>
+            <p class="pf-name" id="alias-pf">Voyager_7</p>
+            <p class="pf-addr" onclick="toast('Address copied')">0x7c4e…9f21 ⧉ · 1 identity, 3 wallets</p>
+            <div class="pf-stats">
+              <div><b>128</b><span>connections</span></div>
+              <div><b>7</b><span>groups</span></div>
+              <div><b>94</b><span>trust score</span></div>
+            </div>
+          </div>
+
+          <p class="label">Privacy — you decide what leaks</p>
+          <div class="card" style="padding:4px 16px">
+            <div class="set-row">
+              <div><p class="sr-t">Anonymous mode</p><p class="sr-s">Chats never expose your address; alias rotates on demand</p></div>
+              <div class="tog on" onclick="this.classList.toggle('on')"></div>
+            </div>
+            <div class="set-row">
+              <div><p class="sr-t">Portfolio Broadcast</p><p class="sr-s">Share your buys as asset messages in chosen groups. Off by default.</p></div>
+              <div class="tog" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'Broadcast on — only in groups you whitelist':'Broadcast off')"></div>
+            </div>
+            <div class="set-row">
+              <div><p class="sr-t">Copy-trade permissions</p><p class="sr-s">Who may mirror your shared trades</p></div>
+              <span class="chip" style="margin-left:auto">Nobody ▾</span>
+            </div>
+          </div>
+
+          <p class="label">Security</p>
+          <div class="card" style="padding:4px 16px">
+            <div class="set-row">
+              <div><p class="sr-t">Transaction checks</p><p class="sr-s">Simulate every signature · block unlimited approvals · screen addresses</p></div>
+              <div class="tog on" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'Transaction checks re-enabled':'⚠️ Transaction checks disabled — not recommended')"></div>
+            </div>
+            <div class="set-row">
+              <div><p class="sr-t">Recovery</p><p class="sr-s" id="profile-recovery-detail">Recovery method not recorded</p></div>
+              <span class="risk-pill risk-med" id="profile-recovery-status" style="margin-left:auto">not set</span>
+            </div>
+            <div class="set-row">
+              <div><p class="sr-t">Open approvals</p><p class="sr-s">Approval management is planned for F17. No approval has changed.</p></div>
+              <button class="btn btn-ghost" id="profile-approvals-review" style="margin-left:auto;height:32px;padding:0 13px;font-size:11.5px" onclick="toast('Approval management is planned for F17. No approval has changed.')">View plan</button>
+            </div>
+          </div>
+
+          <p class="label">One identity, three surfaces</p>
+          <div class="card" style="font-size:12.5px;color:var(--tx2);line-height:1.6">
+            Your wallet address, social alias and market activity are <b style="color:var(--tx)">one identity under your control</b> — linked internally, never exposed without consent.
+          </div>
+          <button class="btn btn-ghost restart-onboarding" id="restart-onboarding" type="button" onclick="restartOnboarding()">Restart onboarding demo</button>
+          <div style="height:16px"></div>
+        </div>
+      </section>

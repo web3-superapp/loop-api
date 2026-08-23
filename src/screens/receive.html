@@ -1,0 +1,25 @@
+      <section class="scr wallet-foundation" id="scr-receive">
+        <div class="pad">
+          <button class="back" type="button" onclick="back()">‹ Back</button>
+          <h1 class="h1" data-route-focus>Receive</h1>
+          <div id="receive-content" aria-live="polite">
+            <p class="wallet-class-line" id="receive-wallet-class"></p>
+            <div class="receive-selectors">
+              <label class="wallet-field">Asset
+                <select id="receive-asset" aria-label="Receive asset"></select>
+              </label>
+              <label class="wallet-field">Network
+                <select id="receive-chain" aria-label="Receive network"></select>
+              </label>
+            </div>
+            <div class="receive-card card">
+              <div id="receive-qr" class="receive-qr"></div>
+              <label class="wallet-field" for="receive-address">Public address</label>
+              <textarea id="receive-address" class="receive-address mono" readonly rows="2" spellcheck="false"></textarea>
+              <button class="btn btn-primary" id="receive-copy" type="button">Copy address</button>
+              <p id="receive-copy-status" class="wallet-action-note" role="status"></p>
+            </div>
+            <p class="receive-warning" id="receive-warning"></p>
+          </div>
+        </div>
+      </section>

@@ -1,0 +1,5 @@
+vendor/qrcode-generator-1.4.4.js
+wallet-provider.js
+wallet-review.js
+wallet-transfer.js
+app.js

@@ -1,0 +1,55 @@
+      <section class="scr" id="scr-token">
+        <div class="pad">
+          <button class="back" onclick="back()">‹ Back</button>
+          <div class="tk-head">
+            <div class="tok-logo" id="tk-logo">G</div>
+            <div>
+              <p style="font-weight:700;font-size:16px" id="tk-name">Glyph</p>
+              <p class="tok-sub"><span class="mono" id="tk-sym">$GLYPH</span><span class="chip" style="padding:2px 8px;font-size:9.5px" id="tk-chain">Ethereum</span></p>
+            </div>
+            <span class="risk-pill risk-med" id="tk-riskpill" style="margin-left:auto">LP unlock 3d</span>
+          </div>
+          <p class="tk-price mono" id="tk-price">$0.00231</p>
+          <p class="tk-chg up" id="tk-chg">▲ +36.2% · 24h</p>
+          <div class="tf-row">
+            <span class="tf">1H</span><span class="tf on">4H</span><span class="tf">1D</span><span class="tf">1W</span><span class="tf">1M</span>
+          </div>
+          <canvas id="chart"></canvas>
+          <div class="tk-stats">
+            <div class="stat"><b id="tk-liq">$4.2M</b><span>Liquidity</span></div>
+            <div class="stat"><b id="tk-hold">28,421</b><span>Holders</span></div>
+            <div class="stat"><b id="tk-vol">$18.7M</b><span>Vol 24h</span></div>
+          </div>
+
+          <!-- No score ring: the old 0–100 dial implied a precision the underlying data does not
+               have. Findings are listed as checkable facts, with a count instead of a grade. -->
+          <div class="h-row" style="margin:22px 0 0">
+            <p class="label" style="margin:0">Contract facts</p>
+            <span class="risk-pill risk-med" id="tk-factcount">2 to review</span>
+          </div>
+          <div class="card">
+            <div id="tk-sec"></div>
+            <p style="font-size:10px;color:var(--tx3);margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+              On-chain facts via contract scan · checked 4 min ago. Not investment advice.
+            </p>
+          </div>
+
+          <p class="label">Community</p>
+          <div class="card">
+            <p style="font-size:13px;color:var(--tx2)"><b style="color:var(--tx)" id="tk-comm-n">12,421 people</b> are discussing this token right now</p>
+            <div class="comm-num">
+              <div><b id="tk-groups">34</b><span>public groups</span></div>
+              <div><b id="tk-ch">128</b><span>channels</span></div>
+              <div><b id="tk-kol">23</b><span>KOLs talking</span></div>
+            </div>
+            <button class="btn btn-ghost" style="width:100%;height:42px;font-size:13px;margin-top:14px" onclick="openGroup()">💬 &nbsp;Join the top group</button>
+          </div>
+
+          <div class="tk-actions">
+            <button class="btn btn-primary buy" id="token-buy" data-requires-signing onclick="openSwap()">Buy</button>
+            <button class="btn btn-ghost b2" id="tk-watch" onclick="toggleWatch(this)">☆ Watch</button>
+            <button class="btn btn-ghost b2" onclick="toast('Price alert armed at ±10%')">🔔 Alert</button>
+          </div>
+          <div style="height:18px"></div>
+        </div>
+      </section>

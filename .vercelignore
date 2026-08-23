@@ -1,0 +1,13 @@
+# Build inputs — app.html / docs.html are the deployed artifacts; sources aren't needed at runtime.
+src/
+fonts.css
+build.py
+build_docs.py
+README.md
+_tmp/
+
+# Markdown is already inlined into docs.html by build_docs.py, so these directories add nothing
+# to the deployment — and 调研/ holds vendor pricing and negotiation notes that should not be
+# reachable by URL guessing.
+文档/
+调研/

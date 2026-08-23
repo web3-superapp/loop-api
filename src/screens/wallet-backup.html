@@ -1,0 +1,34 @@
+      <section class="scr account-screen" id="scr-wallet-backup" aria-labelledby="wallet-backup-title">
+        <div class="account-shell wallet-backup-shell">
+          <div id="backup-choice-view">
+            <p class="account-kicker">Recovery</p>
+            <h1 id="wallet-backup-title" tabindex="-1" data-route-focus>Choose a backup method</h1>
+            <p>Choose how you would recover this simulated wallet.</p>
+            <div class="method-list backup-method-list" aria-label="Wallet backup methods">
+              <button class="method-card" id="backup-recovery-phrase" type="button" data-backup-choice="phrase">
+                <span class="method-copy"><strong>Recovery phrase</strong></span><span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="backup-cloud" type="button" data-backup-choice="cloud-simulated">
+                <span class="method-copy"><strong>Cloud backup</strong></span><span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="backup-social" type="button" data-backup-choice="social-simulated">
+                <span class="method-copy"><strong>Social recovery 2-of-3</strong></span><span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card backup-skip-choice" id="backup-not-now" type="button" data-backup-choice="skipped">
+                <span class="method-copy"><strong>Not now</strong></span><span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+          </div>
+          <div class="state-panel" id="backup-confirmation" hidden>
+            <p class="account-kicker" id="backup-confirm-kicker">Confirmation</p>
+            <h2 id="backup-confirm-title" tabindex="-1"></h2>
+            <p id="backup-confirm-copy"></p>
+            <p class="account-note" id="backup-simulation-note"></p>
+            <div class="account-actions">
+              <button class="btn btn-primary" id="backup-confirm-continue" type="button">Continue</button>
+              <button class="btn btn-danger" id="backup-skip-confirm" type="button" hidden>Skip backup and accept the risk</button>
+              <button class="btn btn-ghost" id="backup-confirm-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </section>

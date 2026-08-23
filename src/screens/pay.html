@@ -1,0 +1,19 @@
+      <section class="scr" id="scr-pay">
+        <div class="pad">
+          <button class="back" onclick="back()">‹ Back</button>
+          <div class="h-row" style="margin-top:10px"><h1 class="h1">扫一扫</h1><span class="chip">Pay</span></div>
+          <p style="font-size:12px;color:var(--tx2);margin-top:5px">Scan a payment QR code</p>
+          <div class="scan-shell">
+            <div class="scan-view">
+              <div class="scan-noise"></div>
+              <div class="scan-frame" aria-label="QR code scan area"><i></i><i></i><i></i><i></i><span class="scan-line"></span></div>
+              <p class="scan-hint">Align the QR code within the frame</p>
+            </div>
+            <div class="scan-actions">
+              <button class="scan-action" onclick="toast('Flashlight toggled · simulated')"><b>⚡</b><span>Flash</span></button>
+              <button class="scan-action" onclick="toast('Choose a QR image · simulated')"><b>▧</b><span>Album</span></button>
+            </div>
+          </div>
+          <div class="scan-safety"><span>🛡️</span><span>The recipient, network and amount are checked against sanctions lists before you confirm.</span></div>
+        </div>
+      </section>

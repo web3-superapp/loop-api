@@ -1,0 +1,18 @@
+      <section class="scr account-screen" id="scr-seed-show" aria-labelledby="seed-show-title">
+        <div class="account-shell seed-show-shell">
+          <p class="account-kicker">Recovery phrase</p>
+          <h1 id="seed-show-title" tabindex="-1" data-route-focus>Write down your recovery words</h1>
+          <div class="state-panel state-panel-danger seed-warning">
+            <p><strong>Keep this phrase private.</strong> These are public prototype-only words. Never use them for a real wallet. HTML cannot block OS screenshots. Native builds must block screenshots, and this phrase hides whenever the tab or app loses visibility. Copy is disabled.</p>
+          </div>
+          <label class="account-check"><input id="seed-show-ack" type="checkbox"> I understand anyone with these words can control the wallet</label>
+          <button class="btn btn-primary" id="seed-show-reveal" type="button" aria-controls="seed-phrase-panel" aria-expanded="false" disabled>Reveal recovery phrase</button>
+          <div class="seed-phrase-panel" id="seed-phrase-panel" role="region" aria-label="Revealed recovery words">
+            <ol id="seed-words" data-sensitive></ol>
+          </div>
+          <label class="account-check"><input id="seed-show-recorded" type="checkbox" disabled> I recorded these words offline</label>
+          <div class="account-actions">
+            <button class="btn btn-primary" id="seed-show-continue" type="button" disabled>Continue</button>
+          </div>
+        </div>
+      </section>

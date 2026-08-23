@@ -1,0 +1,6 @@
+.vercel
+__pycache__/
+_tmp/__pycache__/
+*.py[cod]
+.DS_Store
+._*

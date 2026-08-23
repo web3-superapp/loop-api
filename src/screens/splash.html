@@ -1,0 +1,39 @@
+      <section class="scr account-screen" id="scr-splash" aria-labelledby="splash-title">
+        <div class="account-shell">
+          <div class="account-top">
+            <span class="account-mark" aria-hidden="true">L</span>
+            <div>
+              <p class="account-kicker">Private by default</p>
+              <h1 id="splash-title" tabindex="-1" data-route-focus>LOOP</h1>
+            </div>
+          </div>
+
+          <div class="account-stack" id="splash-normal" data-splash-view="normal">
+            <h2>One secure place for your onchain life.</h2>
+            <p>Checking your session and preparing a private workspace…</p>
+            <div class="account-progress" role="status" aria-live="polite">
+              <span aria-hidden="true"></span>
+              <span id="splash-progress-copy">Checking account status…</span>
+            </div>
+          </div>
+
+          <div class="state-panel state-panel-danger" id="splash-force-update" data-splash-view="force-update" hidden>
+            <p class="account-kicker">Update required</p>
+            <h2>This prototype build is out of date.</h2>
+            <p>An update is required before LOOP can continue. Updates are unavailable in this static prototype.</p>
+            <button class="btn btn-ghost" id="splash-update" type="button" disabled aria-disabled="true">Update unavailable</button>
+          </div>
+
+          <div class="state-panel" id="splash-maintenance" data-splash-view="maintenance" hidden>
+            <p class="account-kicker">Scheduled maintenance</p>
+            <h2>LOOP is taking a short pause.</h2>
+            <p id="splash-maintenance-copy" role="status" aria-live="polite">The service is in maintenance. Your local prototype data is unchanged.</p>
+            <div class="account-actions">
+              <button class="btn btn-primary" id="splash-retry" type="button">Retry status check</button>
+              <button class="btn btn-ghost" id="splash-reset" type="button">Reset demo</button>
+            </div>
+          </div>
+
+          <p class="account-note">Session checks and transitions are simulated locally in this prototype.</p>
+        </div>
+      </section>

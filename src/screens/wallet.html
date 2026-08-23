@@ -1,0 +1,46 @@
+      <section class="scr wallet-foundation" id="scr-wallet">
+        <div class="pad">
+          <div class="h-row">
+            <h1 class="h1" data-route-focus>Wallet</h1>
+            <span class="wallet-class-badge" data-wallet-class></span>
+          </div>
+          <div id="wallet-content" class="wallet-content" aria-live="polite">
+            <div class="wallet-identity card">
+              <p class="wallet-provider-state" data-provider-state></p>
+              <p class="wallet-address-short mono" id="wallet-address-short"></p>
+              <p class="sr-only" data-wallet-address></p>
+            </div>
+            <div class="w-total" id="wallet-total">
+              <p class="label" data-total-provenance></p>
+              <p class="amt" id="wallet-total-value"></p>
+              <p class="wallet-disclosure" id="wallet-total-disclosure"></p>
+            </div>
+            <div class="onboarding-notice" id="watch-only-notice" tabindex="-1" hidden>
+              <span aria-hidden="true">👁️</span>
+              <div><b>Watch-only wallet</b><p>Watch-only wallets cannot sign transactions.</p></div>
+            </div>
+            <div class="wallet-state" id="wallet-state" role="status"></div>
+            <div class="w-actions" id="wallet-actions" aria-label="Wallet actions">
+              <button class="w-act" id="wallet-send" type="button" data-requires-signing><span>Send</span></button>
+              <button class="w-act" id="wallet-receive" type="button"><span>Receive</span></button>
+              <button class="w-act" id="wallet-swap" type="button" data-requires-signing><span>Swap</span></button>
+              <button class="w-act" id="wallet-bridge" type="button" data-requires-signing disabled aria-describedby="wallet-bridge-note"><span>Bridge</span></button>
+            </div>
+            <p class="wallet-action-note" id="wallet-bridge-note">Bridge provider integration is planned for the next slice.</p>
+            <p class="label">Networks</p>
+            <div class="chain-chips" id="wallet-chain-filters" aria-label="Filter assets by network"></div>
+            <p class="label">Assets</p>
+            <div id="wallet-assets" class="wallet-assets"></div>
+            <div class="guard-banner">
+              <span aria-hidden="true">🛡️</span>
+              <div><b>Approval guard is on</b><p>Approval requests use the shared review flow.</p></div>
+            </div>
+            <p class="label">DApp browser · wallet-aware</p>
+            <button class="dapp-row" id="wallet-dapps" type="button" data-requires-signing onclick="openDapp()">
+              <div class="dapp-ic" aria-hidden="true">◇</div>
+              <div><p class="tok-name">DApps</p><p class="tok-sub">Review connected app requests</p></div>
+            </button>
+          </div>
+          <div style="height:16px"></div>
+        </div>
+      </section>

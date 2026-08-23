@@ -1,0 +1,18 @@
+      <section class="scr" id="scr-dapp">
+        <div class="pad">
+          <button class="back" onclick="back()">‹ Back</button>
+          <div class="h-row" style="margin-top:10px"><h1 class="h1">DApp Browser</h1><span class="risk-pill risk-low">🛡 verified domain</span></div>
+          <div class="url-bar"><span class="lock">🔒</span> https://swap.zone <span style="margin-left:auto">⟳</span></div>
+          <div class="wallet-ctx">
+            <span class="chip">👛 0x7c4e…9f21</span><span class="chip">⛓ Ethereum</span><span class="chip">⛽ 14 gwei</span><span class="chip" style="color:var(--amber);border-color:rgba(255,190,85,.3)">3 open approvals</span>
+          </div>
+          <p style="font-size:10.5px;color:var(--tx3);margin-top:8px">The browser knows your wallet, chain, balances and approval history — every request is decoded and simulated before you see it.</p>
+          <div class="dapp-frame">
+            <div class="df-head"><span style="font-size:18px">S</span> Swap.zone <span class="chip" style="margin-left:auto;font-size:9.5px">connected</span></div>
+            <div class="uni-box"><p class="u-l">Sell</p><div class="u-m"><span>1,000</span><b style="font-size:13px">USDC ▾</b></div></div>
+            <div class="uni-box" style="margin-top:-6px"><p class="u-l">Buy · est.</p><div class="u-m"><span>432,900</span><b style="font-size:13px">GLYPH ▾</b></div></div>
+            <button class="uni-cta" id="dapp-approve" data-requires-signing onclick="openApproveSheet()">Review USDC approval</button>
+          </div>
+          <div style="height:16px"></div>
+        </div>
+      </section>

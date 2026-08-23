@@ -1,0 +1,29 @@
+      <section class="scr wallet-foundation" id="scr-asset">
+        <div class="pad">
+          <button class="back" type="button" onclick="back()">‹ Back</button>
+          <div class="asset-heading">
+            <div><p class="eyebrow">Provider asset</p><h1 class="h1" data-route-focus>Asset detail</h1></div>
+            <label class="wallet-field">Network
+              <select id="asset-chain" aria-label="Asset network"></select>
+            </label>
+          </div>
+          <div id="asset-content" aria-live="polite">
+            <div id="asset-summary"></div>
+            <section class="wallet-section" aria-labelledby="asset-holdings-title">
+              <h2 id="asset-holdings-title">Per-chain holdings</h2>
+              <div id="asset-holdings"></div>
+            </section>
+            <section class="wallet-section" aria-labelledby="asset-history-title">
+              <h2 id="asset-history-title">Transaction history</h2>
+              <p id="asset-history-status" role="status"></p>
+              <div id="asset-history"></div>
+              <div id="asset-pagination"></div>
+            </section>
+            <div class="wallet-primary-actions">
+              <button class="btn btn-ghost" id="asset-receive" type="button">Receive</button>
+              <button class="btn btn-primary" id="asset-review-transfer" type="button">Review simulated transfer</button>
+            </div>
+            <p class="wallet-action-note" id="asset-action-note"></p>
+          </div>
+        </div>
+      </section>

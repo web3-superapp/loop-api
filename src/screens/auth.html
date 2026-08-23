@@ -1,0 +1,66 @@
+      <section class="scr account-screen" id="scr-auth" aria-labelledby="auth-title">
+        <div class="account-shell auth-picker">
+          <div class="account-top">
+            <span class="account-mark" aria-hidden="true">L</span>
+            <div>
+              <p class="account-kicker">Sign in or continue</p>
+              <h1 id="auth-title" tabindex="-1" data-route-focus>Welcome to LOOP</h1>
+            </div>
+          </div>
+
+          <div class="account-stack" aria-labelledby="auth-method-heading">
+            <div>
+              <h2 id="auth-method-heading">Choose a secure method</h2>
+              <p>Use an identity or bring an existing wallet.</p>
+            </div>
+
+            <div class="method-list">
+              <button class="method-card" id="auth-email" type="button" data-auth-method="email">
+                <span class="method-icon" aria-hidden="true">@</span>
+                <span class="method-copy"><strong>Email</strong><small>Continue with a one-time code</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="auth-phone" type="button" data-auth-method="phone">
+                <span class="method-icon" aria-hidden="true">#</span>
+                <span class="method-copy"><strong>Phone</strong><small>Continue with a one-time code</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="auth-google" type="button" data-auth-method="google">
+                <span class="method-icon method-icon-google" aria-hidden="true">G</span>
+                <span class="method-copy"><strong>Google</strong><small>Simulated identity sign-in</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="auth-apple" type="button" data-auth-method="apple">
+                <span class="method-icon" aria-hidden="true"></span>
+                <span class="method-copy"><strong>Apple</strong><small>Simulated identity sign-in</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="auth-passkey" type="button" data-auth-method="passkey">
+                <span class="method-icon" aria-hidden="true">◈</span>
+                <span class="method-copy"><strong>Passkey</strong><small>Use this device</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <p class="account-note method-note" id="auth-passkey-note" hidden>Passkeys are not available in this browser.</p>
+              <button class="method-card" id="auth-wallet" type="button" data-auth-method="wallet">
+                <span class="method-icon" aria-hidden="true">◇</span>
+                <span class="method-copy"><strong>External wallet</strong><small>Choose a simulated connection path</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+              <button class="method-card" id="auth-import" type="button" data-auth-method="import">
+                <span class="method-icon" aria-hidden="true">↓</span>
+                <span class="method-copy"><strong>Import wallet</strong><small>Use a recovery phrase later</small></span>
+                <span class="method-progress" data-method-status aria-live="polite"></span>
+                <span class="method-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+          </div>
+
+          <p class="account-note auth-disclosure">Designed for Privy · simulated in this prototype. No identity provider or wallet connection is made.</p>
+        </div>
+      </section>
