@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from platform_policy_test_app import production_policy_test_app
 
 CONTRACT_ONLY = sys.argv[1:] == ['--contract-only']
 if sys.argv[1:] and not CONTRACT_ONLY:
@@ -22,16 +23,17 @@ if not CONTRACT_ONLY:
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / 'src'
 APP = ROOT / 'app.html'
+RUNTIME_APP = production_policy_test_app(ROOT) if not CONTRACT_ONLY else APP
 SCREENS = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
-    'tx-result', 'swap', 'dapp', 'profile',
+    'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
 SCRIPTS = ['vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
-           'wallet-review.js', 'wallet-transfer.js',
-           'stream-chat-provider.js', 'app.js']
+           'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
+           'platform-provider.js', 'platform-offline-fixture.js', 'app.js']
 SHELLS = ('send', 'send-to', 'send-confirm', 'tx-result')
 CANONICAL_STACKS = {
     'send': ['scr-wallet', 'scr-send'],
@@ -4354,8 +4356,8 @@ if CONTRACT_ONLY:
 print('== Transfer source/build contract ==')
 screen_manifest = lines(SRC / 'screens-order.txt')
 script_manifest = lines(SRC / 'scripts-order.txt')
-check(screen_manifest == SCREENS, f'exact pinned 26-screen order: {screen_manifest}')
-check(script_manifest == SCRIPTS, f'exact pinned six-script order: {script_manifest}')
+check(screen_manifest == SCREENS, f'exact pinned 30-screen order: {screen_manifest}')
+check(script_manifest == SCRIPTS, f'exact pinned eight-script order: {script_manifest}')
 screen_sources = sorted(p.stem for p in (SRC / 'screens').glob('*.html')
                         if not p.name.startswith('._'))
 script_sources = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob('*.js')
@@ -4463,16 +4465,16 @@ check(storage_route_mutation != app_source and
       any('executable' in item or 'reference' in item for item in
           security_findings(fragments, storage_route_mutation, transfer_source)),
       'dormant ROUTES localStorage mutation fails the semantic security gate')
-check('length>22' not in app_source and app_source.count('length>26') == 3,
-      'all three navigation/F11 stack bounds use the 26-screen limit')
+check(app_source.count('length>26') == 3 and 'length>30' not in app_source,
+      'all three navigation/F11 stack bounds retain the approved 26-entry limit')
 
 build_source = (ROOT / 'build.py').read_text()
-check('exact pinned 26-screen order' in build_source, 'builder pins 26-screen error text')
-check('exact pinned six-script order' in build_source, 'builder pins six-script error text')
+check('exact pinned 30-screen order' in build_source, 'builder pins 30-screen error text')
+check('exact pinned eight-script order' in build_source, 'builder pins eight-script error text')
 build = subprocess.run([sys.executable, 'build.py'], cwd=ROOT, text=True,
                        capture_output=True, check=False)
-check(build.returncode == 0 and '26 screens' in build.stdout,
-      f'build succeeds at 26 screens: {(build.stderr or build.stdout).strip()}')
+check(build.returncode == 0 and '30 screens' in build.stdout,
+      f'build succeeds at 30 screens: {(build.stderr or build.stdout).strip()}')
 
 print('\n== Frozen minimal facade ==')
 probe = subprocess.run(['node', '-e', r"""
@@ -4486,8 +4488,8 @@ check(probe.returncode == 0, 'constructors return separate frozen empty shells')
 
 print('\n== F11 review-origin stack bound ==')
 check("stack=array(item.stack,26,'stack')" in review_source and
-      "stack=array(item.stack,22,'stack')" not in review_source,
-      'wallet-review origin pins the 26-screen stack bound')
+      "stack=array(item.stack,30,'stack')" not in review_source,
+      'wallet-review origin retains the approved 26-entry stack bound')
 review_probe = subprocess.run(['node', '-e', r"""
 require(process.argv[1]);
 require(process.argv[2]);
@@ -4501,11 +4503,17 @@ const open=n=>R.createController({adapter:P.createSimulatedAdapter({
     origin:{stack:Array.from({length:n},(_,index)=>`scr-level-${index}`),voice},
     live_context:live,trigger_ref:'fixture-trigger',now_ms:100001});
 const bounded=[23,24,25,26].map(n=>open(n));
-const overflow=open(27);
+const overflow=[27,28,29,30].map(n=>open(n));
+const excluded=['scr-notifications','scr-search','scr-privacy','scr-security'].map(screen=>
+  R.createController({adapter:P.createSimulatedAdapter({
+    walletClass:'privy_embedded',scenario:'normal'})}).open({
+      review_id:'review-transfer',origin:{stack:[screen],voice},live_context:live,
+      trigger_ref:'fixture-trigger',now_ms:100001}));
 process.stdout.write(JSON.stringify({
   bounded:bounded.map(result=>result.ok),
   bounded_codes:bounded.map(result=>result.error?.code||null),
-  overflow:!overflow.ok&&overflow.error?.code==='INVALID_REQUEST'
+  overflow:overflow.map(result=>!result.ok&&result.error?.code==='INVALID_REQUEST'),
+  excluded:excluded.map(result=>!result.ok&&result.error?.code==='INVALID_REQUEST')
 }));
 """, str(SRC / 'wallet-provider.js'), str(review)], cwd=ROOT,
                               capture_output=True, text=True, check=False)
@@ -4516,9 +4524,10 @@ except json.JSONDecodeError:
 check(review_probe.returncode == 0 and review_result == {
           'bounded': [True, True, True, True],
           'bounded_codes': [None, None, None, None],
-          'overflow': True,
+          'overflow': [True, True, True, True],
+          'excluded': [True, True, True, True],
       },
-      'F11 origin accepts legal 23-26 layer stacks and rejects >26: '
+      'F11 origin accepts <=26 and rejects synthetic 27-30 layer stacks: '
       f'{review_result or review_probe.stderr.strip()}')
 
 print('\n== Direct-link route shells ==')
@@ -4535,7 +4544,7 @@ if build.returncode == 0 and APP.is_file():
         page.on('request', lambda request: requests.append(request.url))
         for name in SHELLS:
             page.goto('about:blank')
-            page.goto(f'{APP.as_uri()}#{name}')
+            page.goto(f'{RUNTIME_APP.as_uri()}#{name}')
             page.wait_for_load_state('networkidle')
             page.wait_for_timeout(300)
             active = page.evaluate("""() => [...document.querySelectorAll('.scr')]
@@ -4561,7 +4570,7 @@ if build.returncode == 0 and APP.is_file():
                 check('unavailable' in status.lower(),
                       f'#{name} honestly reports unavailable: {status!r}')
         page.goto('about:blank')
-        page.goto(f'{APP.as_uri()}#send-confirm')
+        page.goto(f'{RUNTIME_APP.as_uri()}#send-confirm')
         page.wait_for_load_state('networkidle')
         f5_projection = page.evaluate("""() => {
           const projection=sanitizeReviewProjectionForWrite.projection(history.state);
@@ -4575,8 +4584,10 @@ if build.returncode == 0 and APP.is_file():
             voice:{state:'idle',open:false,minimized:false,muted:false}});
           return projection.stack.length===1&&projection.stack[0]===screen;
         })""", [f'scr-{name}' for name in SCREENS])
-        check(accepted_screens == [f'scr-{name}' for name in SCREENS],
-              f'F11 projection knows all 26 manifest screens: {accepted_screens}')
+        expected_review_origins = [f'scr-{name}' for name in SCREENS
+                                   if name not in ('notifications', 'search', 'privacy', 'security')]
+        check(accepted_screens == expected_review_origins,
+              f'F11 projection excludes four non-wallet platform routes: {accepted_screens}')
         non_file_requests = [url for url in requests if not url.startswith('file:')]
         console_errors = [item for item in console_messages if item['type'] == 'error']
         check(not errors and not console_errors,

@@ -1,0 +1,21 @@
+      <section class="scr platform-screen" id="scr-privacy">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">H3 · server authority</p><h1 class="h1" data-route-focus tabindex="-1">Privacy center</h1></div>
+            <span class="platform-fixture-badge">Fail closed</span>
+          </div>
+          <p class="platform-disclosure">Visibility is projected locally for review. Production export, deletion and group allowlists must be enforced asynchronously by the selected provider/server.</p>
+          <div class="card platform-settings-card">
+            <div class="set-row"><div><p class="sr-t">Anonymous chat alias</p><p class="sr-s">Address disclosure remains off.</p></div><span class="risk-pill risk-low">On</span></div>
+            <div class="set-row"><div><p class="sr-t">Portfolio Broadcast</p><p class="sr-s">Group allowlist authority is not configured.</p></div><span class="risk-pill risk-med">Off</span></div>
+            <div class="set-row"><div><p class="sr-t">Visibility matrix</p><p class="sr-s">Wallet public · positions private · chat alias only.</p></div><span class="chip">Fixture</span></div>
+          </div>
+          <p class="label">Your provider data</p>
+          <div class="platform-action-grid">
+            <button class="btn btn-ghost" id="privacy-export" type="button" data-provider-mutation="privacy_mutation" data-privacy-operation="export">Request export</button>
+            <button class="btn btn-danger" id="privacy-delete" type="button" data-provider-mutation="privacy_mutation" data-privacy-operation="delete">Request deletion</button>
+          </div>
+          <p id="privacy-operation-status" class="platform-status" role="status" aria-live="polite">PENDING · no provider/server operation has run.</p>
+        </div>
+      </section>

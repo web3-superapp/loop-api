@@ -28,6 +28,60 @@ const TOKENS = {
 const MKT = ['ETH','SOL','GLYPH','PXL'];
 
 /* ---------- app state (single source of truth) ---------- */
+const REGIONAL_BLOCKED_SESSION_KEY='loop.prototype.regional-blocked.v1';
+const REGIONAL_PROBE_SESSION_KEY='loop.prototype.regional-probe.v1';
+const regionalSessionAuthority=(()=>{
+  let storageReadable=false,storageWritable=false,roundtripConfirmed=false;
+  let trusted=true,storageRef=null,blockedObserved=false,probeOrdinal=0;
+  const snapshot=()=>Object.freeze({storageReadable,storageWritable,
+    roundtripConfirmed,trusted:trusted&&storageReadable&&storageWritable&&
+      roundtripConfirmed,blockedObserved});
+  const distrust=({readable=storageReadable}={})=>{
+    storageReadable=readable;storageWritable=false;roundtripConfirmed=false;
+    trusted=false;return snapshot();
+  };
+  const probeValue=()=>`regional-roundtrip:${String(performance.timeOrigin)}:`+
+    `${String(performance.now())}:${String(probeOrdinal+=1)}`;
+  function recheck(){
+    if(!trusted)return snapshot();
+    let store;
+    try{store=globalThis.sessionStorage}catch(_error){return distrust({readable:false})}
+    if(!store||typeof store!=='object'||(storageRef&&store!==storageRef))
+      return distrust({readable:false});
+    storageRef=store;
+    let previous;
+    try{previous=store.getItem(REGIONAL_PROBE_SESSION_KEY);storageReadable=true}
+    catch(_error){return distrust({readable:false})}
+    const value=probeValue();
+    try{
+      store.setItem(REGIONAL_PROBE_SESSION_KEY,value);
+      if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==value)return distrust();
+      if(previous===null){
+        store.removeItem(REGIONAL_PROBE_SESSION_KEY);
+        if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==null)return distrust();
+      }else{
+        store.setItem(REGIONAL_PROBE_SESSION_KEY,previous);
+        if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==previous)return distrust();
+      }
+      storageWritable=true;roundtripConfirmed=true;
+      blockedObserved=blockedObserved||
+        store.getItem(REGIONAL_BLOCKED_SESSION_KEY)==='1';
+      return snapshot();
+    }catch(_error){return distrust()}
+  }
+  function persistBlocked(){
+    const current=recheck();
+    if(!current.trusted)return current;
+    try{
+      storageRef.setItem(REGIONAL_BLOCKED_SESSION_KEY,'1');
+      if(storageRef.getItem(REGIONAL_BLOCKED_SESSION_KEY)!=='1')return distrust();
+      blockedObserved=true;return snapshot();
+    }catch(_error){return distrust()}
+  }
+  recheck();
+  return Object.freeze({snapshot,recheck,persistBlocked});
+})();
+let regionalBlockedLatch=regionalSessionAuthority.snapshot().blockedObserved;
 const ROUTES = {
   splash:{screen:'scr-splash',stack:['scr-splash'],parent:null,account:true},
   auth:{screen:'scr-auth',stack:['scr-auth'],parent:'splash',account:true},
@@ -45,6 +99,8 @@ const ROUTES = {
   wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
   profile:{screen:'scr-profile',stack:['scr-profile'],root:true},
   pay:{screen:'scr-pay',stack:['scr-home','scr-pay']},
+  notifications:{screen:'scr-notifications',stack:['scr-home','scr-notifications']},
+  search:{screen:'scr-search',stack:['scr-home','scr-search']},
   token:{screen:'scr-token',stack:['scr-market','scr-token']},
   group:{screen:'scr-group',stack:['scr-chat','scr-group']},
   voiceroom:{screen:'scr-group',stack:['scr-chat','scr-group']},
@@ -55,8 +111,16 @@ const ROUTES = {
   receive:{screen:'scr-receive',stack:['scr-wallet','scr-receive']},
   'tx-result':{screen:'scr-tx-result',stack:['scr-wallet','scr-tx-result']},
   swap:{screen:'scr-swap',stack:['scr-wallet','scr-swap']},
-  dapp:{screen:'scr-dapp',stack:['scr-wallet','scr-dapp']}
+  dapp:{screen:'scr-dapp',stack:['scr-wallet','scr-dapp']},
+  privacy:{screen:'scr-privacy',stack:['scr-profile','scr-privacy']},
+  security:{screen:'scr-security',stack:['scr-profile','scr-security']}
 };
+const PLATFORM_ADAPTER=globalThis.LoopPlatformOfflineFixture.createAdapter();
+const PRODUCTION_REGIONAL_POLICY=
+  globalThis.LoopPlatformProvider.consumeProductionRegionalPolicy();
+const PLATFORM_RUNTIME=PRODUCTION_REGIONAL_POLICY?'production_injected':'offline_fixture';
+const REGIONAL_POLICY=PRODUCTION_REGIONAL_POLICY||
+  globalThis.LoopPlatformOfflineFixture.regionalPolicy();
 const WALLET_ROUTE_DEFAULT=Object.freeze({asset:'ETH',chain:'ethereum'});
 const WALLET_ASSET_IDS=Object.freeze(['ETH','SOL','USDC','GLYPH']);
 const WALLET_CHAIN_IDS=Object.freeze(['ethereum','base','arbitrum','solana']);
@@ -95,6 +159,9 @@ const SCREEN_HASH = Object.entries(ROUTES).reduce((hashes,[hash,route])=>{
   return hashes;
 },{});
 const KNOWN_SCREENS = new Set(Object.values(ROUTES).flatMap(route=>route.stack));
+const REVIEW_ORIGIN_EXCLUDED = new Set([
+  'scr-notifications','scr-search','scr-privacy','scr-security'
+]);
 const SS_KEY = 'loop.proto.state';
 const ONBOARDING_KEYS={complete:'loop.proto.onboarding.complete',backupIncomplete:'loop.proto.onboarding.backupIncomplete',watchOnly:'loop.proto.onboarding.watchOnly',recoveryMethod:'loop.proto.onboarding.recoveryMethod'};
 const ONBOARDING_PREFIX = 'loop.proto.onboarding.';
@@ -1093,7 +1160,8 @@ function focusActiveScreen({backupChoice=''}={}){
       ? watchNotice : document.getElementById('home-title'))
     : screen.querySelector('[data-route-focus]')||screen.querySelector('h1,h2')||
       screen.querySelector('input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button:not(:disabled)');
-  if(screen.id!=='scr-home'&&!screen.classList.contains('account-screen')) return;
+  if(screen.id!=='scr-home'&&!screen.classList.contains('account-screen')&&
+     !screen.classList.contains('platform-screen')) return;
   if(target?.matches('h1,h2')&&!target.hasAttribute('tabindex')) target.setAttribute('tabindex','-1');
   let focusImmediately=screen.id==='scr-home';
   if(screen.id==='scr-wallet-backup'){
@@ -1460,7 +1528,9 @@ function render(){
 
   renderVoice();
   renderOnboardingFlags();
+  renderPlatformScreen(cur);
   renderWalletFoundation(cur);
+  applyRegionalCapabilityGates();
 }
 
 function walletPairCompatible(asset,chain){
@@ -2111,6 +2181,11 @@ function renderWalletSigningCapabilities(){
 }
 function walletSigningAllowed(controlId){
   const control=document.getElementById(controlId);
+  const regional=regionalCapabilityDecision(control,{recheck:true});
+  if(control&&!regional.allowed){
+    applyRegionalControlDecision(control,regional);
+    return false;
+  }
   const decision=walletSigningDecision(control);
   if(control) applySigningControlDecision(control,decision);
   if(!decision.allowed&&decision.reason!=='bridge'){
@@ -2153,7 +2228,8 @@ const sanitizeReviewProjectionForWrite=(()=>{
     'scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify',
     'scr-wallet-import','scr-home','scr-pay','scr-market','scr-token','scr-launchpad',
     'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
-    'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile']);
+    'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile',
+  ]);
   const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
   const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
   const includes=(values,value)=>{
@@ -2243,7 +2319,7 @@ const sanitizeReviewProjectionForWrite=(()=>{
   const clear=()=>{ownedOrigin=null};
   return freeze({projection,marker,captureOrigin,origin,clear});
 })();
-const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',
+const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',policyOperation:'',
   returningId:'',cancellingId:'',triggerId:'',originEntryKey:'',markerEntryKey:'',markerIssued:false,
   fallbackAllowed:false,result:null,expiryTimer:null,
   legacyVeilOwned:false,background:new Map()});
@@ -2561,6 +2637,12 @@ function renderReviewResult(result,{focus=false}={}){
   if(focus)document.getElementById('review-cancel').focus({preventScroll:true});
 }
 function openWalletReview(reviewId,trigger=document.activeElement){
+  const policyOperation=reviewOperation(reviewId);
+  const regional=regionalOperationDecision({capability:'wallet_mutation',
+    operation:policyOperation,stage:'review_open'});
+  if(!regional.allowed){
+    terminateReviewForRegionalPolicy(reviewId,regional);return false;
+  }
   const controller=ensureReviewController();
   const live=currentReviewLive(reviewId);
   const origin=sanitizeReviewProjectionForWrite.captureOrigin(reviewOriginProjection());
@@ -2572,7 +2654,8 @@ function openWalletReview(reviewId,trigger=document.activeElement){
   const result=controller?.open({review_id:reviewId,origin,live_context:live,
     trigger_ref:reviewRuntime.triggerId||'review-trigger',now_ms:reviewNow()})||null;
   if(!result?.ok){renderReviewResult(result,{focus:true});return false}
-  reviewRuntime.openId=reviewId;reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  reviewRuntime.openId=reviewId;reviewRuntime.policyOperation=policyOperation;
+  reviewRuntime.returningId='';reviewRuntime.cancellingId='';
   renderReviewResult(result,{focus:true});
   try{
     history.pushState(sanitizeReviewProjectionForWrite.marker(origin,reviewId),'',location.href);
@@ -2618,6 +2701,9 @@ function continueWalletReview(){
   const id=reviewRuntime.openId;
   if(!id||reviewRuntime.returningId||reviewRuntime.cancellingId||
      !reviewRuntime.controller)return;
+  const regional=regionalOperationDecision({capability:'wallet_mutation',
+    operation:reviewRuntime.policyOperation||reviewOperation(id),stage:'begin_handoff'});
+  if(!regional.allowed){terminateReviewForRegionalPolicy(id,regional);return}
   const marker=reviewMarkerInfo(history.state).snapshot;
   const candidateProjection=marker&&marker.review_id===id?
     {stack:marker.stack,voice:marker.voice}:null;
@@ -2699,9 +2785,21 @@ function showReviewProviderState(result){
   banner.textContent=result.ok?result.value.safe_message:result.error.safe_message;
   banner.hidden=false;
 }
+function terminateReviewForRegionalPolicy(reviewId,decision){
+  if(reviewId)reviewRuntime.controller?.consume({review_id:reviewId});
+  reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  reviewRuntime.policyOperation='';reviewRuntime.result=null;clearReviewEntryProof();
+  closeReviewSurface(true);
+  const banner=document.getElementById('review-provider-banner');
+  if(banner){banner.dataset.state='provider_blocked';
+    banner.textContent=`Blocked · ${decision?.reason||'Regional eligibility is unavailable.'}`;
+    banner.hidden=false}
+  applyRegionalCapabilityGates();
+}
 function completeReviewOriginReturn(origin){
   const id=reviewRuntime.returningId;
   if(!id)return;
+  const operation=reviewRuntime.policyOperation||reviewOperation(id);
   reviewRuntime.returningId='';reviewRuntime.cancellingId='';
   closeReviewSurface(true);reviewRuntime.openId='';reviewRuntime.result=null;
   clearReviewEntryProof();
@@ -2709,11 +2807,19 @@ function completeReviewOriginReturn(origin){
   const live=currentReviewLive(id);
   const now=reviewNow();
   queueMicrotask(()=>{
+    const regional=regionalOperationDecision({capability:'wallet_mutation',
+      operation,stage:'provider_handoff'});
+    if(!regional.allowed){terminateReviewForRegionalPolicy(id,regional);return}
     const request={review_id:id,live_context:live,origin,now_ms:now};
     const pending=controller.handoff(request);
     showReviewProviderState(pending);
     if(!pending.ok||pending.value.state!=='handoff_pending')return;
-    queueMicrotask(()=>showReviewProviderState(controller.handoff(request)));
+    queueMicrotask(()=>{
+      const finalRegional=regionalOperationDecision({capability:'wallet_mutation',
+        operation,stage:'provider_handoff'});
+      if(!finalRegional.allowed){terminateReviewForRegionalPolicy(id,finalRegional);return}
+      showReviewProviderState(controller.handoff(request));
+    });
   });
 }
 function consumeReviewForNavigation(){
@@ -2723,7 +2829,7 @@ function consumeReviewForNavigation(){
   }
   reviewRuntime.controller?.consume({review_id:reviewRuntime.openId});
   reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
-  reviewRuntime.result=null;
+  reviewRuntime.policyOperation='';reviewRuntime.result=null;
   clearReviewEntryProof();
   closeReviewSurface(false);
 }
@@ -2769,7 +2875,8 @@ function snapshotReviewStack(candidate){
       return null;
     }
     const value=expected.slice(0,-1).map(key=>descriptors[key].value);
-    return isValidStack(value)?value:null;
+    return isValidStack(value)&&!value.some(screen=>REVIEW_ORIGIN_EXCLUDED.has(screen))?
+      value:null;
   }catch(error){return null}
 }
 function reviewMarkerInfo(candidate){
@@ -3381,6 +3488,141 @@ function renderWalletFoundation(screen){
 }
 
 /* ---------- market list + sparklines ---------- */
+let notificationFilter='all';
+function platformElement(tag,className,text){
+  const element=document.createElement(tag);
+  if(className) element.className=className;
+  if(text!==undefined) element.textContent=text;
+  return element;
+}
+const PLATFORM_SEARCH_ROUTE_BY_KIND=Object.freeze({token:'token',contract:'token',
+  group:'chat',user:'profile',perp:'market'});
+function resolvePlatformSearchRoute(item){
+  try{
+    if(!item||typeof item!=='object'||Array.isArray(item)||!Object.isFrozen(item)||
+       Object.getPrototypeOf(item)!==Object.prototype)return '';
+    const descriptors=Object.getOwnPropertyDescriptors(item);
+    const keys=Reflect.ownKeys(descriptors);
+    const expected=['id','authority','kind','title','subtitle','route'];
+    if(keys.length!==expected.length||expected.some(key=>
+      !descriptors[key]||!Object.prototype.hasOwnProperty.call(descriptors[key],'value')))return '';
+    const kind=descriptors.kind.value,target=PLATFORM_SEARCH_ROUTE_BY_KIND[kind];
+    if(!target||descriptors.route.value!=='#'+target||!ROUTES[target]||
+       ROUTES[target].account||ROUTES[target].sensitive)return '';
+    const canonical=strictHashRoute(target);
+    if(canonical.target!==target||canonical.canonical!==target||
+       guardAccountRoute(target)!==target)return '';
+    return target;
+  }catch(_error){return ''}
+}
+function openPlatformRoute(candidate){
+  const target=typeof candidate==='string'&&
+    ['search','notifications','privacy','security'].includes(candidate)?candidate:
+    resolvePlatformSearchRoute(candidate);
+  if(!target||!ROUTES[target]||ROUTES[target].account||ROUTES[target].sensitive)return false;
+  const guarded=guardAccountRoute(target);
+  if(guarded!==target)return false;
+  navigate(ROUTES[target].stack.slice());return true;
+}
+async function renderNotifications(){
+  const list=document.getElementById('notifications-list');
+  const status=document.getElementById('notifications-status');
+  if(!list||!status)return;
+  status.textContent='Loading bounded provider projections…';list.replaceChildren();
+  try{
+    const response=await PLATFORM_ADAPTER.notifications({limit:20});
+    if(activeScr()!=='scr-notifications')return;
+    const items=response.items.filter(item=>notificationFilter==='all'||
+      item.category===notificationFilter);
+    status.textContent=items.length
+      ?`${items.length} fixture events · durable read sync PENDING`
+      :'No fixture events in this category.';
+    items.forEach(item=>{
+      const article=platformElement('article','platform-row');
+      const head=platformElement('div','platform-row-head');
+      head.append(platformElement('span',`platform-kind kind-${item.category}`,item.category),
+        platformElement('time','',item.occurred_at.slice(11,16)));
+      article.append(head,platformElement('h2','',item.title),
+        platformElement('p','',item.detail),
+        platformElement('small','',`${item.authority} official-event fixture · ${item.read?'read projection':'unread projection'}`));
+      list.append(article);
+    });
+  }catch(_error){status.textContent='Provider notification projection unavailable.'}
+}
+async function submitPlatformSearch(){
+  const input=document.getElementById('platform-search-input');
+  const status=document.getElementById('platform-search-status');
+  const list=document.getElementById('platform-search-results');
+  const query=input.value.trim();
+  list.replaceChildren();
+  if(!query){status.textContent='Enter a query.';input.focus();return}
+  status.textContent='Searching up to 4 injected providers…';
+  try{
+    const response=await PLATFORM_ADAPTER.search({query});
+    if(activeScr()!=='scr-search')return;
+    status.textContent=response.results.length
+      ?`${response.results.length} offline fixture results · no LOOP index`
+      :'No provider fixture results.';
+    response.results.forEach(item=>{
+      const button=platformElement('button','platform-row platform-result');
+      button.type='button';
+      button.append(platformElement('span','platform-kind',item.kind),
+        platformElement('h2','',item.title),platformElement('p','',item.subtitle),
+        platformElement('small','',`${item.authority} projection`));
+      button.addEventListener('click',()=>openPlatformRoute(item));
+      list.append(button);
+    });
+  }catch(_error){status.textContent='Search provider projection unavailable.'}
+}
+async function renderSecurityFacts(){
+  const capabilities=document.getElementById('privy-security-capabilities');
+  const list=document.getElementById('security-facts');
+  const status=document.getElementById('security-facts-status');
+  if(!capabilities||!list||!status)return;
+  capabilities.replaceChildren();list.replaceChildren();
+  status.textContent='Loading Privy security capabilities and secondary facts…';
+  try{
+    const [privy,response]=await Promise.all([
+      PLATFORM_ADAPTER.privySecurity(),PLATFORM_ADAPTER.securityFacts()
+    ]);
+    if(activeScr()!=='scr-security')return;
+    status.textContent=`Privy: ${privy.capabilities.length} capability states · ${response.facts.length} secondary facts`;
+    privy.capabilities.forEach(item=>{
+      const row=platformElement('div','set-row');
+      const copy=platformElement('div');
+      copy.append(platformElement('p','sr-t',item.label),platformElement('p','sr-s',item.detail));
+      row.append(copy,platformElement('span',item.state==='PENDING'?
+        'risk-pill risk-med':'chip',item.state));capabilities.append(row);
+    });
+    response.facts.forEach(item=>{
+      const article=platformElement('article','platform-row');
+      const head=platformElement('div','platform-row-head');
+      head.append(platformElement('span',`platform-kind severity-${item.severity}`,item.authority),
+        platformElement('time','',item.observed_at.slice(11,16)));
+      article.append(head,platformElement('h2','',item.label),
+        platformElement('p','',item.value));list.append(article);
+    });
+  }catch(_error){status.textContent='Privy security authority unavailable · H5 fails closed.'}
+}
+async function requestPrivacy(kind){
+  const status=document.getElementById('privacy-operation-status');
+  const policy=regionalOperationDecision({capability:'privacy_mutation',
+    operation:`privacy_${kind}`,stage:'provider_mutation'});
+  if(!policy.allowed){
+    status.textContent=`Blocked · ${policy.reason}`;applyRegionalCapabilityGates();return;
+  }
+  status.textContent='Checking provider/server capability…';
+  try{
+    const response=await PLATFORM_ADAPTER.requestPrivacyOperation({kind});
+    if(activeScr()!=='scr-privacy')return;
+    status.textContent=`${response.status} · ${kind} was not submitted; no mutation occurred.`;
+  }catch(_error){status.textContent='PENDING · provider/server capability unavailable.'}
+}
+function renderPlatformScreen(screen){
+  if(screen==='scr-notifications')renderNotifications();
+  if(screen==='scr-search')submitPlatformSearch();
+  if(screen==='scr-security')renderSecurityFacts();
+}
 function rng(seed){let s=seed*9301+49297;return()=>{s=(s*1664525+1013904223)>>>0;return s/2**32}}
 function series(seed,drift,n){const r=rng(seed);let v=50,out=[];for(let i=0;i<n;i++){v=Math.max(8,v+(r()-drift)*-9);out.push(v)}return out}
 function sparkSVG(t){
@@ -3694,6 +3936,183 @@ function shuffleAlias(){ai=(ai+1)%ALIASES.length;const a=ALIASES[ai];
 let toastT;
 function toast(msg){const t=document.getElementById('toast');t.textContent=String(msg);t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2600)}
 
+/* ---------- global provider/system states ---------- */
+const GLOBAL_BLOCKING_IDS=['global-server-error','global-region-restriction','force-update-dialog'];
+function reviewOperation(reviewId){
+  if(typeof reviewId!=='string')return 'unknown_review';
+  if(reviewId.startsWith('review-transfer'))return 'transfer';
+  if(reviewId.startsWith('review-swap'))return 'swap';
+  if(reviewId.startsWith('review-approve'))return 'approval';
+  if(reviewId.startsWith('review-perp'))return 'perp_order';
+  return 'unknown_review';
+}
+function regionalControlOperation(control){
+  if(control?.dataset?.privacyOperation)return `privacy_${control.dataset.privacyOperation}`;
+  if(control?.id==='review-continue')return reviewRuntime.policyOperation||
+    reviewOperation(reviewRuntime.openId);
+  return typeof control?.id==='string'&&control.id?`control_${control.id}`:'unknown_operation';
+}
+function latchRegionalBlock(decision){
+  if(decision?.state!=='blocked'||decision.verified!==true)return;
+  regionalBlockedLatch=true;
+  regionalSessionAuthority.persistBlocked();
+}
+function refreshRegionalBlockedSessionLatch(){
+  const storage=regionalSessionAuthority.recheck();
+  if(storage.blockedObserved)regionalBlockedLatch=true;
+  return Object.freeze({latched:regionalBlockedLatch,storage});
+}
+function regionalStorageUnavailableDecision(){
+  return Object.freeze({allowed:false,state:'unknown',revision:0,policy_id:'',
+    verified:false,source:'regional_storage_unavailable',
+    reason:'Regional eligibility cannot be verified because session persistence is unavailable.'});
+}
+function regionalLatchedDecision(decision,storage=regionalSessionAuthority.snapshot()){
+  latchRegionalBlock(decision);
+  if(storage.blockedObserved)regionalBlockedLatch=true;
+  if(regionalBlockedLatch){
+    return Object.freeze({allowed:false,state:'blocked',revision:decision?.revision||0,
+      policy_id:decision?.policy_id||'',verified:true,source:'session_blocked_latch',
+      reason:'Regional policy blocked this session. Reload and history cannot restore restricted actions.'});
+  }
+  if(!storage.trusted)return regionalStorageUnavailableDecision();
+  return decision;
+}
+function regionalOperationDecision({capability,operation,stage}){
+  try{
+    const persistence=refreshRegionalBlockedSessionLatch();
+    if(persistence.latched)return regionalLatchedDecision(
+      REGIONAL_POLICY.decision({capability}),persistence.storage);
+    if(!persistence.storage.trusted)return regionalStorageUnavailableDecision();
+    const decision=REGIONAL_POLICY.recheck({capability,operation,stage});
+    if(!decision||!Object.isFrozen(decision)||typeof decision.allowed!=='boolean'||
+       typeof decision.reason!=='string'||typeof decision.state!=='string'||
+       typeof decision.verified!=='boolean')throw new TypeError('regional decision');
+    return regionalLatchedDecision(decision,persistence.storage);
+  }catch(_error){
+    return regionalLatchedDecision(Object.freeze({allowed:false,state:'unknown',revision:0,
+      policy_id:'',verified:false,source:'regional_policy_unavailable',
+      reason:'Regional eligibility is unavailable.'}));
+  }
+}
+function regionalCapabilityDecision(control,{recheck=false}={}){
+  try{
+    const capability=control?.hasAttribute('data-requires-signing')?
+      'wallet_mutation':control?.dataset?.providerMutation||'';
+    const decision=recheck?regionalOperationDecision({capability,
+      operation:regionalControlOperation(control),stage:'entry_gate'}):
+      regionalLatchedDecision(REGIONAL_POLICY.decision({capability}));
+    if(!decision||!Object.isFrozen(decision)||typeof decision.allowed!=='boolean'||
+       typeof decision.reason!=='string'||typeof decision.state!=='string'||
+       typeof decision.verified!=='boolean'){
+      return Object.freeze({allowed:false,state:'unknown',
+        reason:'Regional eligibility is unavailable.'});
+    }
+    return decision;
+  }catch(_error){
+    return Object.freeze({allowed:false,state:'unknown',
+      reason:'Regional eligibility is unavailable.'});
+  }
+}
+function applyRegionalControlDecision(control,decision){
+  control.setAttribute('data-regional-policy-control',
+    control.hasAttribute('data-requires-signing')?
+      'wallet_mutation':control.dataset.providerMutation||'unknown');
+  if(decision.allowed){
+    if(control.getAttribute('aria-describedby')==='regional-policy-explanation'){
+      control.removeAttribute('aria-describedby');control.removeAttribute('aria-disabled');
+      if(control.hasAttribute('data-provider-mutation'))control.disabled=false;
+      else applySigningControlDecision(control,walletSigningDecision(control));
+    }
+    return;
+  }
+  control.disabled=true;control.setAttribute('aria-disabled','true');
+  control.setAttribute('aria-describedby','regional-policy-explanation');
+}
+function applyRegionalCapabilityGates(){
+  const controls=[...document.querySelectorAll(
+    '[data-requires-signing],[data-provider-mutation]')];
+  let blocked=false;
+  controls.forEach(control=>{
+    const decision=regionalCapabilityDecision(control);blocked=blocked||!decision.allowed;
+    applyRegionalControlDecision(control,decision);
+  });
+  const explanation=document.getElementById('regional-policy-explanation');
+  if(explanation){
+    const snapshot=REGIONAL_POLICY.snapshot();
+    explanation.textContent=blocked?
+      `Regional policy (${snapshot.state}) prevents restricted actions.`:'';
+    explanation.hidden=!blocked;
+  }
+}
+function clearSystemQuery(){
+  const url=new URL(location.href);url.searchParams.delete('system');
+  history.replaceState(history.state,'',url.pathname+url.search+url.hash);
+}
+function hideGlobalSystemStates(){
+  document.getElementById('global-offline-banner').hidden=true;
+  GLOBAL_BLOCKING_IDS.forEach(id=>{
+    const surface=document.getElementById(id);surface.hidden=true;
+    surface.setAttribute('inert','');surface.setAttribute('aria-hidden','true');
+  });
+  const viewport=document.getElementById('viewport-shell');
+  viewport.removeAttribute('inert');viewport.removeAttribute('aria-hidden');
+}
+function recoverGlobalSystemState({home=false,preserveRestriction=false}={}){
+  if(!preserveRestriction)clearSystemQuery();
+  hideGlobalSystemStates();
+  if(preserveRestriction)document.getElementById('phone').dataset.regionalRestriction='active';
+  if(home&&activeScr()!=='scr-home')navigate(ROUTES.home.stack.slice(),{replace:true});
+  focusActiveScreen();
+}
+function activateOfflineReadOnlyPreview(){
+  const status=document.getElementById('global-offline-preview-status');
+  if(PLATFORM_RUNTIME!=='offline_fixture'||
+     typeof REGIONAL_POLICY.activateReadOnlyPreview!=='function'){
+    if(status)status.textContent='Read-only preview is unavailable in this runtime.';
+    return false;
+  }
+  const snapshot=REGIONAL_POLICY.activateReadOnlyPreview();
+  applyRegionalCapabilityGates();
+  if(status)status.textContent=snapshot.state==='eligible_readonly'?
+    'Read-only eligibility preview enabled. Signing and provider mutations remain blocked.':
+    'Read-only preview remains unavailable.';
+  return snapshot.state==='eligible_readonly';
+}
+function showBlockingGlobalState(id){
+  hideGlobalSystemStates();
+  const viewport=document.getElementById('viewport-shell');
+  viewport.setAttribute('inert','');viewport.setAttribute('aria-hidden','true');
+  const surface=document.getElementById(id);surface.hidden=false;
+  surface.removeAttribute('inert');surface.setAttribute('aria-hidden','false');surface.focus();
+}
+function setupGlobalSystemState(){
+  const state=new URLSearchParams(location.search).get('system');
+  document.getElementById('phone').dataset.platformRuntime=PLATFORM_RUNTIME;
+  hideGlobalSystemStates();
+  if(state==='offline'){
+    const banner=document.getElementById('global-offline-banner');banner.hidden=false;
+    document.getElementById('global-offline-retry').focus();
+  }else if(state==='server-error')showBlockingGlobalState('global-server-error');
+  else if(state==='regional'){
+    document.getElementById('phone').dataset.regionalRestriction='active';
+    showBlockingGlobalState('global-region-restriction');
+  }
+  else if(state==='force-update')showBlockingGlobalState('force-update-dialog');
+  applyRegionalCapabilityGates();
+}
+function handleGlobalSystemKeys(event){
+  const surface=GLOBAL_BLOCKING_IDS.map(id=>document.getElementById(id)).find(item=>!item.hidden);
+  if(!surface)return;
+  if(event.key==='Escape'){event.preventDefault();return}
+  if(event.key!=='Tab')return;
+  const controls=[...surface.querySelectorAll('button:not(:disabled)')];
+  if(!controls.length){event.preventDefault();surface.focus();return}
+  const first=controls[0],last=controls.at(-1);
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}
+}
+
 /* ---------- guided demos (desktop aside) ---------- */
 function demoTokenCard(){openGroup();toast('Tickers in chat become live, executable cards')}
 function demoSecurity(){goTab('market');setTimeout(()=>{openToken('GLYPH');toast('AI security is a layer, not a tab — it follows the token')},350)}
@@ -3755,9 +4174,11 @@ window.addEventListener('unload',()=>{
 });
 window.addEventListener('pageshow',event=>{
   if(!event.persisted) return;
+  refreshRegionalBlockedSessionLatch();
   setupAccountScreen(activeScr());
   focusActiveScreen();
   restoreReviewFromCurrentEntry();
+  applyRegionalCapabilityGates();
 });
 
 /* ---------- session restore ---------- */
@@ -3836,9 +4257,36 @@ document.getElementById('review-cancel').addEventListener('click',cancelWalletRe
 document.getElementById('review-continue').addEventListener('click',continueWalletReview);
 document.getElementById('review-refresh').addEventListener('click',refreshWalletReview);
 document.getElementById('review-dialog').addEventListener('keydown',handleReviewKeys);
+document.querySelectorAll('[data-notification-filter]').forEach(button=>button.addEventListener('click',()=>{
+  notificationFilter=button.dataset.notificationFilter;
+  document.querySelectorAll('[data-notification-filter]').forEach(item=>
+    item.classList.toggle('on',item===button));renderNotifications();
+}));
+document.getElementById('platform-search-form').addEventListener('submit',event=>{
+  event.preventDefault();submitPlatformSearch();
+});
+document.querySelectorAll('[data-privacy-operation]').forEach(button=>
+  button.addEventListener('click',()=>requestPrivacy(button.dataset.privacyOperation)));
+document.getElementById('global-offline-retry').addEventListener('click',()=>recoverGlobalSystemState());
+document.getElementById('global-offline-preview').addEventListener('click',activateOfflineReadOnlyPreview);
+document.getElementById('global-server-retry').addEventListener('click',()=>recoverGlobalSystemState());
+document.getElementById('global-region-home').addEventListener('click',()=>
+  recoverGlobalSystemState({home:true,preserveRestriction:true}));
+document.addEventListener('keydown',handleGlobalSystemKeys);
 document.addEventListener('click',event=>{
-  const signingControl=event.target.closest?.('[data-requires-signing]');
-  if(!signingControl) return;
+  const mutationControl=event.target.closest?.(
+    '[data-requires-signing],[data-provider-mutation]');
+  if(!mutationControl)return;
+  const regional=regionalCapabilityDecision(mutationControl,{recheck:true});
+  applyRegionalControlDecision(mutationControl,regional);
+  if(!regional.allowed){
+    event.preventDefault();event.stopImmediatePropagation();
+    const explanation=document.getElementById('regional-policy-explanation');
+    if(explanation){explanation.textContent=regional.reason;explanation.hidden=false}
+    return;
+  }
+  const signingControl=mutationControl.closest?.('[data-requires-signing]');
+  if(!signingControl)return;
   const decision=walletSigningDecision(signingControl);
   applySigningControlDecision(signingControl,decision);
   if(decision.allowed) return;
@@ -3851,3 +4299,4 @@ document.addEventListener('click',event=>{
   }
 },{capture:true});
 if(!restore()) route();
+setupGlobalSystemState();

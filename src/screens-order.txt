@@ -9,6 +9,8 @@ seed-verify
 wallet-import
 home
 pay
+notifications
+search
 market
 token
 launchpad
@@ -24,3 +26,5 @@ tx-result
 swap
 dapp
 profile
+privacy
+security

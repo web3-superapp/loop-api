@@ -1,0 +1,22 @@
+      <section class="scr platform-screen" id="scr-search">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">B4 · bounded fan-out</p><h1 class="h1" data-route-focus tabindex="-1">Global search</h1></div>
+            <span class="platform-fixture-badge">Offline fixture</span>
+          </div>
+          <p class="platform-disclosure">Queries fan out only to injected provider adapters. LOOP does not own a search index, ranking store or social graph.</p>
+          <form class="platform-search-form" id="platform-search-form">
+            <label class="sr-only" for="platform-search-input">Search tokens, contracts, groups, users or perp markets</label>
+            <input id="platform-search-input" type="search" maxlength="64" value="eth" autocomplete="off" placeholder="Token, contract, group, user, perp…">
+            <button class="btn btn-primary" type="submit">Search</button>
+          </form>
+          <p id="platform-search-status" class="platform-status" role="status" aria-live="polite">Ready · maximum 4 providers × 5 results</p>
+          <div id="platform-search-results" class="platform-list" aria-label="Search results"></div>
+          <div class="platform-search-memory" aria-label="Search discovery states">
+            <div><b>Recent searches</b><span>Unavailable · no local or durable history store</span></div>
+            <div><b>Trending searches</b><span>PENDING · provider suggestion authority not selected</span></div>
+          </div>
+          <div class="platform-pending-card"><b>Indexing PENDING</b><p>Provider selection, privacy deletion and ranking provenance must pass the catalog gate before production.</p></div>
+        </div>
+      </section>

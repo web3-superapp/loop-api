@@ -3,25 +3,27 @@
 ## 2026-08-23 — Current known state
 
 - Static HTML/CSS/JavaScript prototype built from `src/screens-order.txt`, source fragments, `src/app.js`, and `src/style.css`.
-- Generated prototype currently reports a 26-screen routed manifest: the prior 22 routes plus four semantic, unavailable-by-default F3–F5/F12 route shells. These shells contain no transfer state, provider behavior, signing, or fabricated result; F11 remains the single shared dialog and is not counted as a routed screen.
+- Generated prototype currently reports a 30-screen routed manifest: the prior 26 routes plus B3 notifications, B4 search, H3 privacy, and H5 security. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog.
 - Account onboarding slice added nine screens and a comprehensive `_tmp/verify_account.py` suite.
 - The pre-documentation Task 7 evidence passed the focused wallet, account, shared-route, syntax, AST/security, mobile, and deterministic app-build checks; Task 8 re-runs the complete chain after documentation changes.
 - A6–A10 owner copy approval passed on 2026-08-22; the account slice has no remaining acceptance item.
-- The wallet-foundation slice now covers F1/F2/F6/F11 and the F16/Swap handoff into the same F11 review surface. The full project objective remains broader: Stream communication/voice, Hyperliquid Perp, and remaining A–I provider-boundary work are pending/in progress. 全项目未完成；剩余范围待实现。
+- The wallet-foundation slice now covers F1/F2/F6/F11 and the F16/Swap handoff into the same F11 review surface. The Stream v5 production seam is bundled but remains uncredentialed; connected communication/voice, Hyperliquid Perp, and remaining A–I provider-boundary work are pending/in progress. 全项目未完成；剩余范围待实现。
 
 ## Repository scope map
 
 - `文档/页面清单.md` is the full 103-screen inventory: A 12, B 9, C 9, D 12, E 13, F 20, G 4, H 16, I 8, with existing/new annotations.
 - `文档/开发进度安排.md` defines dependency order: foundations, account/wallet, spot trading, Chat/voice, Perp, then system hardening.
 - `文档/测试用例.md` is the cross-module acceptance source, including P0 fund-safety and end-to-end journeys.
-- The current source manifest contains 26 screens: the prior 22-screen wallet-foundation manifest plus `send`, `send-to`, `send-confirm`, and `tx-result` structural routes. Shared dialogs and state variants are not routed-screen units.
+- The current source manifest contains 30 screens. The four new routed screens are provider/state projections; shared dialogs and global state variants are not routed-screen units.
 - Subsequent slices must compare A-tier rows and dependency sequencing rather than simply selecting the numerically next screen.
 
 ## Inventory audit observations
 
 - The authoritative inventory says the HTML milestone covers A-tier only and lists 47 A-tier items. README was reconciled on 2026-08-22 to the same 47 A-tier / 103 total-screen authority.
-- Current 26-screen manifest implements the account and wallet-foundation slices and adds four inert semantic route shells for Send and Transaction Result.
-- Major remaining A-tier gaps include notifications/search, full-screen chart, all production Hyperliquid Perp flows, direct messages, F3–F5/F12 wallet transfer/result behavior, bridge/approval-recovery flows, privacy/security/seed-backup expansion, and global offline/server/region states.
+- Current 30-screen routed manifest implements the account/wallet-foundation slices, the four inert Send/Result shells, and the first non-wallet B3/B4/H3/H5 provider/UI projection slice.
+- Major remaining A-tier gaps include full-screen chart, all production Hyperliquid Perp flows, direct messages, F3–F5/F12 wallet transfer/result behavior, bridge/approval-recovery flows, seed-backup expansion, and credentialed production provider wiring for the new app-wide surfaces.
+- Notifications do not create durable inbox/read state: they project only allowlisted Firebase, Stream, Hyperliquid, and Privy fixture events. Search is bounded provider fan-out. Privacy export/delete is async PENDING and mutation-free offline. Security shows GoPlus/Chainalysis/Privy facts without a LOOP score.
+- The I1/I2/I3/I5 states preserve exact recovery semantics: offline and 5xx are retryable, regional restriction can return to eligible app surfaces but cannot be bypassed in settings, and force update remains blocking while its official store destination is PENDING.
 - The reusable wallet review boundary is now present. Subsequent spot, Stream Chat/voice, and Hyperliquid work must integrate through provider capability audits and the existing F11 extension point without treating the HTML fixture adapter as a live provider.
 - Existing `ROUTES` remains centralized in `src/app.js`; new work must preserve the newly hardened three-level ancestry/history provenance system.
 
@@ -150,3 +152,13 @@
 - The current 26-screen `app.html` SHA-256 is `9553b2b354189b61c99be967d57ec0822e5d9d85277333ed3268ffd589fde153`.
 - The offline `docs.html` remains `b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b`.
 - The prior Task 1 checkpoint hashes remain recorded above. The global goal remains incomplete; F3–F5/F12 behavior, Stream, Hyperliquid, and remaining A–I work are still pending/in progress.
+
+## App-wide platform/UI candidate deterministic evidence
+
+- This is an isolated 30-screen provider/UI candidate, not credentialed production provider delivery or a final project checkpoint.
+- The v3 security-remediated 30-screen, eight-script `app.html` preserves the Stream v5 production seam and Hyperliquid v10 contracts and has SHA-256 `d4cb71dece9c0d9373a01a702664364524483a15fab7f9ba2d991994c76097c5`.
+- The v4 storage-authority remediation keeps the same 30-screen/eight-script boundary and has deterministic `app.html` SHA-256 `6120381646dde9c193e0d29b1a5745ec391277a4927757ef9547de307ca404b6`.
+- The v5 new-document remediation removes automatic offline eligibility, keeps the explicit offline preview read-only, and has deterministic `app.html` SHA-256 `9277c724706628b716996accaa4947ce4200ccbcfeb4159a77be297ccee45b42`.
+- The v6 production-policy remediation permanently burns each exact branded handle on its first policy create/install attempt; the deterministic `app.html` SHA-256 is `f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6`.
+- The deterministic offline `docs.html` SHA-256 is `3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278`.
+- The global goal remains incomplete; credentialed Stream delivery, Hyperliquid, and remaining A–I work are still pending/in progress.

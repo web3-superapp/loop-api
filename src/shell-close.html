@@ -1,5 +1,35 @@
     </div><!-- /viewport -->
 
+    <section class="global-offline-banner" id="global-offline-banner" role="alert" hidden>
+      <div><b>You're offline</b><p>Provider reads are paused. A single-chain RPC issue appears inside that provider surface instead.</p></div>
+      <button class="btn btn-ghost" id="global-offline-retry" type="button">Retry</button>
+      <button class="btn btn-ghost" id="global-offline-preview" type="button">Preview read-only eligibility</button>
+      <p id="global-offline-preview-status" class="platform-status" role="status" aria-live="polite">Preview not enabled</p>
+    </section>
+
+    <section class="global-system-dialog" id="global-server-error" role="dialog" aria-modal="true" aria-labelledby="global-server-title" inert aria-hidden="true" hidden tabindex="-1">
+      <span class="global-state-icon" aria-hidden="true">503</span>
+      <h2 id="global-server-title">LOOP could not load</h2>
+      <p>The server returned an error. No wallet, notification or privacy operation was retried automatically.</p>
+      <button class="btn btn-primary" id="global-server-retry" type="button">Retry safely</button>
+      <button class="btn btn-ghost" id="global-server-support" type="button" disabled aria-disabled="true">Support integration PENDING</button>
+    </section>
+
+    <section class="global-system-dialog" id="global-region-restriction" role="dialog" aria-modal="true" aria-labelledby="global-region-title" inert aria-hidden="true" hidden tabindex="-1">
+      <span class="global-state-icon" aria-hidden="true">◎</span>
+      <h2 id="global-region-title">Feature unavailable in this region</h2>
+      <p>Compliance authority blocks this capability. App settings cannot remove the restriction; other eligible read-only surfaces remain available.</p>
+      <button class="btn btn-primary" id="global-region-home" type="button">Return home</button>
+    </section>
+
+    <section class="force-update-dialog" id="force-update-dialog" role="dialog" aria-modal="true" aria-labelledby="force-update-title" inert aria-hidden="true" hidden tabindex="-1">
+      <div class="grab" aria-hidden="true"></div>
+      <span class="platform-fixture-badge">I3 · blocking</span>
+      <h2 id="force-update-title">Update required</h2>
+      <p>This version is below the server-approved minimum. Access cannot continue until the official store destination is configured.</p>
+      <button class="btn btn-primary" id="force-update-action" type="button" disabled aria-disabled="true">Store link PENDING</button>
+    </section>
+
     <!-- Group chat header + composer live OUTSIDE the scroll container so they stay pinned.
          Shown only while the group screen is active (see render()). -->
     <div class="gc-head" id="gcHead" hidden>
@@ -50,6 +80,7 @@
     </nav>
 
     <p class="watch-only-explanation" id="watch-only-explanation" role="status" hidden>Watch-only wallets cannot sign transactions.</p>
+    <p class="watch-only-explanation" id="regional-policy-explanation" role="status" aria-live="polite" hidden>Regional policy prevents this action.</p>
     <p class="review-provider-banner" id="review-provider-banner" role="status" aria-live="polite" hidden></p>
 
     <!-- sheets -->
@@ -70,7 +101,7 @@
       <div class="review-actions">
         <button class="btn btn-ghost review-cancel" id="review-cancel" type="button">Cancel</button>
         <button class="btn btn-ghost review-refresh" id="review-refresh" type="button" hidden>Refresh quote</button>
-        <button class="btn btn-primary review-continue" id="review-continue" type="button">Continue with Privy</button>
+        <button class="btn btn-primary review-continue" id="review-continue" type="button" data-provider-mutation="wallet_mutation">Continue with Privy</button>
       </div>
     </section>
 

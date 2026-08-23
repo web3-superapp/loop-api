@@ -8,7 +8,8 @@ Complete modules A–I in the authoritative inventory using the researched integ
 
 - Account onboarding slice (A1, A3–A10): automated implementation, specification review, quality review, regressions, docs, accessibility, mobile, and security complete.
 - Wallet foundation slice (F1, F2, F6, F11 plus shared F16/Swap review routing): implementation, specification review, quality review, regressions, docs, accessibility, mobile, security, and deterministic builds complete.
-- Privy transfer/result slice: approved specification and plan complete; Task 1 deterministic 26-screen route skeleton is complete with full regression, determinism, and independent reviews; Task 2 credential-gated contract is in progress.
+- Privy transfer/result slice: approved specification and plan complete; Task 1 route skeleton remains intact inside the current 30-screen app-wide manifest; Task 2 credential-gated contract is in progress.
+- App-wide platform/UI slice: B3/B4/H3/H5 and I1/I2/I3/I5 offline provider/state projection candidate implemented in isolation; production provider/OSS selection and credentialed R0 remain PENDING.
 - Mandatory owner copy review for A6–A10: PASS on 2026-08-22.
 - Repository has no Git metadata; do not create commits or initialize Git.
 

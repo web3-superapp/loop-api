@@ -3,4 +3,6 @@ wallet-provider.js
 wallet-review.js
 wallet-transfer.js
 stream-chat-provider.js
+platform-provider.js
+platform-offline-fixture.js
 app.js

@@ -1,0 +1,20 @@
+      <section class="scr platform-screen" id="scr-notifications">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">B3 · provider projection</p><h1 class="h1" data-route-focus tabindex="-1">Notifications</h1></div>
+            <span class="platform-fixture-badge">Offline fixture</span>
+          </div>
+          <p class="platform-disclosure">Firebase delivery and official Stream, Hyperliquid and Privy events are projected here. Durable inbox, read-state sync and provider event ingestion remain PENDING.</p>
+          <div class="platform-filter" aria-label="Notification categories">
+            <button class="chip on" type="button" data-notification-filter="all">All</button>
+            <button class="chip" type="button" data-notification-filter="transaction">Transactions</button>
+            <button class="chip" type="button" data-notification-filter="community">Community</button>
+            <button class="chip" type="button" data-notification-filter="security">Security</button>
+            <button class="chip" type="button" data-notification-filter="system">System</button>
+          </div>
+          <p id="notifications-status" class="platform-status" role="status" aria-live="polite">Loading provider fixture…</p>
+          <div id="notifications-list" class="platform-list" aria-label="Provider notifications"></div>
+          <div class="platform-pending-card"><b>Read sync PENDING</b><p>No durable notification record is created by this prototype.</p></div>
+        </div>
+      </section>

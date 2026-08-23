@@ -11,6 +11,7 @@ import tempfile
 import atexit
 
 from playwright.sync_api import sync_playwright
+from platform_policy_test_app import production_policy_test_app
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -19,9 +20,9 @@ APP = ROOT / 'app.html'
 EXPECTED_SCREENS = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
-    'tx-result', 'swap', 'dapp', 'profile',
+    'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
 EXPECTED_SCRIPTS = [
     'vendor/qrcode-generator-1.4.4.js',
@@ -29,6 +30,8 @@ EXPECTED_SCRIPTS = [
     'wallet-review.js',
     'wallet-transfer.js',
     'stream-chat-provider.js',
+    'platform-provider.js',
+    'platform-offline-fixture.js',
     'app.js',
 ]
 EXPECTED_LOCK = {
@@ -385,7 +388,7 @@ screen_manifest_path = SRC / 'screens-order.txt'
 screen_order = (screen_manifest_path.read_text().splitlines()
                 if screen_manifest_path.exists() else [])
 check(screen_order == EXPECTED_SCREENS,
-      f'exact normalized 26-screen order: {screen_order}')
+      f'exact normalized 30-screen order: {screen_order}')
 check(len(screen_order) == len(set(screen_order)),
       'screen manifest has no duplicate entries')
 resolved_screen_paths = {
@@ -400,8 +403,8 @@ check(wallet_index >= 0 and screen_order[wallet_index:wallet_index + 7] ==
       ['wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
        'tx-result'],
       'wallet transfer shells and receive/result follow the exact pinned order')
-check(len(screen_order) == 26 and len(set(screen_order)) == 26,
-      f'26 unique ordered screen fragments: {len(screen_order)} total')
+check(len(screen_order) == 30 and len(set(screen_order)) == 30,
+      f'30 unique ordered screen fragments: {len(screen_order)} total')
 
 screen_ids = []
 for name in screen_order:
@@ -413,8 +416,8 @@ for name in screen_order:
                           fragment)
     check(len(sections) == 1, f'{name}.html contains exactly one .scr section')
     screen_ids.extend(sections)
-check(len(screen_ids) == 26 and len(set(screen_ids)) == 26,
-      f'26 unique screen IDs: {len(screen_ids)} total')
+check(len(screen_ids) == 30 and len(set(screen_ids)) == 30,
+      f'30 unique screen IDs: {len(screen_ids)} total')
 
 for name, heading, live_id in (
         ('asset', 'Asset detail', 'asset-content'),
@@ -567,6 +570,8 @@ check(not provider_banned,
       f'provider source has no floating/network/storage/timer primitives: {provider_banned}')
 check(not provider_secret_terms,
       f'provider source contains no secret material vocabulary: {provider_secret_terms}')
+
+APP = production_policy_test_app(ROOT)
 
 print('\n== Immutable simulated Privy adapter and normalized DTOs ==')
 with sync_playwright() as playwright:
@@ -3281,24 +3286,27 @@ if not fails:
         page.wait_for_timeout(80)
         decode_open = page.evaluate("""() => openWalletReview('review-unknown',
           document.getElementById('asset-review-transfer'))""")
-        page.wait_for_timeout(20); page.locator('#review-cancel').click()
-        decode_cancel = page.evaluate("""() => ({open:
+        page.wait_for_timeout(20)
+        unknown_policy = page.evaluate("""() => ({open:
           document.getElementById('review-dialog').classList.contains('open'),inert:
-          document.getElementById('review-dialog').hasAttribute('inert'),focus:
-          document.activeElement?.id||'',marker:Boolean(history.state?.loop_review)})""")
-        page.evaluate("""() => openWalletReview('review-missing',
+          document.getElementById('review-dialog').hasAttribute('inert'),marker:
+          Boolean(history.state?.loop_review),state:
+          document.getElementById('review-provider-banner').dataset.state})""")
+        missing_open = page.evaluate("""() => openWalletReview('review-missing',
           document.getElementById('asset-review-transfer'))""")
-        page.keyboard.press('Escape'); page.wait_for_timeout(20)
-        decode_escape = page.evaluate("""() => ({open:
+        page.wait_for_timeout(20)
+        missing_policy = page.evaluate("""() => ({open:
           document.getElementById('review-dialog').classList.contains('open'),inert:
-          document.getElementById('review-dialog').hasAttribute('inert'),focus:
-          document.activeElement?.id||''})""")
-        check(not decode_open and not decode_cancel['open'] and decode_cancel['inert'] and
-              decode_cancel['focus'] == 'asset-review-transfer' and
-              not decode_cancel['marker'] and not decode_escape['open'] and
-              decode_escape['inert'] and decode_escape['focus'] == 'asset-review-transfer',
-              f'decode-failed F11 remains dismissible by Cancel and Escape: '
-              f'{decode_cancel} / {decode_escape}')
+          document.getElementById('review-dialog').hasAttribute('inert'),marker:
+          Boolean(history.state?.loop_review),state:
+          document.getElementById('review-provider-banner').dataset.state})""")
+        check(not decode_open and not missing_open and not unknown_policy['open'] and
+              unknown_policy['inert'] and not unknown_policy['marker'] and
+              unknown_policy['state'] == 'provider_blocked' and
+              not missing_policy['open'] and missing_policy['inert'] and
+              not missing_policy['marker'] and missing_policy['state'] == 'provider_blocked',
+              f'unknown F11 operations fail closed before decode/marker/handoff: '
+              f'{unknown_policy} / {missing_policy}')
 
         page.goto('about:blank')
         page.goto(f'{APP.as_uri()}#asset?asset=ETH&chain=ethereum')
@@ -7234,7 +7242,7 @@ check(set(wallet_manifest) == expected_wallet_manifest and
       'function doSwap' in wallet_manifest.get('wallet_signing_entrypoints', '') and
       "document.getElementById('review-continue').addEventListener" in
           wallet_manifest.get('wallet_signing_bindings', '') and
-      "event.target.closest?.('[data-requires-signing]')" in
+      "'[data-requires-signing],[data-provider-mutation]'" in
           wallet_manifest.get('wallet_signing_bindings', '') and
       'navigationStorageProjection.restore' in
           wallet_manifest['wallet_route_restore_consumers'],
@@ -8636,9 +8644,9 @@ task8_schedule = (ROOT / '文档' / '开发进度安排.md').read_text()
 task8_findings = (ROOT / 'findings.md').read_text()
 task8_docs = '\n'.join((task8_readme, task8_inventory,
                          task8_schedule, task8_findings))
-check('26 个 routed screen fragments' in task8_readme and
-      '26-screen' in task8_findings,
-      'Current docs report the generated 26-screen route-shell milestone')
+check('30 个 routed screen fragments' in task8_readme and
+      '30-screen' in task8_findings,
+      'Current docs report the generated 30-screen platform milestone')
 check('_tmp/verify_wallet_foundation.py' in task8_readme and
       'src/scripts-order.txt' in task8_readme and
       'src/vendor/vendor-lock.json' in task8_readme,

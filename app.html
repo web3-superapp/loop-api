@@ -665,6 +665,40 @@ body::after{ /* grain */
 .tog.on::after{left:20px; background:#062418}
 .restart-onboarding{display:block;width:100%;height:44px;margin-top:16px;font-size:12.5px}
 
+/* ---------- PLATFORM / APP-WIDE PROVIDER SURFACES ---------- */
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.platform-screen :focus-visible,.global-system-dialog:focus-visible,.force-update-dialog:focus-visible,.global-offline-banner :focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+.platform-screen button,.platform-screen input,.global-system-dialog button,.force-update-dialog button,.global-offline-banner button{min-height:46px}
+.platform-back{min-width:54px;margin-bottom:14px}
+.platform-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px}
+.platform-fixture-badge{display:inline-flex;width:max-content;max-width:48%;padding:5px 9px;border:1px solid rgba(90,200,255,.28);border-radius:999px;background:var(--cyan-soft);color:var(--cyan);font-size:9px;font-weight:700;letter-spacing:.04em;text-align:center}
+.platform-disclosure{padding:12px 13px;border:1px solid var(--line2);border-radius:14px;background:var(--card);color:var(--tx2);font-size:11px;line-height:1.55}
+.platform-filter{display:flex;gap:7px;margin:14px 0 8px;overflow-x:auto;scrollbar-width:none}
+.platform-filter .chip{flex:none;min-height:46px;cursor:pointer;font-family:var(--body)}
+.platform-status{min-height:18px;margin:12px 0;color:var(--tx2);font-size:10.5px;line-height:1.45}
+.platform-list{display:grid;gap:9px}
+.platform-row{display:block;width:100%;min-width:0;padding:13px 14px;border:1px solid var(--line);border-radius:15px;background:var(--card);color:var(--tx);text-align:left}
+.platform-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.platform-row time{color:var(--tx3);font:9px var(--mono)}
+.platform-row h2{margin-top:7px;font-size:12.5px}.platform-row p{margin-top:4px;color:var(--tx2);font-size:10.5px;line-height:1.5}.platform-row small{display:block;margin-top:8px;color:var(--tx3);font-size:9px;line-height:1.4}
+.platform-kind{display:inline-flex;width:max-content;padding:3px 7px;border-radius:99px;background:var(--cyan-soft);color:var(--cyan);font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.kind-security,.severity-critical{background:var(--red-soft);color:var(--red)}.kind-transaction,.severity-warning{background:var(--amber-soft);color:var(--amber)}.kind-community{background:var(--mint-soft);color:var(--mint)}
+.platform-pending-card{margin-top:12px;padding:12px 13px;border:1px dashed rgba(255,190,85,.35);border-radius:13px;background:var(--amber-soft)}
+.platform-pending-card b{font-size:11px;color:var(--amber)}.platform-pending-card p{margin-top:3px;color:var(--tx2);font-size:10px;line-height:1.5}
+.platform-search-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:14px}
+.platform-search-form input{min-width:0;padding:0 13px;border:1px solid var(--line2);border-radius:13px;background:#0b1017;color:var(--tx);font:12px var(--body)}
+.platform-search-form button{padding:0 15px}.platform-result{cursor:pointer;font-family:var(--body)}.platform-result:hover{border-color:rgba(61,240,174,.35);background:var(--card2)}
+.platform-search-memory{display:grid;gap:7px;margin-top:12px}.platform-search-memory div{display:grid;gap:3px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}.platform-search-memory b{font-size:10.5px}.platform-search-memory span{color:var(--tx3);font-size:9.5px;line-height:1.45}
+.platform-settings-card{margin-top:14px;padding:4px 14px}.platform-settings-card .set-row{min-height:58px}.platform-settings-card .set-row>div{min-width:0}.platform-settings-card .risk-pill,.platform-settings-card .chip{margin-left:auto}
+.platform-action-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.platform-action-grid .btn{padding:0 10px}
+.home-platform-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.home-platform-actions{display:flex;gap:7px}.home-platform-actions button{width:46px;height:46px;border:1px solid var(--line2);border-radius:13px;background:var(--card);color:var(--tx);font-size:18px;cursor:pointer}.home-platform-actions button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.profile-platform-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}.profile-platform-links .btn{min-height:46px;padding:0 11px;justify-content:space-between;font-size:10.5px}
+.global-offline-banner{position:absolute;top:52px;left:14px;right:14px;z-index:94;display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid rgba(255,190,85,.4);border-radius:15px;background:rgba(36,27,12,.96);box-shadow:0 16px 50px rgba(0,0,0,.55)}
+.global-offline-banner>div{min-width:0;flex:1}.global-offline-banner b{font-size:11.5px;color:var(--amber)}.global-offline-banner p{margin-top:2px;color:var(--tx2);font-size:9.5px;line-height:1.4}.global-offline-banner .btn{flex:none;padding:0 13px;font-size:10.5px}
+.global-system-dialog{position:absolute;inset:0;z-index:96;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;padding:30px;background:rgba(5,8,12,.98);text-align:center}
+.global-system-dialog h2,.force-update-dialog h2{font-family:var(--disp);font-size:20px;font-weight:550}.global-system-dialog p,.force-update-dialog p{max-width:310px;color:var(--tx2);font-size:11.5px;line-height:1.6}.global-system-dialog .btn{width:100%;max-width:300px;padding:0 14px}.global-state-icon{display:grid;place-items:center;width:62px;height:62px;border:1px solid var(--line2);border-radius:20px;background:var(--card);color:var(--amber);font:15px var(--mono)}
+.force-update-dialog{position:absolute;left:12px;right:12px;bottom:12px;z-index:98;display:flex;flex-direction:column;gap:12px;padding:18px;border:1px solid var(--line2);border-radius:24px;background:#10141c;box-shadow:0 -30px 100px rgba(0,0,0,.78)}
+.force-update-dialog::before{content:"";position:fixed;inset:0;z-index:-1;background:rgba(3,5,8,.76);backdrop-filter:blur(5px)}.force-update-dialog .grab{width:40px;height:4px;margin:0 auto;border-radius:99px;background:var(--line2)}.force-update-dialog .btn{width:100%}.force-update-dialog .btn:disabled{cursor:not-allowed;opacity:.48}
+
 /* ---------- responsive ---------- */
 @media (max-width:1020px){
   .pitch{display:none}
@@ -705,6 +739,10 @@ body::after{ /* grain */
   .wallet-foundation .asset-row{gap:9px}
   .wallet-foundation .tok-logo{width:36px;height:36px}
   .wallet-foundation .qty{max-width:44%}
+  .global-offline-banner{top:calc(12px + env(safe-area-inset-top))}
+  .force-update-dialog{bottom:calc(10px + env(safe-area-inset-bottom))}
+  .platform-screen .pad{padding-left:16px;padding-right:16px}
+  .platform-search-form{grid-template-columns:minmax(0,1fr) 76px}
 }
 @media (prefers-reduced-motion: reduce){
   .account-screen *, .account-screen{animation:none!important;transition:none!important;scroll-behavior:auto!important}
@@ -739,7 +777,7 @@ body::after{ /* grain */
     <div class="notch"></div>
     <div class="statusbar"><span>9:41</span><span class="net"><i></i>MAINNET</span><span>◢ ⚡ ▮</span></div>
 
-    <div class="viewport">
+    <div class="viewport" id="viewport-shell">
 
       <!-- ============ SPLASH ============ -->
       <section class="scr account-screen" id="scr-splash" aria-labelledby="splash-title">
@@ -1037,7 +1075,13 @@ body::after{ /* grain */
       <!-- ============ HOME ============ -->
       <section class="scr" id="scr-home">
         <div class="pad">
-          <h1 class="home-hi" id="home-title" tabindex="-1">gm, <b id="alias-home">Voyager_7</b> 🎭</h1>
+          <div class="home-platform-head">
+            <h1 class="home-hi" id="home-title" tabindex="-1">gm, <b id="alias-home">Voyager_7</b> 🎭</h1>
+            <div class="home-platform-actions">
+              <button type="button" aria-label="Global search" onclick="openPlatformRoute('search')">⌕</button>
+              <button type="button" aria-label="Notifications" onclick="openPlatformRoute('notifications')">●</button>
+            </div>
+          </div>
           <div class="networth">$46,806<span style="color:var(--tx3)">.55</span><small class="up">+2.6% today</small></div>
           <div class="loop-strip">
             <div class="loop-cell lc-m" onclick="goTab('market')"><b>MARKET</b><span>3 tokens moving in your watchlist</span></div>
@@ -1108,6 +1152,50 @@ body::after{ /* grain */
             </div>
           </div>
           <div class="scan-safety"><span>🛡️</span><span>The recipient, network and amount are checked against sanctions lists before you confirm.</span></div>
+        </div>
+      </section>
+      <!-- ============ NOTIFICATIONS ============ -->
+      <section class="scr platform-screen" id="scr-notifications">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">B3 · provider projection</p><h1 class="h1" data-route-focus tabindex="-1">Notifications</h1></div>
+            <span class="platform-fixture-badge">Offline fixture</span>
+          </div>
+          <p class="platform-disclosure">Firebase delivery and official Stream, Hyperliquid and Privy events are projected here. Durable inbox, read-state sync and provider event ingestion remain PENDING.</p>
+          <div class="platform-filter" aria-label="Notification categories">
+            <button class="chip on" type="button" data-notification-filter="all">All</button>
+            <button class="chip" type="button" data-notification-filter="transaction">Transactions</button>
+            <button class="chip" type="button" data-notification-filter="community">Community</button>
+            <button class="chip" type="button" data-notification-filter="security">Security</button>
+            <button class="chip" type="button" data-notification-filter="system">System</button>
+          </div>
+          <p id="notifications-status" class="platform-status" role="status" aria-live="polite">Loading provider fixture…</p>
+          <div id="notifications-list" class="platform-list" aria-label="Provider notifications"></div>
+          <div class="platform-pending-card"><b>Read sync PENDING</b><p>No durable notification record is created by this prototype.</p></div>
+        </div>
+      </section>
+      <!-- ============ SEARCH ============ -->
+      <section class="scr platform-screen" id="scr-search">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">B4 · bounded fan-out</p><h1 class="h1" data-route-focus tabindex="-1">Global search</h1></div>
+            <span class="platform-fixture-badge">Offline fixture</span>
+          </div>
+          <p class="platform-disclosure">Queries fan out only to injected provider adapters. LOOP does not own a search index, ranking store or social graph.</p>
+          <form class="platform-search-form" id="platform-search-form">
+            <label class="sr-only" for="platform-search-input">Search tokens, contracts, groups, users or perp markets</label>
+            <input id="platform-search-input" type="search" maxlength="64" value="eth" autocomplete="off" placeholder="Token, contract, group, user, perp…">
+            <button class="btn btn-primary" type="submit">Search</button>
+          </form>
+          <p id="platform-search-status" class="platform-status" role="status" aria-live="polite">Ready · maximum 4 providers × 5 results</p>
+          <div id="platform-search-results" class="platform-list" aria-label="Search results"></div>
+          <div class="platform-search-memory" aria-label="Search discovery states">
+            <div><b>Recent searches</b><span>Unavailable · no local or durable history store</span></div>
+            <div><b>Trending searches</b><span>PENDING · provider suggestion authority not selected</span></div>
+          </div>
+          <div class="platform-pending-card"><b>Indexing PENDING</b><p>Provider selection, privacy deletion and ranking provenance must pass the catalog gate before production.</p></div>
         </div>
       </section>
       <!-- ============ MARKET ============ -->
@@ -1583,6 +1671,11 @@ body::after{ /* grain */
             </div>
           </div>
 
+          <div class="profile-platform-links" aria-label="Profile settings">
+            <button class="btn btn-ghost" type="button" onclick="openPlatformRoute('privacy')"><span>Privacy center</span><span aria-hidden="true">›</span></button>
+            <button class="btn btn-ghost" type="button" onclick="openPlatformRoute('security')"><span>Security center</span><span aria-hidden="true">›</span></button>
+          </div>
+
           <p class="label">Privacy — you decide what leaks</p>
           <div class="card" style="padding:4px 16px">
             <div class="set-row">
@@ -1623,8 +1716,76 @@ body::after{ /* grain */
           <div style="height:16px"></div>
         </div>
       </section>
+      <!-- ============ PRIVACY ============ -->
+      <section class="scr platform-screen" id="scr-privacy">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">H3 · server authority</p><h1 class="h1" data-route-focus tabindex="-1">Privacy center</h1></div>
+            <span class="platform-fixture-badge">Fail closed</span>
+          </div>
+          <p class="platform-disclosure">Visibility is projected locally for review. Production export, deletion and group allowlists must be enforced asynchronously by the selected provider/server.</p>
+          <div class="card platform-settings-card">
+            <div class="set-row"><div><p class="sr-t">Anonymous chat alias</p><p class="sr-s">Address disclosure remains off.</p></div><span class="risk-pill risk-low">On</span></div>
+            <div class="set-row"><div><p class="sr-t">Portfolio Broadcast</p><p class="sr-s">Group allowlist authority is not configured.</p></div><span class="risk-pill risk-med">Off</span></div>
+            <div class="set-row"><div><p class="sr-t">Visibility matrix</p><p class="sr-s">Wallet public · positions private · chat alias only.</p></div><span class="chip">Fixture</span></div>
+          </div>
+          <p class="label">Your provider data</p>
+          <div class="platform-action-grid">
+            <button class="btn btn-ghost" id="privacy-export" type="button" data-provider-mutation="privacy_mutation" data-privacy-operation="export">Request export</button>
+            <button class="btn btn-danger" id="privacy-delete" type="button" data-provider-mutation="privacy_mutation" data-privacy-operation="delete">Request deletion</button>
+          </div>
+          <p id="privacy-operation-status" class="platform-status" role="status" aria-live="polite">PENDING · no provider/server operation has run.</p>
+        </div>
+      </section>
+      <!-- ============ SECURITY ============ -->
+      <section class="scr platform-screen" id="scr-security">
+        <div class="pad">
+          <button class="back platform-back" type="button" onclick="back()">‹ Back</button>
+          <div class="platform-heading">
+            <div><p class="eyebrow">H5 · Privy wallet security</p><h1 class="h1" data-route-focus tabindex="-1">Security center</h1></div>
+            <span class="platform-fixture-badge">Offline fixture</span>
+          </div>
+          <p class="platform-disclosure">Privy is the primary authority for account security. GoPlus and Chainalysis facts appear only as B9 secondary evidence; LOOP does not calculate a security score.</p>
+          <p id="security-facts-status" class="platform-status" role="status" aria-live="polite">Loading provider facts…</p>
+          <p class="label">Privy account protections</p>
+          <div id="privy-security-capabilities" class="card platform-settings-card" aria-label="Privy security capabilities" data-canonical-capabilities="MFA|App lock|Devices &amp; sessions|Recovery|Login history"></div>
+          <p class="label">B9 secondary security facts</p>
+          <div id="security-facts" class="platform-list" aria-label="Secondary provider security facts"></div>
+        </div>
+      </section>
 
     </div><!-- /viewport -->
+
+    <section class="global-offline-banner" id="global-offline-banner" role="alert" hidden>
+      <div><b>You're offline</b><p>Provider reads are paused. A single-chain RPC issue appears inside that provider surface instead.</p></div>
+      <button class="btn btn-ghost" id="global-offline-retry" type="button">Retry</button>
+      <button class="btn btn-ghost" id="global-offline-preview" type="button">Preview read-only eligibility</button>
+      <p id="global-offline-preview-status" class="platform-status" role="status" aria-live="polite">Preview not enabled</p>
+    </section>
+
+    <section class="global-system-dialog" id="global-server-error" role="dialog" aria-modal="true" aria-labelledby="global-server-title" inert aria-hidden="true" hidden tabindex="-1">
+      <span class="global-state-icon" aria-hidden="true">503</span>
+      <h2 id="global-server-title">LOOP could not load</h2>
+      <p>The server returned an error. No wallet, notification or privacy operation was retried automatically.</p>
+      <button class="btn btn-primary" id="global-server-retry" type="button">Retry safely</button>
+      <button class="btn btn-ghost" id="global-server-support" type="button" disabled aria-disabled="true">Support integration PENDING</button>
+    </section>
+
+    <section class="global-system-dialog" id="global-region-restriction" role="dialog" aria-modal="true" aria-labelledby="global-region-title" inert aria-hidden="true" hidden tabindex="-1">
+      <span class="global-state-icon" aria-hidden="true">◎</span>
+      <h2 id="global-region-title">Feature unavailable in this region</h2>
+      <p>Compliance authority blocks this capability. App settings cannot remove the restriction; other eligible read-only surfaces remain available.</p>
+      <button class="btn btn-primary" id="global-region-home" type="button">Return home</button>
+    </section>
+
+    <section class="force-update-dialog" id="force-update-dialog" role="dialog" aria-modal="true" aria-labelledby="force-update-title" inert aria-hidden="true" hidden tabindex="-1">
+      <div class="grab" aria-hidden="true"></div>
+      <span class="platform-fixture-badge">I3 · blocking</span>
+      <h2 id="force-update-title">Update required</h2>
+      <p>This version is below the server-approved minimum. Access cannot continue until the official store destination is configured.</p>
+      <button class="btn btn-primary" id="force-update-action" type="button" disabled aria-disabled="true">Store link PENDING</button>
+    </section>
 
     <!-- Group chat header + composer live OUTSIDE the scroll container so they stay pinned.
          Shown only while the group screen is active (see render()). -->
@@ -1676,6 +1837,7 @@ body::after{ /* grain */
     </nav>
 
     <p class="watch-only-explanation" id="watch-only-explanation" role="status" hidden>Watch-only wallets cannot sign transactions.</p>
+    <p class="watch-only-explanation" id="regional-policy-explanation" role="status" aria-live="polite" hidden>Regional policy prevents this action.</p>
     <p class="review-provider-banner" id="review-provider-banner" role="status" aria-live="polite" hidden></p>
 
     <!-- sheets -->
@@ -1696,7 +1858,7 @@ body::after{ /* grain */
       <div class="review-actions">
         <button class="btn btn-ghost review-cancel" id="review-cancel" type="button">Cancel</button>
         <button class="btn btn-ghost review-refresh" id="review-refresh" type="button" hidden>Refresh quote</button>
-        <button class="btn btn-primary review-continue" id="review-continue" type="button">Continue with Privy</button>
+        <button class="btn btn-primary review-continue" id="review-continue" type="button" data-provider-mutation="wallet_mutation">Continue with Privy</button>
       </div>
     </section>
 
@@ -5103,7 +5265,7 @@ var qrcode = function() {
 
   const failure=(code,message,refreshable=false)=>freeze({ok:false,error:{code,retryable:false,safe_message:message,refreshable}}),success=value=>freeze({ok:true,value});
   function live(value){const item=record(value,['user_id','wallet_id','wallet_class','endpoint'],[],'live');text(item.user_id,'user');if(!CLASSES.includes(item.wallet_class))throw new TypeError('wallet class');if(item.wallet_class==='privy_embedded')text(item.wallet_id,'wallet');else if(item.wallet_id!==null)throw new TypeError('wallet');text(item.endpoint,'endpoint');return freeze({...item});}
-  function origin(value){const item=record(value,['stack','voice'],[],'origin'),stack=array(item.stack,26,'stack'),voice=record(item.voice,['state','open','minimized','muted'],[],'voice');if(!stack.length||stack.some(entry=>typeof entry!=='string'||!/^scr-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry))||!['idle','joining','joined','reconnecting','error'].includes(voice.state)||['open','minimized','muted'].some(key=>typeof voice[key]!=='boolean'))throw new TypeError('origin');return freeze({stack:[...stack],voice:{...voice}});}
+  function origin(value){const item=record(value,['stack','voice'],[],'origin'),stack=array(item.stack,26,'stack'),voice=record(item.voice,['state','open','minimized','muted'],[],'voice'),excluded=['scr-notifications','scr-search','scr-privacy','scr-security'];if(!stack.length||stack.some(entry=>typeof entry!=='string'||!/^scr-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry)||excluded.includes(entry))||!['idle','joining','joined','reconnecting','error'].includes(voice.state)||['open','minimized','muted'].some(key=>typeof voice[key]!=='boolean'))throw new TypeError('origin');return freeze({stack:[...stack],voice:{...voice}});}
   const same=(left,right)=>canonical(left)===canonical(right);
   const ADAPTER_METHODS=['getWalletSnapshot','getBalanceSnapshot',
     'getTransactionHistorySnapshot','getWalletActionSnapshot','getReceiveTarget',
@@ -5459,6 +5621,312 @@ var qrcode = function() {
   root.StreamChatBoundary=freeze({createProductionBoundary});
 })(globalThis);
 
+/* ============ SCRIPT: platform-provider.js ============ */
+(function(root){
+  'use strict';
+  const MAX_QUERY_LENGTH=64,MAX_SOURCES=4,MAX_RESULTS_PER_SOURCE=5,MAX_NOTIFICATIONS=24;
+  const EVENT_AUTHORITIES=Object.freeze(['firebase','stream','hyperliquid','privy']);
+  const SECURITY_AUTHORITIES=Object.freeze(['goplus','chainalysis']);
+  const SEARCH_DESTINATIONS=Object.freeze(Object.fromEntries([
+    ['token','#token'],['contract','#token'],['group','#chat'],
+    ['user','#profile'],['perp','#market']
+  ]));
+  const SELECTION_GATES=Object.freeze({notification_inbox:'whole_app_core_selection_pending',
+    federated_search_indexing:'whole_app_core_selection_pending',
+    provider_event_ingestion:'whole_app_core_selection_pending'});
+  const offlineHandles=new WeakSet(),productionHandles=new WeakSet(),productionPolicies=new WeakSet();
+  let offlineClaimed=false,productionClaimed=false,pendingProductionPolicy=null;
+  function freeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){
+    Reflect.ownKeys(value).forEach(key=>freeze(value[key]));Object.freeze(value)}return value}
+  function cleanText(value,max,label){if(typeof value!=='string'||value.length<1||
+    value.length>max||value.trim()!==value||/[\u0000-\u001f\u007f]/.test(value))throw new TypeError(label);return value}
+  function ownRecord(value,label){if(!value||typeof value!=='object'||Array.isArray(value)||
+    Object.getPrototypeOf(value)!==Object.prototype)throw new TypeError(label);
+    const descriptors=Object.getOwnPropertyDescriptors(value);
+    if(Reflect.ownKeys(descriptors).some(key=>typeof key!=='string'||
+      !Object.prototype.hasOwnProperty.call(descriptors[key],'value')))throw new TypeError(label);
+    const copy={};Reflect.ownKeys(descriptors).forEach(key=>{copy[key]=descriptors[key].value});return copy}
+  function exactKeys(value,required,label){const item=ownRecord(value,label),keys=Object.keys(item);
+    if(keys.length!==required.length||required.some(key=>!keys.includes(key)))throw new TypeError(label);return item}
+  function sourceArray(value,allowed,label){if(!Array.isArray(value)||value.length<1||
+    value.length>MAX_SOURCES)throw new TypeError(label);const seen=new Set();return value.map(raw=>{
+      const item=exactKeys(raw,['authority','read'],label+' source');cleanText(item.authority,24,label+' authority');
+      if(!allowed.includes(item.authority)||seen.has(item.authority)||typeof item.read!=='function')throw new TypeError(label+' authority');
+      seen.add(item.authority);return freeze({authority:item.authority,read:item.read})})}
+  function notification(raw,authority){const item=exactKeys(raw,
+    ['id','category','title','detail','occurred_at','read'],'notification');
+    ['id','category','title','detail','occurred_at'].forEach(key=>cleanText(item[key],key==='detail'?180:80,'notification '+key));
+    if(!['transaction','community','security','system'].includes(item.category)||typeof item.read!=='boolean')throw new TypeError('notification value');
+    return {id:item.id,authority,category:item.category,title:item.title,detail:item.detail,occurred_at:item.occurred_at,read:item.read}}
+  function result(raw,authority){const item=exactKeys(raw,['id','kind','title','subtitle'],'search result');
+    ['id','title','subtitle'].forEach(key=>cleanText(item[key],key==='subtitle'?160:80,'search '+key));
+    if(!Object.prototype.hasOwnProperty.call(SEARCH_DESTINATIONS,item.kind))throw new TypeError('search value');
+    return {id:item.id,authority,kind:item.kind,title:item.title,subtitle:item.subtitle,
+      route:SEARCH_DESTINATIONS[item.kind]}}
+  function fact(raw,authority){const item=exactKeys(raw,['id','label','value','severity','observed_at'],'security fact');
+    ['id','label','value','observed_at'].forEach(key=>cleanText(item[key],120,'security '+key));
+    if(!['info','warning','critical'].includes(item.severity))throw new TypeError('security severity');
+    return {id:item.id,authority,label:item.label,value:item.value,severity:item.severity,observed_at:item.observed_at}}
+  function privyCapability(raw){const item=exactKeys(raw,['id','label','state','detail'],'Privy security capability');
+    ['id','label','state','detail'].forEach(key=>cleanText(item[key],160,'Privy security '+key));
+    if(!['PENDING','available','attention'].includes(item.state))throw new TypeError('Privy security state');
+    return {id:item.id,label:item.label,state:item.state,detail:item.detail}}
+  function readList(raw,max,label){if(!Array.isArray(raw)||raw.length>max)throw new TypeError(label);return raw}
+  function validHandle(handles,handle){return Boolean(handle&&typeof handle==='object'&&
+    Object.getPrototypeOf(handle)===null&&Object.isFrozen(handle)&&Reflect.ownKeys(handle).length===0&&handles.has(handle))}
+  function createAdapter(handle,configuration,status){
+    const handles=status==='offline_fixture'?offlineHandles:productionHandles;
+    if(!validHandle(handles,handle))throw new TypeError('untrusted adapter channel');
+    const config=exactKeys(configuration,
+      ['eventSources','searchSources','securitySources','privySecuritySource','privacyClient'],'platform configuration');
+    const eventSources=sourceArray(config.eventSources,EVENT_AUTHORITIES,'event');
+    const searchSources=sourceArray(config.searchSources,['privy','stream','hyperliquid','market_data'],'search');
+    const securitySources=sourceArray(config.securitySources,SECURITY_AUTHORITIES,'security');
+    const privySource=exactKeys(config.privySecuritySource,['authority','read'],'Privy security source');
+    if(privySource.authority!=='privy'||typeof privySource.read!=='function')throw new TypeError('Privy security authority');
+    if(config.privacyClient!==null&&(!config.privacyClient||typeof config.privacyClient.requestOperation!=='function'))throw new TypeError('privacy client');
+    const privacyRequest=config.privacyClient===null?null:config.privacyClient.requestOperation;
+    return freeze({
+      async notifications(request){const input=exactKeys(request,['limit'],'notification request');
+        if(!Number.isInteger(input.limit)||input.limit<1||input.limit>MAX_NOTIFICATIONS)throw new TypeError('notification limit');
+        const batches=await Promise.all(eventSources.map(async source=>({source,
+          items:readList(await source.read({limit:Math.min(input.limit,6)}),6,'event batch')})));
+        const items=batches.flatMap(batch=>batch.items.map(item=>notification(item,batch.source.authority)))
+          .sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).slice(0,input.limit);
+        return freeze({status,selection_gate:SELECTION_GATES.notification_inbox,durable_read_state:false,items})},
+      async search(request){const input=exactKeys(request,['query'],'search request');
+        const query=cleanText(input.query,MAX_QUERY_LENGTH,'query');
+        const batches=await Promise.all(searchSources.map(async source=>({source,
+          items:readList(await source.read({query,limit:MAX_RESULTS_PER_SOURCE}),MAX_RESULTS_PER_SOURCE,'search batch')})));
+        const results=batches.flatMap(batch=>batch.items.map(item=>result(item,batch.source.authority))).slice(0,MAX_SOURCES*MAX_RESULTS_PER_SOURCE);
+        return freeze({status,selection_gate:SELECTION_GATES.federated_search_indexing,query,results})},
+      async privySecurity(){const capabilities=readList(await privySource.read({limit:5}),5,'Privy security batch').map(privyCapability);
+        return freeze({status,profile:'privy_wallet',authority:'privy',capabilities})},
+      async securityFacts(){const batches=await Promise.all(securitySources.map(async source=>({source,
+          items:readList(await source.read({limit:4}),4,'security batch')})));
+        return freeze({status,profile:'security_facts',facts:batches.flatMap(batch=>batch.items.map(item=>fact(item,batch.source.authority)))})},
+      async requestPrivacyOperation(request){const input=exactKeys(request,['kind'],'privacy request');
+        if(!['export','delete'].includes(input.kind))throw new TypeError('privacy kind');
+        if(status==='offline_fixture'||privacyRequest===null)return freeze({status:'PENDING',kind:input.kind,request_id:null,
+          mutation_performed:false,reason:'provider_selection_or_server_configuration_pending'});
+        const response=exactKeys(await privacyRequest({kind:input.kind}),['request_id','status'],'privacy response');
+        cleanText(response.request_id,96,'privacy request id');if(response.status!=='PENDING')throw new TypeError('privacy status');
+        return freeze({status:'PENDING',kind:input.kind,request_id:response.request_id,
+          mutation_performed:false,reason:'provider_async_request_accepted'})}
+    })
+  }
+  function createOfflineAdapter(handle,configuration){return createAdapter(handle,configuration,'offline_fixture')}
+  function createProductionAdapter(handle,configuration){return createAdapter(handle,configuration,'production_injected')}
+  function buildProductionRegionalPolicy(configuration){
+    const config=exactKeys(configuration,['authoritativeRecheck'],'regional policy configuration');
+    if(typeof config.authoritativeRecheck!=='function')throw new TypeError('regional policy recheck');
+    const authoritativeRecheck=config.authoritativeRecheck;
+    const capabilities=freeze(['wallet_mutation','privacy_mutation']);
+    const operations=freeze(['transfer','swap','approval','perp_order','privacy_export',
+      'privacy_delete','control_home-pay','control_token-buy','control_group-token-buy',
+      'control_group-copy-trade','control_wallet-send','control_wallet-swap',
+      'control_wallet-bridge','control_wallet-dapps','control_swap-submit',
+      'control_dapp-approve','control_approval-limit','control_approval-unlimited']);
+    const stages=freeze(['entry_gate','review_open','begin_handoff','provider_handoff',
+      'provider_mutation']);
+    let snapshot=freeze({state:'unknown',revision:0,policy_id:'',verified:false,
+      source:'production_policy_provider'}),blocked=false;
+    const deny=(state,reason)=>freeze({allowed:false,state,revision:snapshot.revision,
+      policy_id:snapshot.policy_id,verified:false,source:snapshot.source,reason});
+    const inspect=(request,rechecking)=>{
+      const input=exactKeys(request,rechecking?['capability','operation','stage']:
+        ['capability'],'regional policy request');
+      cleanText(input.capability,32,'regional capability');
+      if(!capabilities.includes(input.capability))throw new TypeError('regional capability');
+      if(rechecking){
+        cleanText(input.operation,64,'regional operation');
+        cleanText(input.stage,32,'regional stage');
+        if(!operations.includes(input.operation)||!stages.includes(input.stage))
+          throw new TypeError('regional operation');
+      }
+      return input;
+    };
+    const projection=()=>{
+      const allowed=!blocked&&snapshot.verified&&snapshot.state==='eligible';
+      return freeze({allowed,state:blocked?'blocked':snapshot.state,revision:snapshot.revision,
+        policy_id:snapshot.policy_id,verified:snapshot.verified,source:snapshot.source,
+        reason:allowed?'':'Regional eligibility is unavailable for this operation.'});
+    };
+    const policy=freeze({
+      decision(request){try{inspect(request,false);return projection()}catch(_error){
+        return deny('unknown','Regional eligibility is unknown for this action.')}},
+      recheck(request){
+        let input;
+        try{input=inspect(request,true)}catch(_error){return deny('unknown','Regional eligibility is unknown for this action.')}
+        let response;
+        try{response=exactKeys(authoritativeRecheck(freeze({...input})),
+          ['state','revision','policy_id','verified'],'regional policy response')}
+        catch(_error){return blocked?projection():
+          deny('unknown','Regional policy provider recheck failed.')}
+        if(blocked)return projection();
+        if(!['eligible','blocked'].includes(response.state)||
+           !Number.isInteger(response.revision)||response.revision<1||
+           response.revision<snapshot.revision||response.verified!==true){
+          return deny('stale','Regional policy provider response was not current and verified.');
+        }
+        cleanText(response.policy_id,96,'regional policy id');
+        snapshot=freeze({state:response.state,revision:response.revision,
+          policy_id:response.policy_id,verified:true,source:'production_policy_provider'});
+        if(response.state==='blocked')blocked=true;
+        return projection();
+      },
+      snapshot(){return snapshot}
+    });
+    productionPolicies.add(policy);return policy;
+  }
+  function burnProductionPolicyHandle(handle){
+    if(!validHandle(productionHandles,handle))throw new TypeError('untrusted production policy channel');
+    productionHandles.delete(handle);
+  }
+  function createProductionRegionalPolicy(handle,configuration){
+    burnProductionPolicyHandle(handle);
+    return buildProductionRegionalPolicy(configuration);
+  }
+  function installProductionRegionalPolicy(handle,configuration){
+    burnProductionPolicyHandle(handle);
+    if(pendingProductionPolicy!==null)throw new TypeError('production policy already installed');
+    const policy=buildProductionRegionalPolicy(configuration);
+    if(!productionPolicies.has(policy))throw new TypeError('untrusted production policy');
+    pendingProductionPolicy=policy;return policy;
+  }
+  function consumeProductionRegionalPolicy(){
+    if(arguments.length!==0)throw new TypeError('production policy consume arguments');
+    const policy=pendingProductionPolicy;pendingProductionPolicy=null;
+    return policy&&productionPolicies.has(policy)?policy:null;
+  }
+  const bootstrap=freeze({
+    claimOfflineHandle(){if(offlineClaimed)throw new TypeError('offline channel already claimed');offlineClaimed=true;
+      const handle=Object.freeze(Object.create(null));offlineHandles.add(handle);return handle},
+    claimProductionHandle(){if(productionClaimed)throw new TypeError('production channel already claimed');productionClaimed=true;
+      const handle=Object.freeze(Object.create(null));productionHandles.add(handle);return handle}
+  });
+  const facade=freeze({createOfflineAdapter,createProductionAdapter,
+    createProductionRegionalPolicy,installProductionRegionalPolicy,
+    consumeProductionRegionalPolicy,MAX_QUERY_LENGTH,MAX_SOURCES,
+    MAX_RESULTS_PER_SOURCE,SEARCH_DESTINATIONS,SELECTION_GATES});
+  Object.defineProperty(root,'LoopPlatformProvider',{value:facade,writable:false,configurable:false,enumerable:true});
+  Object.defineProperty(root,'LoopPlatformProviderBootstrap',{value:bootstrap,writable:false,configurable:true,enumerable:false});
+})(globalThis);
+
+/* ============ SCRIPT: platform-offline-fixture.js ============ */
+(function(root){
+  'use strict';
+  const bootstrap=root.LoopPlatformProviderBootstrap;
+  if(!bootstrap||!Object.isFrozen(bootstrap)||typeof bootstrap.claimOfflineHandle!=='function'){
+    throw new TypeError('provider bootstrap unavailable');
+  }
+  const offlineHandle=bootstrap.claimOfflineHandle();
+  delete root.LoopPlatformProviderBootstrap;
+  function freeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){
+    Reflect.ownKeys(value).forEach(key=>freeze(value[key]));Object.freeze(value)}return value}
+  const EVENTS=freeze({
+    firebase:[{id:'sys-1',category:'system',title:'Price alert delivery paused',detail:'Device notification permission is off. Open system settings to change it.',occurred_at:'2026-08-23T09:39:00Z',read:false}],
+    stream:[{id:'chat-1',category:'community',title:'Glyph Hunters mentioned you',detail:'A Stream event projection from a fixture channel; no message was sent.',occurred_at:'2026-08-23T09:37:00Z',read:false}],
+    hyperliquid:[{id:'perp-1',category:'transaction',title:'Perp market data delayed',detail:'Read-only Hyperliquid feed is reconnecting. Trading remains unavailable.',occurred_at:'2026-08-23T09:34:00Z',read:true}],
+    privy:[{id:'wallet-1',category:'security',title:'New wallet session observed',detail:'Privy fixture session fact. Review devices when production access is configured.',occurred_at:'2026-08-23T09:31:00Z',read:true}]
+  });
+  const SEARCH=freeze({
+    market_data:[{id:'eth-token',kind:'token',title:'Ethereum',subtitle:'Market-data fixture · ETH'}],
+    stream:[{id:'eth-group',kind:'group',title:'ETH Holders Lounge',subtitle:'Stream fixture channel'}],
+    hyperliquid:[{id:'eth-perp',kind:'perp',title:'ETH-PERP',subtitle:'Hyperliquid read-only fixture market'}],
+    privy:[{id:'eth-wallet',kind:'user',title:'Your embedded wallet',subtitle:'Privy fixture identity'}]
+  });
+  const FACTS=freeze({
+    goplus:[{id:'gp-1',label:'Token permission fact',value:'No mint function reported in fixture',severity:'info',observed_at:'2026-08-23T09:20:00Z'}],
+    chainalysis:[{id:'ch-1',label:'Address screening',value:'Production screening not configured',severity:'warning',observed_at:'2026-08-23T09:20:00Z'}]
+  });
+  const PRIVY_SECURITY=freeze([
+    {id:'mfa',label:'MFA',state:'PENDING',detail:'Privy production configuration required.'},
+    {id:'app-lock',label:'App lock',state:'PENDING',detail:'Device capability audit required.'},
+    {id:'devices',label:'Devices & sessions',state:'PENDING',detail:'Privy/server session management is not configured.'},
+    {id:'recovery',label:'Recovery',state:'attention',detail:'Privy fixture recovery requires production verification.'},
+    {id:'login-history',label:'Login history',state:'PENDING',detail:'Privy/server history authority is not configured.'}
+  ]);
+  const source=(authority,items)=>freeze({authority,read:async()=>items});
+  const configuration=()=>freeze({
+    eventSources:['firebase','stream','hyperliquid','privy'].map(name=>source(name,EVENTS[name])),
+    searchSources:['market_data','stream','hyperliquid','privy'].map(name=>source(name,SEARCH[name])),
+    securitySources:['goplus','chainalysis'].map(name=>source(name,FACTS[name])),
+    privySecuritySource:source('privy',PRIVY_SECURITY),privacyClient:null
+  });
+  function createAdapter(){
+    if(arguments.length!==0)throw new TypeError('offline adapter accepts no configuration');
+    return root.LoopPlatformProvider.createOfflineAdapter(offlineHandle,configuration());
+  }
+  function regionalPolicy(){
+    if(arguments.length!==0)throw new TypeError('regional policy accepts no configuration');
+    let snapshot=freeze({state:'unknown',revision:0,policy_id:'offline-fixture-policy',
+      verified:false,source:'trusted_offline_policy_fixture'});
+    const capabilities=freeze(['wallet_mutation','privacy_mutation']);
+    const operations=freeze(['transfer','swap','approval','perp_order','privacy_export',
+      'privacy_delete','control_home-pay','control_token-buy','control_group-token-buy',
+      'control_group-copy-trade','control_wallet-send','control_wallet-swap',
+      'control_wallet-bridge','control_wallet-dapps','control_swap-submit',
+      'control_dapp-approve','control_approval-limit','control_approval-unlimited']);
+    const stages=freeze(['entry_gate','review_open','begin_handoff','provider_handoff',
+      'provider_mutation']);
+    function inspect(request,rechecking=false){
+      let values=null;
+      try{
+        const descriptors=request&&Object.getPrototypeOf(request)===Object.prototype?
+          Object.getOwnPropertyDescriptors(request):null;
+        if(!descriptors||Reflect.ownKeys(descriptors).some(key=>
+          !Object.prototype.hasOwnProperty.call(descriptors[key],'value')))return null;
+        values={};Reflect.ownKeys(descriptors).forEach(key=>{values[key]=descriptors[key].value});
+      }catch(_error){return null}
+      const keys=Object.keys(values||{}),expected=rechecking?
+        ['capability','operation','stage']:['capability'];
+      if(keys.length!==expected.length||expected.some(key=>!keys.includes(key))||
+         !capabilities.includes(values.capability))return null;
+      if(rechecking&&(!operations.includes(values.operation)||!stages.includes(values.stage)))
+        return null;
+      return values;
+    }
+    function projection(request,rechecking=false){
+      const input=inspect(request,rechecking),known=Boolean(input);
+      const allowed=false;
+      return freeze({allowed,state:known?snapshot.state:'unknown',revision:snapshot.revision,
+        policy_id:snapshot.policy_id,verified:snapshot.verified,source:snapshot.source,
+        reason:known&&snapshot.state==='eligible_readonly'?
+          'Offline eligibility preview is read-only; provider mutations remain unavailable.':
+          known?'This action is unavailable under the current regional policy.':
+          'Regional eligibility is unknown for this action.'});
+    }
+    return freeze({
+      decision(request){return projection(request)},
+      recheck(request){
+        const input=inspect(request,true);
+        if(!input){
+          return projection({capability:'unknown'});
+        }
+        return projection(input,true);
+      },
+      activateReadOnlyPreview(){
+        if(snapshot.revision!==0)return snapshot;
+        snapshot=freeze({state:'eligible_readonly',revision:1,
+          policy_id:'offline-readonly-preview',verified:true,
+          source:'explicit_offline_readonly_preview'});
+        return snapshot;
+      },
+      applyTrustedFixtureTransition(state){
+        if(!['blocked','unknown','stale','malformed'].includes(state))state='unknown';
+        snapshot=freeze({state,revision:snapshot.revision+1,policy_id:'offline-fixture-policy',
+          verified:state==='blocked',source:'trusted_offline_policy_fixture'});
+        return snapshot;
+      },
+      snapshot(){return snapshot}
+    });
+  }
+  const facade=freeze({createAdapter,regionalPolicy});
+  Object.defineProperty(root,'LoopPlatformOfflineFixture',{value:facade,writable:false,
+    configurable:false,enumerable:true});
+})(globalThis);
+
 /* ============ SCRIPT: app.js ============ */
 /* ---------- data ----------
    No 0–100 risk score anywhere: a single number invites users to treat a heuristic as a verdict,
@@ -5490,6 +5958,60 @@ const TOKENS = {
 const MKT = ['ETH','SOL','GLYPH','PXL'];
 
 /* ---------- app state (single source of truth) ---------- */
+const REGIONAL_BLOCKED_SESSION_KEY='loop.prototype.regional-blocked.v1';
+const REGIONAL_PROBE_SESSION_KEY='loop.prototype.regional-probe.v1';
+const regionalSessionAuthority=(()=>{
+  let storageReadable=false,storageWritable=false,roundtripConfirmed=false;
+  let trusted=true,storageRef=null,blockedObserved=false,probeOrdinal=0;
+  const snapshot=()=>Object.freeze({storageReadable,storageWritable,
+    roundtripConfirmed,trusted:trusted&&storageReadable&&storageWritable&&
+      roundtripConfirmed,blockedObserved});
+  const distrust=({readable=storageReadable}={})=>{
+    storageReadable=readable;storageWritable=false;roundtripConfirmed=false;
+    trusted=false;return snapshot();
+  };
+  const probeValue=()=>`regional-roundtrip:${String(performance.timeOrigin)}:`+
+    `${String(performance.now())}:${String(probeOrdinal+=1)}`;
+  function recheck(){
+    if(!trusted)return snapshot();
+    let store;
+    try{store=globalThis.sessionStorage}catch(_error){return distrust({readable:false})}
+    if(!store||typeof store!=='object'||(storageRef&&store!==storageRef))
+      return distrust({readable:false});
+    storageRef=store;
+    let previous;
+    try{previous=store.getItem(REGIONAL_PROBE_SESSION_KEY);storageReadable=true}
+    catch(_error){return distrust({readable:false})}
+    const value=probeValue();
+    try{
+      store.setItem(REGIONAL_PROBE_SESSION_KEY,value);
+      if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==value)return distrust();
+      if(previous===null){
+        store.removeItem(REGIONAL_PROBE_SESSION_KEY);
+        if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==null)return distrust();
+      }else{
+        store.setItem(REGIONAL_PROBE_SESSION_KEY,previous);
+        if(store.getItem(REGIONAL_PROBE_SESSION_KEY)!==previous)return distrust();
+      }
+      storageWritable=true;roundtripConfirmed=true;
+      blockedObserved=blockedObserved||
+        store.getItem(REGIONAL_BLOCKED_SESSION_KEY)==='1';
+      return snapshot();
+    }catch(_error){return distrust()}
+  }
+  function persistBlocked(){
+    const current=recheck();
+    if(!current.trusted)return current;
+    try{
+      storageRef.setItem(REGIONAL_BLOCKED_SESSION_KEY,'1');
+      if(storageRef.getItem(REGIONAL_BLOCKED_SESSION_KEY)!=='1')return distrust();
+      blockedObserved=true;return snapshot();
+    }catch(_error){return distrust()}
+  }
+  recheck();
+  return Object.freeze({snapshot,recheck,persistBlocked});
+})();
+let regionalBlockedLatch=regionalSessionAuthority.snapshot().blockedObserved;
 const ROUTES = {
   splash:{screen:'scr-splash',stack:['scr-splash'],parent:null,account:true},
   auth:{screen:'scr-auth',stack:['scr-auth'],parent:'splash',account:true},
@@ -5507,6 +6029,8 @@ const ROUTES = {
   wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
   profile:{screen:'scr-profile',stack:['scr-profile'],root:true},
   pay:{screen:'scr-pay',stack:['scr-home','scr-pay']},
+  notifications:{screen:'scr-notifications',stack:['scr-home','scr-notifications']},
+  search:{screen:'scr-search',stack:['scr-home','scr-search']},
   token:{screen:'scr-token',stack:['scr-market','scr-token']},
   group:{screen:'scr-group',stack:['scr-chat','scr-group']},
   voiceroom:{screen:'scr-group',stack:['scr-chat','scr-group']},
@@ -5517,8 +6041,16 @@ const ROUTES = {
   receive:{screen:'scr-receive',stack:['scr-wallet','scr-receive']},
   'tx-result':{screen:'scr-tx-result',stack:['scr-wallet','scr-tx-result']},
   swap:{screen:'scr-swap',stack:['scr-wallet','scr-swap']},
-  dapp:{screen:'scr-dapp',stack:['scr-wallet','scr-dapp']}
+  dapp:{screen:'scr-dapp',stack:['scr-wallet','scr-dapp']},
+  privacy:{screen:'scr-privacy',stack:['scr-profile','scr-privacy']},
+  security:{screen:'scr-security',stack:['scr-profile','scr-security']}
 };
+const PLATFORM_ADAPTER=globalThis.LoopPlatformOfflineFixture.createAdapter();
+const PRODUCTION_REGIONAL_POLICY=
+  globalThis.LoopPlatformProvider.consumeProductionRegionalPolicy();
+const PLATFORM_RUNTIME=PRODUCTION_REGIONAL_POLICY?'production_injected':'offline_fixture';
+const REGIONAL_POLICY=PRODUCTION_REGIONAL_POLICY||
+  globalThis.LoopPlatformOfflineFixture.regionalPolicy();
 const WALLET_ROUTE_DEFAULT=Object.freeze({asset:'ETH',chain:'ethereum'});
 const WALLET_ASSET_IDS=Object.freeze(['ETH','SOL','USDC','GLYPH']);
 const WALLET_CHAIN_IDS=Object.freeze(['ethereum','base','arbitrum','solana']);
@@ -5557,6 +6089,9 @@ const SCREEN_HASH = Object.entries(ROUTES).reduce((hashes,[hash,route])=>{
   return hashes;
 },{});
 const KNOWN_SCREENS = new Set(Object.values(ROUTES).flatMap(route=>route.stack));
+const REVIEW_ORIGIN_EXCLUDED = new Set([
+  'scr-notifications','scr-search','scr-privacy','scr-security'
+]);
 const SS_KEY = 'loop.proto.state';
 const ONBOARDING_KEYS={complete:'loop.proto.onboarding.complete',backupIncomplete:'loop.proto.onboarding.backupIncomplete',watchOnly:'loop.proto.onboarding.watchOnly',recoveryMethod:'loop.proto.onboarding.recoveryMethod'};
 const ONBOARDING_PREFIX = 'loop.proto.onboarding.';
@@ -6555,7 +7090,8 @@ function focusActiveScreen({backupChoice=''}={}){
       ? watchNotice : document.getElementById('home-title'))
     : screen.querySelector('[data-route-focus]')||screen.querySelector('h1,h2')||
       screen.querySelector('input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button:not(:disabled)');
-  if(screen.id!=='scr-home'&&!screen.classList.contains('account-screen')) return;
+  if(screen.id!=='scr-home'&&!screen.classList.contains('account-screen')&&
+     !screen.classList.contains('platform-screen')) return;
   if(target?.matches('h1,h2')&&!target.hasAttribute('tabindex')) target.setAttribute('tabindex','-1');
   let focusImmediately=screen.id==='scr-home';
   if(screen.id==='scr-wallet-backup'){
@@ -6922,7 +7458,9 @@ function render(){
 
   renderVoice();
   renderOnboardingFlags();
+  renderPlatformScreen(cur);
   renderWalletFoundation(cur);
+  applyRegionalCapabilityGates();
 }
 
 function walletPairCompatible(asset,chain){
@@ -7573,6 +8111,11 @@ function renderWalletSigningCapabilities(){
 }
 function walletSigningAllowed(controlId){
   const control=document.getElementById(controlId);
+  const regional=regionalCapabilityDecision(control,{recheck:true});
+  if(control&&!regional.allowed){
+    applyRegionalControlDecision(control,regional);
+    return false;
+  }
   const decision=walletSigningDecision(control);
   if(control) applySigningControlDecision(control,decision);
   if(!decision.allowed&&decision.reason!=='bridge'){
@@ -7615,7 +8158,8 @@ const sanitizeReviewProjectionForWrite=(()=>{
     'scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify',
     'scr-wallet-import','scr-home','scr-pay','scr-market','scr-token','scr-launchpad',
     'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
-    'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile']);
+    'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile',
+  ]);
   const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
   const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
   const includes=(values,value)=>{
@@ -7705,7 +8249,7 @@ const sanitizeReviewProjectionForWrite=(()=>{
   const clear=()=>{ownedOrigin=null};
   return freeze({projection,marker,captureOrigin,origin,clear});
 })();
-const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',
+const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',policyOperation:'',
   returningId:'',cancellingId:'',triggerId:'',originEntryKey:'',markerEntryKey:'',markerIssued:false,
   fallbackAllowed:false,result:null,expiryTimer:null,
   legacyVeilOwned:false,background:new Map()});
@@ -8023,6 +8567,12 @@ function renderReviewResult(result,{focus=false}={}){
   if(focus)document.getElementById('review-cancel').focus({preventScroll:true});
 }
 function openWalletReview(reviewId,trigger=document.activeElement){
+  const policyOperation=reviewOperation(reviewId);
+  const regional=regionalOperationDecision({capability:'wallet_mutation',
+    operation:policyOperation,stage:'review_open'});
+  if(!regional.allowed){
+    terminateReviewForRegionalPolicy(reviewId,regional);return false;
+  }
   const controller=ensureReviewController();
   const live=currentReviewLive(reviewId);
   const origin=sanitizeReviewProjectionForWrite.captureOrigin(reviewOriginProjection());
@@ -8034,7 +8584,8 @@ function openWalletReview(reviewId,trigger=document.activeElement){
   const result=controller?.open({review_id:reviewId,origin,live_context:live,
     trigger_ref:reviewRuntime.triggerId||'review-trigger',now_ms:reviewNow()})||null;
   if(!result?.ok){renderReviewResult(result,{focus:true});return false}
-  reviewRuntime.openId=reviewId;reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  reviewRuntime.openId=reviewId;reviewRuntime.policyOperation=policyOperation;
+  reviewRuntime.returningId='';reviewRuntime.cancellingId='';
   renderReviewResult(result,{focus:true});
   try{
     history.pushState(sanitizeReviewProjectionForWrite.marker(origin,reviewId),'',location.href);
@@ -8080,6 +8631,9 @@ function continueWalletReview(){
   const id=reviewRuntime.openId;
   if(!id||reviewRuntime.returningId||reviewRuntime.cancellingId||
      !reviewRuntime.controller)return;
+  const regional=regionalOperationDecision({capability:'wallet_mutation',
+    operation:reviewRuntime.policyOperation||reviewOperation(id),stage:'begin_handoff'});
+  if(!regional.allowed){terminateReviewForRegionalPolicy(id,regional);return}
   const marker=reviewMarkerInfo(history.state).snapshot;
   const candidateProjection=marker&&marker.review_id===id?
     {stack:marker.stack,voice:marker.voice}:null;
@@ -8161,9 +8715,21 @@ function showReviewProviderState(result){
   banner.textContent=result.ok?result.value.safe_message:result.error.safe_message;
   banner.hidden=false;
 }
+function terminateReviewForRegionalPolicy(reviewId,decision){
+  if(reviewId)reviewRuntime.controller?.consume({review_id:reviewId});
+  reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
+  reviewRuntime.policyOperation='';reviewRuntime.result=null;clearReviewEntryProof();
+  closeReviewSurface(true);
+  const banner=document.getElementById('review-provider-banner');
+  if(banner){banner.dataset.state='provider_blocked';
+    banner.textContent=`Blocked · ${decision?.reason||'Regional eligibility is unavailable.'}`;
+    banner.hidden=false}
+  applyRegionalCapabilityGates();
+}
 function completeReviewOriginReturn(origin){
   const id=reviewRuntime.returningId;
   if(!id)return;
+  const operation=reviewRuntime.policyOperation||reviewOperation(id);
   reviewRuntime.returningId='';reviewRuntime.cancellingId='';
   closeReviewSurface(true);reviewRuntime.openId='';reviewRuntime.result=null;
   clearReviewEntryProof();
@@ -8171,11 +8737,19 @@ function completeReviewOriginReturn(origin){
   const live=currentReviewLive(id);
   const now=reviewNow();
   queueMicrotask(()=>{
+    const regional=regionalOperationDecision({capability:'wallet_mutation',
+      operation,stage:'provider_handoff'});
+    if(!regional.allowed){terminateReviewForRegionalPolicy(id,regional);return}
     const request={review_id:id,live_context:live,origin,now_ms:now};
     const pending=controller.handoff(request);
     showReviewProviderState(pending);
     if(!pending.ok||pending.value.state!=='handoff_pending')return;
-    queueMicrotask(()=>showReviewProviderState(controller.handoff(request)));
+    queueMicrotask(()=>{
+      const finalRegional=regionalOperationDecision({capability:'wallet_mutation',
+        operation,stage:'provider_handoff'});
+      if(!finalRegional.allowed){terminateReviewForRegionalPolicy(id,finalRegional);return}
+      showReviewProviderState(controller.handoff(request));
+    });
   });
 }
 function consumeReviewForNavigation(){
@@ -8185,7 +8759,7 @@ function consumeReviewForNavigation(){
   }
   reviewRuntime.controller?.consume({review_id:reviewRuntime.openId});
   reviewRuntime.openId='';reviewRuntime.returningId='';reviewRuntime.cancellingId='';
-  reviewRuntime.result=null;
+  reviewRuntime.policyOperation='';reviewRuntime.result=null;
   clearReviewEntryProof();
   closeReviewSurface(false);
 }
@@ -8231,7 +8805,8 @@ function snapshotReviewStack(candidate){
       return null;
     }
     const value=expected.slice(0,-1).map(key=>descriptors[key].value);
-    return isValidStack(value)?value:null;
+    return isValidStack(value)&&!value.some(screen=>REVIEW_ORIGIN_EXCLUDED.has(screen))?
+      value:null;
   }catch(error){return null}
 }
 function reviewMarkerInfo(candidate){
@@ -8843,6 +9418,141 @@ function renderWalletFoundation(screen){
 }
 
 /* ---------- market list + sparklines ---------- */
+let notificationFilter='all';
+function platformElement(tag,className,text){
+  const element=document.createElement(tag);
+  if(className) element.className=className;
+  if(text!==undefined) element.textContent=text;
+  return element;
+}
+const PLATFORM_SEARCH_ROUTE_BY_KIND=Object.freeze({token:'token',contract:'token',
+  group:'chat',user:'profile',perp:'market'});
+function resolvePlatformSearchRoute(item){
+  try{
+    if(!item||typeof item!=='object'||Array.isArray(item)||!Object.isFrozen(item)||
+       Object.getPrototypeOf(item)!==Object.prototype)return '';
+    const descriptors=Object.getOwnPropertyDescriptors(item);
+    const keys=Reflect.ownKeys(descriptors);
+    const expected=['id','authority','kind','title','subtitle','route'];
+    if(keys.length!==expected.length||expected.some(key=>
+      !descriptors[key]||!Object.prototype.hasOwnProperty.call(descriptors[key],'value')))return '';
+    const kind=descriptors.kind.value,target=PLATFORM_SEARCH_ROUTE_BY_KIND[kind];
+    if(!target||descriptors.route.value!=='#'+target||!ROUTES[target]||
+       ROUTES[target].account||ROUTES[target].sensitive)return '';
+    const canonical=strictHashRoute(target);
+    if(canonical.target!==target||canonical.canonical!==target||
+       guardAccountRoute(target)!==target)return '';
+    return target;
+  }catch(_error){return ''}
+}
+function openPlatformRoute(candidate){
+  const target=typeof candidate==='string'&&
+    ['search','notifications','privacy','security'].includes(candidate)?candidate:
+    resolvePlatformSearchRoute(candidate);
+  if(!target||!ROUTES[target]||ROUTES[target].account||ROUTES[target].sensitive)return false;
+  const guarded=guardAccountRoute(target);
+  if(guarded!==target)return false;
+  navigate(ROUTES[target].stack.slice());return true;
+}
+async function renderNotifications(){
+  const list=document.getElementById('notifications-list');
+  const status=document.getElementById('notifications-status');
+  if(!list||!status)return;
+  status.textContent='Loading bounded provider projections…';list.replaceChildren();
+  try{
+    const response=await PLATFORM_ADAPTER.notifications({limit:20});
+    if(activeScr()!=='scr-notifications')return;
+    const items=response.items.filter(item=>notificationFilter==='all'||
+      item.category===notificationFilter);
+    status.textContent=items.length
+      ?`${items.length} fixture events · durable read sync PENDING`
+      :'No fixture events in this category.';
+    items.forEach(item=>{
+      const article=platformElement('article','platform-row');
+      const head=platformElement('div','platform-row-head');
+      head.append(platformElement('span',`platform-kind kind-${item.category}`,item.category),
+        platformElement('time','',item.occurred_at.slice(11,16)));
+      article.append(head,platformElement('h2','',item.title),
+        platformElement('p','',item.detail),
+        platformElement('small','',`${item.authority} official-event fixture · ${item.read?'read projection':'unread projection'}`));
+      list.append(article);
+    });
+  }catch(_error){status.textContent='Provider notification projection unavailable.'}
+}
+async function submitPlatformSearch(){
+  const input=document.getElementById('platform-search-input');
+  const status=document.getElementById('platform-search-status');
+  const list=document.getElementById('platform-search-results');
+  const query=input.value.trim();
+  list.replaceChildren();
+  if(!query){status.textContent='Enter a query.';input.focus();return}
+  status.textContent='Searching up to 4 injected providers…';
+  try{
+    const response=await PLATFORM_ADAPTER.search({query});
+    if(activeScr()!=='scr-search')return;
+    status.textContent=response.results.length
+      ?`${response.results.length} offline fixture results · no LOOP index`
+      :'No provider fixture results.';
+    response.results.forEach(item=>{
+      const button=platformElement('button','platform-row platform-result');
+      button.type='button';
+      button.append(platformElement('span','platform-kind',item.kind),
+        platformElement('h2','',item.title),platformElement('p','',item.subtitle),
+        platformElement('small','',`${item.authority} projection`));
+      button.addEventListener('click',()=>openPlatformRoute(item));
+      list.append(button);
+    });
+  }catch(_error){status.textContent='Search provider projection unavailable.'}
+}
+async function renderSecurityFacts(){
+  const capabilities=document.getElementById('privy-security-capabilities');
+  const list=document.getElementById('security-facts');
+  const status=document.getElementById('security-facts-status');
+  if(!capabilities||!list||!status)return;
+  capabilities.replaceChildren();list.replaceChildren();
+  status.textContent='Loading Privy security capabilities and secondary facts…';
+  try{
+    const [privy,response]=await Promise.all([
+      PLATFORM_ADAPTER.privySecurity(),PLATFORM_ADAPTER.securityFacts()
+    ]);
+    if(activeScr()!=='scr-security')return;
+    status.textContent=`Privy: ${privy.capabilities.length} capability states · ${response.facts.length} secondary facts`;
+    privy.capabilities.forEach(item=>{
+      const row=platformElement('div','set-row');
+      const copy=platformElement('div');
+      copy.append(platformElement('p','sr-t',item.label),platformElement('p','sr-s',item.detail));
+      row.append(copy,platformElement('span',item.state==='PENDING'?
+        'risk-pill risk-med':'chip',item.state));capabilities.append(row);
+    });
+    response.facts.forEach(item=>{
+      const article=platformElement('article','platform-row');
+      const head=platformElement('div','platform-row-head');
+      head.append(platformElement('span',`platform-kind severity-${item.severity}`,item.authority),
+        platformElement('time','',item.observed_at.slice(11,16)));
+      article.append(head,platformElement('h2','',item.label),
+        platformElement('p','',item.value));list.append(article);
+    });
+  }catch(_error){status.textContent='Privy security authority unavailable · H5 fails closed.'}
+}
+async function requestPrivacy(kind){
+  const status=document.getElementById('privacy-operation-status');
+  const policy=regionalOperationDecision({capability:'privacy_mutation',
+    operation:`privacy_${kind}`,stage:'provider_mutation'});
+  if(!policy.allowed){
+    status.textContent=`Blocked · ${policy.reason}`;applyRegionalCapabilityGates();return;
+  }
+  status.textContent='Checking provider/server capability…';
+  try{
+    const response=await PLATFORM_ADAPTER.requestPrivacyOperation({kind});
+    if(activeScr()!=='scr-privacy')return;
+    status.textContent=`${response.status} · ${kind} was not submitted; no mutation occurred.`;
+  }catch(_error){status.textContent='PENDING · provider/server capability unavailable.'}
+}
+function renderPlatformScreen(screen){
+  if(screen==='scr-notifications')renderNotifications();
+  if(screen==='scr-search')submitPlatformSearch();
+  if(screen==='scr-security')renderSecurityFacts();
+}
 function rng(seed){let s=seed*9301+49297;return()=>{s=(s*1664525+1013904223)>>>0;return s/2**32}}
 function series(seed,drift,n){const r=rng(seed);let v=50,out=[];for(let i=0;i<n;i++){v=Math.max(8,v+(r()-drift)*-9);out.push(v)}return out}
 function sparkSVG(t){
@@ -9156,6 +9866,183 @@ function shuffleAlias(){ai=(ai+1)%ALIASES.length;const a=ALIASES[ai];
 let toastT;
 function toast(msg){const t=document.getElementById('toast');t.textContent=String(msg);t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2600)}
 
+/* ---------- global provider/system states ---------- */
+const GLOBAL_BLOCKING_IDS=['global-server-error','global-region-restriction','force-update-dialog'];
+function reviewOperation(reviewId){
+  if(typeof reviewId!=='string')return 'unknown_review';
+  if(reviewId.startsWith('review-transfer'))return 'transfer';
+  if(reviewId.startsWith('review-swap'))return 'swap';
+  if(reviewId.startsWith('review-approve'))return 'approval';
+  if(reviewId.startsWith('review-perp'))return 'perp_order';
+  return 'unknown_review';
+}
+function regionalControlOperation(control){
+  if(control?.dataset?.privacyOperation)return `privacy_${control.dataset.privacyOperation}`;
+  if(control?.id==='review-continue')return reviewRuntime.policyOperation||
+    reviewOperation(reviewRuntime.openId);
+  return typeof control?.id==='string'&&control.id?`control_${control.id}`:'unknown_operation';
+}
+function latchRegionalBlock(decision){
+  if(decision?.state!=='blocked'||decision.verified!==true)return;
+  regionalBlockedLatch=true;
+  regionalSessionAuthority.persistBlocked();
+}
+function refreshRegionalBlockedSessionLatch(){
+  const storage=regionalSessionAuthority.recheck();
+  if(storage.blockedObserved)regionalBlockedLatch=true;
+  return Object.freeze({latched:regionalBlockedLatch,storage});
+}
+function regionalStorageUnavailableDecision(){
+  return Object.freeze({allowed:false,state:'unknown',revision:0,policy_id:'',
+    verified:false,source:'regional_storage_unavailable',
+    reason:'Regional eligibility cannot be verified because session persistence is unavailable.'});
+}
+function regionalLatchedDecision(decision,storage=regionalSessionAuthority.snapshot()){
+  latchRegionalBlock(decision);
+  if(storage.blockedObserved)regionalBlockedLatch=true;
+  if(regionalBlockedLatch){
+    return Object.freeze({allowed:false,state:'blocked',revision:decision?.revision||0,
+      policy_id:decision?.policy_id||'',verified:true,source:'session_blocked_latch',
+      reason:'Regional policy blocked this session. Reload and history cannot restore restricted actions.'});
+  }
+  if(!storage.trusted)return regionalStorageUnavailableDecision();
+  return decision;
+}
+function regionalOperationDecision({capability,operation,stage}){
+  try{
+    const persistence=refreshRegionalBlockedSessionLatch();
+    if(persistence.latched)return regionalLatchedDecision(
+      REGIONAL_POLICY.decision({capability}),persistence.storage);
+    if(!persistence.storage.trusted)return regionalStorageUnavailableDecision();
+    const decision=REGIONAL_POLICY.recheck({capability,operation,stage});
+    if(!decision||!Object.isFrozen(decision)||typeof decision.allowed!=='boolean'||
+       typeof decision.reason!=='string'||typeof decision.state!=='string'||
+       typeof decision.verified!=='boolean')throw new TypeError('regional decision');
+    return regionalLatchedDecision(decision,persistence.storage);
+  }catch(_error){
+    return regionalLatchedDecision(Object.freeze({allowed:false,state:'unknown',revision:0,
+      policy_id:'',verified:false,source:'regional_policy_unavailable',
+      reason:'Regional eligibility is unavailable.'}));
+  }
+}
+function regionalCapabilityDecision(control,{recheck=false}={}){
+  try{
+    const capability=control?.hasAttribute('data-requires-signing')?
+      'wallet_mutation':control?.dataset?.providerMutation||'';
+    const decision=recheck?regionalOperationDecision({capability,
+      operation:regionalControlOperation(control),stage:'entry_gate'}):
+      regionalLatchedDecision(REGIONAL_POLICY.decision({capability}));
+    if(!decision||!Object.isFrozen(decision)||typeof decision.allowed!=='boolean'||
+       typeof decision.reason!=='string'||typeof decision.state!=='string'||
+       typeof decision.verified!=='boolean'){
+      return Object.freeze({allowed:false,state:'unknown',
+        reason:'Regional eligibility is unavailable.'});
+    }
+    return decision;
+  }catch(_error){
+    return Object.freeze({allowed:false,state:'unknown',
+      reason:'Regional eligibility is unavailable.'});
+  }
+}
+function applyRegionalControlDecision(control,decision){
+  control.setAttribute('data-regional-policy-control',
+    control.hasAttribute('data-requires-signing')?
+      'wallet_mutation':control.dataset.providerMutation||'unknown');
+  if(decision.allowed){
+    if(control.getAttribute('aria-describedby')==='regional-policy-explanation'){
+      control.removeAttribute('aria-describedby');control.removeAttribute('aria-disabled');
+      if(control.hasAttribute('data-provider-mutation'))control.disabled=false;
+      else applySigningControlDecision(control,walletSigningDecision(control));
+    }
+    return;
+  }
+  control.disabled=true;control.setAttribute('aria-disabled','true');
+  control.setAttribute('aria-describedby','regional-policy-explanation');
+}
+function applyRegionalCapabilityGates(){
+  const controls=[...document.querySelectorAll(
+    '[data-requires-signing],[data-provider-mutation]')];
+  let blocked=false;
+  controls.forEach(control=>{
+    const decision=regionalCapabilityDecision(control);blocked=blocked||!decision.allowed;
+    applyRegionalControlDecision(control,decision);
+  });
+  const explanation=document.getElementById('regional-policy-explanation');
+  if(explanation){
+    const snapshot=REGIONAL_POLICY.snapshot();
+    explanation.textContent=blocked?
+      `Regional policy (${snapshot.state}) prevents restricted actions.`:'';
+    explanation.hidden=!blocked;
+  }
+}
+function clearSystemQuery(){
+  const url=new URL(location.href);url.searchParams.delete('system');
+  history.replaceState(history.state,'',url.pathname+url.search+url.hash);
+}
+function hideGlobalSystemStates(){
+  document.getElementById('global-offline-banner').hidden=true;
+  GLOBAL_BLOCKING_IDS.forEach(id=>{
+    const surface=document.getElementById(id);surface.hidden=true;
+    surface.setAttribute('inert','');surface.setAttribute('aria-hidden','true');
+  });
+  const viewport=document.getElementById('viewport-shell');
+  viewport.removeAttribute('inert');viewport.removeAttribute('aria-hidden');
+}
+function recoverGlobalSystemState({home=false,preserveRestriction=false}={}){
+  if(!preserveRestriction)clearSystemQuery();
+  hideGlobalSystemStates();
+  if(preserveRestriction)document.getElementById('phone').dataset.regionalRestriction='active';
+  if(home&&activeScr()!=='scr-home')navigate(ROUTES.home.stack.slice(),{replace:true});
+  focusActiveScreen();
+}
+function activateOfflineReadOnlyPreview(){
+  const status=document.getElementById('global-offline-preview-status');
+  if(PLATFORM_RUNTIME!=='offline_fixture'||
+     typeof REGIONAL_POLICY.activateReadOnlyPreview!=='function'){
+    if(status)status.textContent='Read-only preview is unavailable in this runtime.';
+    return false;
+  }
+  const snapshot=REGIONAL_POLICY.activateReadOnlyPreview();
+  applyRegionalCapabilityGates();
+  if(status)status.textContent=snapshot.state==='eligible_readonly'?
+    'Read-only eligibility preview enabled. Signing and provider mutations remain blocked.':
+    'Read-only preview remains unavailable.';
+  return snapshot.state==='eligible_readonly';
+}
+function showBlockingGlobalState(id){
+  hideGlobalSystemStates();
+  const viewport=document.getElementById('viewport-shell');
+  viewport.setAttribute('inert','');viewport.setAttribute('aria-hidden','true');
+  const surface=document.getElementById(id);surface.hidden=false;
+  surface.removeAttribute('inert');surface.setAttribute('aria-hidden','false');surface.focus();
+}
+function setupGlobalSystemState(){
+  const state=new URLSearchParams(location.search).get('system');
+  document.getElementById('phone').dataset.platformRuntime=PLATFORM_RUNTIME;
+  hideGlobalSystemStates();
+  if(state==='offline'){
+    const banner=document.getElementById('global-offline-banner');banner.hidden=false;
+    document.getElementById('global-offline-retry').focus();
+  }else if(state==='server-error')showBlockingGlobalState('global-server-error');
+  else if(state==='regional'){
+    document.getElementById('phone').dataset.regionalRestriction='active';
+    showBlockingGlobalState('global-region-restriction');
+  }
+  else if(state==='force-update')showBlockingGlobalState('force-update-dialog');
+  applyRegionalCapabilityGates();
+}
+function handleGlobalSystemKeys(event){
+  const surface=GLOBAL_BLOCKING_IDS.map(id=>document.getElementById(id)).find(item=>!item.hidden);
+  if(!surface)return;
+  if(event.key==='Escape'){event.preventDefault();return}
+  if(event.key!=='Tab')return;
+  const controls=[...surface.querySelectorAll('button:not(:disabled)')];
+  if(!controls.length){event.preventDefault();surface.focus();return}
+  const first=controls[0],last=controls.at(-1);
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}
+}
+
 /* ---------- guided demos (desktop aside) ---------- */
 function demoTokenCard(){openGroup();toast('Tickers in chat become live, executable cards')}
 function demoSecurity(){goTab('market');setTimeout(()=>{openToken('GLYPH');toast('AI security is a layer, not a tab — it follows the token')},350)}
@@ -9217,9 +10104,11 @@ window.addEventListener('unload',()=>{
 });
 window.addEventListener('pageshow',event=>{
   if(!event.persisted) return;
+  refreshRegionalBlockedSessionLatch();
   setupAccountScreen(activeScr());
   focusActiveScreen();
   restoreReviewFromCurrentEntry();
+  applyRegionalCapabilityGates();
 });
 
 /* ---------- session restore ---------- */
@@ -9298,9 +10187,36 @@ document.getElementById('review-cancel').addEventListener('click',cancelWalletRe
 document.getElementById('review-continue').addEventListener('click',continueWalletReview);
 document.getElementById('review-refresh').addEventListener('click',refreshWalletReview);
 document.getElementById('review-dialog').addEventListener('keydown',handleReviewKeys);
+document.querySelectorAll('[data-notification-filter]').forEach(button=>button.addEventListener('click',()=>{
+  notificationFilter=button.dataset.notificationFilter;
+  document.querySelectorAll('[data-notification-filter]').forEach(item=>
+    item.classList.toggle('on',item===button));renderNotifications();
+}));
+document.getElementById('platform-search-form').addEventListener('submit',event=>{
+  event.preventDefault();submitPlatformSearch();
+});
+document.querySelectorAll('[data-privacy-operation]').forEach(button=>
+  button.addEventListener('click',()=>requestPrivacy(button.dataset.privacyOperation)));
+document.getElementById('global-offline-retry').addEventListener('click',()=>recoverGlobalSystemState());
+document.getElementById('global-offline-preview').addEventListener('click',activateOfflineReadOnlyPreview);
+document.getElementById('global-server-retry').addEventListener('click',()=>recoverGlobalSystemState());
+document.getElementById('global-region-home').addEventListener('click',()=>
+  recoverGlobalSystemState({home:true,preserveRestriction:true}));
+document.addEventListener('keydown',handleGlobalSystemKeys);
 document.addEventListener('click',event=>{
-  const signingControl=event.target.closest?.('[data-requires-signing]');
-  if(!signingControl) return;
+  const mutationControl=event.target.closest?.(
+    '[data-requires-signing],[data-provider-mutation]');
+  if(!mutationControl)return;
+  const regional=regionalCapabilityDecision(mutationControl,{recheck:true});
+  applyRegionalControlDecision(mutationControl,regional);
+  if(!regional.allowed){
+    event.preventDefault();event.stopImmediatePropagation();
+    const explanation=document.getElementById('regional-policy-explanation');
+    if(explanation){explanation.textContent=regional.reason;explanation.hidden=false}
+    return;
+  }
+  const signingControl=mutationControl.closest?.('[data-requires-signing]');
+  if(!signingControl)return;
   const decision=walletSigningDecision(signingControl);
   applySigningControlDecision(signingControl,decision);
   if(decision.allowed) return;
@@ -9313,4 +10229,5 @@ document.addEventListener('click',event=>{
   }
 },{capture:true});
 if(!restore()) route();
+setupGlobalSystemState();
 </script>

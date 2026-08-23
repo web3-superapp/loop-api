@@ -3,6 +3,7 @@
 import pathlib
 import sys
 from playwright.sync_api import sync_playwright
+from platform_policy_test_app import production_policy_test_app
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / 'app.html'
@@ -10,6 +11,7 @@ URL = APP.as_uri()
 PRODUCTION_SCRIPTS = [
     'vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
     'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
+    'platform-provider.js', 'platform-offline-fixture.js',
     'app.js',
 ]
 
@@ -39,7 +41,7 @@ def fresh(pg, h):
 manifest = (ROOT / 'src/scripts-order.txt').read_text().splitlines()
 generated = APP.read_text()
 check(manifest == PRODUCTION_SCRIPTS,
-      f'生产脚本为精确六项顺序: {manifest}')
+      f'生产脚本为精确八项顺序: {manifest}')
 check(generated.count(
     '/* ============ SCRIPT: stream-chat-provider.js ============ */') == 1,
       '生成物恰好包含一次 Stream 生产适配器')
@@ -47,6 +49,7 @@ check('StreamChatOfflineFixture' not in generated and
       'Offline fixture — Stream credentials not connected' not in generated,
       '测试专用 Stream 离线 fixture 未进入生产生成物')
 
+URL = production_policy_test_app(ROOT).as_uri()
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True)

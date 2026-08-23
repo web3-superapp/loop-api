@@ -61,20 +61,28 @@ python3 _tmp/verify_account.py      # 账号引导回归（流程/安全/无障�
 python3 _tmp/verify_wallet_foundation.py  # F1/F2/F6/F11/F16 focused 安全与交互验证
 python3 _tmp/verify_wallet_transfer.py    # F3–F5/F12 路由壳、manifest 与安全边界
 python3 _tmp/verify_stream_chat.py        # Stream 合同、薄适配器与生产 bundle 边界
+python3 _tmp/verify_platform_ui.py        # B3/B4/H3/H5 + I1/I2/I3/I5 provider/UI 边界
 python3 build_docs.py && python3 _tmp/verify_docs.py  # 文档生成与口径回归
 ```
 
 `docs.html` 内嵌 `docs_vendor/vendor-lock.json` 精确固定的官方 npm `marked@18.0.10` UMD 字节，不依赖 CDN；`build_docs.py` 在生成前校验 bundle 与 MIT LICENSE 的 SHA-256。若 Marked API 不兼容或解析异常，页面以 `textContent` 回退显示 Markdown 原文。
 
-当前生成原型包含 **26 个 routed screen fragments**（原有 22 个 manifest 项 + F3–F5/F12 的 4 个语义路由壳）；F11 是共享弹层，不单独计 routed screen。四个新增片段只提供可深链、可返回、默认不可用的结构，不包含转账业务、provider、签名或结果模拟。权威口径以 `文档/页面清单.md` 为准：A 档 47 屏，全量 103 屏；26 是当前构建 manifest 数，不是全量完成数，F3–F5/F12 仍待实现。
+当前生成原型包含 **30 个 routed screen fragments**：在 26 屏钱包/账户基线上新增 B3 `#notifications`、B4 `#search`、H3 `#privacy`、H5 `#security`，并加入 I1 无网、I2 服务端错误、I3 强更、I5 地区限制四个全局状态。F11 与 I3 是共享弹层/状态，不单独计 routed screen。权威口径仍以 `文档/页面清单.md` 为准：A 档 47 屏，全量 103 屏；30 是当前构建 manifest 数，不是全量完成数，F3–F5/F12 与其余 A–I 能力仍待实现。
+
+### 当前 App-wide provider/UI 切片（2026-08-23）
+
+- 通知只投影 Firebase delivery 与 Stream、Hyperliquid、Privy 官方事件；durable inbox、read sync、preferences 与 webhook ingestion 仍由 integration catalog 的 provider selection gate 默认拒绝。
+- 搜索仅做最多 4 个注入 provider、每个最多 5 条结果的 bounded fan-out，不创建 LOOP 搜索索引、社交图谱或 ranking store。
+- 隐私导出/删除只接受 provider/server async `PENDING` 合同；离线 fixture 明确 `mutation_performed=false`。安全中心只展示 GoPlus、Chainalysis、Privy 事实，不计算自有风险分或安全结论。
+- `LoopPlatformOfflineFixture` 不发网络请求、不含凭据、不落持久化数据，也不会回退到生产；生产接入必须复用已审核 provider/官方 SDK/成熟 GitHub 项目，通过 `LoopPlatformProvider` 薄适配层，不在客户端重建 whole-app 基础设施。
 
 ### 当前 HTML 钱包基础里程碑（2026-08-23）
 
 - 已覆盖 F1 钱包总览、F2 资产详情、F6 收款、F11 统一 Intent 确认弹层，并让 F16 限额/无限授权与 Swap 共用同一 F11 入口。
 - 原型仅使用 `SimulatedPrivyWalletAdapter` 的冻结公开 fixture：**零网络请求、不执行签名、不广播交易、不持有钱包密钥**。页面中的 pending/succeeded 只能是明确标注的模拟 provider fixture。
 - 生产接入边界（尚未接入）走 **Privy Wallet Actions + 薄 BFF**：嵌入式 Wallet Actions 由客户端生成用户授权签名，BFF 持有 app secret 并转发请求；只有对应 Privy 官方路径实际提供认证或 MFA 时，产品才显示该控制；外部钱包保留它自己的最终确认。F11 不替代这些 provider controls。当前 Flutter/BFF 路径尚未接入，不得将 HTML fixture 写成已有生产认证或确认层。
-- `src/scripts-order.txt` 精确固定六项生产顺序：QR vendor → wallet provider → wallet review → wallet transfer → Stream provider → app。`src/test-fixtures/` 被构建器精确排除；测试 fixture 不得进入 `app.html`。`src/screens-order.txt` 决定屏顺序，`src/vendor/vendor-lock.json` 锁定本地 QR 依赖来源；focused verifiers 同时校验生成物、供应商边界、金额精度、历史投影、无障碍与安全扫描。
-- **全项目未完成**：Stream 生产薄适配 seam 已进入静态 runtime，但凭证、官方 SDK、商业/license 与 R0 证据尚未接入，所有 Chat 写入继续 fail closed；Hyperliquid Perp 与其余 A–I 能力仍是 pending / in progress，继续遵循“集成优先”。
+- `src/scripts-order.txt` 精确固定八项生产顺序：QR vendor → wallet provider → wallet review → wallet transfer → Stream provider → platform provider → offline fixture → app。`src/test-fixtures/` 被构建器精确排除；测试 fixture 不得进入 `app.html`。`src/screens-order.txt` 决定屏顺序，`src/vendor/vendor-lock.json` 锁定本地 QR 依赖来源；focused verifiers 同时校验生成物、供应商边界、金额精度、历史投影、无障碍与安全扫描。
+- **全项目未完成**：Stream 生产薄适配 seam 与首批 platform/UI offline 边界已进入静态 runtime，但凭证、官方 SDK、商业/license 与 R0 证据尚未接入，所有 provider 写入继续 fail closed；Hyperliquid Perp 与其余 A–I 能力仍是 pending / in progress，继续遵循“整 App 成熟方案/官方 SDK/成熟 GitHub 代码集成优先”。
 
 **新增一屏**：在 `src/screens/` 建片段 → 在 `screens-order.txt` 加一行 → `python3 build.py`。
 

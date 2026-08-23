@@ -121,9 +121,9 @@ manifest = [line.strip() for line in read('src/screens-order.txt').splitlines()
 expected_screen_manifest = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
-    'tx-result', 'swap', 'dapp', 'profile',
+    'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
 current_docs = current_claim_lines('\n'.join((
     readme, inventory, schedule, findings_doc)))
@@ -290,11 +290,11 @@ check(all(result['exit'] != 0 and not result['generated']
       f'Marked bundle/license 拒绝 internal/external symlink：'
       f'{locked_file_symlink_results}')
 
-check(manifest == expected_screen_manifest and len(set(manifest)) == 26,
-      f'生成屏 manifest 是精确 26 个唯一有序项（{len(manifest)}）')
-check('26 个 routed screen fragments' in readme and
-      '26-screen routed manifest' in findings_doc,
-      'README/findings 当前生成口径是 26 屏')
+check(manifest == expected_screen_manifest and len(set(manifest)) == 30,
+      f'生成屏 manifest 是精确 30 个唯一有序项（{len(manifest)}）')
+check('30 个 routed screen fragments' in readme and
+      '30-screen routed manifest' in findings_doc,
+      'README/findings 当前生成口径是 30 屏')
 check(all(term in current_docs for term in (
     'F3–F5', 'F12', '待实现')),
       '新增 transfer/result 路由仅为结构壳，F3–F5/F12 仍显式待实现')
@@ -435,11 +435,15 @@ stream_v5_integrated_app_hash = \
     'fc4041d2dfe986c34eedb0ac3f8fac2b2bfb73cf008b0e50c5dd60a63b169225'
 task1_current_docs_hash = \
     'b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b'
+platform_current_app_hash = \
+    'f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6'
+platform_current_docs_hash = \
+    '3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278'
 hashes_in_findings = re.findall(r'\b[a-f0-9]{64}\b', findings_doc)
 actual_app_hash = sha256(ROOT / 'app.html')
 actual_docs_hash = sha256(PAGE)
-check(actual_app_hash == stream_v5_integrated_app_hash and
-      actual_docs_hash == task1_current_docs_hash and
+check(actual_app_hash == platform_current_app_hash and
+      actual_docs_hash == platform_current_docs_hash and
       task1_quality_remediation_app_hash != task1_post_spec_fix_app_hash and
       app_pre_review_hash in findings_doc and
       docs_pre_review_hash in findings_doc and
@@ -452,12 +456,16 @@ check(actual_app_hash == stream_v5_integrated_app_hash and
       task1_post_spec_fix_app_hash in findings_doc and
       stream_v5_integrated_app_hash in findings_doc and
       task1_current_docs_hash in findings_doc and
+      platform_current_app_hash in findings_doc and
+      platform_current_docs_hash in findings_doc and
       set(hashes_in_findings) >= {
           app_pre_review_hash, docs_pre_review_hash, docs_post_remediation_hash,
           docs_quality_remediation_hash, docs_vendored_marked_hash,
           task1_app_hash, task1_docs_hash,
           task1_quality_remediation_app_hash, task1_post_spec_fix_app_hash,
-          stream_v5_integrated_app_hash, task1_current_docs_hash} and
+          stream_v5_integrated_app_hash, task1_current_docs_hash,
+          platform_current_app_hash,
+          platform_current_docs_hash} and
       all(term in findings_doc for term in (
           'Task 8 pre-review deterministic evidence',
           'pre-review evidence, not a final checkpoint',
@@ -476,6 +484,8 @@ check(actual_app_hash == stream_v5_integrated_app_hash and
           'post-spec-fix checkpoint, not F3–F5/F12 implementation',
           'Stream v5 build integration deterministic evidence',
           'production seam checkpoint, not a connected Stream provider',
+          'App-wide platform/UI candidate deterministic evidence',
+          'not credentialed production provider delivery',
           'global goal remains incomplete')),
       f'历史/Task 1/Stream v5 checkpoint SHA-256 已区分，当前实际 app/docs hash '
       f'与对应记录一致：{actual_app_hash}/{actual_docs_hash}')

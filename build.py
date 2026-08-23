@@ -33,6 +33,8 @@ EXPECTED_SCREENS = (
     'wallet-import',
     'home',
     'pay',
+    'notifications',
+    'search',
     'market',
     'token',
     'launchpad',
@@ -48,6 +50,8 @@ EXPECTED_SCREENS = (
     'swap',
     'dapp',
     'profile',
+    'privacy',
+    'security',
 )
 EXPECTED_SCRIPTS = (
     'vendor/qrcode-generator-1.4.4.js',
@@ -55,6 +59,8 @@ EXPECTED_SCRIPTS = (
     'wallet-review.js',
     'wallet-transfer.js',
     'stream-chat-provider.js',
+    'platform-provider.js',
+    'platform-offline-fixture.js',
     'app.js',
 )
 EXPECTED_VENDOR_LOCK = {
@@ -86,7 +92,7 @@ if any(not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', name) for name in order):
 if len(order) != len(set(order)):
     sys.exit('screens-order.txt contains duplicate entries')
 if order != list(EXPECTED_SCREENS):
-    sys.exit('screens-order.txt must contain the exact pinned 26-screen order')
+    sys.exit('screens-order.txt must contain the exact pinned 30-screen order')
 
 screen_paths = {}
 for name in order:
@@ -126,7 +132,7 @@ def confined_source_file(relative, label, *, require_js=False):
 
 
 if scripts_order != list(EXPECTED_SCRIPTS):
-    sys.exit('scripts-order.txt must contain the exact pinned six-script order')
+    sys.exit('scripts-order.txt must contain the exact pinned eight-script order')
 script_paths = {
     name: confined_source_file(name, 'script manifest entry', require_js=True)
     for name in scripts_order

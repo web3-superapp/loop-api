@@ -5,6 +5,7 @@ import re
 import sys
 
 from playwright.sync_api import sync_playwright
+from platform_policy_test_app import production_policy_test_app
 
 
 APP = pathlib.Path(__file__).resolve().parent.parent / 'app.html'
@@ -376,6 +377,8 @@ def account_target_sizes(pg, control_ids):
         width:rect?.width||0,height:rect?.height||0};
     })""", control_ids)
 
+
+URL = production_policy_test_app(APP.parent).as_uri()
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
