@@ -699,6 +699,45 @@ body::after{ /* grain */
 .force-update-dialog{position:absolute;left:12px;right:12px;bottom:12px;z-index:98;display:flex;flex-direction:column;gap:12px;padding:18px;border:1px solid var(--line2);border-radius:24px;background:#10141c;box-shadow:0 -30px 100px rgba(0,0,0,.78)}
 .force-update-dialog::before{content:"";position:fixed;inset:0;z-index:-1;background:rgba(3,5,8,.76);backdrop-filter:blur(5px)}.force-update-dialog .grab{width:40px;height:4px;margin:0 auto;border-radius:99px;background:var(--line2)}.force-update-dialog .btn{width:100%}.force-update-dialog .btn:disabled{cursor:not-allowed;opacity:.48}
 
+/* ---------- HYPERLIQUID CORE PERP D1-D7 ---------- */
+.perp-screen .pad{padding-bottom:34px}
+.perp-touch{min-height:46px}
+.perp-touch:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.perp-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:12px 0 16px}
+.perp-heading .h1{margin:0}
+.perp-simulation-label,.perp-policy-note,.perp-blocked-status{margin:10px 0;padding:10px 12px;border:1px solid rgba(255,190,85,.28);border-radius:12px;background:var(--amber-soft);color:var(--tx2);font-size:10.5px;line-height:1.5}
+.perp-summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 18px}
+.perp-summary-grid .card{display:grid;gap:4px;padding:13px}.perp-summary-grid span{color:var(--tx3);font-size:9.5px}.perp-summary-grid strong{font-family:var(--mono);font-size:14px}
+.perp-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 8px}.perp-section-head h2{font-size:13px}.perp-section-head span{color:var(--tx3);font-size:10px}
+.perp-market-list{overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--card)}
+.perp-market-row{display:grid;width:100%;grid-template-columns:1fr 1fr;gap:10px;padding:10px 14px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.perp-market-row:last-child{border-bottom:0}.perp-market-row>span{display:grid;gap:3px}.perp-market-row>span:last-child{text-align:right}.perp-market-row b{font-family:var(--mono);font-size:12px}.perp-market-row small{color:var(--tx3);font-size:9.5px}
+.perp-subnav{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px}.perp-subnav .btn{padding:0 9px;font-size:11px}
+.perp-entry{display:flex;width:100%;min-height:64px;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:11px 13px;border:1px solid rgba(56,218,255,.24);border-radius:14px;background:var(--cyan-soft);color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.perp-entry>span:first-child{display:grid;gap:4px}.perp-entry b{font-size:12px}.perp-entry small{color:var(--tx2);font-size:9.5px}
+.perp-price{font-family:var(--disp);font-size:28px;line-height:1}.perp-change{margin-top:7px;font:11px var(--mono)}
+.perp-chart{height:150px;margin:18px 0 12px;padding:9px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,rgba(61,240,174,.08),transparent)}
+.perp-chart svg{width:100%;height:100%;overflow:visible}.perp-chart path:first-child{fill:none;stroke:var(--mint);stroke-width:2}.perp-chart-fill{fill:rgba(61,240,174,.08);stroke:none}
+.perp-stat-list,.perp-confirm-list{overflow:hidden;border-top:1px solid var(--line)}
+.perp-stat-list>div,.perp-confirm-list>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.perp-stat-list dt,.perp-confirm-list dt{color:var(--tx3);font-size:10px}.perp-stat-list dd,.perp-confirm-list dd{font:10.5px var(--mono);text-align:right;overflow-wrap:anywhere}
+.perp-freshness{margin:10px 0 14px;color:var(--tx3);font:9.5px var(--mono)}
+.perp-side-control,.perp-segmented{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.perp-side-control{margin-bottom:12px}.perp-side-control button,.perp-segmented button{border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--tx2);font:600 11px var(--body)}.perp-side-control button.on,.perp-segmented button.on{border-color:rgba(61,240,174,.42);background:var(--mint-soft);color:var(--mint)}
+.perp-form{display:grid;gap:16px}.perp-form fieldset{border:0}.perp-form legend{margin-bottom:7px;color:var(--tx3);font-size:10px}.perp-form label{display:grid;grid-template-columns:1fr auto;gap:7px;color:var(--tx2);font-size:10px}.perp-form label input{grid-column:1/-1;min-height:44px;width:100%;padding:0 11px;border:1px solid var(--line2);border-radius:11px;background:#0b1017;color:var(--tx);font:13px var(--mono)}.perp-form label input[type=range]{padding:0;accent-color:var(--mint)}.perp-form>p{margin-top:-12px;color:var(--tx3);font-size:9.5px}
+.perp-order-estimate{display:grid;gap:7px}.perp-order-estimate div{display:flex;justify-content:space-between;gap:12px;font-size:10px}.perp-order-estimate dt{color:var(--tx3)}.perp-order-estimate dd{font-family:var(--mono)}
+.perp-confirm-list.card{padding:4px 14px}.perp-recheck,.perp-liquidation-note{margin:12px 0;padding:12px;border:1px solid rgba(255,92,122,.28);border-radius:13px;background:var(--red-soft)}.perp-recheck strong,.perp-liquidation-note strong{font-size:11px}.perp-recheck p,.perp-liquidation-note p{margin-top:4px;color:var(--tx2);font-size:10px;line-height:1.5}
+.perp-account-summary,.perp-position-hero{display:grid;gap:5px}.perp-account-summary span,.perp-position-hero span{color:var(--tx3);font-size:10px}.perp-account-summary strong,.perp-position-hero strong{font-family:var(--disp);font-size:24px}.perp-account-summary small,.perp-position-hero small{color:var(--tx2);font-size:10px}
+.perp-position-card{display:grid;width:100%;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;color:var(--tx);font:inherit;text-align:left;cursor:pointer}.perp-position-card>span{display:grid;gap:3px}.perp-position-card>span:nth-child(even){text-align:right}.perp-position-card b{font:11px var(--mono)}.perp-position-card small{color:var(--tx3);font-size:9.5px}.perp-position-title{grid-column:1/-1!important;display:flex!important;justify-content:space-between!important;text-align:left!important}
+.perp-order-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;margin-bottom:8px}.perp-order-row>span{display:grid;gap:3px}.perp-order-row b{font:10.5px var(--mono)}.perp-order-row small{color:var(--tx3);font-size:9px}
+.perp-screen>.pad>.btn{width:100%;margin-top:14px}
+@media (min-width:900px){
+  .perp-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .perp-chart{height:166px}
+  .perp-market-row:hover,.perp-position-card:hover,.perp-entry:hover{border-color:var(--line2);background:rgba(255,255,255,.045)}
+}
+
+
 /* ---------- responsive ---------- */
 @media (max-width:1020px){
   .pitch{display:none}
@@ -1206,12 +1245,161 @@ body::after{ /* grain */
           <div class="mkt-tabs">
             <span class="chip on">Watchlist</span><span class="chip">Trending</span><span class="chip">New pairs</span><span class="chip">DeFi</span><span class="chip">Smart money</span>
           </div>
+          <button class="perp-entry card perp-touch" type="button" onclick="goPerpMarkets()">
+            <span><b>Hyperliquid Perpetuals</b><small>BTC · ETH · SOL Core markets</small></span>
+            <span class="risk-pill risk-med">Read-only ›</span>
+          </button>
           <div id="mkt-list"></div>
           <div class="card" style="display:flex;gap:11px;align-items:center">
             <div class="fi-ico" style="background:var(--mint-soft);flex:none">🤖</div>
             <p style="font-size:12.5px;color:var(--tx2);line-height:1.5">4 tokens match your pattern <b style="color:var(--tx)">"renounced + rising holders + safe LP"</b> in the last 6h.</p>
           </div>
           <div style="height:16px"></div>
+        </div>
+      </section>
+      <!-- ============ PERP-MARKETS ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-markets">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to market">‹ Back</button>
+          <div class="perp-heading">
+            <div><p class="eyebrow">Hyperliquid</p><h1 class="h1">Core perpetuals</h1></div>
+            <span class="risk-pill risk-med">Read-only</span>
+          </div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid market data unavailable — adapter PENDING.</p>
+          <div class="perp-summary-grid" aria-label="Perpetual market summary">
+            <div class="card"><span>Core markets</span><strong data-perp-provider-fact hidden></strong></div>
+            <div class="card"><span>Snapshot age</span><strong data-perp-provider-fact hidden></strong></div>
+          </div>
+          <div class="perp-section-head"><h2>Markets</h2><span>Core whitelist only</span></div>
+          <div class="perp-market-list" id="perp-market-list" aria-live="polite"></div>
+          <nav class="perp-subnav" aria-label="Perpetual account">
+            <button class="btn btn-ghost perp-touch" id="perp-open-positions" data-perp-provider-action type="button" onclick="openPerpPositions()" disabled>Positions</button>
+            <button class="btn btn-ghost perp-touch" id="perp-open-orders" data-perp-provider-action type="button" onclick="openPerpOrders()" disabled>Orders &amp; history</button>
+          </nav>
+        </div>
+      </section>
+      <!-- ============ PERP-MARKET ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-market">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading">
+            <div><p class="eyebrow">Core perpetual</p><h1 class="h1"><span data-perp-selected-coin>ETH</span>-USD</h1></div>
+          </div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid market data unavailable — adapter PENDING.</p>
+          <p class="perp-price" data-perp-mark-price data-perp-provider-fact hidden></p>
+          <p class="perp-change" data-perp-change data-perp-provider-fact hidden></p>
+          <dl class="perp-stat-list">
+            <div><dt>Funding fraction</dt><dd data-perp-funding data-perp-provider-fact hidden></dd></div>
+            <div><dt>Open interest</dt><dd data-perp-open-interest data-perp-provider-fact hidden></dd></div>
+            <div><dt>24h volume</dt><dd data-perp-volume data-perp-provider-fact hidden></dd></div>
+            <div><dt>Best bid / ask</dt><dd data-perp-bbo data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <p class="perp-freshness" data-perp-freshness data-perp-provider-fact hidden></p>
+          <button class="btn btn-primary perp-touch" id="perp-open-order" data-perp-provider-action type="button" onclick="openPerpOrder()" disabled>Trade <span data-perp-selected-coin>ETH</span></button>
+        </div>
+      </section>
+      <!-- ============ PERP-ORDER ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-order">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp market">‹ ETH-USD</button>
+          <div class="perp-heading"><div><p class="eyebrow">Order entry</p><h1 class="h1">Trade ETH</h1></div><span class="risk-pill risk-med">PENDING</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid order preview unavailable — adapter PENDING.</p>
+          <div class="perp-side-control" role="group" aria-label="Direction">
+            <button class="perp-touch on" data-perp-provider-action type="button" aria-pressed="true" disabled>Buy / Long</button>
+            <button class="perp-touch" type="button" aria-pressed="false" aria-describedby="perp-fixture-scope" disabled>Sell / Short</button>
+          </div>
+          <div class="perp-form card">
+            <fieldset>
+              <legend>Order type</legend>
+              <div class="perp-segmented">
+                <button class="perp-touch on" data-perp-provider-action type="button" aria-pressed="true" disabled>Market</button>
+                <button class="perp-touch" type="button" aria-pressed="false" aria-describedby="perp-fixture-scope" disabled>Limit</button>
+              </div>
+            </fieldset>
+            <label>Size <span>ETH</span><input id="perp-order-size" data-perp-provider-action inputmode="decimal" value="0.01" aria-describedby="perp-order-balance" oninput="updatePerpDraft()" disabled></label>
+            <p id="perp-order-balance">Provider-derived limits are unavailable.</p>
+            <p id="perp-fixture-scope">Offline review supports a validated Buy · Market intent only.</p>
+            <label>Leverage <span id="perp-leverage-value">3×</span><input id="perp-leverage" data-perp-provider-action type="range" min="1" max="20" value="3" oninput="updatePerpDraft()" disabled></label>
+            <dl class="perp-order-estimate">
+              <div><dt>Estimated margin</dt><dd data-perp-provider-fact hidden></dd></div>
+              <div><dt>Estimated trading fee</dt><dd data-perp-provider-fact hidden></dd></div>
+              <div><dt>Builder fee</dt><dd data-perp-provider-fact hidden></dd></div>
+            </dl>
+          </div>
+          <p class="perp-policy-note">No order has been sent. Review creates a local immutable intent; Hyperliquid and Privy remain untouched.</p>
+          <button class="btn btn-primary perp-touch" id="perp-review-order" data-perp-provider-action type="button" onclick="openPerpConfirmation()" disabled>Review order</button>
+        </div>
+      </section>
+      <!-- ============ PERP-CONFIRM ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-confirm">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to order entry">‹ Edit order</button>
+          <div class="perp-heading"><div><p class="eyebrow">Immutable intent</p><h1 class="h1">Confirm Perp order</h1></div><span class="risk-pill risk-med">Blocked</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Immutable Perp intent unavailable — return to order entry.</p>
+          <p class="perp-policy-note">This is a read-only preview. Production mutation authority is PENDING and defaults to deny.</p>
+          <dl class="perp-confirm-list card">
+            <div><dt>Direction</dt><dd data-perp-confirm-direction data-perp-provider-fact hidden></dd></div>
+            <div><dt>Order type</dt><dd data-perp-confirm-type data-perp-provider-fact hidden></dd></div>
+            <div><dt>Price</dt><dd data-perp-confirm-price data-perp-provider-fact hidden></dd></div>
+            <div><dt>Size</dt><dd data-perp-confirm-size data-perp-provider-fact hidden></dd></div>
+            <div><dt>Leverage</dt><dd data-perp-confirm-leverage data-perp-provider-fact hidden></dd></div>
+            <div><dt>Margin</dt><dd data-perp-confirm-margin data-perp-provider-fact hidden></dd></div>
+            <div><dt>Trading fee</dt><dd data-perp-confirm-fee data-perp-provider-fact hidden></dd></div>
+            <div><dt>Builder fee · Disabled</dt><dd data-perp-confirm-builder data-perp-provider-fact hidden></dd></div>
+            <div><dt>Liquidation estimate</dt><dd data-perp-confirm-liquidation data-perp-provider-fact hidden></dd></div>
+            <div><dt>Freshness</dt><dd data-perp-confirm-freshness data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <div class="perp-recheck" role="note">
+            <strong>Required again at provider handoff</strong>
+            <p>region · eligibility · policy · nonce ownership · unknown submission reconciliation</p>
+          </div>
+          <button class="btn btn-primary perp-touch" id="perp-shared-review" data-perp-provider-action type="button" onclick="openPerpSharedReview(this)" disabled>Open shared signing review</button>
+          <p id="perp-review-status" class="perp-blocked-status" role="status" aria-live="polite">Hyperliquid credentials and eligibility evidence are not configured.</p>
+        </div>
+      </section>
+      <!-- ============ PERP-POSITIONS ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-positions">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid account</p><h1 class="h1">Positions</h1></div><span class="chip" data-perp-position-count data-perp-provider-fact hidden></span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid positions unavailable — adapter PENDING.</p>
+          <div id="perp-position-list" aria-live="polite"></div>
+          <p class="perp-policy-note">Positions are provider-derived. LOOP does not maintain a parallel position ledger.</p>
+        </div>
+      </section>
+      <!-- ============ PERP-ORDERS ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-orders">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid account</p><h1 class="h1">Orders &amp; history</h1></div><span class="risk-pill risk-med">Read-only</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid orders unavailable — adapter PENDING.</p>
+          <section aria-labelledby="perp-open-orders-title">
+            <div class="perp-section-head"><h2 id="perp-open-orders-title">Open orders</h2></div>
+            <div id="perp-open-order-list" aria-live="polite"></div>
+          </section>
+          <section aria-labelledby="perp-fill-history-title">
+            <div class="perp-section-head"><h2 id="perp-fill-history-title">Fill history</h2><span>Provider record</span></div>
+            <div id="perp-order-history" aria-live="polite"></div>
+          </section>
+          <p class="perp-policy-note">Unknown submissions require provider readback. They are never retried automatically.</p>
+        </div>
+      </section>
+      <!-- ============ PERP-POSITION ============ -->
+      <section class="scr platform-screen perp-screen" id="scr-perp-position">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to positions">‹ Positions</button>
+          <div class="perp-heading"><div><p class="eyebrow">Open position</p><h1 class="h1" data-perp-position-title data-perp-provider-fact hidden></h1></div><span class="risk-pill risk-low" data-perp-position-badge data-perp-provider-fact hidden></span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid position unavailable — adapter PENDING.</p>
+          <div class="perp-position-hero card" data-perp-position-hero data-perp-provider-fact hidden></div>
+          <dl class="perp-stat-list">
+            <div><dt>Entry price</dt><dd data-perp-position-entry data-perp-provider-fact hidden></dd></div>
+            <div><dt>Mark price</dt><dd data-perp-position-mark data-perp-provider-fact hidden></dd></div>
+            <div><dt>Margin</dt><dd data-perp-position-margin data-perp-provider-fact hidden></dd></div>
+            <div><dt>Unrealized PnL</dt><dd data-perp-position-pnl data-perp-provider-fact hidden></dd></div>
+            <div><dt>Liquidation estimate</dt><dd data-perp-position-liquidation data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <button class="btn btn-danger perp-touch" id="perp-review-close" data-perp-provider-action type="button" onclick="openPerpCloseConfirmation()" disabled>Review close</button>
+          <p id="perp-close-status" class="perp-blocked-status" role="status" aria-live="polite">Close actions are PENDING and default to deny.</p>
         </div>
       </section>
       <!-- ============ TOKEN ============ -->
@@ -5239,7 +5427,9 @@ var qrcode = function() {
   function approvalFixture(id,type,calldata){return seal({kind:'approve',execution:{provider_path:'privy_flutter_rpc',wallet_id:WALLET,payload:{request_id:id,endpoint:'eth_sendTransaction',method:'approve',chain_id:'ethereum',token_address:USDC,spender:SPENDER,calldata,value:'0',approval:type==='limited'?{type,limit_base_units:'1000000000'}:{type}},execution_digest:''},context:common('dapp_request',[TOKENS.USDC],{origin:'https://swap.zone',allowlisted_label:'Swap.zone'},null,{spender:'Swap.zone',provider:'Privy Flutter',environment:'prototype'}),source_digest:'',expires_at_ms:500000});}
   function quoteFixture(status='available',providerExpiry=140000,output='216450000000',quoteId='privy-quote-1',routeId='privy-route-1'){return {status,quote_id:quoteId,route_id:routeId,chain_id:'ethereum',input_token_address:USDC,output_token_address:GLYPH,input_amount_base_units:'500000000',output_amount_base_units:output,minimum_output_amount_base_units:output==='216500000000'?'215417500000':'215367750000',fee_amount_base_units:'500000',fee_asset_id:'USDC',provider_expiry_ms:providerExpiry};}
   function swapFixture(id,r,received=100000){const deadline=r.provider_expiry_ms===null?received+30000:Math.min(r.provider_expiry_ms,received+30000);return seal({kind:'swap',execution:{provider_path:'privy_wallet_action',wallet_id:WALLET,payload:{request_id:id,endpoint:ENDPOINT,method:'swap',chain_id:'ethereum',input_token_address:USDC,output_token_address:GLYPH,input_amount_base_units:'500000000',quote_id:r.quote_id,route_id:r.route_id},execution_digest:''},context:common('privy_swap_quote',[TOKENS.USDC,TOKENS.GLYPH],null,{response:r,received_at_ms:received,freshness_deadline_ms:deadline}),source_digest:'',expires_at_ms:500000});}
-  function perpFixture(){return seal({kind:'perp_order',execution:{provider_path:'hyperliquid',wallet_id:WALLET,payload:{request_id:'review-perp',endpoint:'hyperliquid:testnet',method:'order',chain_id:'hyperliquid-testnet',market:'ETH',side:'buy',order_type:'market',size:'0.01',leverage:'3',reduce_only:false,environment:'testnet'},execution_digest:''},context:common('hyperliquid_order_fixture',[TOKENS.ETH],null,null,{spender:null,provider:'Hyperliquid',environment:'testnet'}),source_digest:'',expires_at_ms:500000});}
+  function boundPerpIntent(value){const item=record(value,['market','side','order_type','size','leverage','reduce_only','intent_revision'],[],'perp intent');exact(item.market,'ETH','market');exact(item.side,'buy','side');exact(item.order_type,'market','order');decimal(item.size,18,'size');if(item.size.startsWith('-')||/^0(?:\.0+)?$/.test(item.size))throw new TypeError('size');decimal(item.leverage,2,'leverage');if(!['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20'].includes(item.leverage))throw new TypeError('leverage');if(item.reduce_only!==false)throw new TypeError('reduce');text(item.intent_revision,'intent revision',128);return {...item};}
+  function perpFixture(intent){const bound=boundPerpIntent(intent);return seal({kind:'perp_order',execution:{provider_path:'hyperliquid',wallet_id:WALLET,payload:{request_id:'review-perp',endpoint:'hyperliquid:testnet',method:'order',chain_id:'hyperliquid-testnet',market:bound.market,side:bound.side,order_type:bound.order_type,size:bound.size,leverage:bound.leverage,reduce_only:bound.reduce_only,environment:'testnet'},execution_digest:''},context:common('hyperliquid_order_fixture',[TOKENS.ETH],null,null,{spender:null,provider:'Hyperliquid',environment:'testnet'}),source_digest:'',expires_at_ms:500000});}
+  const DEFAULT_PERP_INTENT=freeze({market:'ETH',side:'buy',order_type:'market',size:'0.01',leverage:'3',reduce_only:false,intent_revision:'fixture-intent-eth-1'});
   function externalFixture(sourceValue,id){
     const body=JSON.parse(JSON.stringify(sourceValue)),payload=body.execution.payload;
     body.context.wallet_class='connected_external';body.context.wallet_identity={kind:'external_connector',chain_type:'ethereum',address:EXTERNAL_ADDRESS};body.execution.wallet_id=null;payload.request_id=id;
@@ -5259,7 +5449,7 @@ var qrcode = function() {
   // Production calldata decoding and construction are pinned to viem on the BFF. The HTML has
   // only these immutable limited/unlimited semantic fixtures and a deliberate mismatch fixture.
   function lateTransferFixture(){const body=JSON.parse(JSON.stringify(transferFixture()));body.execution.payload.request_id='review-transfer-late';body.expires_at_ms=800000;return seal(body);}
-  const SOURCES=freeze({'review-transfer':transferFixture(),'review-transfer-late':lateTransferFixture(),'review-approve-limited':approvalFixture('review-approve-limited','limited',LIMITED),'review-approve-unlimited':approvalFixture('review-approve-unlimited','unlimited',UNLIMITED),'review-approve-mismatch':approvalFixture('review-approve-mismatch','limited',UNLIMITED),'review-swap-fresh':swapFixture('review-swap-fresh',quoteFixture()),'review-swap-stale':swapFixture('review-swap-stale',quoteFixture('stale')),'review-swap-unavailable':swapFixture('review-swap-unavailable',quoteFixture('unavailable')),'review-swap-no-liquidity':swapFixture('review-swap-no-liquidity',quoteFixture('no_liquidity')),'review-swap-refresh':swapFixture('review-swap-refresh',quoteFixture('available',140000,'216500000000','privy-quote-2','privy-route-2')),...Object.fromEntries(REFRESH_WINDOWS.map(received=>[refreshReviewId(received),refreshWindowFixture(received)])),'review-swap-refresh-input-changed':changedInputFixture(),'review-perp':perpFixture(),'review-transfer-external':externalFixture(transferFixture(),'review-transfer-external'),'review-approve-external':externalFixture(approvalFixture('review-approve-external','limited',LIMITED),'review-approve-external'),'review-approve-unlimited-external':externalFixture(approvalFixture('review-approve-unlimited-external','unlimited',UNLIMITED),'review-approve-unlimited-external'),'review-swap-external':externalFixture(swapFixture('review-swap-external',quoteFixture()),'review-swap-external'),'review-perp-external':externalFixture(perpFixture(),'review-perp-external')});
+  const SOURCES=freeze({'review-transfer':transferFixture(),'review-transfer-late':lateTransferFixture(),'review-approve-limited':approvalFixture('review-approve-limited','limited',LIMITED),'review-approve-unlimited':approvalFixture('review-approve-unlimited','unlimited',UNLIMITED),'review-approve-mismatch':approvalFixture('review-approve-mismatch','limited',UNLIMITED),'review-swap-fresh':swapFixture('review-swap-fresh',quoteFixture()),'review-swap-stale':swapFixture('review-swap-stale',quoteFixture('stale')),'review-swap-unavailable':swapFixture('review-swap-unavailable',quoteFixture('unavailable')),'review-swap-no-liquidity':swapFixture('review-swap-no-liquidity',quoteFixture('no_liquidity')),'review-swap-refresh':swapFixture('review-swap-refresh',quoteFixture('available',140000,'216500000000','privy-quote-2','privy-route-2')),...Object.fromEntries(REFRESH_WINDOWS.map(received=>[refreshReviewId(received),refreshWindowFixture(received)])),'review-swap-refresh-input-changed':changedInputFixture(),'review-perp':perpFixture(DEFAULT_PERP_INTENT),'review-transfer-external':externalFixture(transferFixture(),'review-transfer-external'),'review-approve-external':externalFixture(approvalFixture('review-approve-external','limited',LIMITED),'review-approve-external'),'review-approve-unlimited-external':externalFixture(approvalFixture('review-approve-unlimited-external','unlimited',UNLIMITED),'review-approve-unlimited-external'),'review-swap-external':externalFixture(swapFixture('review-swap-external',quoteFixture()),'review-swap-external'),'review-perp-external':externalFixture(perpFixture(DEFAULT_PERP_INTENT),'review-perp-external')});
   const FIXTURES=freeze(Object.fromEntries(Object.entries(SOURCES).map(([id,fixture])=>
     [id,freeze({owner_user_id:USER,source:fixture})])));
 
@@ -5281,7 +5471,7 @@ var qrcode = function() {
     return freeze(result);
   }
   function createController(options){
-    const selected=record(options,['adapter'],[],'options'),adapter=captureAdapter(selected.adapter),sessions=new Map(),consumed=new Set(),forwardBlocked=new Set(),acknowledged=new Set(),returning=new Set(),handoffOutcomes=new Map();
+    const selected=record(options,['adapter'],['perpIntentProvider'],'options'),adapter=captureAdapter(selected.adapter),perpIntentProvider=Object.prototype.hasOwnProperty.call(selected,'perpIntentProvider')&&typeof selected.perpIntentProvider==='function'?selected.perpIntentProvider:null,sessions=new Map(),consumed=new Set(),forwardBlocked=new Set(),acknowledged=new Set(),returning=new Set(),handoffOutcomes=new Map();
     const take=id=>{const found=sessions.get(id)||null;sessions.delete(id);forwardBlocked.delete(id);acknowledged.delete(id);returning.delete(id);consumed.add(id);return found;};
     const expired=(session,now)=>now>=session.ttl||now>=session.sourceExpiry;
     const prune=now=>{for(const [id,session] of sessions){if(expired(session,now))take(id);}};
@@ -5290,7 +5480,8 @@ var qrcode = function() {
     const present=(session,now)=>{const current=state(session,now),refreshable=session.model.refreshable&&current==='blocked',acknowledgementRequired=current==='preview_unavailable';return {review_id:session.id,state:current,model:session.model,expires_at_ms:Math.min(session.ttl,session.sourceExpiry),refreshable,acknowledgement_required:acknowledgementRequired,acknowledged:acknowledgementRequired&&acknowledged.has(session.id),handoff_eligible:session.model.handoff_eligible&&(current==='ready'||(acknowledgementRequired&&acknowledged.has(session.id)))};};
     const endpointMatches=(_model,execution,current)=>current.endpoint===execution.endpoint;
     const matches=(session,current)=>current.user_id===session.ownerUserId&&same(session.live,current)&&current.wallet_id===session.execution.wallet_id&&current.wallet_class===session.model.wallet_class&&endpointMatches(session.model,session.execution,current);
-    const unchanged=session=>{const repeated=decodeInternal(session.source);return same(repeated.model,session.model)&&same(repeated.execution_binding,session.execution);};
+    const livePerpSource=()=>{if(!perpIntentProvider)return null;try{return perpFixture(perpIntentProvider());}catch(_error){return null;}};
+    const unchanged=session=>{const repeated=decodeInternal(session.source);if(!same(repeated.model,session.model)||!same(repeated.execution_binding,session.execution))return false;if(session.model.kind!=='perp_order'||!perpIntentProvider)return true;const current=livePerpSource();if(!current)return false;const decoded=decodeInternal(current);return same(decoded.model,session.model)&&same(decoded.execution_binding,session.execution);};
     function approvalPreview(value){
       const item=record(value,['chain_id','token_address','spender_address',
         'dapp_origin','allowance_kind','limit_base_units','calldata','value'],[],
@@ -5371,7 +5562,7 @@ var qrcode = function() {
       return freeze({wallet_class:value.wallet_class,wallet_ref:value.wallet_ref,addresses:boundAddresses,capabilities:{...capabilities}});
     }
     function authorized(identity,model,execution,current){const trusted=authority();if(trusted.wallet_class==='watch_only'||trusted.wallet_class!==model.wallet_class||trusted.wallet_class!==current.wallet_class||trusted.wallet_ref!==execution.wallet_id||trusted.wallet_ref!==current.wallet_id)return false;if(trusted.wallet_class==='privy_embedded'){if(identity.kind!=='privy_wallet'||identity.wallet_id!==trusted.wallet_ref)return false;}else if(identity.kind!=='external_connector'||!trusted.addresses.some(address=>same(address,{chain_type:identity.chain_type,address:identity.address})))return false;if(model.kind==='perp_order')return true;return trusted.capabilities[model.kind]===(trusted.wallet_class==='privy_embedded'?(model.kind==='approve'?'spike_required':'supported'):(model.kind==='swap'?'provider_gap':'external_provider'));}
-    function open(request){let item,current,start;try{item=record(request,['review_id','origin','live_context','trigger_ref','now_ms'],[],'open');text(item.review_id,'id');text(item.trigger_ref,'trigger');time(item.now_ms,'now');current=live(item.live_context);start=origin(item.origin);}catch(_error){return failure('INVALID_REQUEST','The review request is invalid.');}prune(item.now_ms);if(consumed.has(item.review_id)||sessions.has(item.review_id))return failure('SESSION_INVALID','This review is no longer available.');const fixture=Object.prototype.hasOwnProperty.call(FIXTURES,item.review_id)?FIXTURES[item.review_id]:null;if(!fixture)return failure('SESSION_INVALID','This review is not available.');if(current.user_id!==fixture.owner_user_id){consumed.add(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(sessions.size>=MAX_SESSIONS)return failure('SESSION_CAPACITY','Too many review sessions are open.');let decoded;try{decoded=decodeInternal(fixture.source);}catch(_error){consumed.add(item.review_id);return failure('DECODE_FAILED','The wallet request could not be reviewed safely.');}let trusted=false;try{trusted=authorized(decoded.source.context.wallet_identity,decoded.model,decoded.execution_binding,current);}catch(_error){trusted=false;}if(decoded.model.id!==item.review_id||!trusted||current.wallet_id!==decoded.execution_binding.wallet_id||current.wallet_class!==decoded.model.wallet_class||!endpointMatches(decoded.model,decoded.execution_binding,current)){consumed.add(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(item.now_ms>=decoded.source.expires_at_ms){consumed.add(item.review_id);return failure('SESSION_EXPIRED','This review has expired.');}const preview=authoritativePreview(decoded.source,decoded.model);if(!preview.ok)return previewFailure(item.review_id,preview,decoded.model.refreshable);if(preview.changed){consumed.add(item.review_id);return failure('REVIEW_CHANGED','The reviewed provider preview changed.',decoded.model.refreshable);}sessions.set(item.review_id,freeze({id:item.review_id,ownerUserId:fixture.owner_user_id,walletIdentity:decoded.source.context.wallet_identity,source:decoded.source,model:decoded.model,execution:decoded.execution_binding,origin:start,live:current,previewStatus:preview.status,created:item.now_ms,ttl:item.now_ms+TTL,sourceExpiry:decoded.source.expires_at_ms,oneTime:'unconsumed',trigger:item.trigger_ref}));return success(present(sessions.get(item.review_id),item.now_ms));}
+    function open(request){let item,current,start;try{item=record(request,['review_id','origin','live_context','trigger_ref','now_ms'],[],'open');text(item.review_id,'id');text(item.trigger_ref,'trigger');time(item.now_ms,'now');current=live(item.live_context);start=origin(item.origin);}catch(_error){return failure('INVALID_REQUEST','The review request is invalid.');}prune(item.now_ms);if(consumed.has(item.review_id)||sessions.has(item.review_id))return failure('SESSION_INVALID','This review is no longer available.');let fixture=Object.prototype.hasOwnProperty.call(FIXTURES,item.review_id)?FIXTURES[item.review_id]:null;if(item.review_id==='review-perp'&&perpIntentProvider){const dynamic=livePerpSource();fixture=dynamic?freeze({owner_user_id:USER,source:dynamic}):null;}if(!fixture)return failure('SESSION_INVALID','This review is not available.');if(current.user_id!==fixture.owner_user_id){consumed.add(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(sessions.size>=MAX_SESSIONS)return failure('SESSION_CAPACITY','Too many review sessions are open.');let decoded;try{decoded=decodeInternal(fixture.source);}catch(_error){consumed.add(item.review_id);return failure('DECODE_FAILED','The wallet request could not be reviewed safely.');}let trusted=false;try{trusted=authorized(decoded.source.context.wallet_identity,decoded.model,decoded.execution_binding,current);}catch(_error){trusted=false;}if(decoded.model.id!==item.review_id||!trusted||current.wallet_id!==decoded.execution_binding.wallet_id||current.wallet_class!==decoded.model.wallet_class||!endpointMatches(decoded.model,decoded.execution_binding,current)){consumed.add(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(item.now_ms>=decoded.source.expires_at_ms){consumed.add(item.review_id);return failure('SESSION_EXPIRED','This review has expired.');}const preview=authoritativePreview(decoded.source,decoded.model);if(!preview.ok)return previewFailure(item.review_id,preview,decoded.model.refreshable);if(preview.changed){consumed.add(item.review_id);return failure('REVIEW_CHANGED','The reviewed provider preview changed.',decoded.model.refreshable);}sessions.set(item.review_id,freeze({id:item.review_id,ownerUserId:fixture.owner_user_id,walletIdentity:decoded.source.context.wallet_identity,source:decoded.source,model:decoded.model,execution:decoded.execution_binding,origin:start,live:current,previewStatus:preview.status,created:item.now_ms,ttl:item.now_ms+TTL,sourceExpiry:decoded.source.expires_at_ms,oneTime:'unconsumed',trigger:item.trigger_ref}));return success(present(sessions.get(item.review_id),item.now_ms));}
     function validationRequest(request,label){const item=record(request,['review_id','live_context','now_ms'],[],label);text(item.review_id,'id');time(item.now_ms,'now');return {review_id:item.review_id,live_context:item.live_context,now_ms:item.now_ms};}
     function validate(request){let item;try{item=validationRequest(request,'validate');}catch(_error){return failure('INVALID_REQUEST','The validation request is invalid.');}const session=sessions.get(item.review_id);if(!session||consumed.has(item.review_id))return failure('SESSION_INVALID','This review is no longer available.');let current;try{current=live(item.live_context);if(!authorized(session.walletIdentity,session.model,session.execution,current))throw new TypeError('authority');}catch(_error){take(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(!matches(session,current)){take(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(expired(session,item.now_ms)||quoteExpired(session,item.now_ms)){take(item.review_id);return failure('SESSION_EXPIRED','This review has expired.',session.model.kind==='swap');}try{if(!unchanged(session))throw new TypeError('changed');}catch(_error){take(item.review_id);return failure('REVIEW_CHANGED','The reviewed request changed.');}const preview=authoritativePreview(session.source,session.model);if(!preview.ok)return previewFailure(item.review_id,preview,session.model.refreshable);if(preview.changed){take(item.review_id);return failure('REVIEW_CHANGED','The reviewed provider preview changed.',session.model.refreshable);}if(!session.model.handoff_eligible){const error=session.model.blocking_error;return failure(error.code,error.safe_message,session.model.refreshable);}return success(present(session,item.now_ms));}
     function forward(request){let item;try{item=validationRequest(request,'forward');}catch(_error){return failure('INVALID_REQUEST','The Forward request is invalid.');}const session=sessions.get(item.review_id);if(!session||consumed.has(item.review_id))return failure('SESSION_INVALID','This review is no longer available.');let current;try{current=live(item.live_context);if(!authorized(session.walletIdentity,session.model,session.execution,current))throw new TypeError('authority');}catch(_error){take(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}if(!matches(session,current)){take(item.review_id);return failure('CONTEXT_MISMATCH','The live wallet context changed.');}try{if(!unchanged(session))throw new TypeError('changed');}catch(_error){take(item.review_id);return failure('REVIEW_CHANGED','The reviewed request changed.');}const preview=authoritativePreview(session.source,session.model);if(!preview.ok)return previewFailure(item.review_id,preview,session.model.refreshable);if(preview.changed){take(item.review_id);return failure('REVIEW_CHANGED','The reviewed provider preview changed.',session.model.refreshable);}if(item.now_ms>=session.ttl){take(item.review_id);return failure('SESSION_EXPIRED','This review has expired.');}if(session.model.kind==='swap'&&(item.now_ms>=session.sourceExpiry||quoteExpired(session,item.now_ms))){forwardBlocked.add(item.review_id);return success(present(session,item.now_ms));}if(item.now_ms>=session.sourceExpiry){take(item.review_id);return failure('SESSION_EXPIRED','This review has expired.');}return success(present(session,item.now_ms));}
@@ -5927,6 +6118,248 @@ var qrcode = function() {
     configurable:false,enumerable:true});
 })(globalThis);
 
+/* ============ SCRIPT: perp-read-provider.js ============ */
+(()=>{
+  'use strict';
+
+  const OFFLINE_LABEL='Simulated Hyperliquid testnet fixture — no network, signing, or submission';
+  const CORE_COINS=Object.freeze(['BTC','ETH','SOL']);
+  const ADAPTER_METHODS=Object.freeze([
+    'getMarketsSnapshot','getMarketSnapshot','getPositionsSnapshot',
+    'getOrdersSnapshot','getPositionSnapshot','prepareOrderIntent',
+    'prepareMutationReview'
+  ]);
+  const adapters=new WeakSet();
+  const freeze=Object.freeze;
+  const monotonicNow=performance.now.bind(performance);
+  const capturedAtMs=monotonicNow();
+
+  function sourceFreshness(value){
+    if(Array.isArray(value))return value.reduce((age,item)=>Math.max(age,sourceFreshness(item)),0);
+    if(value&&typeof value==='object'&&Number.isInteger(value.freshness_ms))return value.freshness_ms;
+    return 0;
+  }
+
+  function result(value){
+    const elapsed=Math.max(0,Math.floor(monotonicNow()-capturedAtMs));
+    const age=sourceFreshness(value)+elapsed;
+    return freeze({ok:true,value,meta:freeze({source:'hyperliquid_offline_fixture',
+      mode:'offline_readonly',network:'testnet',label:OFFLINE_LABEL,
+      fetched_at_ms:capturedAtMs,age_ms:age,stale:age>2000,partial:false})});
+  }
+  function failure(code,message){
+    return freeze({ok:false,error:freeze({code,retryable:false,safe_message:message})});
+  }
+  function plainRecord(value){
+    return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&
+      Object.getPrototypeOf(value)===Object.prototype);
+  }
+  function exactRecord(value,keys){
+    if(!plainRecord(value))return null;
+    const descriptors=Object.getOwnPropertyDescriptors(value);
+    const found=Reflect.ownKeys(descriptors);
+    if(found.length!==keys.length||found.some(key=>typeof key!=='string'||
+       !keys.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+      return null;
+    }
+    const copy={};
+    for(const key of keys)copy[key]=descriptors[key].value;
+    return copy;
+  }
+  function text(value,max=128){
+    return typeof value==='string'&&value.length>0&&value.length<=max?value:null;
+  }
+  function decimal(value){
+    return typeof value==='string'&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)?value:null;
+  }
+  function coreCoin(value){
+    return typeof value==='string'&&CORE_COINS.includes(value)&&!value.includes(':')?value:null;
+  }
+  function immutableRows(rows,keys,validator){
+    if(!Array.isArray(rows)||Object.getPrototypeOf(rows)!==Array.prototype||rows.length>20){
+      throw new TypeError('rows');
+    }
+    return freeze(rows.map(row=>{
+      const item=exactRecord(row,keys);
+      if(!item||!validator(item))throw new TypeError('row');
+      return freeze({...item});
+    }));
+  }
+  function snapshot(value){
+    const item=exactRecord(value,['mode','label','markets','positions','orders']);
+    if(!item||item.mode!=='offline_readonly'||item.label!==OFFLINE_LABEL)throw new TypeError('mode');
+    const markets=immutableRows(item.markets,
+      ['coin','display_name','mark_px','change_24h','volume_24h','funding','open_interest','best_bid',
+        'best_ask','freshness_ms','source_revision'],
+      row=>Boolean(coreCoin(row.coin)&&text(row.display_name,32)&&decimal(row.mark_px)&&decimal(row.change_24h)&&
+        decimal(row.volume_24h)&&decimal(row.funding)&&decimal(row.open_interest)&&
+        decimal(row.best_bid)&&decimal(row.best_ask)&&Number.isInteger(row.freshness_ms)&&
+        row.freshness_ms>=0&&row.freshness_ms<=2000&&text(row.source_revision)));
+    if(markets.length!==3||markets.some((market,index)=>market.coin!==CORE_COINS[index])){
+      throw new TypeError('Core market allowlist rejects HIP-3');
+    }
+    const positions=immutableRows(item.positions,
+      ['id','coin','side','size','entry_px','mark_px','leverage','margin','unrealized_pnl',
+        'liquidation_px','freshness_ms','source_revision'],
+      row=>Boolean(text(row.id)&&coreCoin(row.coin)&&['long','short'].includes(row.side)&&
+        decimal(row.size)&&decimal(row.entry_px)&&decimal(row.mark_px)&&decimal(row.leverage)&&
+        decimal(row.margin)&&decimal(row.unrealized_pnl)&&decimal(row.liquidation_px)&&
+        Number.isInteger(row.freshness_ms)&&row.freshness_ms>=0&&
+        row.freshness_ms<=2000&&text(row.source_revision)));
+    const orders=immutableRows(item.orders,
+      ['id','coin','side','type','size','price','status','filled_size','created_label',
+        'freshness_ms','source_revision'],
+      row=>Boolean(text(row.id)&&coreCoin(row.coin)&&['buy','sell'].includes(row.side)&&
+        ['Limit','Market · IOC'].includes(row.type)&&decimal(row.size)&&decimal(row.price)&&
+        ['Open','Filled','Cancelled'].includes(row.status)&&decimal(row.filled_size)&&
+        text(row.created_label)&&Number.isInteger(row.freshness_ms)&&
+        row.freshness_ms>=0&&row.freshness_ms<=2000&&text(row.source_revision)));
+    return freeze({markets,positions,orders});
+  }
+  function mutationDecision(action){
+    const item=exactRecord(action,['kind','coin','intent_revision']);
+    const knownKinds=['order','close_position'];
+    if(!item||!knownKinds.includes(item.kind)||!coreCoin(item.coin)||
+       !text(item.intent_revision)){
+      return failure('INVALID_MUTATION_REVIEW','The Perp request could not be reviewed safely.');
+    }
+    return freeze({ok:false,binding:freeze({kind:item.kind,coin:item.coin,
+      intent_revision:item.intent_revision}),error:freeze({
+      code:'PENDING_default_deny',retryable:false,
+      safe_message:'Trading is unavailable until Hyperliquid credentials, eligibility evidence, and the Privy signer handoff are approved.',
+      rechecks:freeze(['region','eligibility','policy','nonce','unknown submission'])
+    })});
+  }
+  function orderDraft(value){
+    const item=exactRecord(value,
+      ['coin','side','order_type','size','leverage','reduce_only']);
+    if(!item||item.coin!=='ETH'||item.side!=='buy'||item.order_type!=='market'||
+       item.reduce_only!==false||!decimal(item.size)||item.size.startsWith('-')||
+       /^0(?:\.0+)?$/.test(item.size)||item.size.length>18||
+       !Object.freeze(['1','2','3','4','5','6','7','8','9','10','11','12','13',
+         '14','15','16','17','18','19','20']).includes(item.leverage)){
+      return null;
+    }
+    return item;
+  }
+  function orderIntent(data,value){
+    const draft=orderDraft(value);
+    const market=draft?data.markets.find(item=>item.coin===draft.coin):null;
+    if(!draft||!market){
+      return failure('INVALID_ORDER_INTENT','The Perp order draft could not be bound safely.');
+    }
+    return result(freeze({
+      market:draft.coin,side:draft.side,order_type:draft.order_type,
+      size:draft.size,leverage:draft.leverage,reduce_only:draft.reduce_only,
+      mark_px:market.mark_px,margin_estimate:'Unavailable in read-only fixture',
+      trading_fee_estimate:'Unavailable in read-only fixture',builder_fee:'0.00',
+      liquidation_estimate:'Unavailable in read-only fixture',
+      freshness_ms:market.freshness_ms,source_revision:market.source_revision,
+      intent_revision:'fixture-order:'+market.source_revision+':'+draft.size+':'+draft.leverage
+    }));
+  }
+  function createOfflineReadOnlyAdapter(value){
+    let data;
+    try{data=snapshot(value)}catch(_error){
+      return null;
+    }
+    const byCoin=coin=>data.markets.find(item=>item.coin===coin)||null;
+    const byPosition=id=>data.positions.find(item=>item.id===id)||null;
+    const adapter=freeze({
+      getMarketsSnapshot:()=>result(data.markets),
+      getMarketSnapshot:request=>{
+        const item=exactRecord(request,['coin']);
+        const market=item?byCoin(item.coin):null;
+        return market?result(market):failure('CORE_MARKET_UNAVAILABLE','Core market unavailable.');
+      },
+      getPositionsSnapshot:()=>result(data.positions),
+      getOrdersSnapshot:()=>result(data.orders),
+      getPositionSnapshot:request=>{
+        const item=exactRecord(request,['position_id']);
+        const position=item?byPosition(item.position_id):null;
+        return position?result(position):failure('POSITION_UNAVAILABLE','Position unavailable.');
+      },
+      prepareOrderIntent:request=>orderIntent(data,request),
+      prepareMutationReview:mutationDecision
+    });
+    adapters.add(adapter);
+    return adapter;
+  }
+  function createPendingProductionAdapter(){
+    const unavailable=()=>failure('PRODUCTION_ADAPTER_PENDING',
+      'Hyperliquid production reads are unavailable until the pinned SDK and credentials are approved.');
+    const adapter=freeze({
+      getMarketsSnapshot:unavailable,getMarketSnapshot:unavailable,
+      getPositionsSnapshot:unavailable,getOrdersSnapshot:unavailable,
+      getPositionSnapshot:unavailable,prepareOrderIntent:unavailable,
+      prepareMutationReview:mutationDecision
+    });
+    adapters.add(adapter);
+    return adapter;
+  }
+  function captureAdapter(value){
+    if(!adapters.has(value)||!Object.isFrozen(value))return null;
+    const descriptors=Object.getOwnPropertyDescriptors(value);
+    const keys=Reflect.ownKeys(descriptors);
+    if(keys.length!==ADAPTER_METHODS.length||keys.some(key=>typeof key!=='string'||
+       !ADAPTER_METHODS.includes(key)||typeof descriptors[key].value!=='function')){
+      return null;
+    }
+    const captured={};
+    for(const key of ADAPTER_METHODS)captured[key]=descriptors[key].value;
+    return freeze(captured);
+  }
+
+  globalThis.LoopHyperliquidPerp=freeze({
+    createOfflineReadOnlyAdapter,createPendingProductionAdapter,captureAdapter
+  });
+})();
+
+/* ============ SCRIPT: perp-offline-fixture.js ============ */
+(()=>{
+  'use strict';
+
+  const LABEL='Simulated Hyperliquid testnet fixture — no network, signing, or submission';
+  const provider=globalThis.LoopHyperliquidPerp;
+  const markets=[
+    {coin:'BTC',display_name:'Bitcoin',mark_px:'64280.0',change_24h:'2.41',volume_24h:'1824000000',
+      funding:'0.00011',open_interest:'812000000',best_bid:'64279.0',best_ask:'64280.0',
+      freshness_ms:320,source_revision:'fixture-epoch-1:41:btc'},
+    {coin:'ETH',display_name:'Ethereum',mark_px:'3842.1',change_24h:'3.82',volume_24h:'684000000',
+      funding:'0.00008',open_interest:'446000000',best_bid:'3842.0',best_ask:'3842.1',
+      freshness_ms:420,source_revision:'fixture-epoch-1:42:eth'},
+    {coin:'SOL',display_name:'Solana',mark_px:'142.36',change_24h:'-1.24',volume_24h:'228000000',
+      funding:'-0.00003',open_interest:'172000000',best_bid:'142.35',best_ask:'142.36',
+      freshness_ms:510,source_revision:'fixture-epoch-1:43:sol'}
+  ];
+  const positions=[
+    {id:'position-eth-long',coin:'ETH',side:'long',size:'0.42',entry_px:'3718.4',
+      mark_px:'3842.1',leverage:'3',margin:'520.58',unrealized_pnl:'51.95',
+      liquidation_px:'2684.32',freshness_ms:460,source_revision:'fixture-position-19'}
+  ];
+  const orders=[
+    {id:'order-btc-open',coin:'BTC',side:'buy',type:'Limit',size:'0.01',
+      price:'63120.0',status:'Open',filled_size:'0',created_label:'Today · 14:21',
+      freshness_ms:610,source_revision:'fixture-order-31'},
+    {id:'order-eth-fill',coin:'ETH',side:'buy',type:'Market · IOC',size:'0.42',
+      price:'3718.4',status:'Filled',filled_size:'0.42',created_label:'Yesterday · 09:14',
+      freshness_ms:610,source_revision:'fixture-order-30'},
+    {id:'order-sol-cancel',coin:'SOL',side:'sell',type:'Limit',size:'2.5',
+      price:'151.2',status:'Cancelled',filled_size:'0',created_label:'12 Aug · 19:42',
+      freshness_ms:610,source_revision:'fixture-order-29'}
+  ];
+  const snapshot=Object.freeze({
+    mode:'offline_readonly',label:LABEL,
+    markets:Object.freeze(markets.map(Object.freeze)),
+    positions:Object.freeze(positions.map(Object.freeze)),
+    orders:Object.freeze(orders.map(Object.freeze))
+  });
+  const adapter=provider?.createOfflineReadOnlyAdapter(snapshot)||null;
+  globalThis.LoopHyperliquidPerpOfflineFixture=Object.freeze({
+    create:()=>adapter,label:LABEL,mode:'offline_readonly'
+  });
+})();
+
 /* ============ SCRIPT: app.js ============ */
 /* ---------- data ----------
    No 0–100 risk score anywhere: a single number invites users to treat a heuristic as a verdict,
@@ -5956,6 +6389,23 @@ const TOKENS = {
     comm:['8,904 people','21','96','14'],seed:5,drift:.56}
 };
 const MKT = ['ETH','SOL','GLYPH','PXL'];
+const perpReadAdapter=(()=>{
+  try{
+    const provider=globalThis.LoopHyperliquidPerp;
+    const fixture=globalThis.LoopHyperliquidPerpOfflineFixture;
+    if(!provider||!fixture||!Object.isFrozen(provider)||!Object.isFrozen(fixture)||
+       typeof provider.captureAdapter!=='function'||
+       typeof provider.createPendingProductionAdapter!=='function'||
+       typeof fixture.create!=='function'||fixture.mode!=='offline_readonly'||
+       fixture.label!=='Simulated Hyperliquid testnet fixture — no network, signing, or submission'){
+      return null;
+    }
+    return provider.captureAdapter(fixture.create())||
+      provider.captureAdapter(provider.createPendingProductionAdapter());
+  }catch(_error){return null}
+})();
+const perpViewState={coin:'ETH',positionId:'',intent:null,intentDeadlineMs:0};
+let perpFreshnessTimer=null;
 
 /* ---------- app state (single source of truth) ---------- */
 const REGIONAL_BLOCKED_SESSION_KEY='loop.prototype.regional-blocked.v1';
@@ -6024,6 +6474,13 @@ const ROUTES = {
   'wallet-import':{screen:'scr-wallet-import',stack:['scr-auth','scr-wallet-import'],parent:'auth',account:true,sensitive:true},
   home:{screen:'scr-home',stack:['scr-home'],root:true},
   market:{screen:'scr-market',stack:['scr-market'],root:true},
+  'perp-markets':{screen:'scr-perp-markets',stack:['scr-market','scr-perp-markets']},
+  'perp-market':{screen:'scr-perp-market',stack:['scr-market','scr-perp-markets','scr-perp-market']},
+  'perp-order':{screen:'scr-perp-order',stack:['scr-market','scr-perp-markets','scr-perp-market','scr-perp-order']},
+  'perp-confirm':{screen:'scr-perp-confirm',stack:['scr-market','scr-perp-markets','scr-perp-market','scr-perp-order','scr-perp-confirm']},
+  'perp-positions':{screen:'scr-perp-positions',stack:['scr-market','scr-perp-markets','scr-perp-positions']},
+  'perp-orders':{screen:'scr-perp-orders',stack:['scr-market','scr-perp-markets','scr-perp-orders']},
+  'perp-position':{screen:'scr-perp-position',stack:['scr-market','scr-perp-markets','scr-perp-positions','scr-perp-position']},
   launchpad:{screen:'scr-launchpad',stack:['scr-launchpad'],root:true},
   chat:{screen:'scr-chat',stack:['scr-chat'],root:true},
   wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
@@ -7459,6 +7916,7 @@ function render(){
   renderVoice();
   renderOnboardingFlags();
   renderPlatformScreen(cur);
+  renderPerpScreen(cur);
   renderWalletFoundation(cur);
   applyRegionalCapabilityGates();
 }
@@ -8156,7 +8614,10 @@ const sanitizeReviewProjectionForWrite=(()=>{
   const regexpTest=RegExp.prototype.test;
   const knownScreens=freeze(['scr-splash','scr-auth','scr-auth-otp','scr-auth-wallet',
     'scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify',
-    'scr-wallet-import','scr-home','scr-pay','scr-market','scr-token','scr-launchpad',
+    'scr-wallet-import','scr-home','scr-pay','scr-market',
+    'scr-perp-markets','scr-perp-market','scr-perp-order','scr-perp-confirm',
+    'scr-perp-positions','scr-perp-orders','scr-perp-position',
+    'scr-token','scr-launchpad',
     'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
     'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile',
   ]);
@@ -8251,7 +8712,7 @@ const sanitizeReviewProjectionForWrite=(()=>{
 })();
 const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',policyOperation:'',
   returningId:'',cancellingId:'',triggerId:'',originEntryKey:'',markerEntryKey:'',markerIssued:false,
-  fallbackAllowed:false,result:null,expiryTimer:null,
+  fallbackAllowed:false,result:null,expiryTimer:null,perpIntentRevision:'',
   legacyVeilOwned:false,background:new Map()});
 const reviewMarkerProof=(()=>{
   const MAX_PROOFS=5;
@@ -8391,13 +8852,18 @@ function currentReviewLive(reviewId){
 }
 function ensureReviewController(){
   const adapter=ensureWalletAdapter().adapter;
-  if(reviewRuntime.adapter===adapter&&reviewRuntime.controller) return reviewRuntime.controller;
+  const perpIntent=currentPerpIntentForReview();
+  const perpIntentRevision=perpIntent?.intent_revision||'';
+  if(reviewRuntime.adapter===adapter&&reviewRuntime.controller&&
+     reviewRuntime.perpIntentRevision===perpIntentRevision)return reviewRuntime.controller;
   if(reviewRuntime.openId&&reviewRuntime.controller){
     reviewRuntime.controller.consume({review_id:reviewRuntime.openId});
     closeReviewSurface(false);
   }
   reviewRuntime.adapter=adapter;
-  reviewRuntime.controller=walletReviewFacade?.createController({adapter})||null;
+  reviewRuntime.perpIntentRevision=perpIntentRevision;
+  reviewRuntime.controller=walletReviewFacade?.createController({adapter,
+    perpIntentProvider:currentPerpIntentForReview})||null;
   return reviewRuntime.controller;
 }
 function reviewDialog(){return document.getElementById('review-dialog')}
@@ -9416,6 +9882,549 @@ function renderWalletFoundation(screen){
   if(screen==='scr-receive') renderReceiveScreen();
   renderWalletSigningCapabilities();
 }
+
+/* ---------- D1-D7: read-only Hyperliquid Core Perp presentation ---------- */
+const PERP_MAX_AGE_MS=2000;
+let perpReadFailure='unavailable';
+function formatPerpDecimal(value){
+  const sign=value.startsWith('-')?'−':'';
+  const unsigned=value.replace(/^-/,''),parts=unsigned.split('.');
+  const integer=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return sign+integer+(parts.length===2?'.'+parts[1]:'');
+}
+function formatPerpMoney(value){return '$'+formatPerpDecimal(value)}
+function clearPerpTimer(){
+  if(perpFreshnessTimer!==null){clearTimeout(perpFreshnessTimer);perpFreshnessTimer=null}
+}
+function schedulePerpFreshness(ageMs){
+  clearPerpTimer();
+  const delay=Math.max(0,PERP_MAX_AGE_MS-ageMs+1);
+  perpFreshnessTimer=setTimeout(()=>{perpFreshnessTimer=null;render()},delay);
+}
+function resetPerpProjection(screen){
+  const host=document.getElementById(screen);
+  if(!host)return;
+  host.querySelectorAll('[data-perp-provider-fact]').forEach(node=>{
+    node.textContent='';node.hidden=true;
+  });
+  host.querySelectorAll('[data-perp-provider-action]').forEach(node=>{node.disabled=true});
+  ['perp-market-list','perp-position-list','perp-open-order-list','perp-order-history']
+    .forEach(id=>host.querySelector('#'+id)?.replaceChildren());
+}
+function setPerpStatus(screen,message){
+  const node=document.querySelector('#'+screen+' [data-perp-provider-status]');
+  if(node)node.textContent=message;
+}
+function projectPerpRecord(value,keys){
+  if(!value||typeof value!=='object'||Array.isArray(value)||
+     Object.getPrototypeOf(value)!==Object.prototype)return null;
+  const descriptors=Object.getOwnPropertyDescriptors(value),found=Reflect.ownKeys(descriptors);
+  if(found.length!==keys.length||found.some(key=>typeof key!=='string'||
+     !keys.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+    return null;
+  }
+  const projected={};
+  for(const key of keys)projected[key]=descriptors[key].value;
+  return projected;
+}
+function projectPerpArray(value,max=20){
+  if(!Array.isArray(value)||Object.getPrototypeOf(value)!==Array.prototype||
+     value.length>max)return null;
+  const descriptors=Object.getOwnPropertyDescriptors(value),expected=['length'];
+  for(let index=0;index<value.length;index++)expected.push(String(index));
+  const found=Reflect.ownKeys(descriptors);
+  if(found.length!==expected.length||found.some(key=>typeof key!=='string'||
+     !expected.includes(key)||(key!=='length'&&
+       !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))))return null;
+  return Array.from({length:value.length},(_item,index)=>descriptors[String(index)].value);
+}
+function perpText(value,max=128){
+  return typeof value==='string'&&value.length>0&&value.length<=max&&
+    value.trim()===value&&!/[\u0000-\u001f\u007f]/.test(value)?value:null;
+}
+function perpToken(value,max=96){
+  return perpText(value,max)&&/^[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(value)?value:null;
+}
+function perpNumber(value,min,max,{integer=false}={}){
+  if(typeof value!=='string'||value.length>40||
+     !/^-?(?:0|[1-9]\d{0,17})(?:\.\d{1,18})?$/.test(value))return null;
+  const parsed=Number(value);
+  return Number.isFinite(parsed)&&!Object.is(parsed,-0)&&parsed>=min&&parsed<=max&&
+    (!integer||Number.isInteger(parsed))?value:null;
+}
+function perpCoreCoin(value){return ['BTC','ETH','SOL'].includes(value)?value:null}
+const PERP_MARKET_KEYS=Object.freeze(['coin','display_name','mark_px','change_24h',
+  'volume_24h','funding','open_interest','best_bid','best_ask','freshness_ms',
+  'source_revision']);
+function projectPerpMarket(value){
+  const row=projectPerpRecord(value,PERP_MARKET_KEYS);
+  if(!row||!perpCoreCoin(row.coin)||!perpText(row.display_name,32)||
+     !perpNumber(row.mark_px,0.00000001,1e12)||
+     !perpNumber(row.change_24h,-10000,10000)||
+     !perpNumber(row.volume_24h,0,1e15)||!perpNumber(row.funding,-1,1)||
+     !perpNumber(row.open_interest,0,1e15)||!perpNumber(row.best_bid,0,1e12)||
+     !perpNumber(row.best_ask,0,1e12)||Number(row.best_bid)>Number(row.best_ask)||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpMarkets(value){
+  const rows=projectPerpArray(value,3);
+  if(!rows||rows.length!==3)return null;
+  const projected=rows.map(projectPerpMarket);
+  if(projected.some(row=>!row)||
+     projected.some((row,index)=>row.coin!==['BTC','ETH','SOL'][index]))return null;
+  return Object.freeze(projected);
+}
+const PERP_POSITION_KEYS=Object.freeze(['id','coin','side','size','entry_px','mark_px',
+  'leverage','margin','unrealized_pnl','liquidation_px','freshness_ms','source_revision']);
+function projectPerpPosition(value){
+  const row=projectPerpRecord(value,PERP_POSITION_KEYS);
+  if(!row||!perpToken(row.id)||!perpCoreCoin(row.coin)||
+     !['long','short'].includes(row.side)||!perpNumber(row.size,0.00000001,1e12)||
+     !perpNumber(row.entry_px,0.00000001,1e12)||
+     !perpNumber(row.mark_px,0.00000001,1e12)||
+     !perpNumber(row.leverage,1,100,{integer:true})||!perpNumber(row.margin,0,1e15)||
+     !perpNumber(row.unrealized_pnl,-1e15,1e15)||
+     !perpNumber(row.liquidation_px,0.00000001,1e12)||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpPositions(value){
+  const rows=projectPerpArray(value),projected=rows?.map(projectPerpPosition);
+  if(!projected||projected.some(row=>!row)||
+     new Set(projected.map(row=>row.id)).size!==projected.length)return null;
+  return Object.freeze(projected);
+}
+const PERP_ORDER_KEYS=Object.freeze(['id','coin','side','type','size','price','status',
+  'filled_size','created_label','freshness_ms','source_revision']);
+function projectPerpOrder(value){
+  const row=projectPerpRecord(value,PERP_ORDER_KEYS);
+  if(!row||!perpToken(row.id)||!perpCoreCoin(row.coin)||
+     !['buy','sell'].includes(row.side)||!['Limit','Market · IOC'].includes(row.type)||
+     !perpNumber(row.size,0.00000001,1e12)||
+     !perpNumber(row.price,0.00000001,1e12)||
+     !['Open','Filled','Cancelled'].includes(row.status)||
+     !perpNumber(row.filled_size,0,1e12)||Number(row.filled_size)>Number(row.size)||
+     !perpText(row.created_label,64)||!Number.isInteger(row.freshness_ms)||
+     row.freshness_ms<0||row.freshness_ms>PERP_MAX_AGE_MS||
+     !perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpOrders(value){
+  const rows=projectPerpArray(value),projected=rows?.map(projectPerpOrder);
+  if(!projected||projected.some(row=>!row)||
+     new Set(projected.map(row=>row.id)).size!==projected.length)return null;
+  return Object.freeze(projected);
+}
+const PERP_INTENT_KEYS=Object.freeze(['market','side','order_type','size','leverage',
+  'reduce_only','mark_px','margin_estimate','trading_fee_estimate','builder_fee',
+  'liquidation_estimate','freshness_ms','source_revision','intent_revision']);
+function projectPerpIntent(value){
+  const intent=projectPerpRecord(value,PERP_INTENT_KEYS);
+  if(!intent||!perpCoreCoin(intent.market)||!['buy','sell'].includes(intent.side)||
+     !['market','limit'].includes(intent.order_type)||
+     !perpNumber(intent.size,0.00000001,1e12)||
+     !perpNumber(intent.leverage,1,20,{integer:true})||
+     typeof intent.reduce_only!=='boolean'||
+     !perpNumber(intent.mark_px,0.00000001,1e12)||
+     !perpText(intent.margin_estimate)||!perpText(intent.trading_fee_estimate)||
+     intent.builder_fee!=='0.00'||!perpText(intent.liquidation_estimate)||
+     !Number.isInteger(intent.freshness_ms)||intent.freshness_ms<0||
+     intent.freshness_ms>PERP_MAX_AGE_MS||!perpToken(intent.source_revision)||
+     !perpToken(intent.intent_revision))return null;
+  return Object.freeze({...intent});
+}
+const PERP_MUTATION_MESSAGE=
+  'Trading is unavailable until Hyperliquid credentials, eligibility evidence, and the Privy signer handoff are approved.';
+const PERP_MUTATION_RECHECKS=Object.freeze([
+  'region','eligibility','policy','nonce','unknown submission'
+]);
+function projectPerpMutationRequest(value){
+  const request=projectPerpRecord(value,['kind','coin','intent_revision']);
+  if(!request||!['order','close_position'].includes(request.kind)||
+     !perpCoreCoin(request.coin)||!perpToken(request.intent_revision))return null;
+  return Object.freeze({...request});
+}
+function projectPerpMutationBinding(value,expected){
+  const binding=projectPerpRecord(value,['kind','coin','intent_revision']);
+  if(!binding||!expected||!['order','close_position'].includes(binding.kind)||
+     !perpCoreCoin(binding.coin)||!perpToken(binding.intent_revision)||
+     binding.kind!==expected.kind||binding.coin!==expected.coin||
+     binding.intent_revision!==expected.intent_revision)return null;
+  return Object.freeze({...binding});
+}
+function projectPerpMutationDecision(value,expected){
+  try{
+    const envelope=projectPerpRecord(value,['ok','binding','error']);
+    const binding=envelope?.ok===false?
+      projectPerpMutationBinding(envelope.binding,expected):null;
+    const error=envelope?.ok===false?
+      projectPerpRecord(envelope.error,
+        ['code','retryable','safe_message','rechecks']):null;
+    const rechecks=error?projectPerpArray(error.rechecks,5):null;
+    if(!binding||!error||error.code!=='PENDING_default_deny'||
+       error.retryable!==false||error.safe_message!==PERP_MUTATION_MESSAGE||
+       !rechecks||rechecks.length!==PERP_MUTATION_RECHECKS.length||
+       rechecks.some((entry,index)=>entry!==PERP_MUTATION_RECHECKS[index]))return null;
+    return Object.freeze({ok:false,binding,error:Object.freeze({
+      code:'PENDING_default_deny',retryable:false,safe_message:PERP_MUTATION_MESSAGE,
+      rechecks:Object.freeze([...PERP_MUTATION_RECHECKS])
+    })});
+  }catch(_error){return null}
+}
+function projectPerpAdapterRequest(method,value){
+  try{
+    if(['getMarketsSnapshot','getPositionsSnapshot','getOrdersSnapshot'].includes(method))
+      return value===undefined?Object.freeze({}):null;
+    if(method==='getMarketSnapshot'){
+      const request=projectPerpRecord(value,['coin']);
+      return request&&perpCoreCoin(request.coin)?Object.freeze({...request}):null;
+    }
+    if(method==='getPositionSnapshot'){
+      const request=projectPerpRecord(value,['position_id']);
+      return request&&perpToken(request.position_id)?Object.freeze({...request}):null;
+    }
+    if(method==='prepareOrderIntent'){
+      const request=projectPerpRecord(value,
+        ['coin','side','order_type','size','leverage','reduce_only']);
+      if(!request||!perpCoreCoin(request.coin)||
+         !['buy','sell'].includes(request.side)||
+         !['market','limit'].includes(request.order_type)||
+         !perpNumber(request.size,0.00000001,1e12)||
+         !perpNumber(request.leverage,1,20,{integer:true})||
+         typeof request.reduce_only!=='boolean')return null;
+      return Object.freeze({...request});
+    }
+  }catch(_error){}
+  return null;
+}
+function projectPerpAdapterValue(method,value,request){
+  try{
+    if(method==='getMarketsSnapshot')return projectPerpMarkets(value);
+    if(method==='getMarketSnapshot'){
+      const projected=projectPerpMarket(value);
+      if(!projected||projected.coin!==request.coin)return null;
+      return projected;
+    }
+    if(method==='getPositionsSnapshot')return projectPerpPositions(value);
+    if(method==='getOrdersSnapshot')return projectPerpOrders(value);
+    if(method==='getPositionSnapshot'){
+      const projected=projectPerpPosition(value);
+      if(!projected||projected.id!==request.position_id)return null;
+      return projected;
+    }
+    if(method==='prepareOrderIntent'){
+      const intent=projectPerpIntent(value);
+      if(!intent||intent.market!==request.coin||intent.side!==request.side||
+         intent.order_type!==request.order_type||intent.size!==request.size||
+         intent.leverage!==request.leverage||intent.reduce_only!==request.reduce_only)return null;
+      return intent;
+    }
+  }catch(_error){}
+  return null;
+}
+function projectPerpMeta(value){
+  const meta=projectPerpRecord(value,['source','mode','network','label','fetched_at_ms',
+    'age_ms','stale','partial']);
+  if(!meta||meta.source!=='hyperliquid_offline_fixture'||meta.mode!=='offline_readonly'||
+     meta.network!=='testnet'||meta.label!==
+       'Simulated Hyperliquid testnet fixture — no network, signing, or submission'||
+     !Number.isFinite(meta.fetched_at_ms)||meta.fetched_at_ms<0||
+     !Number.isInteger(meta.age_ms)||meta.age_ms<0||meta.age_ms>PERP_MAX_AGE_MS||
+     meta.stale!==false||meta.partial!==false)return null;
+  return Object.freeze({...meta});
+}
+function showPerpFact(selector,value){
+  const node=document.querySelector(selector);
+  if(!node)return;
+  node.textContent=value;node.hidden=false;
+}
+function enablePerpActions(screen){
+  document.querySelectorAll('#'+screen+' [data-perp-provider-action]')
+    .forEach(node=>{node.disabled=false});
+}
+function perpUnavailableMessage(subject){
+  return perpReadFailure==='stale'?`Hyperliquid ${subject} stale — facts cleared and actions blocked.`:
+    perpReadFailure==='malformed'?`Hyperliquid ${subject} malformed — facts cleared and actions blocked.`:
+    `Hyperliquid ${subject} unavailable — adapter PENDING.`;
+}
+function perpSnapshot(method,request){
+  try{
+    if(!perpReadAdapter||typeof perpReadAdapter[method]!=='function')return null;
+    const canonicalRequest=projectPerpAdapterRequest(method,request);
+    if(!canonicalRequest){clearPerpTimer();perpReadFailure='malformed';return null}
+    const result=Reflect.ownKeys(canonicalRequest).length===0?perpReadAdapter[method]():
+      perpReadAdapter[method](canonicalRequest);
+    const envelope=projectPerpRecord(result,['ok','value','meta']);
+    const rawMeta=envelope?.ok===true?projectPerpRecord(envelope.meta,
+      ['source','mode','network','label','fetched_at_ms','age_ms','stale','partial']):null;
+    const meta=envelope?.ok===true?projectPerpMeta(envelope.meta):null;
+    if(!meta){
+      clearPerpTimer();
+      perpReadFailure=rawMeta?.stale===true?'stale':'unavailable';
+      return null;
+    }
+    const projected=projectPerpAdapterValue(method,envelope.value,canonicalRequest);
+    if(projected===null){clearPerpTimer();perpReadFailure='malformed';return null}
+    perpReadFailure='';
+    schedulePerpFreshness(meta.age_ms);
+    return Object.freeze({ok:true,value:projected,meta});
+  }catch(_error){clearPerpTimer();perpReadFailure='unavailable';return null}
+}
+function renderPerpMarkets(){
+  resetPerpProjection('scr-perp-markets');
+  const result=perpSnapshot('getMarketsSnapshot');
+  const host=document.getElementById('perp-market-list');
+  if(!host||!result){setPerpStatus('scr-perp-markets',perpUnavailableMessage('market data'));return}
+  setPerpStatus('scr-perp-markets',result.meta.label);
+  const summary=document.querySelectorAll('#scr-perp-markets [data-perp-provider-fact]');
+  if(summary[0]){summary[0].textContent=result.value.length+' Core';summary[0].hidden=false}
+  if(summary[1]){summary[1].textContent=result.meta.age_ms+' ms';summary[1].hidden=false}
+  result.value.forEach(market=>{
+    const button=document.createElement('button');
+    button.className='perp-market-row perp-touch';button.type='button';
+    button.dataset.perpCoin=market.coin;button.setAttribute('data-perp-provider-action','');
+    const identity=document.createElement('span'),coin=document.createElement('b'),
+      name=document.createElement('small'),quote=document.createElement('span'),
+      price=document.createElement('b'),change=document.createElement('small');
+    coin.textContent=market.coin;name.textContent=market.display_name;
+    price.textContent=formatPerpMoney(market.mark_px);
+    change.textContent=(market.change_24h.startsWith('-')?'':'+')+
+      formatPerpDecimal(market.change_24h)+'%';
+    change.className=market.change_24h.startsWith('-')?'down':'up';
+    identity.append(coin,name);quote.append(price,change);button.append(identity,quote);
+    button.addEventListener('click',()=>openPerpMarket(market.coin));host.append(button);
+  });
+  enablePerpActions('scr-perp-markets');
+}
+function renderPerpMarket(){
+  resetPerpProjection('scr-perp-market');
+  const result=perpSnapshot('getMarketSnapshot',{coin:perpViewState.coin});
+  if(!result){setPerpStatus('scr-perp-market',perpUnavailableMessage('market detail'));return}
+  const market=result.value;
+  setPerpStatus('scr-perp-market',result.meta.label);
+  document.querySelectorAll('[data-perp-selected-coin]').forEach(node=>{
+    node.textContent=perpViewState.coin;
+  });
+  const change=document.querySelector('[data-perp-change]');
+  showPerpFact('[data-perp-mark-price]',formatPerpMoney(market.mark_px));
+  showPerpFact('[data-perp-change]',(market.change_24h.startsWith('-')?'':'+')+
+    formatPerpDecimal(market.change_24h)+'% · 24h');
+  if(change)change.className='perp-change '+(market.change_24h.startsWith('-')?'down':'up');
+  showPerpFact('[data-perp-funding]',formatPerpDecimal(market.funding)+' / 8h');
+  showPerpFact('[data-perp-open-interest]',formatPerpMoney(market.open_interest));
+  showPerpFact('[data-perp-volume]',formatPerpMoney(market.volume_24h));
+  showPerpFact('[data-perp-bbo]',formatPerpMoney(market.best_bid)+' / '+
+    formatPerpMoney(market.best_ask));
+  showPerpFact('[data-perp-freshness]',`Snapshot age ${result.meta.age_ms} ms · ${market.source_revision}`);
+  enablePerpActions('scr-perp-market');
+}
+function renderPerpOrder(){
+  resetPerpProjection('scr-perp-order');
+  const result=perpSnapshot('getMarketSnapshot',{coin:'ETH'});
+  if(!result){perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+    setPerpStatus('scr-perp-order',perpUnavailableMessage('order preview'));return}
+  setPerpStatus('scr-perp-order',result.meta.label);
+  const estimates=document.querySelectorAll('#scr-perp-order [data-perp-provider-fact]');
+  ['Calculated only after validation','Calculated only after validation','Disabled · $0.00']
+    .forEach((text,index)=>{if(estimates[index]){estimates[index].textContent=text;estimates[index].hidden=false}});
+  enablePerpActions('scr-perp-order');
+}
+function renderPerpConfirmation(){
+  resetPerpProjection('scr-perp-confirm');
+  const intent=currentPerpIntent();
+  if(!intent){setPerpStatus('scr-perp-confirm',perpUnavailableMessage('immutable intent'));return}
+  setPerpStatus('scr-perp-confirm','Validated immutable intent · '+
+    'Simulated Hyperliquid testnet fixture — no network, signing, or submission');
+  const fields={
+    '[data-perp-confirm-direction]':intent.side==='buy'?'Buy / Long':'Sell / Short',
+    '[data-perp-confirm-type]':intent.order_type==='market'?'Market':'Limit',
+    '[data-perp-confirm-price]':formatPerpMoney(intent.mark_px)+' mark',
+    '[data-perp-confirm-size]':intent.size+' ETH',
+    '[data-perp-confirm-leverage]':intent.leverage+'× isolated',
+    '[data-perp-confirm-margin]':intent.margin_estimate,
+    '[data-perp-confirm-fee]':intent.trading_fee_estimate,
+    '[data-perp-confirm-builder]':'Disabled · '+formatPerpMoney(intent.builder_fee),
+    '[data-perp-confirm-liquidation]':intent.liquidation_estimate,
+    '[data-perp-confirm-freshness]':'Source age below '+PERP_MAX_AGE_MS+' ms · '+intent.source_revision
+  };
+  Object.entries(fields).forEach(([selector,value])=>showPerpFact(selector,value));
+  enablePerpActions('scr-perp-confirm');
+}
+function positionButton(position){
+  const button=document.createElement('button');button.type='button';
+  button.className='perp-position-card card perp-touch';
+  button.setAttribute('data-perp-provider-action','');
+  const title=document.createElement('span'),name=document.createElement('b'),lev=document.createElement('small');
+  title.className='perp-position-title';name.textContent=position.coin+' · '+
+    (position.side==='long'?'Long':'Short');lev.textContent=position.leverage+'× isolated';title.append(name,lev);
+  const pairs=[['Size',position.size+' '+position.coin],['Entry / Mark',
+    formatPerpMoney(position.entry_px)+' / '+formatPerpMoney(position.mark_px)],
+    ['Unrealized PnL',formatPerpMoney(position.unrealized_pnl)]];
+  button.append(title);
+  pairs.forEach(([label,value])=>{const span=document.createElement('span'),small=document.createElement('small'),bold=document.createElement('b');small.textContent=label;bold.textContent=value;span.append(small,bold);button.append(span)});
+  button.addEventListener('click',()=>openPerpPosition(position.id));return button;
+}
+function renderPerpPositions(){
+  resetPerpProjection('scr-perp-positions');
+  const result=perpSnapshot('getPositionsSnapshot'),host=document.getElementById('perp-position-list');
+  if(!result||!host){setPerpStatus('scr-perp-positions',perpUnavailableMessage('positions'));return}
+  setPerpStatus('scr-perp-positions',result.meta.label);
+  showPerpFact('[data-perp-position-count]',result.value.length+' open');
+  result.value.forEach(position=>host.append(positionButton(position)));
+}
+function orderRow(order){
+  const article=document.createElement('article');article.className='perp-order-row card';
+  article.setAttribute('data-perp-provider-fact','');
+  const identity=document.createElement('span'),name=document.createElement('b'),type=document.createElement('small'),
+    terms=document.createElement('span'),size=document.createElement('b'),price=document.createElement('small'),status=document.createElement('span');
+  name.textContent=order.coin+' · '+(order.side==='buy'?'Buy':'Sell');type.textContent=order.type;
+  size.textContent=order.size+' '+order.coin;price.textContent='@ '+formatPerpMoney(order.price);
+  status.className=order.status==='Filled'?'risk-pill risk-low':'chip';status.textContent=order.status;
+  identity.append(name,type);terms.append(size,price);article.append(identity,terms,status);return article;
+}
+function renderPerpOrders(){
+  resetPerpProjection('scr-perp-orders');
+  const result=perpSnapshot('getOrdersSnapshot'),open=document.getElementById('perp-open-order-list'),
+    history=document.getElementById('perp-order-history');
+  if(!result||!open||!history){setPerpStatus('scr-perp-orders',perpUnavailableMessage('orders'));return}
+  setPerpStatus('scr-perp-orders',result.meta.label);
+  result.value.forEach(order=>(order.status==='Open'?open:history).append(orderRow(order)));
+}
+function renderPerpPosition(){
+  resetPerpProjection('scr-perp-position');
+  let id=perpViewState.positionId;
+  if(!id){const positions=perpSnapshot('getPositionsSnapshot');id=positions?.value[0]?.id||''}
+  const result=id?perpSnapshot('getPositionSnapshot',{position_id:id}):null;
+  if(!result){setPerpStatus('scr-perp-position',perpUnavailableMessage('position'));return}
+  const position=result.value;perpViewState.positionId=position.id;
+  setPerpStatus('scr-perp-position',result.meta.label);
+  showPerpFact('[data-perp-position-title]',position.coin+' '+
+    (position.side==='long'?'Long':'Short'));
+  showPerpFact('[data-perp-position-badge]',formatPerpMoney(position.unrealized_pnl));
+  const hero=document.querySelector('[data-perp-position-hero]');
+  if(hero){const label=document.createElement('span'),strong=document.createElement('strong'),small=document.createElement('small');label.textContent=position.coin+' '+(position.side==='long'?'Long':'Short');strong.textContent=position.size+' '+position.coin;small.textContent=position.leverage+'× isolated';hero.append(label,strong,small);hero.hidden=false}
+  showPerpFact('[data-perp-position-entry]',formatPerpMoney(position.entry_px));
+  showPerpFact('[data-perp-position-mark]',formatPerpMoney(position.mark_px));
+  showPerpFact('[data-perp-position-margin]',formatPerpMoney(position.margin));
+  showPerpFact('[data-perp-position-pnl]',formatPerpMoney(position.unrealized_pnl));
+  showPerpFact('[data-perp-position-liquidation]',formatPerpMoney(position.liquidation_px));
+  enablePerpActions('scr-perp-position');
+}
+function renderPerpScreen(screen){
+  if(!screen.startsWith('scr-perp-')){clearPerpTimer();return}
+  if(screen==='scr-perp-markets')renderPerpMarkets();
+  else if(screen==='scr-perp-market')renderPerpMarket();
+  else if(screen==='scr-perp-order')renderPerpOrder();
+  else if(screen==='scr-perp-confirm')renderPerpConfirmation();
+  else if(screen==='scr-perp-positions')renderPerpPositions();
+  else if(screen==='scr-perp-orders')renderPerpOrders();
+  else if(screen==='scr-perp-position')renderPerpPosition();
+}
+function goPerpMarkets(){
+  navigate(ROUTES['perp-markets'].stack.slice());
+}
+function openPerpMarket(coin){
+  const result=perpSnapshot('getMarketSnapshot',{coin});
+  if(!result)return;
+  perpViewState.coin=coin;
+  navigate(ROUTES['perp-market'].stack.slice());
+}
+function openPerpOrder(){
+  if(perpViewState.coin!=='ETH'){
+    toast('This offline order review is pinned to ETH; no provider request was made.');
+    return;
+  }
+  navigate(ROUTES['perp-order'].stack.slice());
+}
+function openPerpConfirmation(){
+  const size=document.getElementById('perp-order-size')?.value||'';
+  const leverage=document.getElementById('perp-leverage')?.value||'';
+  const result=perpSnapshot('prepareOrderIntent',{
+    coin:'ETH',side:'buy',order_type:'market',size,leverage,reduce_only:false
+  });
+  if(!result){perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+    resetPerpProjection('scr-perp-order');
+    setPerpStatus('scr-perp-order','Order draft invalid or stale — review blocked.');return false}
+  perpViewState.intent=result.value;
+  perpViewState.intentDeadlineMs=performance.now()+Math.max(0,PERP_MAX_AGE_MS-result.meta.age_ms);
+  navigate(ROUTES['perp-confirm'].stack.slice());
+  return true;
+}
+function updatePerpDraft(){
+  const leverage=document.getElementById('perp-leverage');
+  const label=document.getElementById('perp-leverage-value');
+  if(leverage&&label)label.textContent=leverage.value+'×';
+  perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+}
+function currentPerpIntent(){
+  const intent=perpViewState.intent;
+  if(!intent||performance.now()>=perpViewState.intentDeadlineMs){
+    perpReadFailure=intent?'stale':'unavailable';perpViewState.intent=null;
+    perpViewState.intentDeadlineMs=0;return null;
+  }
+  const market=perpSnapshot('getMarketSnapshot',{coin:intent.market});
+  if(!market||market.value.source_revision!==intent.source_revision||
+     market.value.mark_px!==intent.mark_px){
+    perpViewState.intent=null;perpViewState.intentDeadlineMs=0;return null;
+  }
+  return intent;
+}
+function currentPerpIntentForReview(){
+  const intent=currentPerpIntent();
+  return intent?Object.freeze({market:intent.market,side:intent.side,
+    order_type:intent.order_type,size:intent.size,leverage:intent.leverage,
+    reduce_only:intent.reduce_only,intent_revision:intent.intent_revision}):null;
+}
+function openPerpPositions(){
+  navigate(ROUTES['perp-positions'].stack.slice());
+}
+function openPerpOrders(){
+  navigate(ROUTES['perp-orders'].stack.slice());
+}
+function openPerpPosition(positionId){
+  if(typeof positionId!=='string'||!positionId)return;
+  const result=perpSnapshot('getPositionSnapshot',{position_id:positionId});
+  if(!result)return;
+  perpViewState.positionId=positionId;
+  navigate(ROUTES['perp-position'].stack.slice());
+}
+function perpMutationDecision(kind){
+  const intent=kind==='order'?currentPerpIntent():null;
+  if(kind==='order'&&!intent)return null;
+  try{
+    if(!perpReadAdapter||typeof perpReadAdapter.prepareMutationReview!=='function')return null;
+    const request=projectPerpMutationRequest({
+      kind,coin:kind==='order'?intent.market:'ETH',
+      intent_revision:kind==='order'?intent.intent_revision:'fixture-close-position-eth-1'
+    });
+    if(!request)return null;
+    const raw=perpReadAdapter.prepareMutationReview(request);
+    const projected=projectPerpMutationDecision(raw,request);
+    return projected;
+  }catch(_error){return null}
+}
+function openPerpSharedReview(trigger){
+  const decision=perpMutationDecision('order');
+  const status=document.getElementById('perp-review-status');
+  if(!decision||decision.ok!==false||decision.error?.code!=='PENDING_default_deny'){
+    if(status)status.textContent='The Hyperliquid policy decision was unavailable. Request blocked.';
+    return false;
+  }
+  if(status)status.textContent=decision.error.safe_message;
+  return openWalletReview('review-perp',trigger);
+}
+function openPerpCloseConfirmation(){
+  const decision=perpMutationDecision('close_position');
+  const status=document.getElementById('perp-close-status');
+  if(status)status.textContent=decision?.ok===false?
+    decision.error.safe_message:'The Hyperliquid policy decision was unavailable. Request blocked.';
+  status?.focus({preventScroll:true});
+  return false;
+}
+
 
 /* ---------- market list + sparklines ---------- */
 let notificationFilter='all';

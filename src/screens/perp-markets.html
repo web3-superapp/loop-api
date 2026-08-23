@@ -1,0 +1,20 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-markets">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to market">‹ Back</button>
+          <div class="perp-heading">
+            <div><p class="eyebrow">Hyperliquid</p><h1 class="h1">Core perpetuals</h1></div>
+            <span class="risk-pill risk-med">Read-only</span>
+          </div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid market data unavailable — adapter PENDING.</p>
+          <div class="perp-summary-grid" aria-label="Perpetual market summary">
+            <div class="card"><span>Core markets</span><strong data-perp-provider-fact hidden></strong></div>
+            <div class="card"><span>Snapshot age</span><strong data-perp-provider-fact hidden></strong></div>
+          </div>
+          <div class="perp-section-head"><h2>Markets</h2><span>Core whitelist only</span></div>
+          <div class="perp-market-list" id="perp-market-list" aria-live="polite"></div>
+          <nav class="perp-subnav" aria-label="Perpetual account">
+            <button class="btn btn-ghost perp-touch" id="perp-open-positions" data-perp-provider-action type="button" onclick="openPerpPositions()" disabled>Positions</button>
+            <button class="btn btn-ghost perp-touch" id="perp-open-orders" data-perp-provider-action type="button" onclick="openPerpOrders()" disabled>Orders &amp; history</button>
+          </nav>
+        </div>
+      </section>

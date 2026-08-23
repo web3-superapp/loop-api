@@ -5,4 +5,6 @@ wallet-transfer.js
 stream-chat-provider.js
 platform-provider.js
 platform-offline-fixture.js
+perp-read-provider.js
+perp-offline-fixture.js
 app.js

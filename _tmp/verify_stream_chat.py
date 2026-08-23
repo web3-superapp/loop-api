@@ -57,7 +57,8 @@ def require_regular_confined(root:Path,path:Path)->None:
 PRODUCTION_SCRIPTS=[
  "vendor/qrcode-generator-1.4.4.js","wallet-provider.js","wallet-review.js",
  "wallet-transfer.js","stream-chat-provider.js","platform-provider.js",
- "platform-offline-fixture.js","app.js"]
+ "platform-offline-fixture.js","perp-read-provider.js",
+ "perp-offline-fixture.js","app.js"]
 PROVIDER_BANNER="/* ============ SCRIPT: stream-chat-provider.js ============ */"
 FIXTURE_SENTINELS=("StreamChatOfflineFixture","installStreamCommunicationOfflineFixture","Offline fixture — Stream credentials not connected")
 PROVIDER_SUCCESS_SENTINELS=("STREAM_CHAT_PROVIDER_READY","STREAM_CHAT_PROVIDER_CONNECTED","Stream credentials connected")
@@ -183,12 +184,12 @@ def check_runtime(root:Path)->None:
  if "NODE CONTRACT PASS" not in result.stdout or "MUTATION PASS 37" not in result.stdout:raise VerificationError("runtime did not pass")
 def check_integrated_build(root:Path,provider:Path,fixture:Path)->None:
  manifest=(root/"src"/"scripts-order.txt").read_text(encoding="utf-8").splitlines()
- if manifest!=PRODUCTION_SCRIPTS:raise VerificationError(f"exact eight-script production order mismatch: {manifest}")
+ if manifest!=PRODUCTION_SCRIPTS:raise VerificationError(f"exact ten-script production order mismatch: {manifest}")
  source_js={p.relative_to(root/"src").as_posix() for p in (root/"src").rglob("*.js") if not p.name.startswith("._") and not (len(p.relative_to(root/"src").parts)>1 and p.relative_to(root/"src").parts[0]=="test-fixtures")}
  if source_js!=set(PRODUCTION_SCRIPTS):raise VerificationError(f"production source inventory mismatch: {sorted(source_js)}")
  if fixture.relative_to(root/"src").as_posix()!="test-fixtures/stream-chat-offline-fixture.js":raise VerificationError("offline fixture is not test-only")
  build_source=(root/"build.py").read_text(encoding="utf-8")
- if "exact pinned eight-script order" not in build_source or "stream-chat-provider.js" not in build_source:raise VerificationError("builder eight-script pin missing")
+ if "exact pinned ten-script order" not in build_source or "stream-chat-provider.js" not in build_source:raise VerificationError("builder ten-script pin missing")
  first=subprocess.run([sys.executable,"build.py"],cwd=root,text=True,capture_output=True,check=False,timeout=60)
  if first.returncode!=0:raise VerificationError(f"integrated build failed:\n{first.stdout}{first.stderr}")
  app=root/"app.html";first_bytes=app.read_bytes();second=subprocess.run([sys.executable,"build.py"],cwd=root,text=True,capture_output=True,check=False,timeout=60)

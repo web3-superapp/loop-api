@@ -20,7 +20,10 @@ APP = ROOT / 'app.html'
 EXPECTED_SCREENS = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market',
+    'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
+    'perp-positions', 'perp-orders', 'perp-position',
+    'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
@@ -32,6 +35,8 @@ EXPECTED_SCRIPTS = [
     'stream-chat-provider.js',
     'platform-provider.js',
     'platform-offline-fixture.js',
+    'perp-read-provider.js',
+    'perp-offline-fixture.js',
     'app.js',
 ]
 EXPECTED_LOCK = {
@@ -388,7 +393,7 @@ screen_manifest_path = SRC / 'screens-order.txt'
 screen_order = (screen_manifest_path.read_text().splitlines()
                 if screen_manifest_path.exists() else [])
 check(screen_order == EXPECTED_SCREENS,
-      f'exact normalized 30-screen order: {screen_order}')
+      f'exact normalized 37-screen order: {screen_order}')
 check(len(screen_order) == len(set(screen_order)),
       'screen manifest has no duplicate entries')
 resolved_screen_paths = {
@@ -403,8 +408,8 @@ check(wallet_index >= 0 and screen_order[wallet_index:wallet_index + 7] ==
       ['wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
        'tx-result'],
       'wallet transfer shells and receive/result follow the exact pinned order')
-check(len(screen_order) == 30 and len(set(screen_order)) == 30,
-      f'30 unique ordered screen fragments: {len(screen_order)} total')
+check(len(screen_order) == 37 and len(set(screen_order)) == 37,
+      f'37 unique ordered screen fragments: {len(screen_order)} total')
 
 screen_ids = []
 for name in screen_order:
@@ -416,8 +421,8 @@ for name in screen_order:
                           fragment)
     check(len(sections) == 1, f'{name}.html contains exactly one .scr section')
     screen_ids.extend(sections)
-check(len(screen_ids) == 30 and len(set(screen_ids)) == 30,
-      f'30 unique screen IDs: {len(screen_ids)} total')
+check(len(screen_ids) == 37 and len(set(screen_ids)) == 37,
+      f'37 unique screen IDs: {len(screen_ids)} total')
 
 for name, heading, live_id in (
         ('asset', 'Asset detail', 'asset-content'),
@@ -3791,13 +3796,32 @@ if not fails:
               f'external approval uses its bound endpoint and exact public fields: '
               f'{external_approval}')
 
-        page.goto('about:blank')
-        page.goto(f'{APP.as_uri()}#asset?asset=ETH&chain=ethereum')
-        page.wait_for_timeout(80)
-        perp_open = page.evaluate("""() => openWalletReview('review-perp',
-          document.getElementById('asset-review-transfer'))""")
-        page.wait_for_timeout(30)
-        perp_review = page.evaluate("""() => ({state:
+        # Perp fixture freshness is deliberately tied to the current monotonic
+        # clock.  Use a fresh page for this focused flow so the preceding F11
+        # matrix cannot consume the read-only snapshot's bounded lifetime.
+        perp_page = browser.new_page()
+        perp_page.goto(f'{APP.as_uri()}#perp-confirm')
+        perp_page.wait_for_timeout(80)
+        direct_perp = perp_page.evaluate("""() => ({opened:openPerpSharedReview(
+          document.getElementById('perp-shared-review')),facts:
+          [...document.querySelectorAll('.scr.active [data-perp-provider-fact]')]
+            .filter(node=>!node.hidden&&node.textContent.trim()).length,
+          disabled:document.getElementById('perp-shared-review').disabled})""")
+        check(direct_perp == {'opened': False, 'facts': 0, 'disabled': True},
+              f'Perp F11 direct/deep-link attempt has no typed intent and fails closed: '
+              f'{direct_perp}')
+
+        perp_page.goto(f'{APP.as_uri()}#perp-order')
+        perp_page.wait_for_timeout(80)
+        perp_page.fill('#perp-order-size', '1.25')
+        perp_page.locator('#perp-leverage').evaluate("""node => {
+          node.value='20';node.dispatchEvent(new Event('input',{bubbles:true}))
+        }""")
+        perp_page.locator('#perp-review-order').click()
+        perp_open = perp_page.evaluate("""() => openPerpSharedReview(
+          document.getElementById('perp-shared-review'))""")
+        perp_page.wait_for_timeout(30)
+        perp_review = perp_page.evaluate("""() => ({state:
           document.getElementById('review-dialog').dataset.state,fields:
           Object.fromEntries([...document.querySelectorAll('#review-fields .review-field')]
             .map(row=>[row.querySelector('dt')?.textContent||'',
@@ -3813,9 +3837,14 @@ if not fails:
               perp_review['fields'].get('Order type') == {
                   'value': 'Market', 'provenance': 'digest_bound_provider'} and
               perp_review['fields'].get('Reduce only') == {
-                  'value': 'No', 'provenance': 'digest_bound_provider'},
-              f'Perp F11 renders exact side/order/reduce-only provenance fields: '
+                  'value': 'No', 'provenance': 'digest_bound_provider'} and
+              perp_review['fields'].get('Size') == {
+                  'value': '1.25', 'provenance': 'digest_bound_provider'} and
+              perp_review['fields'].get('Leverage') == {
+                  'value': '20×', 'provenance': 'digest_bound_provider'},
+              f'Perp F11 renders exact typed-intent/provenance fields: '
               f'{perp_review}')
+        perp_page.close()
 
         page.goto('about:blank')
         page.goto(f'{APP.as_uri()}?demo=wallet-external-gap#asset?asset=ETH&chain=ethereum')
@@ -8644,9 +8673,9 @@ task8_schedule = (ROOT / '文档' / '开发进度安排.md').read_text()
 task8_findings = (ROOT / 'findings.md').read_text()
 task8_docs = '\n'.join((task8_readme, task8_inventory,
                          task8_schedule, task8_findings))
-check('30 个 routed screen fragments' in task8_readme and
-      '30-screen' in task8_findings,
-      'Current docs report the generated 30-screen platform milestone')
+check('37 个 routed screen fragments' in task8_readme and
+      '37-screen' in task8_findings,
+      'Current docs report the generated 37-screen platform + Perp milestone')
 check('_tmp/verify_wallet_foundation.py' in task8_readme and
       'src/scripts-order.txt' in task8_readme and
       'src/vendor/vendor-lock.json' in task8_readme,

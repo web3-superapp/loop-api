@@ -12,6 +12,13 @@ pay
 notifications
 search
 market
+perp-markets
+perp-market
+perp-order
+perp-confirm
+perp-positions
+perp-orders
+perp-position
 token
 launchpad
 chat

@@ -1,0 +1,26 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-confirm">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to order entry">‹ Edit order</button>
+          <div class="perp-heading"><div><p class="eyebrow">Immutable intent</p><h1 class="h1">Confirm Perp order</h1></div><span class="risk-pill risk-med">Blocked</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Immutable Perp intent unavailable — return to order entry.</p>
+          <p class="perp-policy-note">This is a read-only preview. Production mutation authority is PENDING and defaults to deny.</p>
+          <dl class="perp-confirm-list card">
+            <div><dt>Direction</dt><dd data-perp-confirm-direction data-perp-provider-fact hidden></dd></div>
+            <div><dt>Order type</dt><dd data-perp-confirm-type data-perp-provider-fact hidden></dd></div>
+            <div><dt>Price</dt><dd data-perp-confirm-price data-perp-provider-fact hidden></dd></div>
+            <div><dt>Size</dt><dd data-perp-confirm-size data-perp-provider-fact hidden></dd></div>
+            <div><dt>Leverage</dt><dd data-perp-confirm-leverage data-perp-provider-fact hidden></dd></div>
+            <div><dt>Margin</dt><dd data-perp-confirm-margin data-perp-provider-fact hidden></dd></div>
+            <div><dt>Trading fee</dt><dd data-perp-confirm-fee data-perp-provider-fact hidden></dd></div>
+            <div><dt>Builder fee · Disabled</dt><dd data-perp-confirm-builder data-perp-provider-fact hidden></dd></div>
+            <div><dt>Liquidation estimate</dt><dd data-perp-confirm-liquidation data-perp-provider-fact hidden></dd></div>
+            <div><dt>Freshness</dt><dd data-perp-confirm-freshness data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <div class="perp-recheck" role="note">
+            <strong>Required again at provider handoff</strong>
+            <p>region · eligibility · policy · nonce ownership · unknown submission reconciliation</p>
+          </div>
+          <button class="btn btn-primary perp-touch" id="perp-shared-review" data-perp-provider-action type="button" onclick="openPerpSharedReview(this)" disabled>Open shared signing review</button>
+          <p id="perp-review-status" class="perp-blocked-status" role="status" aria-live="polite">Hyperliquid credentials and eligibility evidence are not configured.</p>
+        </div>
+      </section>

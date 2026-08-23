@@ -17,7 +17,9 @@ APP = ROOT / "app.html"
 SCREENS = [
     "splash", "auth", "auth-otp", "auth-wallet", "wallet-create",
     "wallet-backup", "seed-show", "seed-verify", "wallet-import",
-    "home", "pay", "notifications", "search", "market", "token",
+    "home", "pay", "notifications", "search", "market",
+    "perp-markets", "perp-market", "perp-order", "perp-confirm",
+    "perp-positions", "perp-orders", "perp-position", "token",
     "launchpad", "chat", "group", "wallet", "asset", "send", "send-to",
     "send-confirm", "receive", "tx-result", "swap", "dapp", "profile",
     "privacy", "security",
@@ -26,7 +28,8 @@ SCRIPTS = [
     "vendor/qrcode-generator-1.4.4.js", "wallet-provider.js",
     "wallet-review.js", "wallet-transfer.js", "stream-chat-provider.js",
     "platform-provider.js",
-    "platform-offline-fixture.js", "app.js",
+    "platform-offline-fixture.js", "perp-read-provider.js",
+    "perp-offline-fixture.js", "app.js",
 ]
 ROUTES = {
     "notifications": "B3", "search": "B4", "privacy": "H3",
@@ -52,11 +55,11 @@ def lines(relative):
 
 print("== RED/GREEN source contract ==")
 check(lines("src/screens-order.txt") == SCREENS,
-      "exact canonical 30-screen routed manifest")
+      "exact canonical 37-screen routed manifest")
 check(lines("src/scripts-order.txt") == SCRIPTS,
-      "exact eight-script Stream/platform/provider/fixture/app order")
-check("exact pinned 30-screen order" in read("build.py") and
-      "exact pinned eight-script order" in read("build.py"),
+      "exact ten-script Stream/platform/Perp provider/fixture/app order")
+check("exact pinned 37-screen order" in read("build.py") and
+      "exact pinned ten-script order" in read("build.py"),
       "builder pins the expanded exact manifests")
 
 for route, inventory_id in ROUTES.items():
@@ -356,8 +359,8 @@ check(storage_probe.returncode == 0,
 print("\n== Deterministic build ==")
 build = subprocess.run([sys.executable, "build.py"], cwd=ROOT, text=True,
                        capture_output=True, check=False)
-check(build.returncode == 0 and "30 screens" in build.stdout,
-      f"30-screen build succeeds: {(build.stderr or build.stdout).strip()}")
+check(build.returncode == 0 and "37 screens" in build.stdout,
+      f"37-screen build succeeds: {(build.stderr or build.stdout).strip()}")
 first = hashlib.sha256(APP.read_bytes()).hexdigest() if APP.is_file() else None
 build_again = subprocess.run([sys.executable, "build.py"], cwd=ROOT, text=True,
                              capture_output=True, check=False)
@@ -367,7 +370,7 @@ check(build_again.returncode == 0 and first == second,
 PRODUCTION_TEST_APP = production_policy_test_app(ROOT)
 
 print("\n== Routed and global UI matrix ==")
-if build.returncode == 0 and "30 screens" in build.stdout and APP.is_file():
+if build.returncode == 0 and "37 screens" in build.stdout and APP.is_file():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         default_page = browser.new_page(viewport={"width": 390, "height": 844})

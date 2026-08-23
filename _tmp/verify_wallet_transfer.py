@@ -27,13 +27,17 @@ RUNTIME_APP = production_policy_test_app(ROOT) if not CONTRACT_ONLY else APP
 SCREENS = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market',
+    'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
+    'perp-positions', 'perp-orders', 'perp-position',
+    'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
 SCRIPTS = ['vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
            'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
-           'platform-provider.js', 'platform-offline-fixture.js', 'app.js']
+           'platform-provider.js', 'platform-offline-fixture.js',
+           'perp-read-provider.js', 'perp-offline-fixture.js', 'app.js']
 SHELLS = ('send', 'send-to', 'send-confirm', 'tx-result')
 CANONICAL_STACKS = {
     'send': ['scr-wallet', 'scr-send'],
@@ -4356,8 +4360,8 @@ if CONTRACT_ONLY:
 print('== Transfer source/build contract ==')
 screen_manifest = lines(SRC / 'screens-order.txt')
 script_manifest = lines(SRC / 'scripts-order.txt')
-check(screen_manifest == SCREENS, f'exact pinned 30-screen order: {screen_manifest}')
-check(script_manifest == SCRIPTS, f'exact pinned eight-script order: {script_manifest}')
+check(screen_manifest == SCREENS, f'exact pinned 37-screen order: {screen_manifest}')
+check(script_manifest == SCRIPTS, f'exact pinned ten-script order: {script_manifest}')
 screen_sources = sorted(p.stem for p in (SRC / 'screens').glob('*.html')
                         if not p.name.startswith('._'))
 script_sources = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob('*.js')
@@ -4469,12 +4473,12 @@ check(app_source.count('length>26') == 3 and 'length>30' not in app_source,
       'all three navigation/F11 stack bounds retain the approved 26-entry limit')
 
 build_source = (ROOT / 'build.py').read_text()
-check('exact pinned 30-screen order' in build_source, 'builder pins 30-screen error text')
-check('exact pinned eight-script order' in build_source, 'builder pins eight-script error text')
+check('exact pinned 37-screen order' in build_source, 'builder pins 37-screen error text')
+check('exact pinned ten-script order' in build_source, 'builder pins ten-script error text')
 build = subprocess.run([sys.executable, 'build.py'], cwd=ROOT, text=True,
                        capture_output=True, check=False)
-check(build.returncode == 0 and '30 screens' in build.stdout,
-      f'build succeeds at 30 screens: {(build.stderr or build.stdout).strip()}')
+check(build.returncode == 0 and '37 screens' in build.stdout,
+      f'build succeeds at 37 screens: {(build.stderr or build.stdout).strip()}')
 
 print('\n== Frozen minimal facade ==')
 probe = subprocess.run(['node', '-e', r"""

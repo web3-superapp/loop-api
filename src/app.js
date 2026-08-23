@@ -26,6 +26,23 @@ const TOKENS = {
     comm:['8,904 people','21','96','14'],seed:5,drift:.56}
 };
 const MKT = ['ETH','SOL','GLYPH','PXL'];
+const perpReadAdapter=(()=>{
+  try{
+    const provider=globalThis.LoopHyperliquidPerp;
+    const fixture=globalThis.LoopHyperliquidPerpOfflineFixture;
+    if(!provider||!fixture||!Object.isFrozen(provider)||!Object.isFrozen(fixture)||
+       typeof provider.captureAdapter!=='function'||
+       typeof provider.createPendingProductionAdapter!=='function'||
+       typeof fixture.create!=='function'||fixture.mode!=='offline_readonly'||
+       fixture.label!=='Simulated Hyperliquid testnet fixture — no network, signing, or submission'){
+      return null;
+    }
+    return provider.captureAdapter(fixture.create())||
+      provider.captureAdapter(provider.createPendingProductionAdapter());
+  }catch(_error){return null}
+})();
+const perpViewState={coin:'ETH',positionId:'',intent:null,intentDeadlineMs:0};
+let perpFreshnessTimer=null;
 
 /* ---------- app state (single source of truth) ---------- */
 const REGIONAL_BLOCKED_SESSION_KEY='loop.prototype.regional-blocked.v1';
@@ -94,6 +111,13 @@ const ROUTES = {
   'wallet-import':{screen:'scr-wallet-import',stack:['scr-auth','scr-wallet-import'],parent:'auth',account:true,sensitive:true},
   home:{screen:'scr-home',stack:['scr-home'],root:true},
   market:{screen:'scr-market',stack:['scr-market'],root:true},
+  'perp-markets':{screen:'scr-perp-markets',stack:['scr-market','scr-perp-markets']},
+  'perp-market':{screen:'scr-perp-market',stack:['scr-market','scr-perp-markets','scr-perp-market']},
+  'perp-order':{screen:'scr-perp-order',stack:['scr-market','scr-perp-markets','scr-perp-market','scr-perp-order']},
+  'perp-confirm':{screen:'scr-perp-confirm',stack:['scr-market','scr-perp-markets','scr-perp-market','scr-perp-order','scr-perp-confirm']},
+  'perp-positions':{screen:'scr-perp-positions',stack:['scr-market','scr-perp-markets','scr-perp-positions']},
+  'perp-orders':{screen:'scr-perp-orders',stack:['scr-market','scr-perp-markets','scr-perp-orders']},
+  'perp-position':{screen:'scr-perp-position',stack:['scr-market','scr-perp-markets','scr-perp-positions','scr-perp-position']},
   launchpad:{screen:'scr-launchpad',stack:['scr-launchpad'],root:true},
   chat:{screen:'scr-chat',stack:['scr-chat'],root:true},
   wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
@@ -1529,6 +1553,7 @@ function render(){
   renderVoice();
   renderOnboardingFlags();
   renderPlatformScreen(cur);
+  renderPerpScreen(cur);
   renderWalletFoundation(cur);
   applyRegionalCapabilityGates();
 }
@@ -2226,7 +2251,10 @@ const sanitizeReviewProjectionForWrite=(()=>{
   const regexpTest=RegExp.prototype.test;
   const knownScreens=freeze(['scr-splash','scr-auth','scr-auth-otp','scr-auth-wallet',
     'scr-wallet-create','scr-wallet-backup','scr-seed-show','scr-seed-verify',
-    'scr-wallet-import','scr-home','scr-pay','scr-market','scr-token','scr-launchpad',
+    'scr-wallet-import','scr-home','scr-pay','scr-market',
+    'scr-perp-markets','scr-perp-market','scr-perp-order','scr-perp-confirm',
+    'scr-perp-positions','scr-perp-orders','scr-perp-position',
+    'scr-token','scr-launchpad',
     'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
     'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile',
   ]);
@@ -2321,7 +2349,7 @@ const sanitizeReviewProjectionForWrite=(()=>{
 })();
 const reviewRuntime=Object.seal({adapter:null,controller:null,openId:'',policyOperation:'',
   returningId:'',cancellingId:'',triggerId:'',originEntryKey:'',markerEntryKey:'',markerIssued:false,
-  fallbackAllowed:false,result:null,expiryTimer:null,
+  fallbackAllowed:false,result:null,expiryTimer:null,perpIntentRevision:'',
   legacyVeilOwned:false,background:new Map()});
 const reviewMarkerProof=(()=>{
   const MAX_PROOFS=5;
@@ -2461,13 +2489,18 @@ function currentReviewLive(reviewId){
 }
 function ensureReviewController(){
   const adapter=ensureWalletAdapter().adapter;
-  if(reviewRuntime.adapter===adapter&&reviewRuntime.controller) return reviewRuntime.controller;
+  const perpIntent=currentPerpIntentForReview();
+  const perpIntentRevision=perpIntent?.intent_revision||'';
+  if(reviewRuntime.adapter===adapter&&reviewRuntime.controller&&
+     reviewRuntime.perpIntentRevision===perpIntentRevision)return reviewRuntime.controller;
   if(reviewRuntime.openId&&reviewRuntime.controller){
     reviewRuntime.controller.consume({review_id:reviewRuntime.openId});
     closeReviewSurface(false);
   }
   reviewRuntime.adapter=adapter;
-  reviewRuntime.controller=walletReviewFacade?.createController({adapter})||null;
+  reviewRuntime.perpIntentRevision=perpIntentRevision;
+  reviewRuntime.controller=walletReviewFacade?.createController({adapter,
+    perpIntentProvider:currentPerpIntentForReview})||null;
   return reviewRuntime.controller;
 }
 function reviewDialog(){return document.getElementById('review-dialog')}
@@ -3486,6 +3519,549 @@ function renderWalletFoundation(screen){
   if(screen==='scr-receive') renderReceiveScreen();
   renderWalletSigningCapabilities();
 }
+
+/* ---------- D1-D7: read-only Hyperliquid Core Perp presentation ---------- */
+const PERP_MAX_AGE_MS=2000;
+let perpReadFailure='unavailable';
+function formatPerpDecimal(value){
+  const sign=value.startsWith('-')?'−':'';
+  const unsigned=value.replace(/^-/,''),parts=unsigned.split('.');
+  const integer=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return sign+integer+(parts.length===2?'.'+parts[1]:'');
+}
+function formatPerpMoney(value){return '$'+formatPerpDecimal(value)}
+function clearPerpTimer(){
+  if(perpFreshnessTimer!==null){clearTimeout(perpFreshnessTimer);perpFreshnessTimer=null}
+}
+function schedulePerpFreshness(ageMs){
+  clearPerpTimer();
+  const delay=Math.max(0,PERP_MAX_AGE_MS-ageMs+1);
+  perpFreshnessTimer=setTimeout(()=>{perpFreshnessTimer=null;render()},delay);
+}
+function resetPerpProjection(screen){
+  const host=document.getElementById(screen);
+  if(!host)return;
+  host.querySelectorAll('[data-perp-provider-fact]').forEach(node=>{
+    node.textContent='';node.hidden=true;
+  });
+  host.querySelectorAll('[data-perp-provider-action]').forEach(node=>{node.disabled=true});
+  ['perp-market-list','perp-position-list','perp-open-order-list','perp-order-history']
+    .forEach(id=>host.querySelector('#'+id)?.replaceChildren());
+}
+function setPerpStatus(screen,message){
+  const node=document.querySelector('#'+screen+' [data-perp-provider-status]');
+  if(node)node.textContent=message;
+}
+function projectPerpRecord(value,keys){
+  if(!value||typeof value!=='object'||Array.isArray(value)||
+     Object.getPrototypeOf(value)!==Object.prototype)return null;
+  const descriptors=Object.getOwnPropertyDescriptors(value),found=Reflect.ownKeys(descriptors);
+  if(found.length!==keys.length||found.some(key=>typeof key!=='string'||
+     !keys.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+    return null;
+  }
+  const projected={};
+  for(const key of keys)projected[key]=descriptors[key].value;
+  return projected;
+}
+function projectPerpArray(value,max=20){
+  if(!Array.isArray(value)||Object.getPrototypeOf(value)!==Array.prototype||
+     value.length>max)return null;
+  const descriptors=Object.getOwnPropertyDescriptors(value),expected=['length'];
+  for(let index=0;index<value.length;index++)expected.push(String(index));
+  const found=Reflect.ownKeys(descriptors);
+  if(found.length!==expected.length||found.some(key=>typeof key!=='string'||
+     !expected.includes(key)||(key!=='length'&&
+       !Object.prototype.hasOwnProperty.call(descriptors[key],'value'))))return null;
+  return Array.from({length:value.length},(_item,index)=>descriptors[String(index)].value);
+}
+function perpText(value,max=128){
+  return typeof value==='string'&&value.length>0&&value.length<=max&&
+    value.trim()===value&&!/[\u0000-\u001f\u007f]/.test(value)?value:null;
+}
+function perpToken(value,max=96){
+  return perpText(value,max)&&/^[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(value)?value:null;
+}
+function perpNumber(value,min,max,{integer=false}={}){
+  if(typeof value!=='string'||value.length>40||
+     !/^-?(?:0|[1-9]\d{0,17})(?:\.\d{1,18})?$/.test(value))return null;
+  const parsed=Number(value);
+  return Number.isFinite(parsed)&&!Object.is(parsed,-0)&&parsed>=min&&parsed<=max&&
+    (!integer||Number.isInteger(parsed))?value:null;
+}
+function perpCoreCoin(value){return ['BTC','ETH','SOL'].includes(value)?value:null}
+const PERP_MARKET_KEYS=Object.freeze(['coin','display_name','mark_px','change_24h',
+  'volume_24h','funding','open_interest','best_bid','best_ask','freshness_ms',
+  'source_revision']);
+function projectPerpMarket(value){
+  const row=projectPerpRecord(value,PERP_MARKET_KEYS);
+  if(!row||!perpCoreCoin(row.coin)||!perpText(row.display_name,32)||
+     !perpNumber(row.mark_px,0.00000001,1e12)||
+     !perpNumber(row.change_24h,-10000,10000)||
+     !perpNumber(row.volume_24h,0,1e15)||!perpNumber(row.funding,-1,1)||
+     !perpNumber(row.open_interest,0,1e15)||!perpNumber(row.best_bid,0,1e12)||
+     !perpNumber(row.best_ask,0,1e12)||Number(row.best_bid)>Number(row.best_ask)||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpMarkets(value){
+  const rows=projectPerpArray(value,3);
+  if(!rows||rows.length!==3)return null;
+  const projected=rows.map(projectPerpMarket);
+  if(projected.some(row=>!row)||
+     projected.some((row,index)=>row.coin!==['BTC','ETH','SOL'][index]))return null;
+  return Object.freeze(projected);
+}
+const PERP_POSITION_KEYS=Object.freeze(['id','coin','side','size','entry_px','mark_px',
+  'leverage','margin','unrealized_pnl','liquidation_px','freshness_ms','source_revision']);
+function projectPerpPosition(value){
+  const row=projectPerpRecord(value,PERP_POSITION_KEYS);
+  if(!row||!perpToken(row.id)||!perpCoreCoin(row.coin)||
+     !['long','short'].includes(row.side)||!perpNumber(row.size,0.00000001,1e12)||
+     !perpNumber(row.entry_px,0.00000001,1e12)||
+     !perpNumber(row.mark_px,0.00000001,1e12)||
+     !perpNumber(row.leverage,1,100,{integer:true})||!perpNumber(row.margin,0,1e15)||
+     !perpNumber(row.unrealized_pnl,-1e15,1e15)||
+     !perpNumber(row.liquidation_px,0.00000001,1e12)||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpPositions(value){
+  const rows=projectPerpArray(value),projected=rows?.map(projectPerpPosition);
+  if(!projected||projected.some(row=>!row)||
+     new Set(projected.map(row=>row.id)).size!==projected.length)return null;
+  return Object.freeze(projected);
+}
+const PERP_ORDER_KEYS=Object.freeze(['id','coin','side','type','size','price','status',
+  'filled_size','created_label','freshness_ms','source_revision']);
+function projectPerpOrder(value){
+  const row=projectPerpRecord(value,PERP_ORDER_KEYS);
+  if(!row||!perpToken(row.id)||!perpCoreCoin(row.coin)||
+     !['buy','sell'].includes(row.side)||!['Limit','Market · IOC'].includes(row.type)||
+     !perpNumber(row.size,0.00000001,1e12)||
+     !perpNumber(row.price,0.00000001,1e12)||
+     !['Open','Filled','Cancelled'].includes(row.status)||
+     !perpNumber(row.filled_size,0,1e12)||Number(row.filled_size)>Number(row.size)||
+     !perpText(row.created_label,64)||!Number.isInteger(row.freshness_ms)||
+     row.freshness_ms<0||row.freshness_ms>PERP_MAX_AGE_MS||
+     !perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpOrders(value){
+  const rows=projectPerpArray(value),projected=rows?.map(projectPerpOrder);
+  if(!projected||projected.some(row=>!row)||
+     new Set(projected.map(row=>row.id)).size!==projected.length)return null;
+  return Object.freeze(projected);
+}
+const PERP_INTENT_KEYS=Object.freeze(['market','side','order_type','size','leverage',
+  'reduce_only','mark_px','margin_estimate','trading_fee_estimate','builder_fee',
+  'liquidation_estimate','freshness_ms','source_revision','intent_revision']);
+function projectPerpIntent(value){
+  const intent=projectPerpRecord(value,PERP_INTENT_KEYS);
+  if(!intent||!perpCoreCoin(intent.market)||!['buy','sell'].includes(intent.side)||
+     !['market','limit'].includes(intent.order_type)||
+     !perpNumber(intent.size,0.00000001,1e12)||
+     !perpNumber(intent.leverage,1,20,{integer:true})||
+     typeof intent.reduce_only!=='boolean'||
+     !perpNumber(intent.mark_px,0.00000001,1e12)||
+     !perpText(intent.margin_estimate)||!perpText(intent.trading_fee_estimate)||
+     intent.builder_fee!=='0.00'||!perpText(intent.liquidation_estimate)||
+     !Number.isInteger(intent.freshness_ms)||intent.freshness_ms<0||
+     intent.freshness_ms>PERP_MAX_AGE_MS||!perpToken(intent.source_revision)||
+     !perpToken(intent.intent_revision))return null;
+  return Object.freeze({...intent});
+}
+const PERP_MUTATION_MESSAGE=
+  'Trading is unavailable until Hyperliquid credentials, eligibility evidence, and the Privy signer handoff are approved.';
+const PERP_MUTATION_RECHECKS=Object.freeze([
+  'region','eligibility','policy','nonce','unknown submission'
+]);
+function projectPerpMutationRequest(value){
+  const request=projectPerpRecord(value,['kind','coin','intent_revision']);
+  if(!request||!['order','close_position'].includes(request.kind)||
+     !perpCoreCoin(request.coin)||!perpToken(request.intent_revision))return null;
+  return Object.freeze({...request});
+}
+function projectPerpMutationBinding(value,expected){
+  const binding=projectPerpRecord(value,['kind','coin','intent_revision']);
+  if(!binding||!expected||!['order','close_position'].includes(binding.kind)||
+     !perpCoreCoin(binding.coin)||!perpToken(binding.intent_revision)||
+     binding.kind!==expected.kind||binding.coin!==expected.coin||
+     binding.intent_revision!==expected.intent_revision)return null;
+  return Object.freeze({...binding});
+}
+function projectPerpMutationDecision(value,expected){
+  try{
+    const envelope=projectPerpRecord(value,['ok','binding','error']);
+    const binding=envelope?.ok===false?
+      projectPerpMutationBinding(envelope.binding,expected):null;
+    const error=envelope?.ok===false?
+      projectPerpRecord(envelope.error,
+        ['code','retryable','safe_message','rechecks']):null;
+    const rechecks=error?projectPerpArray(error.rechecks,5):null;
+    if(!binding||!error||error.code!=='PENDING_default_deny'||
+       error.retryable!==false||error.safe_message!==PERP_MUTATION_MESSAGE||
+       !rechecks||rechecks.length!==PERP_MUTATION_RECHECKS.length||
+       rechecks.some((entry,index)=>entry!==PERP_MUTATION_RECHECKS[index]))return null;
+    return Object.freeze({ok:false,binding,error:Object.freeze({
+      code:'PENDING_default_deny',retryable:false,safe_message:PERP_MUTATION_MESSAGE,
+      rechecks:Object.freeze([...PERP_MUTATION_RECHECKS])
+    })});
+  }catch(_error){return null}
+}
+function projectPerpAdapterRequest(method,value){
+  try{
+    if(['getMarketsSnapshot','getPositionsSnapshot','getOrdersSnapshot'].includes(method))
+      return value===undefined?Object.freeze({}):null;
+    if(method==='getMarketSnapshot'){
+      const request=projectPerpRecord(value,['coin']);
+      return request&&perpCoreCoin(request.coin)?Object.freeze({...request}):null;
+    }
+    if(method==='getPositionSnapshot'){
+      const request=projectPerpRecord(value,['position_id']);
+      return request&&perpToken(request.position_id)?Object.freeze({...request}):null;
+    }
+    if(method==='prepareOrderIntent'){
+      const request=projectPerpRecord(value,
+        ['coin','side','order_type','size','leverage','reduce_only']);
+      if(!request||!perpCoreCoin(request.coin)||
+         !['buy','sell'].includes(request.side)||
+         !['market','limit'].includes(request.order_type)||
+         !perpNumber(request.size,0.00000001,1e12)||
+         !perpNumber(request.leverage,1,20,{integer:true})||
+         typeof request.reduce_only!=='boolean')return null;
+      return Object.freeze({...request});
+    }
+  }catch(_error){}
+  return null;
+}
+function projectPerpAdapterValue(method,value,request){
+  try{
+    if(method==='getMarketsSnapshot')return projectPerpMarkets(value);
+    if(method==='getMarketSnapshot'){
+      const projected=projectPerpMarket(value);
+      if(!projected||projected.coin!==request.coin)return null;
+      return projected;
+    }
+    if(method==='getPositionsSnapshot')return projectPerpPositions(value);
+    if(method==='getOrdersSnapshot')return projectPerpOrders(value);
+    if(method==='getPositionSnapshot'){
+      const projected=projectPerpPosition(value);
+      if(!projected||projected.id!==request.position_id)return null;
+      return projected;
+    }
+    if(method==='prepareOrderIntent'){
+      const intent=projectPerpIntent(value);
+      if(!intent||intent.market!==request.coin||intent.side!==request.side||
+         intent.order_type!==request.order_type||intent.size!==request.size||
+         intent.leverage!==request.leverage||intent.reduce_only!==request.reduce_only)return null;
+      return intent;
+    }
+  }catch(_error){}
+  return null;
+}
+function projectPerpMeta(value){
+  const meta=projectPerpRecord(value,['source','mode','network','label','fetched_at_ms',
+    'age_ms','stale','partial']);
+  if(!meta||meta.source!=='hyperliquid_offline_fixture'||meta.mode!=='offline_readonly'||
+     meta.network!=='testnet'||meta.label!==
+       'Simulated Hyperliquid testnet fixture — no network, signing, or submission'||
+     !Number.isFinite(meta.fetched_at_ms)||meta.fetched_at_ms<0||
+     !Number.isInteger(meta.age_ms)||meta.age_ms<0||meta.age_ms>PERP_MAX_AGE_MS||
+     meta.stale!==false||meta.partial!==false)return null;
+  return Object.freeze({...meta});
+}
+function showPerpFact(selector,value){
+  const node=document.querySelector(selector);
+  if(!node)return;
+  node.textContent=value;node.hidden=false;
+}
+function enablePerpActions(screen){
+  document.querySelectorAll('#'+screen+' [data-perp-provider-action]')
+    .forEach(node=>{node.disabled=false});
+}
+function perpUnavailableMessage(subject){
+  return perpReadFailure==='stale'?`Hyperliquid ${subject} stale — facts cleared and actions blocked.`:
+    perpReadFailure==='malformed'?`Hyperliquid ${subject} malformed — facts cleared and actions blocked.`:
+    `Hyperliquid ${subject} unavailable — adapter PENDING.`;
+}
+function perpSnapshot(method,request){
+  try{
+    if(!perpReadAdapter||typeof perpReadAdapter[method]!=='function')return null;
+    const canonicalRequest=projectPerpAdapterRequest(method,request);
+    if(!canonicalRequest){clearPerpTimer();perpReadFailure='malformed';return null}
+    const result=Reflect.ownKeys(canonicalRequest).length===0?perpReadAdapter[method]():
+      perpReadAdapter[method](canonicalRequest);
+    const envelope=projectPerpRecord(result,['ok','value','meta']);
+    const rawMeta=envelope?.ok===true?projectPerpRecord(envelope.meta,
+      ['source','mode','network','label','fetched_at_ms','age_ms','stale','partial']):null;
+    const meta=envelope?.ok===true?projectPerpMeta(envelope.meta):null;
+    if(!meta){
+      clearPerpTimer();
+      perpReadFailure=rawMeta?.stale===true?'stale':'unavailable';
+      return null;
+    }
+    const projected=projectPerpAdapterValue(method,envelope.value,canonicalRequest);
+    if(projected===null){clearPerpTimer();perpReadFailure='malformed';return null}
+    perpReadFailure='';
+    schedulePerpFreshness(meta.age_ms);
+    return Object.freeze({ok:true,value:projected,meta});
+  }catch(_error){clearPerpTimer();perpReadFailure='unavailable';return null}
+}
+function renderPerpMarkets(){
+  resetPerpProjection('scr-perp-markets');
+  const result=perpSnapshot('getMarketsSnapshot');
+  const host=document.getElementById('perp-market-list');
+  if(!host||!result){setPerpStatus('scr-perp-markets',perpUnavailableMessage('market data'));return}
+  setPerpStatus('scr-perp-markets',result.meta.label);
+  const summary=document.querySelectorAll('#scr-perp-markets [data-perp-provider-fact]');
+  if(summary[0]){summary[0].textContent=result.value.length+' Core';summary[0].hidden=false}
+  if(summary[1]){summary[1].textContent=result.meta.age_ms+' ms';summary[1].hidden=false}
+  result.value.forEach(market=>{
+    const button=document.createElement('button');
+    button.className='perp-market-row perp-touch';button.type='button';
+    button.dataset.perpCoin=market.coin;button.setAttribute('data-perp-provider-action','');
+    const identity=document.createElement('span'),coin=document.createElement('b'),
+      name=document.createElement('small'),quote=document.createElement('span'),
+      price=document.createElement('b'),change=document.createElement('small');
+    coin.textContent=market.coin;name.textContent=market.display_name;
+    price.textContent=formatPerpMoney(market.mark_px);
+    change.textContent=(market.change_24h.startsWith('-')?'':'+')+
+      formatPerpDecimal(market.change_24h)+'%';
+    change.className=market.change_24h.startsWith('-')?'down':'up';
+    identity.append(coin,name);quote.append(price,change);button.append(identity,quote);
+    button.addEventListener('click',()=>openPerpMarket(market.coin));host.append(button);
+  });
+  enablePerpActions('scr-perp-markets');
+}
+function renderPerpMarket(){
+  resetPerpProjection('scr-perp-market');
+  const result=perpSnapshot('getMarketSnapshot',{coin:perpViewState.coin});
+  if(!result){setPerpStatus('scr-perp-market',perpUnavailableMessage('market detail'));return}
+  const market=result.value;
+  setPerpStatus('scr-perp-market',result.meta.label);
+  document.querySelectorAll('[data-perp-selected-coin]').forEach(node=>{
+    node.textContent=perpViewState.coin;
+  });
+  const change=document.querySelector('[data-perp-change]');
+  showPerpFact('[data-perp-mark-price]',formatPerpMoney(market.mark_px));
+  showPerpFact('[data-perp-change]',(market.change_24h.startsWith('-')?'':'+')+
+    formatPerpDecimal(market.change_24h)+'% · 24h');
+  if(change)change.className='perp-change '+(market.change_24h.startsWith('-')?'down':'up');
+  showPerpFact('[data-perp-funding]',formatPerpDecimal(market.funding)+' / 8h');
+  showPerpFact('[data-perp-open-interest]',formatPerpMoney(market.open_interest));
+  showPerpFact('[data-perp-volume]',formatPerpMoney(market.volume_24h));
+  showPerpFact('[data-perp-bbo]',formatPerpMoney(market.best_bid)+' / '+
+    formatPerpMoney(market.best_ask));
+  showPerpFact('[data-perp-freshness]',`Snapshot age ${result.meta.age_ms} ms · ${market.source_revision}`);
+  enablePerpActions('scr-perp-market');
+}
+function renderPerpOrder(){
+  resetPerpProjection('scr-perp-order');
+  const result=perpSnapshot('getMarketSnapshot',{coin:'ETH'});
+  if(!result){perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+    setPerpStatus('scr-perp-order',perpUnavailableMessage('order preview'));return}
+  setPerpStatus('scr-perp-order',result.meta.label);
+  const estimates=document.querySelectorAll('#scr-perp-order [data-perp-provider-fact]');
+  ['Calculated only after validation','Calculated only after validation','Disabled · $0.00']
+    .forEach((text,index)=>{if(estimates[index]){estimates[index].textContent=text;estimates[index].hidden=false}});
+  enablePerpActions('scr-perp-order');
+}
+function renderPerpConfirmation(){
+  resetPerpProjection('scr-perp-confirm');
+  const intent=currentPerpIntent();
+  if(!intent){setPerpStatus('scr-perp-confirm',perpUnavailableMessage('immutable intent'));return}
+  setPerpStatus('scr-perp-confirm','Validated immutable intent · '+
+    'Simulated Hyperliquid testnet fixture — no network, signing, or submission');
+  const fields={
+    '[data-perp-confirm-direction]':intent.side==='buy'?'Buy / Long':'Sell / Short',
+    '[data-perp-confirm-type]':intent.order_type==='market'?'Market':'Limit',
+    '[data-perp-confirm-price]':formatPerpMoney(intent.mark_px)+' mark',
+    '[data-perp-confirm-size]':intent.size+' ETH',
+    '[data-perp-confirm-leverage]':intent.leverage+'× isolated',
+    '[data-perp-confirm-margin]':intent.margin_estimate,
+    '[data-perp-confirm-fee]':intent.trading_fee_estimate,
+    '[data-perp-confirm-builder]':'Disabled · '+formatPerpMoney(intent.builder_fee),
+    '[data-perp-confirm-liquidation]':intent.liquidation_estimate,
+    '[data-perp-confirm-freshness]':'Source age below '+PERP_MAX_AGE_MS+' ms · '+intent.source_revision
+  };
+  Object.entries(fields).forEach(([selector,value])=>showPerpFact(selector,value));
+  enablePerpActions('scr-perp-confirm');
+}
+function positionButton(position){
+  const button=document.createElement('button');button.type='button';
+  button.className='perp-position-card card perp-touch';
+  button.setAttribute('data-perp-provider-action','');
+  const title=document.createElement('span'),name=document.createElement('b'),lev=document.createElement('small');
+  title.className='perp-position-title';name.textContent=position.coin+' · '+
+    (position.side==='long'?'Long':'Short');lev.textContent=position.leverage+'× isolated';title.append(name,lev);
+  const pairs=[['Size',position.size+' '+position.coin],['Entry / Mark',
+    formatPerpMoney(position.entry_px)+' / '+formatPerpMoney(position.mark_px)],
+    ['Unrealized PnL',formatPerpMoney(position.unrealized_pnl)]];
+  button.append(title);
+  pairs.forEach(([label,value])=>{const span=document.createElement('span'),small=document.createElement('small'),bold=document.createElement('b');small.textContent=label;bold.textContent=value;span.append(small,bold);button.append(span)});
+  button.addEventListener('click',()=>openPerpPosition(position.id));return button;
+}
+function renderPerpPositions(){
+  resetPerpProjection('scr-perp-positions');
+  const result=perpSnapshot('getPositionsSnapshot'),host=document.getElementById('perp-position-list');
+  if(!result||!host){setPerpStatus('scr-perp-positions',perpUnavailableMessage('positions'));return}
+  setPerpStatus('scr-perp-positions',result.meta.label);
+  showPerpFact('[data-perp-position-count]',result.value.length+' open');
+  result.value.forEach(position=>host.append(positionButton(position)));
+}
+function orderRow(order){
+  const article=document.createElement('article');article.className='perp-order-row card';
+  article.setAttribute('data-perp-provider-fact','');
+  const identity=document.createElement('span'),name=document.createElement('b'),type=document.createElement('small'),
+    terms=document.createElement('span'),size=document.createElement('b'),price=document.createElement('small'),status=document.createElement('span');
+  name.textContent=order.coin+' · '+(order.side==='buy'?'Buy':'Sell');type.textContent=order.type;
+  size.textContent=order.size+' '+order.coin;price.textContent='@ '+formatPerpMoney(order.price);
+  status.className=order.status==='Filled'?'risk-pill risk-low':'chip';status.textContent=order.status;
+  identity.append(name,type);terms.append(size,price);article.append(identity,terms,status);return article;
+}
+function renderPerpOrders(){
+  resetPerpProjection('scr-perp-orders');
+  const result=perpSnapshot('getOrdersSnapshot'),open=document.getElementById('perp-open-order-list'),
+    history=document.getElementById('perp-order-history');
+  if(!result||!open||!history){setPerpStatus('scr-perp-orders',perpUnavailableMessage('orders'));return}
+  setPerpStatus('scr-perp-orders',result.meta.label);
+  result.value.forEach(order=>(order.status==='Open'?open:history).append(orderRow(order)));
+}
+function renderPerpPosition(){
+  resetPerpProjection('scr-perp-position');
+  let id=perpViewState.positionId;
+  if(!id){const positions=perpSnapshot('getPositionsSnapshot');id=positions?.value[0]?.id||''}
+  const result=id?perpSnapshot('getPositionSnapshot',{position_id:id}):null;
+  if(!result){setPerpStatus('scr-perp-position',perpUnavailableMessage('position'));return}
+  const position=result.value;perpViewState.positionId=position.id;
+  setPerpStatus('scr-perp-position',result.meta.label);
+  showPerpFact('[data-perp-position-title]',position.coin+' '+
+    (position.side==='long'?'Long':'Short'));
+  showPerpFact('[data-perp-position-badge]',formatPerpMoney(position.unrealized_pnl));
+  const hero=document.querySelector('[data-perp-position-hero]');
+  if(hero){const label=document.createElement('span'),strong=document.createElement('strong'),small=document.createElement('small');label.textContent=position.coin+' '+(position.side==='long'?'Long':'Short');strong.textContent=position.size+' '+position.coin;small.textContent=position.leverage+'× isolated';hero.append(label,strong,small);hero.hidden=false}
+  showPerpFact('[data-perp-position-entry]',formatPerpMoney(position.entry_px));
+  showPerpFact('[data-perp-position-mark]',formatPerpMoney(position.mark_px));
+  showPerpFact('[data-perp-position-margin]',formatPerpMoney(position.margin));
+  showPerpFact('[data-perp-position-pnl]',formatPerpMoney(position.unrealized_pnl));
+  showPerpFact('[data-perp-position-liquidation]',formatPerpMoney(position.liquidation_px));
+  enablePerpActions('scr-perp-position');
+}
+function renderPerpScreen(screen){
+  if(!screen.startsWith('scr-perp-')){clearPerpTimer();return}
+  if(screen==='scr-perp-markets')renderPerpMarkets();
+  else if(screen==='scr-perp-market')renderPerpMarket();
+  else if(screen==='scr-perp-order')renderPerpOrder();
+  else if(screen==='scr-perp-confirm')renderPerpConfirmation();
+  else if(screen==='scr-perp-positions')renderPerpPositions();
+  else if(screen==='scr-perp-orders')renderPerpOrders();
+  else if(screen==='scr-perp-position')renderPerpPosition();
+}
+function goPerpMarkets(){
+  navigate(ROUTES['perp-markets'].stack.slice());
+}
+function openPerpMarket(coin){
+  const result=perpSnapshot('getMarketSnapshot',{coin});
+  if(!result)return;
+  perpViewState.coin=coin;
+  navigate(ROUTES['perp-market'].stack.slice());
+}
+function openPerpOrder(){
+  if(perpViewState.coin!=='ETH'){
+    toast('This offline order review is pinned to ETH; no provider request was made.');
+    return;
+  }
+  navigate(ROUTES['perp-order'].stack.slice());
+}
+function openPerpConfirmation(){
+  const size=document.getElementById('perp-order-size')?.value||'';
+  const leverage=document.getElementById('perp-leverage')?.value||'';
+  const result=perpSnapshot('prepareOrderIntent',{
+    coin:'ETH',side:'buy',order_type:'market',size,leverage,reduce_only:false
+  });
+  if(!result){perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+    resetPerpProjection('scr-perp-order');
+    setPerpStatus('scr-perp-order','Order draft invalid or stale — review blocked.');return false}
+  perpViewState.intent=result.value;
+  perpViewState.intentDeadlineMs=performance.now()+Math.max(0,PERP_MAX_AGE_MS-result.meta.age_ms);
+  navigate(ROUTES['perp-confirm'].stack.slice());
+  return true;
+}
+function updatePerpDraft(){
+  const leverage=document.getElementById('perp-leverage');
+  const label=document.getElementById('perp-leverage-value');
+  if(leverage&&label)label.textContent=leverage.value+'×';
+  perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+}
+function currentPerpIntent(){
+  const intent=perpViewState.intent;
+  if(!intent||performance.now()>=perpViewState.intentDeadlineMs){
+    perpReadFailure=intent?'stale':'unavailable';perpViewState.intent=null;
+    perpViewState.intentDeadlineMs=0;return null;
+  }
+  const market=perpSnapshot('getMarketSnapshot',{coin:intent.market});
+  if(!market||market.value.source_revision!==intent.source_revision||
+     market.value.mark_px!==intent.mark_px){
+    perpViewState.intent=null;perpViewState.intentDeadlineMs=0;return null;
+  }
+  return intent;
+}
+function currentPerpIntentForReview(){
+  const intent=currentPerpIntent();
+  return intent?Object.freeze({market:intent.market,side:intent.side,
+    order_type:intent.order_type,size:intent.size,leverage:intent.leverage,
+    reduce_only:intent.reduce_only,intent_revision:intent.intent_revision}):null;
+}
+function openPerpPositions(){
+  navigate(ROUTES['perp-positions'].stack.slice());
+}
+function openPerpOrders(){
+  navigate(ROUTES['perp-orders'].stack.slice());
+}
+function openPerpPosition(positionId){
+  if(typeof positionId!=='string'||!positionId)return;
+  const result=perpSnapshot('getPositionSnapshot',{position_id:positionId});
+  if(!result)return;
+  perpViewState.positionId=positionId;
+  navigate(ROUTES['perp-position'].stack.slice());
+}
+function perpMutationDecision(kind){
+  const intent=kind==='order'?currentPerpIntent():null;
+  if(kind==='order'&&!intent)return null;
+  try{
+    if(!perpReadAdapter||typeof perpReadAdapter.prepareMutationReview!=='function')return null;
+    const request=projectPerpMutationRequest({
+      kind,coin:kind==='order'?intent.market:'ETH',
+      intent_revision:kind==='order'?intent.intent_revision:'fixture-close-position-eth-1'
+    });
+    if(!request)return null;
+    const raw=perpReadAdapter.prepareMutationReview(request);
+    const projected=projectPerpMutationDecision(raw,request);
+    return projected;
+  }catch(_error){return null}
+}
+function openPerpSharedReview(trigger){
+  const decision=perpMutationDecision('order');
+  const status=document.getElementById('perp-review-status');
+  if(!decision||decision.ok!==false||decision.error?.code!=='PENDING_default_deny'){
+    if(status)status.textContent='The Hyperliquid policy decision was unavailable. Request blocked.';
+    return false;
+  }
+  if(status)status.textContent=decision.error.safe_message;
+  return openWalletReview('review-perp',trigger);
+}
+function openPerpCloseConfirmation(){
+  const decision=perpMutationDecision('close_position');
+  const status=document.getElementById('perp-close-status');
+  if(status)status.textContent=decision?.ok===false?
+    decision.error.safe_message:'The Hyperliquid policy decision was unavailable. Request blocked.';
+  status?.focus({preventScroll:true});
+  return false;
+}
+
 
 /* ---------- market list + sparklines ---------- */
 let notificationFilter='all';

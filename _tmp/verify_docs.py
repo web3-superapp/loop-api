@@ -121,7 +121,10 @@ manifest = [line.strip() for line in read('src/screens-order.txt').splitlines()
 expected_screen_manifest = [
     'splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
     'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
-    'home', 'pay', 'notifications', 'search', 'market', 'token', 'launchpad', 'chat', 'group',
+    'home', 'pay', 'notifications', 'search', 'market',
+    'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
+    'perp-positions', 'perp-orders', 'perp-position',
+    'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
 ]
@@ -290,11 +293,11 @@ check(all(result['exit'] != 0 and not result['generated']
       f'Marked bundle/license 拒绝 internal/external symlink：'
       f'{locked_file_symlink_results}')
 
-check(manifest == expected_screen_manifest and len(set(manifest)) == 30,
-      f'生成屏 manifest 是精确 30 个唯一有序项（{len(manifest)}）')
-check('30 个 routed screen fragments' in readme and
-      '30-screen routed manifest' in findings_doc,
-      'README/findings 当前生成口径是 30 屏')
+check(manifest == expected_screen_manifest and len(set(manifest)) == 37,
+      f'生成屏 manifest 是精确 37 个唯一有序项（{len(manifest)}）')
+check('37 个 routed screen fragments' in readme and
+      '37-screen routed manifest' in findings_doc,
+      'README/findings 当前生成口径是 37 屏')
 check(all(term in current_docs for term in (
     'F3–F5', 'F12', '待实现')),
       '新增 transfer/result 路由仅为结构壳，F3–F5/F12 仍显式待实现')
@@ -439,11 +442,27 @@ platform_current_app_hash = \
     'f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6'
 platform_current_docs_hash = \
     '3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278'
+hyper_ui_v2_current_app_hash = \
+    '14b57bc4b2cac17519610a59037644f0e181e61cef3a2bfee3eade495ecc2d20'
+hyper_ui_v2_current_docs_hash = \
+    '15bb130fe2f0da6bf9960eaa423fd647f9353dfd4073fd673ae150eb7b77c4ce'
+hyper_ui_v3_current_app_hash = \
+    '2502772768ed9eea6bf2c868cd5140a57deba1d9235540fb2d7c698a5e3035dd'
+hyper_ui_v3_current_docs_hash = \
+    '79ef411256a22c457afd56bd330eaabd5ab240878d7adaa79f7d2537dbc8299c'
+hyper_ui_v4_current_app_hash = \
+    'd082412728b8a5810ed9bb70c199e1f77bad3e41e706c54323a2dc375c4e5cdc'
+hyper_ui_v4_current_docs_hash = \
+    'ce566b596dad1945769440a911545bf2e935989d67d6acf81096ea969319e23b'
+hyper_ui_v5_current_app_hash = \
+    'c177387b397ee386ed2582427c2ad64e3e74027fb36b7a6963fd10a159a9abfa'
+hyper_ui_v5_current_docs_hash = \
+    'ad93bbe1bd6d8fb6d99e2d4df2fc4015a2a795a0ce7c94b8ce5b1a62a2187b4f'
 hashes_in_findings = re.findall(r'\b[a-f0-9]{64}\b', findings_doc)
 actual_app_hash = sha256(ROOT / 'app.html')
 actual_docs_hash = sha256(PAGE)
-check(actual_app_hash == platform_current_app_hash and
-      actual_docs_hash == platform_current_docs_hash and
+check(actual_app_hash == hyper_ui_v5_current_app_hash and
+      actual_docs_hash == hyper_ui_v5_current_docs_hash and
       task1_quality_remediation_app_hash != task1_post_spec_fix_app_hash and
       app_pre_review_hash in findings_doc and
       docs_pre_review_hash in findings_doc and
@@ -458,6 +477,14 @@ check(actual_app_hash == platform_current_app_hash and
       task1_current_docs_hash in findings_doc and
       platform_current_app_hash in findings_doc and
       platform_current_docs_hash in findings_doc and
+      hyper_ui_v2_current_app_hash in findings_doc and
+      hyper_ui_v2_current_docs_hash in findings_doc and
+      hyper_ui_v3_current_app_hash in findings_doc and
+      hyper_ui_v3_current_docs_hash in findings_doc and
+      hyper_ui_v4_current_app_hash in findings_doc and
+      hyper_ui_v4_current_docs_hash in findings_doc and
+      hyper_ui_v5_current_app_hash in findings_doc and
+      hyper_ui_v5_current_docs_hash in findings_doc and
       set(hashes_in_findings) >= {
           app_pre_review_hash, docs_pre_review_hash, docs_post_remediation_hash,
           docs_quality_remediation_hash, docs_vendored_marked_hash,
@@ -465,7 +492,15 @@ check(actual_app_hash == platform_current_app_hash and
           task1_quality_remediation_app_hash, task1_post_spec_fix_app_hash,
           stream_v5_integrated_app_hash, task1_current_docs_hash,
           platform_current_app_hash,
-          platform_current_docs_hash} and
+          platform_current_docs_hash,
+          hyper_ui_v2_current_app_hash,
+          hyper_ui_v2_current_docs_hash,
+          hyper_ui_v3_current_app_hash,
+          hyper_ui_v3_current_docs_hash,
+          hyper_ui_v4_current_app_hash,
+          hyper_ui_v4_current_docs_hash,
+          hyper_ui_v5_current_app_hash,
+          hyper_ui_v5_current_docs_hash} and
       all(term in findings_doc for term in (
           'Task 8 pre-review deterministic evidence',
           'pre-review evidence, not a final checkpoint',
@@ -486,8 +521,16 @@ check(actual_app_hash == platform_current_app_hash and
           'production seam checkpoint, not a connected Stream provider',
           'App-wide platform/UI candidate deterministic evidence',
           'not credentialed production provider delivery',
+          'Hyperliquid Core Perp UI v2 candidate deterministic evidence',
+          'not credentialed production order execution',
+          'Hyperliquid Core Perp UI v3 remediation evidence',
+          'v2 candidate above was rejected by independent audit',
+          'Hyperliquid Core Perp UI v4 deep-DTO remediation evidence',
+          'v3 candidate above was rejected by independent audit',
+          'Hyperliquid Core Perp UI v5 mutation-decision remediation evidence',
+          'v4 candidate above was rejected by independent audit',
           'global goal remains incomplete')),
-      f'历史/Task 1/Stream v5 checkpoint SHA-256 已区分，当前实际 app/docs hash '
+      f'历史/Task 1/Stream/Hyper v2/v3/v4 checkpoint SHA-256 已区分，当前 Hyper v5 app/docs hash '
       f'与对应记录一致：{actual_app_hash}/{actual_docs_hash}')
 
 body_rows = [

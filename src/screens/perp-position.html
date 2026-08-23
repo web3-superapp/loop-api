@@ -1,0 +1,17 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-position">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to positions">‹ Positions</button>
+          <div class="perp-heading"><div><p class="eyebrow">Open position</p><h1 class="h1" data-perp-position-title data-perp-provider-fact hidden></h1></div><span class="risk-pill risk-low" data-perp-position-badge data-perp-provider-fact hidden></span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid position unavailable — adapter PENDING.</p>
+          <div class="perp-position-hero card" data-perp-position-hero data-perp-provider-fact hidden></div>
+          <dl class="perp-stat-list">
+            <div><dt>Entry price</dt><dd data-perp-position-entry data-perp-provider-fact hidden></dd></div>
+            <div><dt>Mark price</dt><dd data-perp-position-mark data-perp-provider-fact hidden></dd></div>
+            <div><dt>Margin</dt><dd data-perp-position-margin data-perp-provider-fact hidden></dd></div>
+            <div><dt>Unrealized PnL</dt><dd data-perp-position-pnl data-perp-provider-fact hidden></dd></div>
+            <div><dt>Liquidation estimate</dt><dd data-perp-position-liquidation data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <button class="btn btn-danger perp-touch" id="perp-review-close" data-perp-provider-action type="button" onclick="openPerpCloseConfirmation()" disabled>Review close</button>
+          <p id="perp-close-status" class="perp-blocked-status" role="status" aria-live="polite">Close actions are PENDING and default to deny.</p>
+        </div>
+      </section>

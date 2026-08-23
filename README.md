@@ -67,7 +67,9 @@ python3 build_docs.py && python3 _tmp/verify_docs.py  # 文档生成与口径回
 
 `docs.html` 内嵌 `docs_vendor/vendor-lock.json` 精确固定的官方 npm `marked@18.0.10` UMD 字节，不依赖 CDN；`build_docs.py` 在生成前校验 bundle 与 MIT LICENSE 的 SHA-256。若 Marked API 不兼容或解析异常，页面以 `textContent` 回退显示 Markdown 原文。
 
-当前生成原型包含 **30 个 routed screen fragments**：在 26 屏钱包/账户基线上新增 B3 `#notifications`、B4 `#search`、H3 `#privacy`、H5 `#security`，并加入 I1 无网、I2 服务端错误、I3 强更、I5 地区限制四个全局状态。F11 与 I3 是共享弹层/状态，不单独计 routed screen。权威口径仍以 `文档/页面清单.md` 为准：A 档 47 屏，全量 103 屏；30 是当前构建 manifest 数，不是全量完成数，F3–F5/F12 与其余 A–I 能力仍待实现。
+当前生成原型包含 **37 个 routed screen fragments**：在 30 屏平台基线上新增 Hyperliquid D1–D7 `#perp-markets`、`#perp-market`、`#perp-order`、`#perp-confirm`、`#perp-positions`、`#perp-orders`、`#perp-position`。Perp HTML 不预置行情、仓位、订单或 PnL 真相；每个 adapter method 的 nested value 必须先通过 exact data-descriptor、known-key、primitive/range、duplicate identity 与 BTC/ETH/SOL Core allowlist 解码，再投影为新冻结 canonical DTO。第七个 `prepareMutationReview` 方法的 outer/binding/error/rechecks 也必须通过同级 exact/frozen projector，Core coin 与 intent revision 必须和请求精确绑定，provider 自定义文案不得进入 UI/F11。accessor、unknown key、colon/HIP-3、畸形数值/字符串/来源/freshness 均在任何事实、操作或 timer 之前 fail closed；missing/pending/malformed/stale 一律清空并禁用操作。D3 的 validated frozen typed intent 精确绑定 D4 与既有 F11；Back/edit、stale revision、reload/BFCache 与 URL 注入只能保留完全相同条款或 fail closed。HIP-3 与第二交易/签名核心禁止，生产 mutation 继续 PENDING/default-deny，Privy 与既有 F11 仍是唯一签名权威/共享确认层。B3/B4/H3/H5 与 I1/I2/I3/I5 平台状态保持不变；F11 与 I3 是共享弹层/状态，不单独计 routed screen。权威口径仍以 `文档/页面清单.md` 为准：A 档 47 屏，全量 103 屏；37 是当前构建 manifest 数，不是全量完成数，F3–F5/F12 与其余 A–I 能力仍待实现。
+
+全部七个 Perp adapter 方法先投影 method-specific canonical request；有参数的响应必须逐项匹配请求的 coin、position identity、side、order type、size、leverage、reduce-only 与 intent revision。即使响应 schema 完全合法，任何 ETH→BTC 或 1.25/20×→9.99/1× 替换也会在渲染和 F11 之前 fail closed。
 
 ### 当前 App-wide provider/UI 切片（2026-08-23）
 
@@ -81,8 +83,8 @@ python3 build_docs.py && python3 _tmp/verify_docs.py  # 文档生成与口径回
 - 已覆盖 F1 钱包总览、F2 资产详情、F6 收款、F11 统一 Intent 确认弹层，并让 F16 限额/无限授权与 Swap 共用同一 F11 入口。
 - 原型仅使用 `SimulatedPrivyWalletAdapter` 的冻结公开 fixture：**零网络请求、不执行签名、不广播交易、不持有钱包密钥**。页面中的 pending/succeeded 只能是明确标注的模拟 provider fixture。
 - 生产接入边界（尚未接入）走 **Privy Wallet Actions + 薄 BFF**：嵌入式 Wallet Actions 由客户端生成用户授权签名，BFF 持有 app secret 并转发请求；只有对应 Privy 官方路径实际提供认证或 MFA 时，产品才显示该控制；外部钱包保留它自己的最终确认。F11 不替代这些 provider controls。当前 Flutter/BFF 路径尚未接入，不得将 HTML fixture 写成已有生产认证或确认层。
-- `src/scripts-order.txt` 精确固定八项生产顺序：QR vendor → wallet provider → wallet review → wallet transfer → Stream provider → platform provider → offline fixture → app。`src/test-fixtures/` 被构建器精确排除；测试 fixture 不得进入 `app.html`。`src/screens-order.txt` 决定屏顺序，`src/vendor/vendor-lock.json` 锁定本地 QR 依赖来源；focused verifiers 同时校验生成物、供应商边界、金额精度、历史投影、无障碍与安全扫描。
-- **全项目未完成**：Stream 生产薄适配 seam 与首批 platform/UI offline 边界已进入静态 runtime，但凭证、官方 SDK、商业/license 与 R0 证据尚未接入，所有 provider 写入继续 fail closed；Hyperliquid Perp 与其余 A–I 能力仍是 pending / in progress，继续遵循“整 App 成熟方案/官方 SDK/成熟 GitHub 代码集成优先”。
+- `src/scripts-order.txt` 精确固定十项生产顺序：QR vendor → wallet provider → wallet review → wallet transfer → Stream provider → platform provider → platform offline fixture → Hyperliquid Core read provider → Perp offline fixture → app。两种 offline fixture 都必须显式标注、保持只读且不得伪装 production；`src/test-fixtures/` 被构建器精确排除。`src/screens-order.txt` 决定屏顺序，`src/vendor/vendor-lock.json` 锁定本地 QR 依赖来源；focused verifiers 同时校验生成物、供应商边界、金额精度、历史投影、无障碍与安全扫描。
+- **全项目未完成**：Stream 生产薄适配 seam、首批 platform/UI offline 边界与 Hyperliquid Core Perp D1–D7 只读切片已进入静态 runtime，但凭证、官方 SDK、商业/license 与 R0 证据尚未接入，所有 provider 写入继续 fail closed；Hyperliquid 生产执行与其余 A–I 能力仍是 pending / in progress，继续遵循“整 App 成熟方案/官方 SDK/成熟 GitHub 代码集成优先”。
 
 **新增一屏**：在 `src/screens/` 建片段 → 在 `screens-order.txt` 加一行 → `python3 build.py`。
 

@@ -1,0 +1,19 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-market">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading">
+            <div><p class="eyebrow">Core perpetual</p><h1 class="h1"><span data-perp-selected-coin>ETH</span>-USD</h1></div>
+          </div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid market data unavailable — adapter PENDING.</p>
+          <p class="perp-price" data-perp-mark-price data-perp-provider-fact hidden></p>
+          <p class="perp-change" data-perp-change data-perp-provider-fact hidden></p>
+          <dl class="perp-stat-list">
+            <div><dt>Funding fraction</dt><dd data-perp-funding data-perp-provider-fact hidden></dd></div>
+            <div><dt>Open interest</dt><dd data-perp-open-interest data-perp-provider-fact hidden></dd></div>
+            <div><dt>24h volume</dt><dd data-perp-volume data-perp-provider-fact hidden></dd></div>
+            <div><dt>Best bid / ask</dt><dd data-perp-bbo data-perp-provider-fact hidden></dd></div>
+          </dl>
+          <p class="perp-freshness" data-perp-freshness data-perp-provider-fact hidden></p>
+          <button class="btn btn-primary perp-touch" id="perp-open-order" data-perp-provider-action type="button" onclick="openPerpOrder()" disabled>Trade <span data-perp-selected-coin>ETH</span></button>
+        </div>
+      </section>

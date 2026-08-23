@@ -1,27 +1,27 @@
 # Findings
 
-## 2026-08-23 — Current known state
+## 2026-08-24 — Current known state
 
 - Static HTML/CSS/JavaScript prototype built from `src/screens-order.txt`, source fragments, `src/app.js`, and `src/style.css`.
-- Generated prototype currently reports a 30-screen routed manifest: the prior 26 routes plus B3 notifications, B4 search, H3 privacy, and H5 security. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog.
+- Generated prototype currently reports a 37-screen routed manifest: the 30-screen platform milestone plus Hyperliquid D1–D7 Core Perp routes. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog and Privy remains the only signing authority.
 - Account onboarding slice added nine screens and a comprehensive `_tmp/verify_account.py` suite.
 - The pre-documentation Task 7 evidence passed the focused wallet, account, shared-route, syntax, AST/security, mobile, and deterministic app-build checks; Task 8 re-runs the complete chain after documentation changes.
 - A6–A10 owner copy approval passed on 2026-08-22; the account slice has no remaining acceptance item.
-- The wallet-foundation slice now covers F1/F2/F6/F11 and the F16/Swap handoff into the same F11 review surface. The Stream v5 production seam is bundled but remains uncredentialed; connected communication/voice, Hyperliquid Perp, and remaining A–I provider-boundary work are pending/in progress. 全项目未完成；剩余范围待实现。
+- The wallet-foundation slice now covers F1/F2/F6/F11 and the F16/Swap handoff into the same F11 review surface. Hyperliquid D1–D7 render no static provider truths: only captured, validated, current-clock-fresh BTC/ETH/SOL Core DTOs may appear, and every unavailable/malformed/stale path clears facts and disables provider actions. D3's frozen typed intent is exact-bound into D4 and the existing F11; HIP-3 and production mutations remain blocked. The Stream v5 production seam is bundled but remains uncredentialed; connected communication/voice, credentialed Perp execution, and remaining A–I provider-boundary work are pending/in progress. 全项目未完成；剩余范围待实现。
 
 ## Repository scope map
 
 - `文档/页面清单.md` is the full 103-screen inventory: A 12, B 9, C 9, D 12, E 13, F 20, G 4, H 16, I 8, with existing/new annotations.
 - `文档/开发进度安排.md` defines dependency order: foundations, account/wallet, spot trading, Chat/voice, Perp, then system hardening.
 - `文档/测试用例.md` is the cross-module acceptance source, including P0 fund-safety and end-to-end journeys.
-- The current source manifest contains 30 screens. The four new routed screens are provider/state projections; shared dialogs and global state variants are not routed-screen units.
+- The current source manifest contains 37 screens. The seven newest routed screens are Hyperliquid Core Perp provider/state projections; shared dialogs and global state variants are not routed-screen units.
 - Subsequent slices must compare A-tier rows and dependency sequencing rather than simply selecting the numerically next screen.
 
 ## Inventory audit observations
 
 - The authoritative inventory says the HTML milestone covers A-tier only and lists 47 A-tier items. README was reconciled on 2026-08-22 to the same 47 A-tier / 103 total-screen authority.
-- Current 30-screen routed manifest implements the account/wallet-foundation slices, the four inert Send/Result shells, and the first non-wallet B3/B4/H3/H5 provider/UI projection slice.
-- Major remaining A-tier gaps include full-screen chart, all production Hyperliquid Perp flows, direct messages, F3–F5/F12 wallet transfer/result behavior, bridge/approval-recovery flows, seed-backup expansion, and credentialed production provider wiring for the new app-wide surfaces.
+- Current 37-screen routed manifest implements the account/wallet-foundation slices, the four inert Send/Result shells, B3/B4/H3/H5 platform projections, and Hyperliquid D1–D7 read-only Core Perp projections.
+- Major remaining A-tier gaps include the full-screen chart, credentialed production Hyperliquid Perp execution, direct messages, F3–F5/F12 wallet transfer/result behavior, bridge/approval-recovery flows, seed-backup expansion, and credentialed production provider wiring for the new app-wide surfaces.
 - Notifications do not create durable inbox/read state: they project only allowlisted Firebase, Stream, Hyperliquid, and Privy fixture events. Search is bounded provider fan-out. Privacy export/delete is async PENDING and mutation-free offline. Security shows GoPlus/Chainalysis/Privy facts without a LOOP score.
 - The I1/I2/I3/I5 states preserve exact recovery semantics: offline and 5xx are retryable, regional restriction can return to eligible app surfaces but cannot be bypassed in settings, and force update remains blocking while its official store destination is PENDING.
 - The reusable wallet review boundary is now present. Subsequent spot, Stream Chat/voice, and Hyperliquid work must integrate through provider capability audits and the existing F11 extension point without treating the HTML fixture adapter as a live provider.
@@ -162,3 +162,40 @@
 - The v6 production-policy remediation permanently burns each exact branded handle on its first policy create/install attempt; the deterministic `app.html` SHA-256 is `f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6`.
 - The deterministic offline `docs.html` SHA-256 is `3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278`.
 - The global goal remains incomplete; credentialed Stream delivery, Hyperliquid, and remaining A–I work are still pending/in progress.
+
+## Hyperliquid Core Perp UI v2 candidate deterministic evidence
+
+- This is an isolated 37-screen, ten-script UI/provider candidate rebased on the platform v6 checkpoint, not credentialed production order execution or a final project checkpoint.
+- The seven D1–D7 screens consume only the official Hyperliquid Core-whitelist read seam; HIP-3 and alternate trading/signing cores remain forbidden.
+- Production mutation handoff remains fail closed and must recheck region, eligibility, policy, nonce, and unknown-submit state before the existing Privy-authoritative F11 review surface may continue. The explicit offline fixture is read-only and cannot sign or submit.
+- The deterministic 37-screen, ten-script `app.html` SHA-256 is `14b57bc4b2cac17519610a59037644f0e181e61cef3a2bfee3eade495ecc2d20`.
+- The deterministic offline `docs.html` SHA-256 is `15bb130fe2f0da6bf9960eaa423fd647f9353dfd4073fd673ae150eb7b77c4ce`.
+- The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.
+
+## Hyperliquid Core Perp UI v3 remediation evidence
+
+- The v2 candidate above was rejected by independent audit and remains historical evidence only; it must not be merged.
+- v3 removes all market/position/order/PnL truths from the HTML fragments. D1–D7 render only captured adapter DTOs and clear/disable on missing, pending, malformed, or current-clock-stale results.
+- v3 binds the validated frozen D3 typed intent into D4 and the existing F11. Runtime coverage fixes the exact 1.25 ETH / 20× case and rejects Back/edit drift, stale revision, reload/BFCache ambiguity, and URL injection.
+- The deterministic v3 37-screen, ten-script `app.html` SHA-256 is `2502772768ed9eea6bf2c868cd5140a57deba1d9235540fb2d7c698a5e3035dd`.
+- The deterministic offline `docs.html` SHA-256 is `79ef411256a22c457afd56bd330eaabd5ab240878d7adaa79f7d2537dbc8299c`.
+- The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.
+
+## Hyperliquid Core Perp UI v4 deep-DTO remediation evidence
+
+- The v3 candidate above was rejected by independent audit and remains historical evidence only; it must not be merged.
+- v4 validates every method-specific nested adapter value before any fact, action, navigation, intent, or freshness timer side effect. Exact data descriptors, known keys, primitive/range rules, duplicate identities, source/freshness fields, and the BTC/ETH/SOL Core allowlist are mandatory; accessors, colon/HIP-3 markets, unknown keys, and malformed values fail closed.
+- The UI receives only a newly projected frozen canonical value. The focused runtime independently corrupts markets, market detail, positions, orders, position detail, and typed intent behind valid metadata.
+- The deterministic v4 37-screen, ten-script `app.html` SHA-256 is `d082412728b8a5810ed9bb70c199e1f77bad3e41e706c54323a2dc375c4e5cdc`.
+- The reproducible offline `docs.html`, generated from the included `文档/页面清单.md` and `文档/开发进度安排.md` sources, has SHA-256 `ce566b596dad1945769440a911545bf2e935989d67d6acf81096ea969319e23b`.
+- The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.
+
+## Hyperliquid Core Perp UI v5 mutation-decision remediation evidence
+
+- The v4 candidate above was rejected by independent audit and remains historical evidence only; it must not be merged.
+- v5 adds the seventh adapter method, `prepareMutationReview`, to the same descriptor-safe boundary as the six read/intent methods. Its outer result, nested binding/error records, and recheck array require exact own data properties; accessors, unknown keys, malformed types, HIP-3/colon markets, revision drift, and provider-authored copy fail closed before F11.
+- The projected decision is a new recursively frozen canonical value, binds the exact BTC/ETH/SOL Core coin and intent revision from the request, and uses only LOOP-owned pending/default-deny copy.
+- All seven methods consume a method-specific canonical request. Parameterized responses are correlated to the exact coin, position identity, order fields, and intent revision; fully schema-valid ETH→BTC and 1.25/20×→9.99/1× substitutions fail closed before rendering or F11.
+- The deterministic v5 37-screen, ten-script `app.html` SHA-256 is `c177387b397ee386ed2582427c2ad64e3e74027fb36b7a6963fd10a159a9abfa`.
+- The reproducible offline `docs.html`, generated from all five included Markdown sources, has SHA-256 `ad93bbe1bd6d8fb6d99e2d4df2fc4015a2a795a0ce7c94b8ce5b1a62a2187b4f`.
+- The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.

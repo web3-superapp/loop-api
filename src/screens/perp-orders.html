@@ -1,0 +1,16 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-orders">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid account</p><h1 class="h1">Orders &amp; history</h1></div><span class="risk-pill risk-med">Read-only</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid orders unavailable — adapter PENDING.</p>
+          <section aria-labelledby="perp-open-orders-title">
+            <div class="perp-section-head"><h2 id="perp-open-orders-title">Open orders</h2></div>
+            <div id="perp-open-order-list" aria-live="polite"></div>
+          </section>
+          <section aria-labelledby="perp-fill-history-title">
+            <div class="perp-section-head"><h2 id="perp-fill-history-title">Fill history</h2><span>Provider record</span></div>
+            <div id="perp-order-history" aria-live="polite"></div>
+          </section>
+          <p class="perp-policy-note">Unknown submissions require provider readback. They are never retried automatically.</p>
+        </div>
+      </section>

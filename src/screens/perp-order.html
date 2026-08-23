@@ -1,0 +1,31 @@
+      <section class="scr platform-screen perp-screen" id="scr-perp-order">
+        <div class="pad">
+          <button class="back perp-touch" type="button" onclick="back()" aria-label="Back to Perp market">‹ ETH-USD</button>
+          <div class="perp-heading"><div><p class="eyebrow">Order entry</p><h1 class="h1">Trade ETH</h1></div><span class="risk-pill risk-med">PENDING</span></div>
+          <p class="perp-simulation-label" data-perp-provider-status>Hyperliquid order preview unavailable — adapter PENDING.</p>
+          <div class="perp-side-control" role="group" aria-label="Direction">
+            <button class="perp-touch on" data-perp-provider-action type="button" aria-pressed="true" disabled>Buy / Long</button>
+            <button class="perp-touch" type="button" aria-pressed="false" aria-describedby="perp-fixture-scope" disabled>Sell / Short</button>
+          </div>
+          <div class="perp-form card">
+            <fieldset>
+              <legend>Order type</legend>
+              <div class="perp-segmented">
+                <button class="perp-touch on" data-perp-provider-action type="button" aria-pressed="true" disabled>Market</button>
+                <button class="perp-touch" type="button" aria-pressed="false" aria-describedby="perp-fixture-scope" disabled>Limit</button>
+              </div>
+            </fieldset>
+            <label>Size <span>ETH</span><input id="perp-order-size" data-perp-provider-action inputmode="decimal" value="0.01" aria-describedby="perp-order-balance" oninput="updatePerpDraft()" disabled></label>
+            <p id="perp-order-balance">Provider-derived limits are unavailable.</p>
+            <p id="perp-fixture-scope">Offline review supports a validated Buy · Market intent only.</p>
+            <label>Leverage <span id="perp-leverage-value">3×</span><input id="perp-leverage" data-perp-provider-action type="range" min="1" max="20" value="3" oninput="updatePerpDraft()" disabled></label>
+            <dl class="perp-order-estimate">
+              <div><dt>Estimated margin</dt><dd data-perp-provider-fact hidden></dd></div>
+              <div><dt>Estimated trading fee</dt><dd data-perp-provider-fact hidden></dd></div>
+              <div><dt>Builder fee</dt><dd data-perp-provider-fact hidden></dd></div>
+            </dl>
+          </div>
+          <p class="perp-policy-note">No order has been sent. Review creates a local immutable intent; Hyperliquid and Privy remain untouched.</p>
+          <button class="btn btn-primary perp-touch" id="perp-review-order" data-perp-provider-action type="button" onclick="openPerpConfirmation()" disabled>Review order</button>
+        </div>
+      </section>

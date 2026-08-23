@@ -1,7 +1,7 @@
 """Build an ephemeral, test-only app with a branded production regional policy.
 
 The generated file lives outside the repository and is never part of app.html or
-the eight-script production manifest. It preserves real provider-handle branding
+the ten-script production manifest. It preserves real provider-handle branding
 while allowing existing wallet/F11 runtime tests to exercise an eligible policy.
 """
 from __future__ import annotations
