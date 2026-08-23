@@ -1,0 +1,88 @@
+{
+  "schema_version": "loop.app-integrations-p0.dependencies/v1",
+  "resolved_at": "2026-08-24",
+  "installed": false,
+  "packages": [
+    {
+      "name": "@supabase/supabase-js",
+      "version": "2.112.3",
+      "registry": "npm",
+      "source": "https://registry.npmjs.org/@supabase/supabase-js/-/supabase-js-2.112.3.tgz",
+      "integrity": "sha512-Jv1bxVQmEJNkjvPEhFaKjPzsh+Ozyew6lWGD+SoYcsclDEP1z7yEvKvfUQfzy0DkxRIQnZNxmmWtAzw5XLTQoA==",
+      "archive_sha256": "f28b54178a3ab925260562e4089beb8bb3edccee1cea6391ebe20facff0aa211",
+      "repository": "https://github.com/supabase/supabase-js",
+      "tag": "v2.112.3",
+      "commit": "0dbc66a448ca9efddc971e9dd9b926059748e802",
+      "license": "MIT",
+      "license_path": "package/LICENSE",
+      "license_sha256": "334dd6820e2eaeab2064e7c59001b810566728a28a41a7c1dbf69bbee17d0936",
+      "published_at": "2026-08-11T11:48:03.000Z",
+      "role": "server_app_records_official_sdk",
+      "installed": false,
+      "runtime_enablement": "CREDENTIAL_AND_TRANSITIVE_LOCK_AUDIT_REQUIRED"
+    },
+    {
+      "name": "@trycourier/courier",
+      "version": "9.1.0",
+      "registry": "npm",
+      "source": "https://registry.npmjs.org/@trycourier/courier/-/courier-9.1.0.tgz",
+      "integrity": "sha512-0qin/5cYOvxWWnNflnhFg+lLVt6psxqOpJ7aVD3zk1MEIoAh9MVwWU4osThq7pJOG7/HawYkV/ytlNbhss98og==",
+      "archive_sha256": "fef2eee9bca80ba149dbcecb2b3ef621f51e2df94d2b02e712609c64668d8235",
+      "repository": "https://github.com/trycourier/courier-node",
+      "tag": "v9.1.0",
+      "commit": "98bc03111db1e45b1a5d4cb8c306d284cbaec060",
+      "license": "Apache-2.0",
+      "license_path": "package/LICENSE",
+      "license_sha256": "7575e6dc01d1b7a9ba1435d66074b43c0277e46ef4ad015823118b5b648e834c",
+      "bundled_license_notices": [
+        {
+          "path": "package/src/internal/qs/LICENSE.md",
+          "license": "BSD-3-Clause",
+          "sha256": "d8c77eaffed7f1f874b97f66ee47a557ae24fd59bae8ae14f9b1b84f26a94d2f"
+        }
+      ],
+      "published_at": "2026-08-19T22:26:15.000Z",
+      "role": "server_notification_official_sdk",
+      "installed": false,
+      "runtime_enablement": "CREDENTIAL_AND_TRANSITIVE_LOCK_AUDIT_REQUIRED"
+    },
+    {
+      "name": "courier_flutter",
+      "version": "5.0.3",
+      "registry": "pub",
+      "source": "https://pub.dev/api/archives/courier_flutter-5.0.3.tar.gz",
+      "integrity": "sha256-d979da01ea5a25754f06024b4fddfbd5a0493248e7ee2fe308928784cbbc6887",
+      "archive_sha256": "d979da01ea5a25754f06024b4fddfbd5a0493248e7ee2fe308928784cbbc6887",
+      "repository": "https://github.com/trycourier/courier-flutter",
+      "tag": "v5.0.3",
+      "commit": "65559b81504420ef6ab5efe81ce579b054964d3a",
+      "license": "MIT",
+      "license_path": "LICENSE",
+      "license_sha256": "734b9166756f78f153ace4c6a1046f248dd0208fe9679bac8b41a1aae4add8b1",
+      "published_at": "2026-06-02T00:00:00.000Z",
+      "role": "flutter_notification_inbox_official_sdk",
+      "installed": false,
+      "runtime_enablement": "CREDENTIAL_AND_TRANSITIVE_LOCK_AUDIT_REQUIRED"
+    },
+    {
+      "name": "@trigger.dev/sdk",
+      "version": "4.5.12",
+      "registry": "npm",
+      "source": "https://registry.npmjs.org/@trigger.dev/sdk/-/sdk-4.5.12.tgz",
+      "integrity": "sha512-kSbLzD50v9VmczK+GD97Iwl8qYgd8d42UbGeH3cBbJMoQSR0rNtSZ8WhUpcj8qunbPJHU5VM3usLDA3Bk6qdkg==",
+      "archive_sha256": "cd30d7779a996e35feddb9f9027e8f9085eded0f43ff5ab4d3944e3264646030",
+      "repository": "https://github.com/triggerdotdev/trigger.dev",
+      "tag": "v4.5.12",
+      "commit": "ce40d0259fead12ac2bad8fc6f8ca574b221228a",
+      "license": "MIT",
+      "license_path": "package/LICENSE",
+      "license_sha256": "08ba90c393a607a7dc83a3dbf6db16a31617925f27b378cd6f959640c3bfa59f",
+      "repository_license_scope": "Apache-2.0_ROOT_PLATFORM_REPO_PACKAGE_ARCHIVE_IS_MIT",
+      "repository_license_sha256": "9e9e22db5ae77f7ce1119294d0386cbbab2791cc77fb68d97c90627d7d96c5e1",
+      "published_at": "2026-08-20T23:51:41.000Z",
+      "role": "price_alert_schedule_retry_official_sdk",
+      "installed": false,
+      "runtime_enablement": "CREDENTIAL_AND_TRANSITIVE_LOCK_AUDIT_REQUIRED"
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "schema_version": "loop.app-integrations-p0/v2",
+  "status": "R0_CONTRACT_READY_RUNTIME_DISABLED",
+  "authorities": {
+    "identity": "privy_service",
+    "wallet_and_signature": "privy_service",
+    "chat_and_video": "stream_service",
+    "perp": "hyperliquid_service",
+    "app_records": "supabase_app_records_only",
+    "notification_runtime": "courier_single_runtime_spike",
+    "price_alert_scheduler": "trigger_dev_scheduler_only"
+  },
+  "forbidden_runtime_authorities": [
+    "supabase_auth",
+    "supabase_wallet_truth",
+    "supabase_provider_truth",
+    "courier_auth",
+    "trigger_price_oracle",
+    "novu"
+  ],
+  "runtime": {
+    "production_enabled": false,
+    "missing_credentials": "FAIL_CLOSED_NO_FIXTURE_FALLBACK",
+    "offline_fixture_opt_in": "LOOP_OFFLINE_APP_INTEGRATIONS_FIXTURE=1",
+    "offline_fixture_claim": "NON_PRODUCTION_NO_NETWORK_NO_PROVIDER_TRUTH_NO_MUTATION",
+    "required_credential_refs": [
+      "PRIVY_APP_ID",
+      "PRIVY_VERIFICATION_KEY_REF",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_REF",
+      "COURIER_API_KEY_REF",
+      "TRIGGER_SECRET_KEY_REF"
+    ],
+    "enablement_capability": "PRIVATE_WEAKSET_BRANDED_ONE_SHOT_CLOSURE_ONLY",
+    "official_port_bundle": "PRIVATE_WEAKSET_BRANDED_COMPOSITION_ROOT_ONLY",
+    "dependency_method_binding": "DESCRIPTOR_SAFE_EXACT_FROZEN_BOUND_SNAPSHOT_BEFORE_BRANDING",
+    "magic_string_or_plain_object_enablement": "FORBIDDEN",
+    "capability_replay_or_copy": "FAIL_CLOSED_AND_FIRST_ATTEMPT_CONSUMES",
+    "enablement_gates": [
+      "owner_credential_provisioning",
+      "complete_transitive_dependency_lock",
+      "credentialed_privy_did_conformance",
+      "credentialed_supabase_rls_and_tenant_isolation",
+      "credentialed_courier_token_delivery_and_revocation",
+      "credentialed_trigger_retry_replay_and_stale_fact_rejection"
+    ]
+  },
+  "identity_boundary": {
+    "principal": "server_derived_privy_did",
+    "client_user_id": "FORBIDDEN",
+    "verification": "privy_bff_official_verifier_before_side_effect",
+    "provider_webhooks": "raw_body_and_headers_to_provider_specific_verifier_before_parse_transform_or_side_effect",
+    "replay_policy": "provider_timestamp_nonce_and_delivery_id_checked_before_side_effect"
+  },
+  "supabase_app_records": {
+    "auth_api": "FORBIDDEN",
+    "service_role_location": "SERVER_ONLY",
+    "allowed_tables": {
+      "profiles": ["privy_did", "alias", "avatar_ref", "updated_at"],
+      "privacy_preferences": ["privy_did", "discoverable", "copy_trade_visibility", "updated_at"],
+      "watchlists": ["privy_did", "asset_key", "position", "updated_at"],
+      "price_alert_definitions": ["alert_id", "privy_did", "asset_key", "condition", "threshold_decimal", "source_allowlist", "expires_at", "updated_at"],
+      "notification_preferences": ["privy_did", "event_type", "enabled", "updated_at"],
+      "delivery_outbox_refs": ["idempotency_key", "privy_did", "event_type", "provider_delivery_ref", "status", "updated_at"]
+    },
+    "forbidden_facts": [
+      "wallet_balance",
+      "wallet_transaction",
+      "wallet_key_or_seed",
+      "stream_message",
+      "stream_membership",
+      "hyperliquid_order",
+      "hyperliquid_position",
+      "market_price"
+    ],
+    "write_preconditions": [
+      "verified_privy_did",
+      "route_allowlisted",
+      "intent_allowlisted",
+      "idempotency_key"
+    ],
+    "row_validation": "DESCRIPTOR_SAFE_EXACT_TYPED_INPUT_AND_OUTPUT",
+    "nested_or_unknown_values": "FORBIDDEN",
+    "read_projection": "VALIDATE_EVERY_ROW_AND_RETURN_FROZEN_ALLOWLIST_ONLY",
+    "provider_truth_key_at_any_depth": "FORBIDDEN_BY_EXACT_TYPED_SCHEMA",
+    "data_exit": "documented_postgres_dump_plus_table_level_json_export_required_before_enablement"
+  },
+  "courier": {
+    "runtime_selected": "courier",
+    "parallel_runtime": "FORBIDDEN",
+    "client_api_key": "FORBIDDEN",
+    "user_token_issuer": "verified_privy_did_bff",
+    "allowed_events": [
+      "price_alert_triggered",
+      "provider_activity_projected",
+      "security_notice",
+      "support_update"
+    ],
+    "delivery_idempotency": "SERVER_SHA256_EVENT_TYPE_PRIVY_DID_SOURCE_EVENT_ID",
+    "caller_idempotency_override": "FORBIDDEN",
+    "event_schema": "EXACT_TYPE_SOURCE_EVENT_ID_DESTINATION_ROUTE_TYPED_PAYLOAD",
+    "caller_routing_template_channel_or_extra": "FORBIDDEN",
+    "destination_route_allowlist_by_event_type": {
+      "price_alert_triggered": ["asset", "notifications", "perp", "token"],
+      "provider_activity_projected": ["chat", "group", "notifications", "perp", "wallet"],
+      "security_notice": ["notifications", "security"],
+      "support_update": ["notifications"]
+    },
+    "novu_policy": "NOT_INSTALLED_NOT_STARTED_FALLBACK_REQUIRES_NEW_OWNER_SELECTION"
+  },
+  "trigger_price_alerts": {
+    "role": "SCHEDULE_RETRY_IDEMPOTENCY_ONLY",
+    "may_create_or_mutate_market_fact": false,
+    "verified_fact_required": true,
+    "fact_fields": ["asset_key", "source", "value_decimal", "observed_at", "expires_at", "source_event_id", "verification_ref"],
+    "source_allowlist": ["coingecko", "dexscreener", "hyperliquid"],
+    "max_fact_age_seconds": 300,
+    "production_clock": "PRIVATE_BRANDED_MONOTONIC_SERVER_CLOCK_PORT",
+    "caller_clock": "FORBIDDEN_IGNORED_EVEN_AS_EXTRA_ARGUMENT",
+    "test_clock": "PRIVATE_WEAKSET_BRANDED_TEST_FACTORY_ONLY",
+    "clock_rollback_or_non_finite": "FAIL_CLOSED",
+    "alert_expiry": "REQUIRED_AND_CHECKED_AGAINST_AUTHORITATIVE_CLOCK",
+    "stale_or_unknown_fact": "FAIL_CLOSED",
+    "numeric_format": "CANONICAL_DECIMAL_STRING_NO_FLOAT",
+    "delivery": "courier_price_alert_triggered_only",
+    "idempotency_material": ["alert_id", "privy_did", "condition", "threshold_decimal", "source", "source_event_id", "observed_at"]
+  },
+  "request_policy": {
+    "routes": ["asset", "chat", "group", "market", "notifications", "perp", "privacy", "profile", "security", "token", "wallet"],
+    "intents": ["app_record_read", "app_record_write", "courier_issue_user_token", "notification_deliver", "price_alert_evaluate"],
+    "arbitrary_url": "FORBIDDEN",
+    "idempotency": "CALLER_KEY_ONLY_FOR_APP_RECORD_WRITE;COURIER_AND_TRIGGER_SERVER_DERIVED"
+  }
+}
