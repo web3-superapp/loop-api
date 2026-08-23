@@ -19,7 +19,7 @@ PRODUCTION_SCRIPTS = [
 HASHES = ['splash', 'auth', 'auth-otp', 'auth-wallet', 'wallet-create',
           'wallet-backup', 'seed-show', 'seed-verify', 'wallet-import',
           'home', 'pay', 'market', 'token', 'launchpad', 'chat',
-          'group', 'voiceroom', 'wallet', 'asset', 'send', 'send-to',
+          'group', 'voiceroom', 'dm', 'wallet', 'asset', 'send', 'send-to',
           'send-confirm', 'receive', 'tx-result', 'swap', 'dapp', 'profile']
 
 fails = []
@@ -118,22 +118,35 @@ with sync_playwright() as p:
                       'state': 'provider_pending', 'successNode': False, 'glyph': ''},
           f'Swap 仅停在 provider pending 且 holdings 不变：{pending}')
 
-    print('\n== 语音房生命周期 ==')
+    print('\n== Stream Video 离线投影与写入门禁 ==')
     fresh(pg, 'voiceroom')
     pg.wait_for_timeout(200)
     check(pg.locator('#voiceRoomCard').is_visible(), '语音房卡片可见（群聊内嵌）')
-    pg.click('#vrJoinBtn')
-    pg.wait_for_timeout(2200)
-    check(pg.locator('#vrCtrls').is_visible(), '入房后显示控制条')
-    # 群聊是二级页，按已拍板设计不显示底部 Tab 栏 —— 用 goTab 模拟根级跳转
+    voice_gate = pg.evaluate("""() => {
+      const join=document.getElementById('vrJoinBtn');
+      const before=JSON.stringify(history.state);
+      const result=streamMutationPending('join_audio_room');
+      return {disabled:join.disabled,aria:join.getAttribute('aria-disabled'),before,
+        after:JSON.stringify(history.state),hasVoice:typeof voice!=='undefined',
+        stored:sessionStorage.getItem('loop.proto.state'),result,inCall:inCall()};
+    }""")
+    check(voice_gate == {'disabled': True, 'aria': 'true',
+          'before': '{"stack":["scr-chat","scr-group"]}',
+          'after': '{"stack":["scr-chat","scr-group"]}', 'hasVoice': False,
+          'stored': '{"stack":["scr-chat","scr-group"]}',
+          'result': {'ok': False, 'error': {'code': 'STREAM_CHAT_PROVIDER_MUTATION_PENDING'}},
+          'inCall': False}, f'语音写入 fail closed 且不创建本地 RTC 状态：{voice_gate}')
+    pg.click('#vrToggleBtn')
+    pg.wait_for_timeout(120)
+    check(pg.locator('#callbar').is_visible() and
+          pg.locator('#cbStatus').inner_text() == 'Unavailable · Stream Video not connected',
+          '最小化条仅显示明确离线投影，不声称已入房')
     pg.evaluate("goTab('market')")
-    pg.wait_for_timeout(350)
-    check(pg.locator('#callbar').is_visible(), '切页后全局通话条常驻')
-    check(pg.locator('.tab[data-tab="chat"] .live-dot').is_visible(),
-          '通话中 Chat tab 亮指示点')
-    pg.click('.cb-leave')
-    pg.wait_for_timeout(350)
-    check(not pg.locator('#callbar').is_visible(), '挂断后通话条消失')
+    pg.wait_for_timeout(120)
+    check(pg.locator('#callbar').is_visible(), '切页后明确离线预览条可返回语音投影')
+    check(not pg.locator('.tab[data-tab="chat"] .live-dot').is_visible(),
+          '未连接时 Chat tab 不伪造 live 指示')
+    check(pg.locator('.cb-leave').is_disabled(), '离线预览 Leave 写入保持 PENDING')
 
     print('\n== 授权拦截弹层 ==')
     fresh(pg, 'dapp')

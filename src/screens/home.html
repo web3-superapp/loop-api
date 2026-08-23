@@ -50,11 +50,14 @@
             <div class="sec-item"><span>🔴</span><span><b>1 contract shared in your chats was flagged</b> as high-risk (hidden mint).</span></div>
           </div>
 
-          <p class="label">Live now</p>
-          <div class="card live-room" onclick="returnToVoiceRoom()">
-            <div class="eq"><i></i><i></i><i></i></div>
-            <div style="flex:1"><p class="fi-t">ETH ETF watch party</p><p class="fi-s">214 listening · hosted by shadowfax.eth</p></div>
-            <button class="btn btn-ghost" style="height:34px;padding:0 16px;font-size:12px">Join</button>
+          <p class="label">Voice room</p>
+          <div class="card live-room stream-home-audio" id="home-audio-room"
+               data-stream-authority="StreamVideo.state.connection CallState.status CallState.participantCount"
+               data-stream-mode="offline_preview" data-stream-connection="disconnected"
+               data-stream-status="unavailable" data-stream-participant-count="0">
+            <div class="stream-home-audio-icon" aria-hidden="true">⌁</div>
+            <div style="flex:1"><p class="fi-t" id="home-audio-title">Voice room</p><p class="fi-s" id="home-audio-status">Unavailable · Stream Video not connected · 0 participants</p></div>
+            <button type="button" id="home-audio-preview" class="btn btn-ghost stream-home-audio-open" onclick="returnToVoiceRoom()">Open preview</button>
           </div>
           <div style="height:16px"></div>
         </div>

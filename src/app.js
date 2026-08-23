@@ -128,6 +128,7 @@ const ROUTES = {
   token:{screen:'scr-token',stack:['scr-market','scr-token']},
   group:{screen:'scr-group',stack:['scr-chat','scr-group']},
   voiceroom:{screen:'scr-group',stack:['scr-chat','scr-group']},
+  dm:{screen:'scr-group',stack:['scr-chat','scr-group']},
   asset:{screen:'scr-asset',stack:['scr-wallet','scr-asset']},
   send:{screen:'scr-send',stack:['scr-wallet','scr-send']},
   'send-to':{screen:'scr-send-to',stack:['scr-wallet','scr-send','scr-send-to']},
@@ -1390,9 +1391,10 @@ function restartOnboarding(){
   navigate(ROUTES.splash.stack.slice(),{replace:true});
 }
 
-/* voice: idle | joining | joined | reconnecting | error */
-const voice = {state:'idle', open:false, minimized:false, muted:true, hand:false, speaker:true,
-  listeners:214, speakers:8, joinedAt:0, weak:false};
+/* Ephemeral panel chrome only. Stream connection, call status and participants never
+   enter application navigation/history/session state. */
+const voicePanel={open:false,minimized:false};
+let conversationMode='group';
 let stack = ['scr-home'];
 const navigationStorageProjection=(()=>{
   const getOwnPropertyDescriptors=Object.getOwnPropertyDescriptors;
@@ -1407,11 +1409,6 @@ const navigationStorageProjection=(()=>{
   const setHas=Set.prototype.has;
   const jsonStringify=JSON.stringify;
   const freeze=Object.freeze;
-  const voiceKeys=freeze(['state','open','minimized','muted','hand','speaker',
-    'listeners','speakers','joinedAt','weak']);
-  const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
-  const defaults=freeze({state:'idle',open:false,minimized:false,muted:true,
-    hand:false,speaker:true,listeners:214,speakers:8,joinedAt:0,weak:false});
   const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
   const includes=(values,value)=>{
     for(let index=0;index<values.length;index+=1){
@@ -1448,51 +1445,24 @@ const navigationStorageProjection=(()=>{
       return safe;
     }catch(_error){return null}
   };
-  const voiceSnapshot=(value,{exact})=>{
-    try{
-      if(!value||typeof value!=='object'||getPrototypeOf(value)!==objectPrototype)return null;
-      const descriptors=getOwnPropertyDescriptors(value);
-      if(exact&&!exactKeys(descriptors,voiceKeys))return null;
-      const state=ownData(descriptors,'state'),open=ownData(descriptors,'open'),
-        minimized=ownData(descriptors,'minimized'),muted=ownData(descriptors,'muted'),
-        hand=ownData(descriptors,'hand'),speaker=ownData(descriptors,'speaker'),
-        listeners=ownData(descriptors,'listeners'),speakers=ownData(descriptors,'speakers'),
-        joinedAt=ownData(descriptors,'joinedAt'),weak=ownData(descriptors,'weak');
-      if(!includes(voiceStates,state)||typeof open!=='boolean'||
-         typeof minimized!=='boolean'||typeof muted!=='boolean'||
-         typeof hand!=='boolean'||typeof speaker!=='boolean'||typeof weak!=='boolean'||
-         !isInteger(listeners)||listeners<0||!isInteger(speakers)||speakers<0||
-         !isInteger(joinedAt)||joinedAt<0)return null;
-      return {state,open,minimized,muted,hand,speaker,listeners,speakers,joinedAt,weak};
-    }catch(_error){return null}
-  };
-  const defaultVoice=()=>({state:defaults.state,open:defaults.open,
-    minimized:defaults.minimized,muted:defaults.muted,hand:defaults.hand,
-    speaker:defaults.speaker,listeners:defaults.listeners,speakers:defaults.speakers,
-    joinedAt:defaults.joinedAt,weak:defaults.weak});
+  /* Live Stream objects and their projections are deliberately non-serializable. */
   const restore=candidate=>{
     try{
       if(!candidate||typeof candidate!=='object'||
          getPrototypeOf(candidate)!==objectPrototype)return null;
       const descriptors=getOwnPropertyDescriptors(candidate);
-      if(!exactKeys(descriptors,['stack','voice']))return null;
+      if(!exactKeys(descriptors,['stack']))return null;
       const safeStack=stackSnapshot(ownData(descriptors,'stack'));
-      if(!safeStack)return null;
-      return {stack:safeStack,
-        voice:voiceSnapshot(ownData(descriptors,'voice'),{exact:true})||defaultVoice()};
+      return safeStack?{stack:safeStack}:null;
     }catch(_error){return null}
   };
-  const forWrite=(stackValue,voiceValue)=>({
-    stack:stackSnapshot(stackValue)||['scr-home'],
-    voice:voiceSnapshot(voiceValue,{exact:false})||defaultVoice()
-  });
-  const serialize=(stackValue,voiceValue)=>reflectApply(jsonStringify,JSON,
-    [forWrite(stackValue,voiceValue)]);
+  const forWrite=stackValue=>({stack:stackSnapshot(stackValue)||['scr-home']});
+  const serialize=stackValue=>reflectApply(jsonStringify,JSON,[forWrite(stackValue)]);
   return freeze({restore,forWrite,serialize});
 })();
 
 function activeScr(){return stack[stack.length-1]}
-function inCall(){return voice.state==='joined'||voice.state==='joining'||voice.state==='reconnecting'}
+function inCall(){return false}
 
 function renderOnboardingFlags(){
   const backupIncomplete=onboardingFlag('backupIncomplete');
@@ -1550,6 +1520,18 @@ function render(){
   if(isGroup){gh.removeAttribute('inert'); co.removeAttribute('inert')}
   else {gh.setAttribute('inert',''); co.setAttribute('inert','')}
 
+  document.querySelectorAll('[data-conversation-view]').forEach(view=>{
+    const on=isGroup&&view.dataset.conversationView===conversationMode;
+    view.hidden=!on;
+    if(on)view.removeAttribute('inert');else view.setAttribute('inert','');
+  });
+  const conversationTitle=document.getElementById('stream-conversation-title');
+  const conversationSub=document.getElementById('stream-conversation-sub');
+  if(conversationTitle)conversationTitle.textContent=conversationMode==='dm'?'shadowfax.eth':'Glyph Hunters';
+  if(conversationSub)conversationSub.textContent=conversationMode==='dm'?
+    'Direct message · offline preview · not connected':'Group · offline preview · not connected';
+  if(isGroup&&conversationMode==='dm')voicePanel.open=false;
+
   renderVoice();
   renderOnboardingFlags();
   renderPlatformScreen(cur);
@@ -1606,31 +1588,6 @@ function strictHashRoute(rawInput){
   const params={asset,chain};
   return {target:routeName,params,canonical:canonicalWalletHash(routeName,params)};
 }
-const NAVIGATION_VOICE_STATES=new Set(['idle','joining','joined','reconnecting','error']);
-function currentVoiceProjection(){
-  return {state:NAVIGATION_VOICE_STATES.has(voice.state)?voice.state:'idle',
-    open:voice.open===true,minimized:voice.minimized===true,muted:voice.muted===true};
-}
-function validatedVoiceProjection(candidate){
-  if(!candidate||typeof candidate!=='object'||Array.isArray(candidate)||
-     Object.getPrototypeOf(candidate)!==Object.prototype) return currentVoiceProjection();
-  const descriptors=Object.getOwnPropertyDescriptors(candidate);
-  const keys=Reflect.ownKeys(candidate);
-  const expected=['state','open','minimized','muted'];
-  if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
-     !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
-    return currentVoiceProjection();
-  }
-  const state=descriptors.state.value;
-  const open=descriptors.open.value;
-  const minimized=descriptors.minimized.value;
-  const muted=descriptors.muted.value;
-  if(!NAVIGATION_VOICE_STATES.has(state)||typeof open!=='boolean'||
-     typeof minimized!=='boolean'||typeof muted!=='boolean'){
-    return currentVoiceProjection();
-  }
-  return {state,open,minimized,muted};
-}
 function exactStack(value,expected){return sameStack(value,expected)}
 function snapshotOwnDataRecord(candidate,expectedKeys,expectedPrototype){
   try{
@@ -1664,16 +1621,10 @@ function snapshotWalletStack(candidate){
   }catch(error){return null}
 }
 function snapshotWalletHistoryState(candidate){
-  const outer=snapshotOwnDataRecord(candidate,['stack','voice'],Object.prototype);
+  const outer=snapshotOwnDataRecord(candidate,['stack'],Object.prototype);
   if(!outer) return null;
   const safeStack=snapshotWalletStack(outer.stack);
-  const safeVoice=snapshotOwnDataRecord(outer.voice,
-    ['state','open','minimized','muted'],Object.prototype);
-  if(!safeStack||!safeVoice||!NAVIGATION_VOICE_STATES.has(safeVoice.state)||
-     typeof safeVoice.open!=='boolean'||typeof safeVoice.minimized!=='boolean'||
-     typeof safeVoice.muted!=='boolean') return null;
-  return {stack:safeStack,voice:{state:safeVoice.state,open:safeVoice.open,
-    minimized:safeVoice.minimized,muted:safeVoice.muted}};
+  return safeStack?{stack:safeStack}:null;
 }
 const walletPopstateStack=(()=>{
   const MAX_PROOFS=32;
@@ -1781,7 +1732,7 @@ const walletPopstateStack=(()=>{
 /* hash is a projection of state, never a second source of truth */
 function syncHash(replace,{accountPushed=false}={}){
   const url = '#'+expectedHash();
-  const st = {stack:stack.slice(), voice:{state:voice.state,open:voice.open,minimized:voice.minimized,muted:voice.muted}};
+  const st={stack:stack.slice()};
   const sameEntry=location.hash===url&&Boolean(history.state);
   if(activeScr()==='scr-wallet-backup'&&hasValidBackupPanelHistoryProvenance()){
     st.backupPanel=history.state.backupPanel;
@@ -1807,7 +1758,7 @@ function syncHash(replace,{accountPushed=false}={}){
   if(replace) history.replaceState(st,'',url); else history.pushState(st,'',url);
 }
 function persist(){
-  try{sessionStorage.setItem(SS_KEY,navigationStorageProjection.serialize(stack,voice))}catch(e){}
+  try{sessionStorage.setItem(SS_KEY,navigationStorageProjection.serialize(stack))}catch(e){}
 }
 function navigate(nextStack,{replace=false, keepScroll=false, accountPushed=false}={}){
   consumeReviewForNavigation();
@@ -1863,9 +1814,7 @@ window.addEventListener('popstate',e=>{
     walletRouteParams={...walletProjection.params};
     const stateSnapshot=snapshotWalletHistoryState(e.state);
     stack=walletPopstateStack(walletProjection.target,stateSnapshot?.stack);
-    const safeVoice=stateSnapshot?.voice||currentVoiceProjection();
-    Object.assign(voice,safeVoice);
-    const projection={stack:stack.slice(),voice:safeVoice};
+    const projection={stack:stack.slice()};
     history.replaceState(projection,'','#'+walletProjection.canonical);
     render();
     focusActiveScreen();
@@ -1897,7 +1846,7 @@ window.addEventListener('popstate',e=>{
         history.replaceState(safeProjectedState,'','#'+projected.canonical);
       }
     }
-    if(e.state.voice){voice.open=e.state.voice.open; voice.minimized=e.state.voice.minimized}
+    voicePanel.open=false;voicePanel.minimized=false;
     render(); setupAccountScreen(activeScr()); focusActiveScreen({backupChoice:backupChoiceToRestore}); persist();
     finishReviewOriginPopstate(e);
   }else{
@@ -2258,7 +2207,6 @@ const sanitizeReviewProjectionForWrite=(()=>{
     'scr-chat','scr-group','scr-wallet','scr-asset','scr-send','scr-send-to',
     'scr-send-confirm','scr-receive','scr-tx-result','scr-swap','scr-dapp','scr-profile',
   ]);
-  const voiceStates=freeze(['idle','joining','joined','reconnecting','error']);
   const hasOwn=(value,key)=>reflectApply(hasOwnProperty,value,[key]);
   const includes=(values,value)=>{
     for(let index=0;index<values.length;index+=1){
@@ -2288,32 +2236,16 @@ const sanitizeReviewProjectionForWrite=(()=>{
       return freeze(result);
     }catch(_error){return null}
   };
-  const voiceSnapshot=value=>{
-    try{
-      if(!value||typeof value!=='object'||getPrototypeOf(value)!==objectPrototype)return null;
-      const descriptors=getOwnPropertyDescriptors(value);
-      const read=key=>{
-        const descriptor=descriptors[key];
-        return descriptor&&hasOwn(descriptor,'value')?descriptor.value:undefined;
-      };
-      const state=read('state'),open=read('open'),minimized=read('minimized'),
-        muted=read('muted');
-      if(!includes(voiceStates,state)||typeof open!=='boolean'||
-         typeof minimized!=='boolean'||typeof muted!=='boolean')return null;
-      return freeze({state,open,minimized,muted});
-    }catch(_error){return null}
-  };
   const snapshot=candidate=>{
     try{
       if(!candidate||typeof candidate!=='object'||
          getPrototypeOf(candidate)!==objectPrototype)return null;
-      const descriptors=getOwnPropertyDescriptors(candidate);
-      const stackDescriptor=descriptors.stack,voiceDescriptor=descriptors.voice;
-      if(!stackDescriptor||!voiceDescriptor||!hasOwn(stackDescriptor,'value')||
-         !hasOwn(voiceDescriptor,'value'))return null;
+      const descriptors=getOwnPropertyDescriptors(candidate),keys=ownKeys(candidate);
+      const stackDescriptor=descriptors.stack;
+      if(keys.length!==1||keys[0]!=='stack'||!stackDescriptor||
+         !hasOwn(stackDescriptor,'value'))return null;
       const safeStack=stackSnapshot(stackDescriptor.value);
-      const safeVoice=voiceSnapshot(voiceDescriptor.value);
-      return safeStack&&safeVoice?freeze({stack:safeStack,voice:safeVoice}):null;
+      return safeStack?freeze({stack:safeStack}):null;
     }catch(_error){return null}
   };
   const clone=projection=>{
@@ -2322,22 +2254,16 @@ const sanitizeReviewProjectionForWrite=(()=>{
     for(let index=0;index<projection.stack.length;index+=1){
       safeStack[index]=projection.stack[index];
     }
-    return freeze({stack:freeze(safeStack),voice:freeze({state:projection.voice.state,
-      open:projection.voice.open,minimized:projection.voice.minimized,
-      muted:projection.voice.muted})});
+    return freeze({stack:freeze(safeStack)});
   };
-  const live=()=>snapshot({stack,voice:{state:voice.state,open:voice.open===true,
-    minimized:voice.minimized===true,muted:voice.muted===true}})||
-    freeze({stack:freeze(['scr-home']),voice:freeze({state:'idle',open:false,
-      minimized:false,muted:true})});
+  const live=()=>snapshot({stack})||freeze({stack:freeze(['scr-home'])});
   let ownedOrigin=null;
   const projection=candidate=>clone(snapshot(candidate)||ownedOrigin||live());
   const marker=(candidate,reviewId)=>{
     const safe=projection(candidate);
     const id=typeof reviewId==='string'&&
       reflectApply(regexpTest,reviewIdPattern,[reviewId])?reviewId:'';
-    return id?freeze({stack:safe.stack,voice:safe.voice,loop_review:1,
-      review_id:id}):safe;
+    return id?freeze({stack:safe.stack,loop_review:1,review_id:id}):safe;
   };
   const captureOrigin=candidate=>{
     ownedOrigin=snapshot(candidate)||live();
@@ -2379,7 +2305,7 @@ const reviewMarkerProof=(()=>{
 })();
 function reviewNow(){return 100000+Math.max(0,Math.floor(performance.now()-reviewClockStart))}
 function reviewOriginProjection(){
-  return sanitizeReviewProjectionForWrite.projection({stack,voice:currentVoiceProjection()});
+  return sanitizeReviewProjectionForWrite.projection({stack});
 }
 const reviewEntryKey=(()=>{
   const getOwnDescriptor=Object.getOwnPropertyDescriptor;
@@ -2739,7 +2665,7 @@ function continueWalletReview(){
   if(!regional.allowed){terminateReviewForRegionalPolicy(id,regional);return}
   const marker=reviewMarkerInfo(history.state).snapshot;
   const candidateProjection=marker&&marker.review_id===id?
-    {stack:marker.stack,voice:marker.voice}:null;
+    {stack:marker.stack}:null;
   const validEntryProof=validCurrentReviewMarkerEntry(id,candidateProjection);
   if((reviewRuntime.markerIssued&&
       (!validReviewMarker(history.state,id)||!validEntryProof))||
@@ -2920,24 +2846,18 @@ function reviewMarkerInfo(candidate){
     const present=Object.prototype.hasOwnProperty.call(descriptors,'loop_review')||
       Object.prototype.hasOwnProperty.call(descriptors,'review_id');
     if(!present)return {present:false,snapshot:null};
-    const expected=['stack','voice','loop_review','review_id'];
+    const expected=['stack','loop_review','review_id'];
     if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
        !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
       return {present:true,snapshot:null};
     }
     const safeStack=snapshotReviewStack(descriptors.stack.value);
-    const safeVoice=snapshotOwnDataRecord(descriptors.voice.value,
-      ['state','open','minimized','muted'],Object.prototype);
     const id=descriptors.review_id.value;
-    if(!safeStack||!safeVoice||!NAVIGATION_VOICE_STATES.has(safeVoice.state)||
-       typeof safeVoice.open!=='boolean'||typeof safeVoice.minimized!=='boolean'||
-       typeof safeVoice.muted!=='boolean'||descriptors.loop_review.value!==1||
+    if(!safeStack||descriptors.loop_review.value!==1||
        typeof id!=='string'||!/^[a-z0-9-]{1,128}$/.test(id)){
       return {present:true,snapshot:null};
     }
-    return {present:true,snapshot:{stack:safeStack,voice:{state:safeVoice.state,
-      open:safeVoice.open,minimized:safeVoice.minimized,muted:safeVoice.muted},
-      loop_review:1,review_id:id}};
+    return {present:true,snapshot:{stack:safeStack,loop_review:1,review_id:id}};
   }catch(error){return {present:true,snapshot:null}}
 }
 function validReviewMarker(candidate,reviewId){
@@ -2949,19 +2869,11 @@ function safeProjectionFromPossibleReview(candidate){
     if(candidate&&typeof candidate==='object'&&!Array.isArray(candidate)&&
        Object.getPrototypeOf(candidate)===Object.prototype){
       const descriptors=Object.getOwnPropertyDescriptors(candidate);
-      if(Object.prototype.hasOwnProperty.call(descriptors,'stack')&&
-         Object.prototype.hasOwnProperty.call(descriptors.stack,'value')&&
-         Object.prototype.hasOwnProperty.call(descriptors,'voice')&&
-         Object.prototype.hasOwnProperty.call(descriptors.voice,'value')){
+      if(Reflect.ownKeys(descriptors).length===1&&
+         Object.prototype.hasOwnProperty.call(descriptors,'stack')&&
+         Object.prototype.hasOwnProperty.call(descriptors.stack,'value')){
         const safeStack=snapshotReviewStack(descriptors.stack.value);
-        const safeVoice=snapshotOwnDataRecord(descriptors.voice.value,
-          ['state','open','minimized','muted'],Object.prototype);
-        if(safeStack&&safeVoice&&NAVIGATION_VOICE_STATES.has(safeVoice.state)&&
-           typeof safeVoice.open==='boolean'&&typeof safeVoice.minimized==='boolean'&&
-           typeof safeVoice.muted==='boolean'){
-          return {stack:safeStack,voice:{state:safeVoice.state,open:safeVoice.open,
-            minimized:safeVoice.minimized,muted:safeVoice.muted}};
-        }
+        if(safeStack)return {stack:safeStack};
       }
     }
   }catch(error){}
@@ -2974,8 +2886,7 @@ function restoreReviewNavigation(projection){
     safeStack[index]=safeProjection.stack[index];
   }
   stack=guardAccountStack(safeStack);
-  voice.state=safeProjection.voice.state;voice.open=safeProjection.voice.open;
-  voice.minimized=safeProjection.voice.minimized;voice.muted=safeProjection.voice.muted;
+  voicePanel.open=false;voicePanel.minimized=false;
   const projected=strictHashRoute(),routeName=SCREEN_HASH[stack[stack.length-1]]||'home';
   if((routeName==='asset'||routeName==='receive')&&projected.target===routeName&&
      projected.params)walletRouteParams={...projected.params};
@@ -2995,7 +2906,7 @@ function handleReviewHistoryPopstate(candidate){
     clearReviewEntryProof();
     closeReviewSurface(true);return true;
   }
-  const projection={stack:marker.snapshot.stack,voice:marker.snapshot.voice};
+  const projection={stack:marker.snapshot.stack};
   const controller=ensureReviewController();
   const proofOrigin=currentReviewMarkerProofOrigin(marker.snapshot.review_id);
   const proofValid=validCurrentReviewMarkerEntry(marker.snapshot.review_id,projection);
@@ -3029,10 +2940,7 @@ function handleReviewHistoryPopstate(candidate){
   renderReviewResult(result,{focus:true});return true;
 }
 function sameReviewProjection(left,right){
-  return Boolean(left&&right&&sameStack(left.stack,right.stack)&&
-    left.voice?.state===right.voice?.state&&left.voice?.open===right.voice?.open&&
-    left.voice?.minimized===right.voice?.minimized&&
-    left.voice?.muted===right.voice?.muted);
+  return Boolean(left&&right&&sameStack(left.stack,right.stack));
 }
 function finishReviewOriginPopstate(event){
   const origin=reviewOriginProjection();
@@ -3069,7 +2977,7 @@ function restoreReviewFromCurrentEntry(){
   const marker=reviewMarkerInfo(history.state);
   if(!marker.present)return;
   if(!marker.snapshot){handleReviewHistoryPopstate(history.state);return}
-  const projection={stack:marker.snapshot.stack,voice:marker.snapshot.voice};
+  const projection={stack:marker.snapshot.stack};
   const controller=ensureReviewController();
   const proofOrigin=currentReviewMarkerProofOrigin(marker.snapshot.review_id);
   const proofValid=validCurrentReviewMarkerEntry(marker.snapshot.review_id,projection);
@@ -4269,172 +4177,110 @@ document.querySelectorAll('.tf').forEach(f=>f.onclick=()=>{document.querySelecto
 
 /* ---------- flows ---------- */
 function openGroup(){
-  if(activeScr()==='scr-group') return;
+  conversationMode='group';
+  voicePanel.open=false;voicePanel.minimized=false;
+  if(activeScr()==='scr-group'){render();syncHash(true);persist();return}
   navigate(['scr-chat','scr-group'], {replace:false});
 }
+function openDM(){
+  conversationMode='dm';
+  voicePanel.open=false;voicePanel.minimized=false;
+  if(activeScr()==='scr-group'){render();syncHash(true);persist();return}
+  navigate(['scr-chat','scr-group'], {replace:false});
+}
+function streamPreviewState(button,state){
+  if(!button||!['preview','loading','empty','offline'].includes(state))return;
+  document.querySelectorAll('[data-stream-list-state]').forEach(panel=>{
+    const on=panel.dataset.streamListState===state;
+    panel.hidden=!on;if(on)panel.removeAttribute('inert');else panel.setAttribute('inert','');
+  });
+  document.querySelectorAll('.stream-state-tab').forEach(tab=>{
+    const on=tab===button;tab.classList.toggle('on',on);tab.setAttribute('aria-selected',String(on));
+  });
+}
+function streamMutationPending(operation){
+  const error=new Error('STREAM_CHAT_PROVIDER_MUTATION_PENDING');
+  error.code='STREAM_CHAT_PROVIDER_MUTATION_PENDING';
+  toast(`${operation} · Stream credentialed write audit PENDING`);
+  return Object.freeze({ok:false,error:Object.freeze({code:error.code})});
+}
 
-/* ---------- voice room: explicit state machine ---------- */
-const VR_SEATS = [
-  {n:'shadowfax', e:'🦊', g:'linear-gradient(135deg,#ffd66e,#ff9a5c)', host:true},
-  {n:'trader_42', e:'🎯', g:'linear-gradient(135deg,var(--cyan),var(--mint))'},
-  {n:'moondev',   e:'🌙', g:'linear-gradient(135deg,#c78bff,#7f5cff)'},
-  {n:'volt_88',   e:'⚡', g:'linear-gradient(135deg,#ff5c7a,#ff9a5c)'}
-];
-let vrTick=null;
-
+/* ---------- Stream Video read-only projection preview ---------- */
+function renderHomeAudioRoomProjection(providerProjection){
+  const room=document.getElementById('home-audio-room');
+  const title=document.getElementById('home-audio-title');
+  const status=document.getElementById('home-audio-status');
+  const action=document.getElementById('home-audio-preview');
+  if(!room||!title||!status||!action)return false;
+  let accepted=false;
+  try{
+    if(!providerProjection||typeof providerProjection!=='object'||
+       Object.getPrototypeOf(providerProjection)!==Object.prototype)throw new Error('INVALID_STREAM_AUDIO_PROJECTION');
+    const descriptors=Object.getOwnPropertyDescriptors(providerProjection);
+    const expected=['authority','mode','connection','status','participant_count',
+      'visible_participants','complete_roster_status'];
+    const keys=Reflect.ownKeys(descriptors);
+    if(keys.length!==expected.length||keys.some(key=>typeof key!=='string'||
+       !expected.includes(key)||!Object.prototype.hasOwnProperty.call(descriptors[key],'value'))){
+      throw new Error('INVALID_STREAM_AUDIO_PROJECTION');
+    }
+    const value=key=>descriptors[key].value;
+    const visible_participants=value('visible_participants');
+    if(value('authority')!=='stream_video_sdk_call_state'||value('mode')!=='offline_preview'||
+       value('connection')!=='disconnected'||value('status')!=='unavailable'||
+       value('participant_count')!==0||!Array.isArray(visible_participants)||
+       visible_participants.length!==0||value('complete_roster_status')!=='PENDING'){
+      throw new Error('UNVERIFIED_STREAM_AUDIO_PROJECTION');
+    }
+    accepted=true;
+  }catch(_error){accepted=false}
+  room.dataset.streamMode='offline_preview';
+  room.dataset.streamConnection='disconnected';
+  room.dataset.streamStatus='unavailable';
+  room.dataset.streamParticipantCount='0';
+  title.textContent='Voice room';
+  status.textContent='Unavailable · Stream Video not connected · 0 participants';
+  action.textContent='Open preview';
+  if(!accepted)return false;
+  return true;
+}
 function openVoiceRoom(){
-  voice.open=true; voice.minimized=false;
-  const card=document.getElementById('voiceRoomCard');
-  card.style.display='block';
+  conversationMode='group';
+  voicePanel.open=true;voicePanel.minimized=false;
+  if(activeScr()!=='scr-group')navigate(['scr-chat','scr-group'],{replace:false});
   renderVoice(); syncHash(true); persist();
-  setTimeout(()=>card.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
 }
 function toggleVoiceRoom(){
-  voice.minimized=!voice.minimized;
+  if(!voicePanel.open)return;
+  voicePanel.minimized=!voicePanel.minimized;
   renderVoice(); syncHash(true); persist();
 }
 function returnToVoiceRoom(){
-  if(activeScr()!=='scr-group'){ navigate(['scr-chat','scr-group']); }
-  voice.open=true; voice.minimized=false;
-  document.getElementById('voiceRoomCard').style.display='block';
+  conversationMode='group';
+  if(activeScr()!=='scr-group')navigate(['scr-chat','scr-group']);
+  voicePanel.open=true;voicePanel.minimized=false;
   renderVoice(); syncHash(true); persist();
-  setTimeout(()=>document.getElementById('voiceRoomCard').scrollIntoView({behavior:'smooth',block:'nearest'}),120);
 }
-function setVoice(s){
-  voice.state=s;
-  if(s==='joined' && !voice.joinedAt) voice.joinedAt=Date.now();
-  if(s==='idle'){voice.joinedAt=0; voice.hand=false; voice.muted=true}
-  renderVoice(); persist();
-  if(inCall() && !vrTick) vrTick=setInterval(renderVoiceTimer,1000);
-  if(!inCall() && vrTick){clearInterval(vrTick); vrTick=null}
-}
-function joinVoiceRoom(){
-  if(inCall()) return;
-  setVoice('joining');
-  toast('Connecting to voice room… (simulated — Agora RTC lands in Phase 1)');
-  setTimeout(()=>{
-    if(voice.state!=='joining') return;
-    voice.listeners=215;
-    setVoice('joined');
-    toast('You are in the room · mic muted by default');
-  },1100);
-}
-function leaveVoiceRoom(){
-  if(!inCall()) return;
-  voice.listeners=214;
-  setVoice('idle');
-  toast('Left the voice room · mic released');
-}
-function toggleMute(){
-  if(!inCall()) return;
-  voice.muted=!voice.muted;
-  renderVoice(); persist();
-  toast(voice.muted?'Microphone muted':'Microphone live — you are speaking to 215 people');
-}
-function toggleHand(){
-  if(!inCall()) return;
-  voice.hand=!voice.hand; renderVoice(); persist();
-  toast(voice.hand?'Hand raised — host notified':'Hand lowered');
-}
-function toggleSpeaker(){
-  if(!inCall()) return;
-  voice.speaker=!voice.speaker; renderVoice(); persist();
-  toast(voice.speaker?'Speaker on':'Speaker off — room muted for you');
-}
-function simulateDrop(){
-  if(voice.state!=='joined') return;
-  voice.weak=true; setVoice('reconnecting');
-  toast('Network dropped — reconnecting…');
-  setTimeout(()=>{
-    if(voice.state!=='reconnecting') return;
-    voice.weak=false; setVoice('joined'); toast('Reconnected · audio restored');
-  },2200);
-}
-
-function renderVoiceTimer(){
-  if(!voice.joinedAt) return;
-  const s=Math.floor((Date.now()-voice.joinedAt)/1000);
-  const mm=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
-  const lbl = voice.state==='reconnecting' ? 'Reconnecting…' : (voice.muted?'In voice · muted':'In voice · live');
-  const el=document.getElementById('cbStatus'); if(el) el.textContent=`${lbl} · ${mm}:${ss}`;
-}
+function joinVoiceRoom(){streamMutationPending('join_audio_room')}
+function leaveVoiceRoom(){streamMutationPending('leave_audio_room')}
+function toggleMute(){streamMutationPending('set_microphone_enabled')}
+function toggleHand(){streamMutationPending('request_speaking_permission')}
+function toggleSpeaker(){streamMutationPending('set_speaker_output')}
 
 function renderVoice(){
   const card=document.getElementById('voiceRoomCard');
   if(!card) return;
   const phone=document.getElementById('phone');
-  const joined=voice.state==='joined'||voice.state==='reconnecting';
-
-  card.style.display = voice.open ? 'block' : 'none';
-  card.classList.toggle('minimized', voice.minimized);
-
-  /* minimize control reflects its real state */
+  const visible=voicePanel.open&&conversationMode==='group';
+  card.style.display=visible?'block':'none';
+  card.classList.toggle('minimized',voicePanel.minimized);
   const tg=document.getElementById('vrToggleBtn');
-  tg.textContent = voice.minimized ? '+' : '−';
-  tg.setAttribute('aria-expanded', String(!voice.minimized));
-  const tgl = (voice.minimized?'Expand':'Minimize')+' voice room';
+  tg.textContent=voicePanel.minimized?'+':'−';
+  tg.setAttribute('aria-expanded',String(!voicePanel.minimized));
+  const tgl=(voicePanel.minimized?'Expand':'Minimize')+' voice room preview';
   tg.setAttribute('aria-label', tgl); tg.title=tgl;
-
-  /* status badge */
-  const badge=document.getElementById('vrBadge');
-  const bs={idle:['live',''],joining:['connecting','warn'],joined:['you are in',''],reconnecting:['reconnecting','warn'],error:['failed','err']}[voice.state];
-  badge.hidden=false; badge.textContent=bs[0]; badge.className='vr-badge'+(bs[1]?' '+bs[1]:'');
-
-  document.getElementById('vrCounts').textContent = `${voice.listeners} listening · ${voice.speakers} speaking`;
-
-  /* seats — self tile appears once joined */
-  const seats = VR_SEATS.map(s=>({...s, mic:true}));
-  if(joined) seats.push({n:'You', e:'🕶️', g:'linear-gradient(135deg,var(--mint),var(--cyan))', me:true, mic:!voice.muted, hand:voice.hand});
-  document.getElementById('vrSeats').innerHTML = seats.map(s=>`
-    <div class="vr-seat${s.me?' me':''}">
-      <div class="avatar" style="background:${s.g}">${s.e}
-        <span class="mic${s.mic?'':' off'}" aria-hidden="true">${s.mic?'●':'✕'}</span>
-      </div>
-      <p>${s.hand?'✋ ':''}${s.n}${s.host?' · host':''}</p>
-    </div>`).join('');
-
-  /* join button vs live controls */
-  const jb=document.getElementById('vrJoinBtn'), ct=document.getElementById('vrCtrls'), net=document.getElementById('vrNet');
-  if(voice.state==='idle'||voice.state==='error'){
-    jb.hidden=false; ct.hidden=true; net.hidden=true;
-    jb.textContent = voice.state==='error' ? '↻ Retry connection' : '🎙️ Join room';
-    jb.disabled=false; jb.style.opacity=1;
-  }else if(voice.state==='joining'){
-    jb.hidden=false; ct.hidden=true; net.hidden=true;
-    jb.textContent='Connecting…'; jb.disabled=true; jb.style.opacity=.6;
-  }else{
-    jb.hidden=true; ct.hidden=false; net.hidden=false;
-  }
-
-  /* live controls */
-  const mb=document.getElementById('vrMuteBtn');
-  mb.setAttribute('aria-pressed', String(voice.muted));
-  mb.textContent = voice.muted?'🔇':'🎙️';
-  const mlbl = voice.muted?'Unmute microphone':'Mute microphone';
-  mb.setAttribute('aria-label', mlbl); mb.title=mlbl;
-
-  const hb=document.getElementById('vrHandBtn');
-  hb.setAttribute('aria-pressed', String(voice.hand));
-  const hlbl = voice.hand?'Lower hand':'Raise hand';
-  hb.setAttribute('aria-label', hlbl); hb.title=hlbl;
-
-  const sb=document.getElementById('vrSpkBtn');
-  sb.setAttribute('aria-pressed', String(voice.speaker));
-  sb.textContent = voice.speaker?'🔊':'🔈';
-  const slbl = voice.speaker?'Speaker on':'Speaker off';
-  sb.setAttribute('aria-label', slbl); sb.title=slbl;
-
-  net.classList.toggle('weak', voice.weak);
-  document.getElementById('vrNetTxt').textContent = voice.state==='reconnecting' ? 'Reconnecting…' : (voice.weak?'Weak connection':'Good connection');
-
-  /* global call bar + chat tab dot */
-  phone.classList.toggle('in-call', inCall() && !(activeScr()==='scr-group' && voice.open && !voice.minimized));
-  phone.classList.toggle('voice-live', inCall());
-  const cbm=document.getElementById('cbMuteBtn');
-  cbm.setAttribute('aria-pressed', String(voice.muted));
-  cbm.textContent = voice.muted?'🔇':'🎙️';
-  cbm.setAttribute('aria-label', mlbl); cbm.title=mlbl;
-  renderVoiceTimer();
+  phone.classList.remove('in-call','voice-live');
+  phone.classList.toggle('voice-preview',visible&&voicePanel.minimized);
 }
 function openSwap(){push('scr-swap')}
 function openDapp(){push('scr-dapp')}
@@ -4715,6 +4561,8 @@ function route({silent=false}={}){
   if((target==='asset'||target==='receive')&&parsed.params){
     walletRouteParams={...parsed.params};
   }
+  if(target==='dm')conversationMode='dm';
+  else if(target==='group'||target==='voiceroom')conversationMode='group';
   if(target==='token') fillToken('GLYPH');
   closeSheets();
   navigate(ROUTES[target].stack.slice(), {replace:true});
@@ -4727,7 +4575,8 @@ function route({silent=false}={}){
 function expectedHash(){
   let h = SCREEN_HASH[activeScr()] || 'home';
   if(h==='asset'||h==='receive') h=canonicalWalletHash(h);
-  if(activeScr()==='scr-group' && voice.open && !voice.minimized) h='voiceroom';
+  if(activeScr()==='scr-group')h=voicePanel.open?'voiceroom':
+    (conversationMode==='dm'?'dm':'group');
   return h;
 }
 /* an externally edited hash (address bar) re-enters through here */
@@ -4751,6 +4600,8 @@ window.addEventListener('unload',()=>{
 window.addEventListener('pageshow',event=>{
   if(!event.persisted) return;
   refreshRegionalBlockedSessionLatch();
+  voicePanel.open=false;voicePanel.minimized=false;
+  renderVoice();
   setupAccountScreen(activeScr());
   focusActiveScreen();
   restoreReviewFromCurrentEntry();
@@ -4768,25 +4619,17 @@ function restore(){
   const h=parsed.target;
   const expect = SCREEN_HASH[restoredStack[restoredStack.length-1]] || 'home';
   /* only restore when the URL still points at the same place we left */
-  if(h!==expect && !(h==='voiceroom' &&
+  if(h!==expect && !((h==='voiceroom'||h==='dm') &&
      restoredStack[restoredStack.length-1]==='scr-group')) return false;
   if((h==='asset'||h==='receive')&&parsed.params){
     walletRouteParams={...parsed.params};
   }
-  voice.state=restored.voice.state;voice.open=restored.voice.open;
-  voice.minimized=restored.voice.minimized;voice.muted=restored.voice.muted;
-  voice.hand=restored.voice.hand;voice.speaker=restored.voice.speaker;
-  voice.listeners=restored.voice.listeners;voice.speakers=restored.voice.speakers;
-  voice.joinedAt=restored.voice.joinedAt;voice.weak=restored.voice.weak;
-  if(voice.state==='joining') voice.state='joined';
-  if(voice.state==='joined'||voice.state==='reconnecting'){
-    voice.joinedAt = voice.joinedAt || Date.now();
-    if(!vrTick) vrTick=setInterval(renderVoiceTimer,1000);
-  }
+  conversationMode=h==='dm'?'dm':'group';
+  voicePanel.open=h==='voiceroom';voicePanel.minimized=false;
   if(restoredStack[restoredStack.length-1]==='scr-token') fillToken(curTok);
   navigate(restoredStack, {replace:true});
   if(restoredStack[restoredStack.length-1]==='scr-token') requestAnimationFrame(drawChart);
-  if(voice.open) document.getElementById('voiceRoomCard').style.display='block';
+  if(voicePanel.open)document.getElementById('voiceRoomCard').style.display='block';
   renderVoice();
   return true;
 }
@@ -4874,5 +4717,8 @@ document.addEventListener('click',event=>{
     explanation.hidden=false;
   }
 },{capture:true});
+renderHomeAudioRoomProjection({authority:'stream_video_sdk_call_state',mode:'offline_preview',
+  connection:'disconnected',status:'unavailable',participant_count:0,
+  visible_participants:[],complete_roster_status:'PENDING'});
 if(!restore()) route();
 setupGlobalSystemState();

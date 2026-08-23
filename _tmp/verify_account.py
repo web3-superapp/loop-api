@@ -1085,8 +1085,7 @@ with sync_playwright() as p:
     left_splash = leak_page.evaluate("""() => ({state:history.state, timers:account.timers.length})""")
     leak_page.clock.run_for(1_000)
     stayed_signed_in = active_state(leak_page)
-    check(left_splash == {'state': {'stack': ['scr-home'], 'voice': {
-              'state': 'idle', 'open': False, 'minimized': False, 'muted': True}}, 'timers': 0} and
+    check(left_splash == {'state': {'stack': ['scr-home']}, 'timers': 0} and
           stayed_signed_in == {'active': ['scr-home'], 'hash': '#home'},
           f'离开 Splash 后清理延迟结果，得到 {left_splash} -> {stayed_signed_in}')
     leak_context.close()
@@ -3723,7 +3722,13 @@ with sync_playwright() as p:
         marker:Boolean(history.state?.loop_review),banner:banner.textContent,
         toast:document.getElementById('toast').textContent};
     }""")
-    check(all(exists and not disabled for _, exists, disabled in usable) and
+    expected_usable = {
+      'tk-watch': (True, False), 'group-chart': (True, False),
+      'group-watch': (True, False), 'group-analysis': (True, False),
+      'vrJoinBtn': (True, True),
+    }
+    check(all(expected_usable.get(item_id) == (exists, disabled)
+              for item_id, exists, disabled in usable) and
           all(not disabled for _, disabled in tabs) and
           reset_restrictions == {'restricted': 0, 'explanationHidden': True} and
           approval_plan == {'label': 'View plan', 'signing': False, 'disabled': False,

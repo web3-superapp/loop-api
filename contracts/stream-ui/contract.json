@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "delivery": {
+    "authority": "stream_chat_and_video_only",
+    "production_provider": "src/stream-chat-provider.js",
+    "production_scripts": 10,
+    "production_connected_claim": false,
+    "offline_preview": "explicit_read_only_not_connection_evidence",
+    "test_fixture_in_bundle": false,
+    "custom_communication_core": false
+  },
+  "routes": {
+    "E1": "#chat",
+    "E2": "#group",
+    "E3": "#voiceroom",
+    "E4": "#dm",
+    "dm_screen_strategy": "reuse_conversation_shell_preserve_37_screen_manifest_and_shared_f11_bound",
+    "account_guard": "existing_guardAccountRoute"
+  },
+  "dto_schema": {
+    "path": "contracts/stream-ui/dto.schema.json",
+    "draft": "https://json-schema.org/draft/2020-12/schema",
+    "additional_properties": false
+  },
+  "dto": {
+    "channel_list": {
+      "authority": "stream_chat_sdk_state",
+      "states": ["preview", "loading", "empty", "offline"],
+      "fields": ["cid", "kind", "name", "member_count", "unread_count", "muted", "last_message"]
+    },
+    "message_timeline": {
+      "authority": "stream_chat_sdk_channel_state",
+      "fields": ["id", "cid", "user_id", "alias", "text", "created_at", "parent_id", "mentioned_user_ids", "reaction_counts", "pinned_at"],
+      "projection_only": ["reply", "reaction", "mention", "pin"]
+    },
+    "audio_room": {
+      "authority": ["StreamVideo.state.connection", "CallState.status", "CallState.callParticipants", "CallState.participantCount"],
+      "participant_count_limit": 50000,
+      "visible_participant_limit": 250,
+      "complete_roster": "PENDING",
+      "projection_only": true
+    }
+  },
+  "writes": {
+    "ui_controls": "disabled_aria_disabled",
+    "behavior": "PENDING_fail_closed_no_provider_call",
+    "operations": ["connect_user", "query_channels", "watch_channel", "send_message", "send_thread_reply", "send_reaction", "mark_read", "join_audio_room", "leave_audio_room", "set_microphone_enabled", "request_speaking_permission"]
+  },
+  "voice": {
+    "rtc_authority": "stream_video_sdk",
+    "local_join_simulation": false,
+    "local_presence_or_roster": false,
+    "local_voice_state_persistence": false,
+    "offline_room_dto": "disconnected_unavailable_zero_empty",
+    "home_entry": "canonical_audio_room_dto_projection_or_fail_closed",
+    "minibar": "official_projection_or_explicit_offline_preview_only",
+    "credentials_license_200k_audio_r0": "PENDING"
+  },
+  "privacy": {
+    "dm_e2ee_claim": false,
+    "large_group_e2ee_claim": false,
+    "copy": "transport_and_message_protection_depend_on_provider_and_account_policy"
+  },
+  "accessibility": {
+    "minimum_target_css_px": 44,
+    "focus_visible": true,
+    "inactive_views_inert": true,
+    "reduced_motion": true,
+    "mobile_and_desktop": true
+  },
+  "pending_gates": ["credentials", "license", "enterprise_200k_channels", "audio_room_r0", "complete_audio_roster_over_250", "all_chat_provider_writes"]
+}

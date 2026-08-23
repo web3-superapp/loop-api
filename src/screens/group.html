@@ -1,127 +1,110 @@
-      <section class="scr" id="scr-group">
-        <!-- Voice room — a module inside the group, not a separate screen -->
-        <section class="voice-room-card" id="voiceRoomCard" style="display:none" aria-label="Voice room">
-          <div class="vr-header">
-            <div class="eq"><i></i><i></i><i></i></div>
-            <div style="flex:1;min-width:0">
-              <p style="font-weight:600;font-size:13px;color:var(--tx)">ETH ETF watch party</p>
-              <p style="font-size:11px;color:var(--tx3);margin-top:2px"><span id="vrCounts">214 listening · 8 speaking</span></p>
-            </div>
-            <span class="vr-badge" id="vrBadge" hidden>live</span>
-            <button class="icon-btn" id="vrToggleBtn" onclick="toggleVoiceRoom()" aria-expanded="true" aria-controls="voiceRoomBody" aria-label="Minimize voice room" title="Minimize voice room">−</button>
+      <section class="scr stream-conversation-shell" id="scr-group">
+        <section class="stream-conversation-view" data-conversation-view="group" data-stream-authority="stream_chat_sdk_channel_state">
+          <div class="stream-preview-banner stream-preview-inline" role="status">
+            <b>Offline preview · not connected</b>
+            <span>Message, reply, reaction, mention and pin fields are read-only official DTO projections.</span>
           </div>
-          <div class="vr-body" id="voiceRoomBody">
-            <div class="vr-seats" id="vrSeats"></div>
 
-            <button class="btn" id="vrJoinBtn" style="width:100%;background:var(--mint);color:#062418;font-size:12px;height:38px" onclick="joinVoiceRoom()">🎙️ Join room</button>
-
-            <div class="vr-ctrls" id="vrCtrls" hidden>
-              <button class="icon-btn muted" id="vrMuteBtn" onclick="toggleMute()" aria-pressed="false" aria-label="Mute microphone" title="Mute microphone">🎙️</button>
-              <button class="icon-btn" id="vrHandBtn" onclick="toggleHand()" aria-pressed="false" aria-label="Raise hand" title="Raise hand">✋</button>
-              <button class="icon-btn" id="vrSpkBtn" onclick="toggleSpeaker()" aria-pressed="true" aria-label="Speaker on" title="Speaker on">🔊</button>
-              <button class="btn vr-leave" onclick="leaveVoiceRoom()">Leave</button>
+          <section class="voice-room-card" id="voiceRoomCard" style="display:none" aria-label="Offline Stream Video room preview"
+            data-stream-authority="CallState.callParticipants" data-stream-count-authority="CallState.participantCount" data-visible-participant-limit="250">
+            <div class="vr-header">
+              <div class="eq stream-eq-static" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="stream-grow">
+                <p class="stream-room-title">ETH ETF watch party</p>
+                <p class="stream-room-sub" id="vrCounts">Unavailable · 0 projected participants</p>
+              </div>
+              <span class="vr-badge warn" id="vrBadge">preview</span>
+              <button class="stream-icon-btn" id="vrToggleBtn" type="button" onclick="toggleVoiceRoom()" aria-expanded="true" aria-controls="voiceRoomBody" aria-label="Minimize voice room preview" title="Minimize voice room preview">−</button>
             </div>
+            <div class="vr-body" id="voiceRoomBody">
+              <div class="stream-video-authorities">
+                <span>Connection · StreamVideo.state.connection</span>
+                <span>Status · CallState.status</span>
+              </div>
+              <div class="vr-seats stream-roster-unavailable" id="vrSeats" aria-label="Participant projection unavailable">
+                <p>No official CallState participant projection is available.</p>
+              </div>
+              <p class="stream-roster-gate">Visible projection ≤ 250 · Complete roster PENDING · 200k/Audio R0 PENDING</p>
+              <button class="stream-action stream-wide" id="vrJoinBtn" type="button" data-stream-provider-mutation="join_audio_room" disabled aria-disabled="true" onclick="joinVoiceRoom()">Join via Stream Video · PENDING</button>
+              <div class="vr-ctrls" id="vrCtrls">
+                <button class="stream-icon-btn" id="vrMuteBtn" type="button" data-stream-provider-mutation="set_microphone_enabled" disabled aria-disabled="true" onclick="toggleMute()" aria-label="Microphone control pending" title="Microphone control pending">🎙️</button>
+                <button class="stream-icon-btn" id="vrHandBtn" type="button" data-stream-provider-mutation="request_speaking_permission" disabled aria-disabled="true" onclick="toggleHand()" aria-label="Speaking request pending" title="Speaking request pending">✋</button>
+                <button class="stream-action stream-grow" type="button" data-stream-provider-mutation="leave_audio_room" disabled aria-disabled="true" onclick="leaveVoiceRoom()">Leave · PENDING</button>
+              </div>
+            </div>
+          </section>
 
-            <div class="vr-net" id="vrNet" hidden><i></i><i></i><i></i><span id="vrNetTxt">Good connection</span> · <button class="vr-sim" onclick="simulateDrop()">simulate drop</button></div>
-            <p style="font-size:10px;color:var(--tx3);text-align:center;margin-top:10px">Designed for Agora RTC · <b style="color:var(--tx2)">simulated in this prototype</b></p>
-          </div>
+          <div class="sysline">— Stream Chat SDK channel state · read-only preview —</div>
+
+          <article class="msg stream-message" data-provider-message-id="fixture_m_001" data-provider-cid="messaging:glyph-hunters" data-parent-id="" data-mention-user="" data-reaction-count="4" data-pinned-at="2026-08-23T14:03:00.000Z">
+            <div class="avatar stream-avatar amber">🦉</div>
+            <div class="stream-message-body">
+              <p class="msg-who">NightOwl <time datetime="2026-08-23T14:02:00.000Z">14:02</time><span class="stream-pinned">Pinned</span></p>
+              <div class="bubble">gm degens. new find today 👇 small cap, LP looks clean-ish, dyor</div>
+              <div class="tok-card" aria-label="Token card attachment projection">
+                <div class="tc-top">
+                  <div class="tok-logo stream-avatar glyph" style="width:32px;height:32px;font-size:12px">G</div>
+                  <div><p style="font-weight:700;font-size:13.5px">Glyph <span class="mono" style="color:var(--tx3);font-size:11px">$GLYPH</span></p><p class="mono" style="font-size:12px;margin-top:1px">$0.00231 <span class="up">+36.2%</span></p></div>
+                  <span class="risk-pill risk-med" style="margin-left:auto">LP unlock 3d</span>
+                </div>
+                <div class="tc-stats"><div><b>$4.2M</b><span>Liquidity</span></div><div><b>28,421</b><span>Holders</span></div><div><b>3 days</b><span>LP unlock</span></div></div>
+                <div class="tc-actions">
+                  <button id="group-chart" type="button" onclick="openToken('GLYPH')">Chart</button>
+                  <button class="tc-buy" id="group-token-buy" type="button" data-requires-signing onclick="openSwap()">Buy</button>
+                  <button id="group-watch" type="button" onclick="toast('$GLYPH added to watchlist')">Watch</button>
+                </div>
+                <p class="tc-detect"><i></i>Stream token_card attachment · read-only projection</p>
+              </div>
+              <div class="stream-message-actions" aria-label="Provider mutation previews">
+                <button type="button" data-stream-provider-mutation="send_thread_reply" disabled aria-disabled="true">Reply · PENDING</button>
+                <button type="button" data-stream-provider-mutation="send_reaction" disabled aria-disabled="true">🔥 4 · PENDING</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="msg stream-message" data-provider-message-id="fixture_m_002" data-provider-cid="messaging:glyph-hunters" data-parent-id="fixture_m_001" data-mention-user="loop_fixture_alicia" data-reaction-count="2" data-pinned-at="">
+            <div class="avatar stream-avatar violet">0x</div>
+            <div class="stream-message-body">
+              <p class="msg-who">0xSable <time datetime="2026-08-23T14:07:00.000Z">14:07</time><span class="stream-reply-label">Reply to NightOwl</span></p>
+              <div class="bubble"><span class="stream-mention">@Alicia</span> contract facts are attached to the provider message.</div>
+              <div class="risk-strip">⚠️ <span style="color:#ffb3c1;font-size:11px">This contract can mint unlimited tokens and pause selling</span><button id="group-analysis" type="button" onclick="openRiskSheet()">View analysis</button></div>
+              <div class="stream-message-actions">
+                <button type="button" data-stream-provider-mutation="send_thread_reply" disabled aria-disabled="true">Reply · PENDING</button>
+                <button type="button" data-stream-provider-mutation="send_reaction" disabled aria-disabled="true">✅ 2 · PENDING</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="msg me stream-message" data-provider-message-id="fixture_m_003" data-provider-cid="messaging:glyph-hunters" data-parent-id="" data-mention-user="" data-reaction-count="0" data-pinned-at="">
+            <div class="avatar stream-avatar mint">V</div>
+            <div class="stream-message-body">
+              <p class="msg-who"><time datetime="2026-08-23T14:11:00.000Z">14:11</time> Voyager_7 (preview)</p>
+              <div class="bubble">No send occurred. This bubble is part of the explicit offline preview.</div>
+              <div class="asset-msg"><p class="am-h"><i></i>Bought ETH</p><p class="am-amt">5 ETH · ≈ $19,210</p><p class="am-note">Wallet action preview; not a Stream provider write.</p><div class="am-act"><button type="button" onclick="openToken('ETH')">View ETH</button><button id="group-copy-trade" type="button" data-requires-signing onclick="toast('Copy-trade drafted — review in Wallet')">Copy trade</button></div></div>
+            </div>
+          </article>
         </section>
 
-        <!-- Not "end-to-end encrypted": key distribution does not scale to a 200k-member group and
-             no commercial IM vendor offers it. E2EE stays scoped to 1:1 DMs — see 调研/chat-基础设施选型.md -->
-        <div class="sysline">— today · anonymous aliases · addresses never exposed —</div>
-
-        <div class="msg">
-          <div class="avatar" style="background:linear-gradient(135deg,#ffd66e,#ff9a5c)">🦉</div>
-          <div>
-            <p class="msg-who">NightOwl <time>14:02</time></p>
-            <div class="bubble">gm degens. new find today 👇 small cap, LP looks clean-ish, dyor</div>
+        <section class="stream-conversation-view stream-dm-view" data-conversation-view="dm" data-stream-authority="stream_chat_sdk_channel_state" hidden inert>
+          <div class="stream-preview-banner stream-preview-inline" role="status">
+            <b>Offline preview · not connected</b>
+            <span>Direct-message DTO projection only. Provider writes remain PENDING.</span>
           </div>
-        </div>
-
-        <div class="msg">
-          <div class="avatar" style="background:linear-gradient(135deg,#ffd66e,#ff9a5c)">🦉</div>
-          <div>
-            <p class="msg-who">NightOwl <time>14:02</time></p>
-            <div class="bubble" style="padding:8px 13px"><span class="tok mono" style="color:var(--cyan)">$GLYPH</span></div>
-            <div class="tok-card">
-              <div class="tc-top">
-                <div class="tok-logo" style="width:32px;height:32px;font-size:12px;background:linear-gradient(135deg,var(--cyan),var(--mint))">G</div>
-                <div>
-                  <p style="font-weight:700;font-size:13.5px">Glyph <span class="mono" style="color:var(--tx3);font-size:11px">$GLYPH</span></p>
-                  <p style="font-family:var(--mono);font-size:12px;margin-top:1px">$0.00231 <span class="up" style="font-weight:600">+36.2%</span></p>
-                </div>
-                <span class="risk-pill risk-med" style="margin-left:auto">LP unlock 3d</span>
-              </div>
-              <div class="tc-stats">
-                <div><b>$4.2M</b><span>Liquidity</span></div>
-                <div><b>28,421</b><span>Holders</span></div>
-                <div><b>3 days</b><span>LP unlock</span></div>
-              </div>
-              <div class="tc-actions">
-                <button id="group-chart" onclick="openToken('GLYPH')">Chart</button>
-                <button class="tc-buy" id="group-token-buy" data-requires-signing onclick="openSwap()">Buy</button>
-                <button id="group-watch" onclick="toast('$GLYPH added to watchlist')">Watch</button>
-              </div>
-              <p class="tc-detect"><i></i>ticker recognized &amp; contract checked automatically</p>
-            </div>
+          <div class="stream-privacy-note">
+            <b>Protection claim</b>
+            <p>End-to-end encryption is not claimed. Transport and message protection depend on provider and account policy.</p>
           </div>
-        </div>
-
-        <div class="msg me">
-          <div class="avatar" style="background:linear-gradient(135deg,var(--mint),#7fffd0)">V</div>
-          <div>
-            <p class="msg-who"><time>14:05</time> Voyager_7 (you)</p>
-            <div class="bubble">holder concentration is a bit spicy but the unlock is the real thing to watch</div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="avatar" style="background:linear-gradient(135deg,#c78bff,#7f5cff)">0x</div>
-          <div>
-            <p class="msg-who">0xSable <time>14:07</time></p>
-            <div class="bubble mono" style="font-size:11px; word-break:break-all">this one's better → 0x1f9e…a31f</div>
-            <div class="risk-strip">⚠️ <span style="color:#ffb3c1;font-size:11.5px;line-height:1.4">This contract can mint unlimited tokens and pause selling</span>
-              <button id="group-analysis" onclick="openRiskSheet()">View analysis</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="avatar" style="background:linear-gradient(135deg,#7fd0ff,#4f7cff)">A</div>
-          <div>
-            <p class="msg-who">Alicia <time>14:11</time></p>
-            <div class="asset-msg">
-              <p class="am-h"><i></i>Bought ETH</p>
-              <p class="am-amt">5 ETH · ≈ $19,210</p>
-              <p class="am-note">🔓 Shared voluntarily via Portfolio Broadcast — off by default</p>
-              <div class="am-act">
-                <button class="btn-ghost" style="background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--tx)" onclick="openToken('ETH')">View ETH</button>
-                <button id="group-copy-trade" data-requires-signing style="background:var(--mint-soft);border:1px solid rgba(61,240,174,.35);color:var(--mint)" onclick="toast('Copy-trade drafted — review &amp; sign in Wallet')">Copy trade</button>
+          <div class="sysline">— direct message · Stream Chat SDK state preview —</div>
+          <article class="msg stream-message" data-provider-message-id="fixture_dm_001" data-provider-cid="messaging:shadowfax" data-parent-id="" data-mention-user="" data-reaction-count="1" data-pinned-at="">
+            <div class="avatar stream-avatar shadow">S</div>
+            <div class="stream-message-body">
+              <p class="msg-who">shadowfax.eth <time datetime="2026-08-23T13:42:00.000Z">13:42</time></p>
+              <div class="bubble">Watch party recap is in the group. This is a read-only preview.</div>
+              <div class="stream-message-actions">
+                <button type="button" data-stream-provider-mutation="send_thread_reply" disabled aria-disabled="true">Reply · PENDING</button>
+                <button type="button" data-stream-provider-mutation="send_reaction" disabled aria-disabled="true">👍 1 · PENDING</button>
               </div>
             </div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="avatar" style="background:linear-gradient(135deg,#ffd66e,#ff9a5c)">🦉</div>
-          <div>
-            <p class="msg-who">NightOwl <time>14:12</time></p>
-            <div class="bubble">@Alicia sized in before the watch party, respect 🫡</div>
-          </div>
-        </div>
-
-        <!-- Project AI bot (community support, Phase 2). Unrelated to the security layer —
-             it never produces risk output. Phase 1 reserves the slot only. -->
-        <div class="bot-slot" aria-label="Project AI Bot — reserved for Phase 2">
-          <div class="bot-slot-head">
-            <div class="bot-slot-ico" aria-hidden="true">🤖</div>
-            <div style="flex:1;min-width:0">
-              <p class="bot-slot-t">Project AI Bot</p>
-              <p class="bot-slot-s">AI customer service and academy powered by verified project knowledge.</p>
-            </div>
-          </div>
-          <button class="bot-slot-cta" disabled aria-disabled="true">Coming in Phase 2</button>
-        </div>
-
+          </article>
+        </section>
       </section>

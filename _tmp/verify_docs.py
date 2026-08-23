@@ -298,6 +298,17 @@ check(manifest == expected_screen_manifest and len(set(manifest)) == 37,
 check('37 个 routed screen fragments' in readme and
       '37-screen routed manifest' in findings_doc,
       'README/findings 当前生成口径是 37 屏')
+for name, source in (
+        ('README', readme), ('页面清单', inventory), ('开发进度安排', schedule)):
+    check(all(term in source for term in (
+        'Stream E1–E4 final semantic composition',
+        '37 screens / 10 scripts',
+        'Stream Chat/Video',
+        'disconnected/unavailable/count 0',
+        'RTC/presence',
+        'Token Card → Buy → Swap → F11 → Privy',
+        'Hyperliquid D1–D7')),
+        f'{name} 记录最终 Stream/Perp 组合边界且不回退 30/8')
 check(all(term in current_docs for term in (
     'F3–F5', 'F12', '待实现')),
       '新增 transfer/result 路由仅为结构壳，F3–F5/F12 仍显式待实现')
@@ -439,7 +450,7 @@ stream_v5_integrated_app_hash = \
 task1_current_docs_hash = \
     'b33545479c1943a97aa4543c3261e25d675764bdfb3fbb53af16131de66ee61b'
 platform_current_app_hash = \
-    'f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6'
+    '72fd05c78c92e3a25a846bb051f9880d695c5524a6e1802a76fa284c2ef15685'
 platform_current_docs_hash = \
     '3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278'
 hyper_ui_v2_current_app_hash = \
@@ -458,11 +469,15 @@ hyper_ui_v5_current_app_hash = \
     'c177387b397ee386ed2582427c2ad64e3e74027fb36b7a6963fd10a159a9abfa'
 hyper_ui_v5_current_docs_hash = \
     'ad93bbe1bd6d8fb6d99e2d4df2fc4015a2a795a0ce7c94b8ce5b1a62a2187b4f'
+stream_final_current_app_hash = \
+    'e00bff543b5c5e4dce0b0dcaf5751499b5660f81fee32b9ce5d7f5b29cefaade'
+stream_final_current_docs_hash = \
+    '2a02ecb0bd4977608d9d3214fd03dbaaf87eb86bfa0f897599bd268d0f50b20b'
 hashes_in_findings = re.findall(r'\b[a-f0-9]{64}\b', findings_doc)
 actual_app_hash = sha256(ROOT / 'app.html')
 actual_docs_hash = sha256(PAGE)
-check(actual_app_hash == hyper_ui_v5_current_app_hash and
-      actual_docs_hash == hyper_ui_v5_current_docs_hash and
+check(actual_app_hash == stream_final_current_app_hash and
+      actual_docs_hash == stream_final_current_docs_hash and
       task1_quality_remediation_app_hash != task1_post_spec_fix_app_hash and
       app_pre_review_hash in findings_doc and
       docs_pre_review_hash in findings_doc and
@@ -485,6 +500,8 @@ check(actual_app_hash == hyper_ui_v5_current_app_hash and
       hyper_ui_v4_current_docs_hash in findings_doc and
       hyper_ui_v5_current_app_hash in findings_doc and
       hyper_ui_v5_current_docs_hash in findings_doc and
+      stream_final_current_app_hash in findings_doc and
+      stream_final_current_docs_hash in findings_doc and
       set(hashes_in_findings) >= {
           app_pre_review_hash, docs_pre_review_hash, docs_post_remediation_hash,
           docs_quality_remediation_hash, docs_vendored_marked_hash,
@@ -500,7 +517,9 @@ check(actual_app_hash == hyper_ui_v5_current_app_hash and
           hyper_ui_v4_current_app_hash,
           hyper_ui_v4_current_docs_hash,
           hyper_ui_v5_current_app_hash,
-          hyper_ui_v5_current_docs_hash} and
+          hyper_ui_v5_current_docs_hash,
+          stream_final_current_app_hash,
+          stream_final_current_docs_hash} and
       all(term in findings_doc for term in (
           'Task 8 pre-review deterministic evidence',
           'pre-review evidence, not a final checkpoint',
@@ -520,6 +539,10 @@ check(actual_app_hash == hyper_ui_v5_current_app_hash and
           'Stream v5 build integration deterministic evidence',
           'production seam checkpoint, not a connected Stream provider',
           'App-wide platform/UI candidate deterministic evidence',
+          'Stream E1–E4 platform-rebased v4 checkpoint',
+          'Stream Chat/Video as the sole communication authority',
+          'offline audio only as disconnected/unavailable with count 0',
+          'Home static live/host/listener claims',
           'not credentialed production provider delivery',
           'Hyperliquid Core Perp UI v2 candidate deterministic evidence',
           'not credentialed production order execution',
@@ -529,8 +552,11 @@ check(actual_app_hash == hyper_ui_v5_current_app_hash and
           'v3 candidate above was rejected by independent audit',
           'Hyperliquid Core Perp UI v5 mutation-decision remediation evidence',
           'v4 candidate above was rejected by independent audit',
+          'Stream E1–E4 final semantic composition evidence',
+          'final Stream semantic composition on the audited Hyperliquid v5 main line',
+          'exact production manifest remains 37 screens / 10 scripts',
           'global goal remains incomplete')),
-      f'历史/Task 1/Stream/Hyper v2/v3/v4 checkpoint SHA-256 已区分，当前 Hyper v5 app/docs hash '
+      f'历史/Task 1/Stream/Hyper v2/v3/v4/v5 checkpoint SHA-256 已区分，当前 Stream final app/docs hash '
       f'与对应记录一致：{actual_app_hash}/{actual_docs_hash}')
 
 body_rows = [

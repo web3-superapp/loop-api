@@ -219,7 +219,7 @@ scripts = '\n\n'.join(
     for name in scripts_order
 )
 
-style = read('style.css')
+style = read('style.css') + '\n' + read('stream-ui.css')
 fonts = (root / 'fonts.css').read_text()
 if style.count('<!--FONTS-->') != 1:
     sys.exit('style.css must contain exactly one <!--FONTS--> placeholder')

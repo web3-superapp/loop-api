@@ -160,6 +160,8 @@
 - The v4 storage-authority remediation keeps the same 30-screen/eight-script boundary and has deterministic `app.html` SHA-256 `6120381646dde9c193e0d29b1a5745ec391277a4927757ef9547de307ca404b6`.
 - The v5 new-document remediation removes automatic offline eligibility, keeps the explicit offline preview read-only, and has deterministic `app.html` SHA-256 `9277c724706628b716996accaa4947ce4200ccbcfeb4159a77be297ccee45b42`.
 - The v6 production-policy remediation permanently burns each exact branded handle on its first policy create/install attempt; the deterministic `app.html` SHA-256 is `f38ad6eefb4c1eb8edf0ad7fbf6a21ea43ec815b6f1a8d21ce73dc834896a2a6`.
+- The Stream E1–E4 platform-rebased v3 checkpoint keeps Stream Chat/Video as the sole communication authority, stores navigation as stack-only, and renders offline audio only as disconnected/unavailable with count 0; the deterministic 30-screen, eight-script `app.html` SHA-256 is `a6c38f09775ba38c4f337e2e245aafcde58ce9d6518c15d06e14c7a22760e027`.
+- The superseding Stream E1–E4 platform-rebased v4 checkpoint removes the Home static live/host/listener claims, projects the canonical offline Stream Video DTO, and measures the `Open preview` control at the 44px minimum; the deterministic 30-screen, eight-script `app.html` SHA-256 is `72fd05c78c92e3a25a846bb051f9880d695c5524a6e1802a76fa284c2ef15685`.
 - The deterministic offline `docs.html` SHA-256 is `3d1b82f6f5492f709d3f60ecef3cb824cfac7dafdd19b5668a2d12465d3e1278`.
 - The global goal remains incomplete; credentialed Stream delivery, Hyperliquid, and remaining A–I work are still pending/in progress.
 
@@ -199,3 +201,13 @@
 - The deterministic v5 37-screen, ten-script `app.html` SHA-256 is `c177387b397ee386ed2582427c2ad64e3e74027fb36b7a6963fd10a159a9abfa`.
 - The reproducible offline `docs.html`, generated from all five included Markdown sources, has SHA-256 `ad93bbe1bd6d8fb6d99e2d4df2fc4015a2a795a0ce7c94b8ce5b1a62a2187b4f`.
 - The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.
+
+## Stream E1–E4 final semantic composition evidence
+
+- This is the final Stream semantic composition on the audited Hyperliquid v5 main line, not credentialed Stream production delivery or a final project checkpoint.
+- The exact production manifest remains 37 screens / 10 scripts. Stream adds no routed screen or production script and preserves Hyperliquid D1–D7 adapter-only reads, TTL, frozen typed intent, request-response correlation, regional policy, and the shared F11/Privy boundary.
+- Stream Chat/Video remains the sole communication and presence authority. Home, channel, conversation, voice-room, and minibar projections fail closed to disconnected/unavailable/count 0 without a verified official handle; all writes are PENDING and no RTC/presence-shaped record is persisted.
+- Token Card → Buy → Swap → F11 → Privy remains the only signing handoff path from the Stream conversation surface.
+- The deterministic 37-screen, ten-script `app.html` SHA-256 is `e00bff543b5c5e4dce0b0dcaf5751499b5660f81fee32b9ce5d7f5b29cefaade`.
+- The reproducible five-source `docs.html` SHA-256 is `2a02ecb0bd4977608d9d3214fd03dbaaf87eb86bfa0f897599bd268d0f50b20b`.
+- The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid execution, and remaining A–I work remain pending/in progress.

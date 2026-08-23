@@ -30,36 +30,36 @@
       <button class="btn btn-primary" id="force-update-action" type="button" disabled aria-disabled="true">Store link PENDING</button>
     </section>
 
-    <!-- Group chat header + composer live OUTSIDE the scroll container so they stay pinned.
-         Shown only while the group screen is active (see render()). -->
+    <!-- Stream conversation chrome stays outside the scroll container. All provider writes
+         remain disabled until the credentialed Stream mutation audit is approved. -->
     <div class="gc-head" id="gcHead" hidden>
       <button class="back" onclick="back()" aria-label="Back">‹</button>
       <div class="avatar" style="width:34px;height:34px;background:linear-gradient(135deg,var(--cyan),var(--mint))">🜁</div>
-      <div><p class="gc-title">Glyph Hunters</p><p class="gc-sub">1,247 members · 89 online · anonymous</p></div>
+      <div><p class="gc-title" id="stream-conversation-title">Glyph Hunters</p><p class="gc-sub" id="stream-conversation-sub">Offline preview · not connected</p></div>
       <div class="gc-call">
         <button class="icon-btn" title="Voice room" aria-label="Voice room" onclick="openVoiceRoom()"><svg viewBox="0 0 24 24"><path d="M5 4h3l2 5-2.5 1.5a12 12 0 0 0 5 5L14 13l5 2v3a2 2 0 0 1-2 2A14 14 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></button>
-        <button class="icon-btn" title="Video" onclick="toast('Video &amp; meetings ship in P1')"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M15 10.5 21 7v10l-6-3.5"/></svg></button>
+        <button class="icon-btn" type="button" data-stream-provider-mutation="join_audio_room" disabled aria-disabled="true" title="Video PENDING" aria-label="Video PENDING"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M15 10.5 21 7v10l-6-3.5"/></svg></button>
       </div>
     </div>
 
     <div class="composer" id="composer" hidden>
-      <button class="icon-btn" style="border:0;background:none" aria-label="Attach"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-      <input placeholder="Message… ($ticker or 0x… auto-detects)" aria-label="Message" onkeydown="if(event.key==='Enter'){toast('Prototype: sending is disabled');this.value=''}">
-      <button class="icon-btn" style="border:0;background:none" title="Voice note" aria-label="Voice note"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-      <button class="send" onclick="toast('Prototype: sending is disabled')" aria-label="Send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
+      <button class="icon-btn" type="button" data-stream-provider-mutation="send_message" disabled aria-disabled="true" style="border:0;background:none" aria-label="Attachment upload PENDING"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <input id="stream-composer-input" placeholder="Message write PENDING" aria-label="Message write PENDING" disabled aria-disabled="true">
+      <button class="icon-btn" type="button" data-stream-provider-mutation="send_message" disabled aria-disabled="true" style="border:0;background:none" title="Voice note PENDING" aria-label="Voice note PENDING"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button class="send" type="button" data-stream-provider-mutation="send_message" disabled aria-disabled="true" onclick="streamMutationPending('send_message')" aria-label="Send message PENDING"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
     </div>
 
-    <!-- global in-call bar — visible on every tab while connected -->
-    <div class="callbar" id="callbar" role="status" aria-live="polite">
-      <button class="cb-open" onclick="returnToVoiceRoom()" aria-label="Return to voice room">
-        <div class="eq"><i></i><i></i><i></i></div>
+    <!-- Explicit offline projection preview; never indicates that a call was joined. -->
+    <div class="callbar stream-preview-minibar" id="callbar" role="status" aria-live="polite" data-stream-authority="CallState.status">
+      <button class="cb-open" type="button" onclick="returnToVoiceRoom()" aria-label="Return to voice room preview">
+        <div class="eq stream-eq-static"><i></i><i></i><i></i></div>
         <div style="min-width:0">
           <p class="cb-t">ETH ETF watch party</p>
-          <p class="cb-s" id="cbStatus">In voice · 00:00</p>
+          <p class="cb-s" id="cbStatus">Unavailable · Stream Video not connected</p>
         </div>
       </button>
-      <button class="icon-btn" id="cbMuteBtn" onclick="toggleMute()" aria-pressed="false" aria-label="Mute microphone" title="Mute microphone">🎙️</button>
-      <button class="btn cb-leave" onclick="leaveVoiceRoom()">Leave</button>
+      <button class="icon-btn" id="cbMuteBtn" type="button" data-stream-provider-mutation="set_microphone_enabled" disabled aria-disabled="true" onclick="toggleMute()" aria-label="Microphone control PENDING" title="Microphone control PENDING">🎙️</button>
+      <button class="btn cb-leave" type="button" data-stream-provider-mutation="leave_audio_room" disabled aria-disabled="true" onclick="leaveVoiceRoom()">Leave · PENDING</button>
     </div>
 
     <!-- tab bar -->

@@ -71,6 +71,8 @@ python3 build_docs.py && python3 _tmp/verify_docs.py  # 文档生成与口径回
 
 全部七个 Perp adapter 方法先投影 method-specific canonical request；有参数的响应必须逐项匹配请求的 coin、position identity、side、order type、size、leverage、reduce-only 与 intent revision。即使响应 schema 完全合法，任何 ETH→BTC 或 1.25/20×→9.99/1× 替换也会在渲染和 F11 之前 fail closed。
 
+> **Stream E1–E4 final semantic composition（2026-08-24）**：当前构建严格保持 **37 screens / 10 scripts**，不新增 Stream production screen/script，也不覆盖 Hyperliquid D1–D7。Stream Chat/Video 是聊天、语音与 presence 的唯一生产权威；未取得不可伪造的官方 provider handle 时，Home、会话和语音房只显示 `disconnected/unavailable/count 0` 的显式离线预览。所有 Stream writes 继续 `PENDING`/fail closed，navigation、history、session 与 F11 都不得持久化 RTC/presence-shaped 状态。Token Card → Buy → Swap → F11 → Privy 仍走既有唯一签名确认层；Perp 的 TTL、typed intent、request-response correlation 与单一 F11 边界保持不变。
+
 ### 当前 App-wide provider/UI 切片（2026-08-23）
 
 - 通知只投影 Firebase delivery 与 Stream、Hyperliquid、Privy 官方事件；durable inbox、read sync、preferences 与 webhook ingestion 仍由 integration catalog 的 provider selection gate 默认拒绝。

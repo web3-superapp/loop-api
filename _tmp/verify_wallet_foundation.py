@@ -169,7 +169,7 @@ def expected_app_bytes(project_root):
     scripts = '\n\n'.join(
         f'/* ============ SCRIPT: {name} ============ */\n' + read_source(name)
         for name in script_names)
-    style = read_source('style.css').replace(
+    style = (read_source('style.css') + '\n' + read_source('stream-ui.css')).replace(
         '<!--FONTS-->', (project_root / 'fonts.css').read_text())
     html = '\n'.join([
         read_source('head.html'), '<style>', style, '</style>', '',
@@ -1790,8 +1790,7 @@ with sync_playwright() as playwright:
       const adapter = P.createSimulatedAdapter({walletClass:'privy_embedded',scenario:'normal'});
       const live = {user_id:'fixture-user-1', wallet_id:'fixture-wallet-1',
         wallet_class:'privy_embedded', endpoint:ENDPOINT};
-      const origin = {stack:['scr-wallet','scr-asset'], voice:{state:'idle',open:false,
-        minimized:false,muted:true}};
+      const origin = {stack:['scr-wallet','scr-asset']};
       const liveFor = (review_id,base=live) => ({...base,endpoint:
         review_id.startsWith('review-approve')?'eth_sendTransaction':
         review_id.startsWith('review-perp')?'hyperliquid:testnet':
@@ -2213,10 +2212,16 @@ with sync_playwright() as playwright:
       out.originProjectionShape = [badOriginBoolean,badOriginExtra,badOriginAccessor]
         .every(result => !result.ok && result.error.code === 'INVALID_REQUEST' &&
           deeplyFrozen(result)) && voiceGetterCalls === 0;
-      out.originStateProjection = ['idle','joining','joined','reconnecting','error']
-        .every(state => R.createController({adapter}).open({review_id:'review-transfer',
-          origin:{stack:['scr-wallet'],voice:{state,open:false,minimized:false,muted:true}},
-          live_context:live,trigger_ref:'x',now_ms:100000}).ok);
+      const validStackOnlyOrigin = R.createController({adapter}).open({
+        review_id:'review-transfer',origin:{stack:['scr-wallet']},live_context:live,
+        trigger_ref:'x',now_ms:100000});
+      out.originStateProjection = validStackOnlyOrigin.ok &&
+        ['idle','joining','joined','reconnecting','error'].every(state => {
+          const result=R.createController({adapter}).open({review_id:'review-transfer',
+            origin:{stack:['scr-wallet'],voice:{state,open:false,minimized:false,muted:true}},
+            live_context:live,trigger_ref:'x',now_ms:100000});
+          return !result.ok&&result.error.code==='INVALID_REQUEST';
+        });
 
       const goodAuthoritativeSwap=controllerPreview('review-swap-fresh','swap',
         'available',fullPreview());
@@ -2766,7 +2771,7 @@ if not fails:
               review_open['kind'] == 'Transfer' and not review_open['ackHidden'] and
               not review_open['ackChecked'] and review_open['continueDisabled'] and
               review_open['primary'] == 'Continue with Privy' and
-              review_open['keys'] == ['loop_review', 'review_id', 'stack', 'voice'] and
+              review_open['keys'] == ['loop_review', 'review_id', 'stack'] and
               review_open['viewportInert'] and review_open['activeId'] == 'review-cancel',
               f'F11 opens one preview-unavailable accessible transfer dialog: {review_open}')
         sensitive_terms = ('0x71C700000000000000000000000000000000F0A2',
@@ -2774,12 +2779,10 @@ if not fails:
         check(page.evaluate('history.length') == initial_length + 1 and
               review_open['url'].endswith('#asset?asset=ETH&chain=ethereum') and
               review_open['historyStack'] == ['scr-wallet', 'scr-asset'] and
-              review_open['historyVoiceKeys'] ==
-              ['minimized', 'muted', 'open', 'state'] and
-              review_open['storedKeys'] == ['stack', 'voice'] and
+              review_open['historyVoiceKeys'] == [] and
+              review_open['storedKeys'] == ['stack'] and
               review_open['storedStack'] == ['scr-wallet', 'scr-asset'] and
-              review_open['storedVoiceKeys'] == ['hand', 'joinedAt', 'listeners',
-                  'minimized', 'muted', 'open', 'speaker', 'speakers', 'state', 'weak'] and
+              review_open['storedVoiceKeys'] == [] and
               all(term not in review_open['historyState'] and
                   term not in review_open['storedText'] for term in sensitive_terms),
               f'F11 pushes one opaque marker-only same-URL entry: {review_open}')
@@ -2817,7 +2820,7 @@ if not fails:
                 const safe=sanitizeReviewProjectionForWrite.projection(pollution);
                 const safeMarker=sanitizeReviewProjectionForWrite.marker(
                   pollution,'review-transfer');
-                intrinsicSafe=safe.stack.length===2&&safe.voice.state==='idle'&&
+                intrinsicSafe=safe.stack.length===2&&safe.voice===undefined&&
                   safe.payload===undefined&&safeMarker.loop_review===1&&
                   safeMarker.review_id==='review-transfer'&&
                   safeMarker.payload===undefined&&safeMarker.wallet_id===undefined;
@@ -2864,10 +2867,10 @@ if not fails:
             polluted_result = polluted_origin_history_case(polluted_action)
             check(polluted_result == {
                 'action': polluted_action,
-                'historyKeys': ['stack', 'voice'],
+                'historyKeys': ['stack'],
                 'historyStack': ['scr-wallet', 'scr-asset'],
-                'historyVoiceKeys': ['minimized', 'muted', 'open', 'state'],
-                'historyDangerous': [], 'storedKeys': ['stack', 'voice'],
+                'historyVoiceKeys': [],
+                'historyDangerous': [], 'storedKeys': ['stack'],
                 'storedStack': ['scr-wallet', 'scr-asset'],
                 'storageDangerous': [], 'open': False, 'dialogHidden': True,
                 'marker': False, 'hostileNode': False, 'executed': False,
@@ -2930,16 +2933,13 @@ if not fails:
                 'Boolean(globalThis.__persistedVoiceExecuted)')
             return result
 
-        approved_storage_voice_keys = ['hand', 'joinedAt', 'listeners', 'minimized',
-                                       'muted', 'open', 'speaker', 'speakers',
-                                       'state', 'weak']
         for persisted_action in ('reload', 'cancel', 'continue', 'back_forward',
                                  'bfcache'):
             persisted_result = polluted_persisted_voice_case(persisted_action)
             expected_open = persisted_action in ('back_forward', 'bfcache')
             expected_marker = expected_open
-            check(persisted_result['topKeys'] == ['stack', 'voice'] and
-                  persisted_result['voiceKeys'] == approved_storage_voice_keys and
+            check(persisted_result['topKeys'] == ['stack'] and
+                  persisted_result['voiceKeys'] == [] and
                   persisted_result['stack'] == ['scr-wallet', 'scr-asset'] and
                   not persisted_result['dangerous'] and
                   not persisted_result['hostileNode'] and
@@ -2948,8 +2948,8 @@ if not fails:
                   persisted_result['open'] == expected_open and
                   persisted_result['marker'] == expected_marker and
                   set(persisted_result['historyKeys']).issubset(
-                      {'stack', 'voice', 'loop_review', 'review_id'}),
-                  f'persisted hostile voice is exact after {persisted_action}: '
+                      {'stack', 'loop_review', 'review_id'}),
+                  f'persisted RTC/presence-shaped voice is dropped after {persisted_action}: '
                   f'{persisted_result}')
 
         # Restore the clean review used by the remaining shared F11 interaction checks.
@@ -3058,7 +3058,7 @@ if not fails:
                   not escape_state['pitchInert'] and escape_state['pitchAria'] is None and
                   not escape_state['mobileInert'] and escape_state['mobileAria'] is None and
                   not stale_forward['open'] and not stale_forward['marker'] and
-                  stale_forward['keys'] == ['stack', 'voice'] and
+                  stale_forward['keys'] == ['stack'] and
                   escape_state['length'] == stale_forward['length'] == initial_length + 1,
                   f'Escape consumes, goes Back, and stale Forward sanitizes in place: '
                   f'{escape_state} / {stale_forward}')
@@ -3138,12 +3138,12 @@ if not fails:
               continue_state['providerStates'] == ['handoff_pending', 'provider_pending'] and
               continue_state['length'] == before_continue_length + 1 and
               not continue_forward['open'] and not continue_forward['marker'] and
-              continue_forward['keys'] == ['stack', 'voice'] and
+              continue_forward['keys'] == ['stack'] and
               before_continue_wallet == after_continue_wallet,
               f'Continue closes before one microtask handoff and cannot replay: '
               f'{continue_state} / {continue_forward}')
         check(all(term not in continue_state['allStorage'] for term in sensitive_terms) and
-              '"stack"' in continue_state['stored'] and '"voice"' in continue_state['stored'] and
+              '"stack"' in continue_state['stored'] and '"voice"' not in continue_state['stored'] and
               'review' not in continue_state['stored'],
               f'review payload/session is absent from storage: {continue_state}')
 
@@ -3159,7 +3159,7 @@ if not fails:
             active:[...document.querySelectorAll('.scr.active:not([inert])')].map(node=>node.id),
             stored:sessionStorage.getItem('loop.proto.state')||''}),20));
         }""")
-        check(not forged['open'] and sorted(forged['state'].keys()) == ['stack', 'voice'] and
+        check(not forged['open'] and sorted(forged['state'].keys()) == ['stack'] and
               forged['active'] == ['scr-asset'] and 'review' not in forged['stored'],
               f'forged review marker and malformed projection sanitize closed: {forged}')
 
@@ -3189,7 +3189,7 @@ if not fails:
         }""")
         check(cross_live_open and not cross_live_marker['open'] and
               not cross_live_marker['marker'] and
-              cross_live_marker['keys'] == ['stack', 'voice'] and
+              cross_live_marker['keys'] == ['stack'] and
               cross_live_marker['bannerHidden'] and not cross_live_marker['banner'],
               f'one live review ID cannot reuse another live marker entry proof: '
               f'{cross_live_marker}')
@@ -3217,7 +3217,7 @@ if not fails:
         }""")
         check(not forward_projection_tamper['open'] and
               not forward_projection_tamper['marker'] and
-              forward_projection_tamper['keys'] == ['stack', 'voice'] and
+              forward_projection_tamper['keys'] == ['stack'] and
               forward_projection_tamper['stack'] == ['scr-wallet', 'scr-asset'] and
               forward_projection_tamper['active'] == ['scr-asset'] and
               forward_projection_tamper['hash'].startswith('#asset?') and
@@ -3246,7 +3246,7 @@ if not fails:
         }""")
         check(not restore_projection_tamper['open'] and
               not restore_projection_tamper['marker'] and
-              restore_projection_tamper['keys'] == ['stack', 'voice'] and
+              restore_projection_tamper['keys'] == ['stack'] and
               restore_projection_tamper['stack'] == ['scr-wallet', 'scr-asset'] and
               restore_projection_tamper['active'] == ['scr-asset'] and
               restore_projection_tamper['hash'].startswith('#asset?') and
@@ -3268,7 +3268,7 @@ if not fails:
             banner:document.getElementById('review-provider-banner').textContent}),20));
         }""")
         check(not nonpersist_review['open'] and not nonpersist_review['marker'] and
-              nonpersist_review['keys'] == ['stack', 'voice'] and
+              nonpersist_review['keys'] == ['stack'] and
               not nonpersist_review['banner'],
               f'non-persisted pagehide clears the marker binding proof: '
               f'{nonpersist_review}')
@@ -3339,8 +3339,8 @@ if not fails:
         page.wait_for_timeout(80)
         page.locator('#asset-review-transfer').click(); page.wait_for_timeout(30)
         page.locator('#review-preview-check').check()
-        page.evaluate("""() => history.replaceState({stack:['scr-wallet','scr-asset'],
-          voice:{state:'idle',open:false,minimized:false,muted:true}},'',location.href)""")
+        page.evaluate("""() => history.replaceState({stack:['scr-wallet','scr-asset']},
+          '',location.href)""")
         page.locator('#review-continue').click(); page.wait_for_timeout(80)
         tampered_continue = page.evaluate("""() => ({open:
           document.getElementById('review-dialog').classList.contains('open'),marker:
@@ -3375,25 +3375,21 @@ if not fails:
               document.getElementById('voiceRoomCard').style.display,
             stored:JSON.parse(sessionStorage.getItem('loop.proto.state')||'{}')}),20));
         }""")
-        expected_origin = {'stack': ['scr-wallet', 'scr-asset'], 'voice': {
-            'state': 'idle', 'open': False, 'minimized': False, 'muted': True}}
+        expected_origin = {'stack': ['scr-wallet', 'scr-asset']}
         check(not synthetic_return['open'] and not synthetic_return['marker'] and
               synthetic_return['bannerHidden'] and not synthetic_return['banner'] and
               synthetic_return['hash'] == '#asset?asset=ETH&chain=ethereum' and
               synthetic_return['state'] == expected_origin and
               synthetic_return['active'] == ['scr-asset'] and
               synthetic_return['voiceCard'] == 'none' and
-              synthetic_return['stored']['stack'] == expected_origin['stack'] and
-              all(synthetic_return['stored']['voice'].get(key) == value for key, value in
-                  expected_origin['voice'].items()),
+              synthetic_return['stored'] == expected_origin,
               f'synthetic origin popstate cannot authorize handoff: {synthetic_return}')
 
         page.goto('about:blank')
         page.goto(f'{APP.as_uri()}#asset?asset=ETH&chain=ethereum')
         page.wait_for_timeout(80)
         older_origin_key = page.evaluate("""() => {
-          history.pushState({stack:['scr-wallet','scr-asset'],voice:{state:'idle',
-            open:false,minimized:false,muted:true}},'',location.href);
+          history.pushState({stack:['scr-wallet','scr-asset']},'',location.href);
           return navigation.currentEntry.key;
         }""")
         page.locator('#asset-review-transfer').click(); page.wait_for_timeout(30)
@@ -3417,7 +3413,7 @@ if not fails:
           [...document.querySelectorAll('.scr.active:not([inert])')].map(node=>node.id)})""")
         check(not wrong_entry['open'] and not wrong_entry['marker'] and
               wrong_entry['bannerHidden'] and not wrong_entry['banner'] and
-              wrong_entry['keys'] == ['stack', 'voice'] and
+              wrong_entry['keys'] == ['stack'] and
               wrong_entry['active'] == ['scr-asset'],
               f'trusted same-projection wrong entry with replaced Navigation cannot handoff: '
               f'{wrong_entry}')
@@ -3438,7 +3434,7 @@ if not fails:
           keys:Object.keys(history.state||{}).sort()})""")
         check(not missing_navigation['open'] and not missing_navigation['marker'] and
               missing_navigation['bannerHidden'] and not missing_navigation['banner'] and
-              missing_navigation['keys'] == ['stack', 'voice'],
+              missing_navigation['keys'] == ['stack'],
               f'successful marker push without a trusted origin key fails closed: '
               f'{missing_navigation}')
 
@@ -3509,8 +3505,7 @@ if not fails:
                 name==='handoffReview'?()=>Object.freeze({ok:false,error:Object.freeze({
                   code,retryable:false,safe_message:safeMessage})}):base[name]])));
               const controller=LoopWalletReview.createController({adapter:hostile});
-              const origin={stack:['scr-wallet','scr-asset'],voice:{state:'idle',
-                open:false,minimized:false,muted:true}};
+              const origin={stack:['scr-wallet','scr-asset']};
               const live={user_id:'fixture-user-1',
                 wallet_id:walletClass==='privy_embedded'?'fixture-wallet-1':null,
                 wallet_class:walletClass,
@@ -3637,8 +3632,7 @@ if not fails:
             'onerror="globalThis.__f11SafeErrorExecuted=true">Signed and confirmed';
           const failure=code=>deepFreeze({ok:false,error:{code,retryable:false,
             safe_message:hostile}});
-          const origin={stack:['scr-wallet','scr-asset'],voice:{state:'idle',
-            open:false,minimized:false,muted:true}};
+          const origin={stack:['scr-wallet','scr-asset']};
           const output=[];
           for(const [code,row] of Object.entries(table)){
             for(const [column,applicability] of Object.entries(row)){
@@ -4090,9 +4084,7 @@ with sync_playwright() as playwright:
         'before': hostile_asset_state['before'],
         'after': hostile_asset_state['before'],
         'hash': '#asset?asset=SOL&chain=solana',
-        'state': {'stack': ['scr-wallet', 'scr-asset'],
-                  'voice': {'state': 'idle', 'open': False,
-                            'minimized': False, 'muted': True}},
+        'state': {'stack': ['scr-wallet', 'scr-asset']},
         'active': ['scr-asset'],
     }, f'hostile Asset popstate sanitizes projection/ancestry without growth: '
        f'{hostile_asset_state}')
@@ -4110,9 +4102,7 @@ with sync_playwright() as playwright:
         'before': hostile_receive_state['before'],
         'after': hostile_receive_state['before'],
         'hash': '#receive?asset=ETH&chain=base',
-        'state': {'stack': ['scr-wallet', 'scr-receive'],
-                  'voice': {'state': 'idle', 'open': False,
-                            'minimized': False, 'muted': True}},
+        'state': {'stack': ['scr-wallet', 'scr-receive']},
         'active': ['scr-receive'],
     }, f'outer state with unexpected keys rejects voice and ancestry together: '
        f'{hostile_receive_state}')
@@ -4160,7 +4150,6 @@ with sync_playwright() as playwright:
           Object.create(null),baseVoice())})],
       ];
       for(const [label,make] of cases){
-        Object.assign(voice,{state:'idle',open:false,minimized:false,muted:true});
         const counter={count:0};
         const candidate=make(counter);
         dispatchEvent(new PopStateEvent('popstate',{state:candidate}));
@@ -4170,9 +4159,7 @@ with sync_playwright() as playwright:
     }""")
     descriptor_failures = [result for result in hostile_descriptor_cases
                            if result['getters'] != 0 or result['state'] != {
-                               'stack': ['scr-wallet', 'scr-receive'],
-                               'voice': {'state': 'idle', 'open': False,
-                                         'minimized': False, 'muted': True}}]
+                               'stack': ['scr-wallet', 'scr-receive']}]
     check(not descriptor_failures,
           'hostile outer/stack/voice descriptors fail closed without invoking getters: '
           f'{descriptor_failures}')
@@ -4309,9 +4296,7 @@ with sync_playwright() as playwright:
     check(forged_receive == {
         'before': forged_receive['before'],
         'after': forged_receive['before'],
-        'state': {'stack': ['scr-wallet', 'scr-receive'],
-                  'voice': {'state': 'idle', 'open': False,
-                            'minimized': False, 'muted': True}},
+        'state': {'stack': ['scr-wallet', 'scr-receive']},
         'active': ['scr-receive'],
     }, f'unissued three-level Receive ancestry fails closed without history growth: '
        f'{forged_receive}')
@@ -4361,9 +4346,7 @@ with sync_playwright() as playwright:
         result = page.evaluate(attempt)
         check(result == {
             'exposed': 'undefined',
-            'state': {'stack': ['scr-wallet', 'scr-receive'],
-                      'voice': {'state': 'idle', 'open': False,
-                                'minimized': False, 'muted': True}},
+            'state': {'stack': ['scr-wallet', 'scr-receive']},
         }, f'{label} cannot expose or mint Receive provenance: {result}')
         check(not page_errors, f'{label} proof rejection has no errors: {page_errors}')
         context.close()
@@ -4383,10 +4366,7 @@ with sync_playwright() as playwright:
     }""")
     check(replayed_receive['issuedKey'] != replayed_receive['replayKey'] and
           replayed_receive['after'] == replayed_receive['before'] and
-          replayed_receive['state'] == {
-              'stack': ['scr-wallet', 'scr-receive'],
-              'voice': {'state': 'idle', 'open': False,
-                        'minimized': False, 'muted': True}} and
+          replayed_receive['state'] == {'stack': ['scr-wallet', 'scr-receive']} and
           replayed_receive['active'] == ['scr-receive'],
           f'issued-looking state replayed on a different Navigation key fails closed: '
           f'{replayed_receive}')
@@ -4418,9 +4398,7 @@ with sync_playwright() as playwright:
     }""")
     check(missing_navigation == {
         'navigation': 'undefined',
-        'state': {'stack': ['scr-wallet', 'scr-receive'],
-                  'voice': {'state': 'idle', 'open': False,
-                            'minimized': False, 'muted': True}},
+        'state': {'stack': ['scr-wallet', 'scr-receive']},
         'active': ['scr-receive'],
     }, f'missing Navigation API fails closed to direct Receive ancestry: '
        f'{missing_navigation}')
@@ -4457,9 +4435,7 @@ with sync_playwright() as playwright:
         'fixedKey': 'attacker-fixed-navigation-key',
         'before': live_navigation_replay['before'],
         'after': live_navigation_replay['before'],
-        'state': {'stack': ['scr-wallet', 'scr-receive'],
-                  'voice': {'state': 'idle', 'open': False,
-                            'minimized': False, 'muted': True}},
+        'state': {'stack': ['scr-wallet', 'scr-receive']},
     }, 'replaced live Navigation identity cannot authorize cross-entry replay: '
        f'{live_navigation_replay}')
     check(not page_errors,
@@ -4501,10 +4477,7 @@ with sync_playwright() as playwright:
           cross_entry_shadow['issuedOwn'] and cross_entry_shadow['replayOwn'] and
           cross_entry_shadow['shadow'] == valid_shadow and
           cross_entry_shadow['after'] == cross_entry_shadow['before'] and
-          cross_entry_shadow['state'] == {
-              'stack': ['scr-wallet', 'scr-receive'],
-              'voice': {'state': 'idle', 'open': False,
-                        'minimized': False, 'muted': True}},
+          cross_entry_shadow['state'] == {'stack': ['scr-wallet', 'scr-receive']},
           'valid bounded own key shadow replayed across native entries fails closed: '
           f'{cross_entry_shadow}')
     check(not page_errors,
@@ -4545,11 +4518,8 @@ with sync_playwright() as playwright:
           dispatchEvent(new PopStateEvent('popstate',{state:issued}));
           return structuredClone(history.state);
         }""")
-        check(accessor_result == {
-            'stack': ['scr-wallet', 'scr-receive'],
-            'voice': {'state': 'idle', 'open': False,
-                      'minimized': False, 'muted': True},
-        }, f'{label} fails closed without issuing proof: {accessor_result}')
+        check(accessor_result == {'stack': ['scr-wallet', 'scr-receive']},
+              f'{label} fails closed without issuing proof: {accessor_result}')
         check(not page_errors, f'{label} causes no pageerror: {page_errors}')
         context.close()
 
@@ -4571,11 +4541,8 @@ with sync_playwright() as playwright:
           dispatchEvent(new PopStateEvent('popstate',{state:issued}));
           return structuredClone(history.state);
         }""")
-        check(malformed_key_result == {
-            'stack': ['scr-wallet', 'scr-receive'],
-            'voice': {'state': 'idle', 'open': False,
-                      'minimized': False, 'muted': True},
-        }, f'{label} Navigation key fails closed: {malformed_key_result}')
+        check(malformed_key_result == {'stack': ['scr-wallet', 'scr-receive']},
+              f'{label} Navigation key fails closed: {malformed_key_result}')
         check(not page_errors,
               f'{label} Navigation key rejection has no errors: {page_errors}')
         context.close()
@@ -4594,8 +4561,7 @@ with sync_playwright() as playwright:
       const newest={key:navigation.currentEntry.key,stack:history.state.stack.slice()};
       await navigation.traverseTo(issuedKeys[0]).finished;
       await new Promise(resolve=>setTimeout(resolve,0));
-      const replay={stack:['scr-wallet','scr-asset','scr-receive'],
-        voice:{state:'idle',open:false,minimized:false,muted:true}};
+      const replay={stack:['scr-wallet','scr-asset','scr-receive']};
       history.replaceState(replay,'','#receive?asset=ETH&chain=base');
       dispatchEvent(new PopStateEvent('popstate',{state:replay}));
       const oldest={key:navigation.currentEntry.key,stack:history.state.stack.slice()};
@@ -4623,7 +4589,7 @@ with sync_playwright() as playwright:
           bounded_proofs['oldest']['stack'] == ['scr-wallet', 'scr-receive'],
           f'bounded proof store accepts newest and rejects oldest after 34 issues: '
           f'{bounded_proofs}')
-    check(bounded_proofs['historyKeys'] == ['stack', 'voice'] and
+    check(bounded_proofs['historyKeys'] == ['stack'] and
           bounded_proofs['globalLeaks'] == [] and
           bounded_proofs['facadeGlobal'] == 'undefined' and
           not bounded_proofs['surfaceLeaks'],
@@ -7591,7 +7557,7 @@ def storage_contract(persist, restore):
         len(persist_sites) == 1 and
         persist_sites[0]['callee'] == 'sessionStorage.setItem' and
         re.sub(r'\s+', '', persist_sites[0]['arguments']) ==
-            'SS_KEY,navigationStorageProjection.serialize(stack,voice)' and
+            'SS_KEY,navigationStorageProjection.serialize(stack)' and
         len(restore_sites) == 1 and
         restore_sites[0]['callee'] == 'sessionStorage.getItem' and
         re.sub(r'\s+', '', restore_sites[0]['arguments']) == 'SS_KEY' and
@@ -7607,7 +7573,9 @@ storage_ok, storage_evidence = storage_contract(persist_source, restore_source)
 check(wallet_app_risks['browser storage'] == ['sessionStorage', 'sessionStorage'] and
       storage_ok and
       'navigationStorageProjection.restore(s)' in restore_source and
+      'navigationStorageProjection.serialize(stack)' in persist_source and
       'JSON.stringify({stack, voice})' not in persist_source and
+      'voice' not in persist_source and
       'Object.assign(voice' not in restore_source,
       'Task 7 storage allowlist is exact sanitizer serialize/restore dataflow: '
       f'{storage_evidence}')
@@ -8056,8 +8024,7 @@ navigation_history_ok, navigation_history_evidence = history_contract(
     navigation_history_source, NAVIGATION_HISTORY_MEMBERS,
     NAVIGATION_HISTORY_ARGUMENTS)
 check(navigation_history_ok and
-      'constst={stack:stack.slice(),voice:{state:voice.state,open:voice.open,'
-      'minimized:voice.minimized,muted:voice.muted}};' in
+      'constst={stack:stack.slice()};' in
           re.sub(r'\s+', '', navigation_history_source),
       'Task 7 shared wallet navigation history consumers are fully enumerated: '
       f'{navigation_history_evidence}')

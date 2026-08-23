@@ -4500,18 +4500,17 @@ require(process.argv[2]);
 const P=globalThis.LoopWalletProvider,R=globalThis.LoopWalletReview;
 const live={user_id:'fixture-user-1',wallet_id:'fixture-wallet-1',
   wallet_class:'privy_embedded',endpoint:'/v1/wallets/fixture-wallet-1/actions'};
-const voice={state:'idle',open:false,minimized:false,muted:true};
 const open=n=>R.createController({adapter:P.createSimulatedAdapter({
   walletClass:'privy_embedded',scenario:'normal'})}).open({
     review_id:'review-transfer',
-    origin:{stack:Array.from({length:n},(_,index)=>`scr-level-${index}`),voice},
+    origin:{stack:Array.from({length:n},(_,index)=>`scr-level-${index}`)},
     live_context:live,trigger_ref:'fixture-trigger',now_ms:100001});
 const bounded=[23,24,25,26].map(n=>open(n));
 const overflow=[27,28,29,30].map(n=>open(n));
 const excluded=['scr-notifications','scr-search','scr-privacy','scr-security'].map(screen=>
   R.createController({adapter:P.createSimulatedAdapter({
     walletClass:'privy_embedded',scenario:'normal'})}).open({
-      review_id:'review-transfer',origin:{stack:[screen],voice},live_context:live,
+      review_id:'review-transfer',origin:{stack:[screen]},live_context:live,
       trigger_ref:'fixture-trigger',now_ms:100001}));
 process.stdout.write(JSON.stringify({
   bounded:bounded.map(result=>result.ok),
@@ -4584,8 +4583,7 @@ if build.returncode == 0 and APP.is_file():
                                 'history': CANONICAL_STACKS['send-confirm']},
               f'F11 accepts the canonical F5 origin projection: {f5_projection}')
         accepted_screens = page.evaluate("""screens => screens.filter(screen => {
-          const projection=sanitizeReviewProjectionForWrite.projection({stack:[screen],
-            voice:{state:'idle',open:false,minimized:false,muted:false}});
+          const projection=sanitizeReviewProjectionForWrite.projection({stack:[screen]});
           return projection.stack.length===1&&projection.stack[0]===screen;
         })""", [f'scr-{name}' for name in SCREENS])
         expected_review_origins = [f'scr-{name}' for name in SCREENS
