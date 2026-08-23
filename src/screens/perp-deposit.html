@@ -1,0 +1,27 @@
+      <section class="scr platform-screen perp-screen perp-account-screen" id="scr-perp-deposit">
+        <div class="pad">
+          <button class="back perp-account-touch" type="button" onclick="back()" aria-label="Back to margin account">‹ Margin account</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid only</p><h1 class="h1">Deposit / withdraw</h1></div><span class="risk-pill risk-med">Blocked</span></div>
+          <p class="perp-simulation-label" data-perp-account-provider-status>Official bridge context unavailable — adapter PENDING.</p>
+          <dl class="perp-stat-list card perp-account-facts">
+            <div><dt>Network</dt><dd data-perp-bridge-network data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Deposit minimum</dt><dd data-perp-bridge-deposit-min data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Withdraw minimum</dt><dd data-perp-bridge-withdraw-min data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Finality</dt><dd data-perp-bridge-arrival data-perp-account-provider-fact hidden></dd></div>
+          </dl>
+          <form class="perp-account-form" onsubmit="return false">
+            <label>Action
+              <select class="perp-account-touch" id="perp-deposit-operation" data-perp-account-provider-action onchange="invalidatePerpAccountIntent()" disabled>
+                <option value="deposit">Deposit</option>
+                <option value="withdraw">Withdraw</option>
+              </select>
+            </label>
+            <label>Amount
+              <input class="perp-account-touch" id="perp-deposit-amount" data-perp-account-provider-action inputmode="decimal" autocomplete="off" placeholder="Enter USDC amount" oninput="invalidatePerpAccountIntent()" disabled>
+            </label>
+            <button class="btn btn-primary perp-account-touch" id="perp-deposit-review" data-perp-account-provider-action type="button" onclick="reviewPerpAccountAction('bridge',this)" disabled>Review official bridge action</button>
+          </form>
+          <p class="perp-blocked-status" data-perp-account-action-status role="status" aria-live="polite">Production bridge policy is PENDING and defaults to deny.</p>
+          <p class="perp-policy-note">Uses the official Hyperliquid bridge boundary only — no custom router, route aggregation, or local settlement.</p>
+        </div>
+      </section>

@@ -1,0 +1,27 @@
+      <section class="scr platform-screen perp-screen perp-account-screen" id="scr-perp-transfer">
+        <div class="pad">
+          <button class="back perp-account-touch" type="button" onclick="back()" aria-label="Back to margin account">‹ Margin account</button>
+          <div class="perp-heading"><div><p class="eyebrow">Official account action</p><h1 class="h1">Spot ↔ Perp transfer</h1></div><span class="risk-pill risk-med">Blocked</span></div>
+          <p class="perp-simulation-label" data-perp-account-provider-status>Transfer context unavailable — adapter PENDING.</p>
+          <dl class="perp-stat-list card perp-account-facts">
+            <div><dt>Spot available</dt><dd data-perp-transfer-spot data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Perp available</dt><dd data-perp-transfer-perp data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Minimum</dt><dd data-perp-transfer-minimum data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Arrival</dt><dd data-perp-transfer-arrival data-perp-account-provider-fact hidden></dd></div>
+          </dl>
+          <form class="perp-account-form" onsubmit="return false">
+            <label>Direction
+              <select class="perp-account-touch" id="perp-transfer-direction" data-perp-account-provider-action onchange="invalidatePerpAccountIntent()" disabled>
+                <option value="spot_to_perp">Spot to Perp</option>
+                <option value="perp_to_spot">Perp to Spot</option>
+              </select>
+            </label>
+            <label>Amount
+              <input class="perp-account-touch" id="perp-transfer-amount" data-perp-account-provider-action inputmode="decimal" autocomplete="off" placeholder="Enter USDC amount" oninput="invalidatePerpAccountIntent()" disabled>
+            </label>
+            <button class="btn btn-primary perp-account-touch" id="perp-transfer-review" data-perp-account-provider-action type="button" onclick="reviewPerpAccountAction('transfer',this)" disabled>Review transfer</button>
+          </form>
+          <p class="perp-blocked-status" data-perp-account-action-status role="status" aria-live="polite">Production transfer policy is PENDING and defaults to deny.</p>
+          <p class="perp-policy-note">Failure never mutates a LOOP balance. Official account state must be reconciled before retry.</p>
+        </div>
+      </section>

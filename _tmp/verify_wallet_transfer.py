@@ -30,6 +30,8 @@ SCREENS = [
     'home', 'pay', 'notifications', 'search', 'market',
     'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
     'perp-positions', 'perp-orders', 'perp-position',
+    'perp-account', 'perp-transfer', 'perp-deposit', 'perp-funding',
+    'perp-risk-notice',
     'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
@@ -37,7 +39,8 @@ SCREENS = [
 SCRIPTS = ['vendor/qrcode-generator-1.4.4.js', 'wallet-provider.js',
            'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
            'platform-provider.js', 'platform-offline-fixture.js',
-           'perp-read-provider.js', 'perp-offline-fixture.js', 'app.js']
+           'perp-read-provider.js', 'perp-offline-fixture.js',
+           'perp-account-provider.js', 'perp-account-offline-fixture.js', 'app.js']
 SHELLS = ('send', 'send-to', 'send-confirm', 'tx-result')
 CANONICAL_STACKS = {
     'send': ['scr-wallet', 'scr-send'],
@@ -4360,8 +4363,8 @@ if CONTRACT_ONLY:
 print('== Transfer source/build contract ==')
 screen_manifest = lines(SRC / 'screens-order.txt')
 script_manifest = lines(SRC / 'scripts-order.txt')
-check(screen_manifest == SCREENS, f'exact pinned 37-screen order: {screen_manifest}')
-check(script_manifest == SCRIPTS, f'exact pinned ten-script order: {script_manifest}')
+check(screen_manifest == SCREENS, f'exact pinned 42-screen order: {screen_manifest}')
+check(script_manifest == SCRIPTS, f'exact pinned twelve-script order: {script_manifest}')
 screen_sources = sorted(p.stem for p in (SRC / 'screens').glob('*.html')
                         if not p.name.startswith('._'))
 script_sources = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob('*.js')
@@ -4473,12 +4476,12 @@ check(app_source.count('length>26') == 3 and 'length>30' not in app_source,
       'all three navigation/F11 stack bounds retain the approved 26-entry limit')
 
 build_source = (ROOT / 'build.py').read_text()
-check('exact pinned 37-screen order' in build_source, 'builder pins 37-screen error text')
-check('exact pinned ten-script order' in build_source, 'builder pins ten-script error text')
+check('exact pinned 42-screen order' in build_source, 'builder pins 42-screen error text')
+check('exact pinned twelve-script order' in build_source, 'builder pins twelve-script error text')
 build = subprocess.run([sys.executable, 'build.py'], cwd=ROOT, text=True,
                        capture_output=True, check=False)
-check(build.returncode == 0 and '37 screens' in build.stdout,
-      f'build succeeds at 37 screens: {(build.stderr or build.stdout).strip()}')
+check(build.returncode == 0 and '42 screens' in build.stdout,
+      f'build succeeds at 42 screens: {(build.stderr or build.stdout).strip()}')
 
 print('\n== Frozen minimal facade ==')
 probe = subprocess.run(['node', '-e', r"""
@@ -4587,9 +4590,11 @@ if build.returncode == 0 and APP.is_file():
           return projection.stack.length===1&&projection.stack[0]===screen;
         })""", [f'scr-{name}' for name in SCREENS])
         expected_review_origins = [f'scr-{name}' for name in SCREENS
-                                   if name not in ('notifications', 'search', 'privacy', 'security')]
+                                   if name not in ('notifications', 'search', 'privacy', 'security',
+                                                   'perp-account', 'perp-transfer', 'perp-deposit',
+                                                   'perp-funding', 'perp-risk-notice')]
         check(accepted_screens == expected_review_origins,
-              f'F11 projection excludes four non-wallet platform routes: {accepted_screens}')
+              f'F11 projection excludes nine non-wallet platform/account routes: {accepted_screens}')
         non_file_requests = [url for url in requests if not url.startswith('file:')]
         console_errors = [item for item in console_messages if item['type'] == 'error']
         check(not errors and not console_errors,

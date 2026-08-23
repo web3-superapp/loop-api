@@ -7,4 +7,6 @@ platform-provider.js
 platform-offline-fixture.js
 perp-read-provider.js
 perp-offline-fixture.js
+perp-account-provider.js
+perp-account-offline-fixture.js
 app.js

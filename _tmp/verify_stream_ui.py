@@ -260,16 +260,19 @@ def verify(root: Path) -> dict:
         "vendor/qrcode-generator-1.4.4.js", "wallet-provider.js",
         "wallet-review.js", "wallet-transfer.js", "stream-chat-provider.js",
         "platform-provider.js", "platform-offline-fixture.js",
-        "perp-read-provider.js", "perp-offline-fixture.js", "app.js",
+        "perp-read-provider.js", "perp-offline-fixture.js",
+        "perp-account-provider.js", "perp-account-offline-fixture.js", "app.js",
     ], "production script order drift")
     require(read(root, "src/screens-order.txt").splitlines() == [
         "splash", "auth", "auth-otp", "auth-wallet", "wallet-create", "wallet-backup",
         "seed-show", "seed-verify", "wallet-import", "home", "pay", "notifications",
         "search", "market", "perp-markets", "perp-market", "perp-order", "perp-confirm",
-        "perp-positions", "perp-orders", "perp-position", "token", "launchpad", "chat", "group", "wallet", "asset",
+        "perp-positions", "perp-orders", "perp-position", "perp-account",
+        "perp-transfer", "perp-deposit", "perp-funding", "perp-risk-notice",
+        "token", "launchpad", "chat", "group", "wallet", "asset",
         "send", "send-to", "send-confirm", "receive", "tx-result", "swap", "dapp",
         "profile", "privacy", "security",
-    ], "37-screen platform + Perp manifest / shared F11 bound drift")
+    ], "42-screen post-Stream + Perp manifest / shared F11 bound drift")
 
     app = read(root, "src/app.js")
     home = read(root, "src/screens/home.html")

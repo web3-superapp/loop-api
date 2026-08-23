@@ -680,6 +680,24 @@ body::after{ /* grain */
 .perp-position-card{display:grid;width:100%;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;color:var(--tx);font:inherit;text-align:left;cursor:pointer}.perp-position-card>span{display:grid;gap:3px}.perp-position-card>span:nth-child(even){text-align:right}.perp-position-card b{font:11px var(--mono)}.perp-position-card small{color:var(--tx3);font-size:9.5px}.perp-position-title{grid-column:1/-1!important;display:flex!important;justify-content:space-between!important;text-align:left!important}
 .perp-order-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;margin-bottom:8px}.perp-order-row>span{display:grid;gap:3px}.perp-order-row b{font:10.5px var(--mono)}.perp-order-row small{color:var(--tx3);font-size:9px}
 .perp-screen>.pad>.btn{width:100%;margin-top:14px}
+
+/* ---------- HYPERLIQUID ACCOUNT D8-D12 ---------- */
+.perp-account-touch{min-height:46px}
+.perp-account-touch:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.perp-account-facts.card{padding:3px 14px;border:1px solid var(--line);border-radius:16px}
+.perp-account-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+.perp-account-actions .btn:last-child{grid-column:1/-1}
+.perp-account-form{display:grid;gap:13px;margin-top:14px}
+.perp-account-form label{display:grid;gap:6px;color:var(--tx2);font-size:10px}
+.perp-account-form input,.perp-account-form select{width:100%;padding:0 12px;border:1px solid var(--line2);border-radius:12px;background:#0b1017;color:var(--tx);font:12px var(--mono)}
+.perp-account-form .btn{width:100%;margin-top:2px}
+.perp-funding-curve{display:flex;height:124px;align-items:flex-end;justify-content:space-around;gap:10px;padding:14px;margin:14px 0}
+.perp-funding-curve span{width:22px;height:var(--funding-y);min-height:4px;border-radius:5px 5px 2px 2px;background:linear-gradient(180deg,var(--cyan),var(--mint))}
+.perp-funding-history{display:grid;gap:8px}.perp-funding-row{display:grid;grid-template-columns:1.2fr 1fr .8fr;align-items:center;gap:8px}
+.perp-funding-row time{color:var(--tx3);font-size:9px}.perp-funding-row b,.perp-funding-row span{font:10px var(--mono);text-align:right}
+.perp-risk-sections{display:grid;gap:9px;margin:13px 0}.perp-risk-section h3{font-size:11.5px}.perp-risk-section p{margin-top:5px;color:var(--tx2);font-size:10px;line-height:1.55}
+.perp-risk-ack{display:grid;grid-template-columns:46px minmax(0,1fr);align-items:center;gap:8px;margin-top:14px;color:var(--tx2);font-size:10px;line-height:1.5;cursor:pointer}
+.perp-risk-ack input{width:22px;height:22px;margin:auto;accent-color:var(--mint)}
 @media (min-width:900px){
   .perp-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .perp-chart{height:166px}

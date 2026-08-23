@@ -19,6 +19,11 @@ perp-confirm
 perp-positions
 perp-orders
 perp-position
+perp-account
+perp-transfer
+perp-deposit
+perp-funding
+perp-risk-notice
 token
 launchpad
 chat

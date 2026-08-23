@@ -1,0 +1,15 @@
+      <section class="scr platform-screen perp-screen perp-account-screen" id="scr-perp-funding">
+        <div class="pad">
+          <button class="back perp-account-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid Core</p><h1 class="h1">ETH funding detail</h1></div><span class="risk-pill risk-med">Read-only</span></div>
+          <p class="perp-simulation-label" data-perp-account-provider-status>Hyperliquid funding unavailable — adapter PENDING.</p>
+          <div class="perp-summary-grid">
+            <div class="card"><span>Current funding</span><strong data-perp-funding-current data-perp-account-provider-fact hidden></strong></div>
+            <div class="card"><span>Next settlement</span><strong data-perp-funding-countdown data-perp-account-provider-fact hidden></strong></div>
+          </div>
+          <div class="perp-funding-curve card" id="perp-funding-curve" data-perp-account-provider-fact hidden aria-label="Provider funding history curve"></div>
+          <div class="perp-section-head"><h2>Funding history</h2><span>Provider records</span></div>
+          <div class="perp-funding-history" id="perp-funding-history" aria-live="polite"></div>
+          <p class="perp-freshness" data-perp-funding-freshness data-perp-account-provider-fact hidden></p>
+        </div>
+      </section>

@@ -3,7 +3,7 @@
 ## 2026-08-24 — Current known state
 
 - Static HTML/CSS/JavaScript prototype built from `src/screens-order.txt`, source fragments, `src/app.js`, and `src/style.css`.
-- Generated prototype currently reports a 37-screen routed manifest: the 30-screen platform milestone plus Hyperliquid D1–D7 Core Perp routes. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog and Privy remains the only signing authority.
+- Generated prototype currently reports a 42-screen routed manifest: the 30-screen platform milestone plus Hyperliquid D1–D12 Core Perp/account routes. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog and Privy remains the only signing authority.
 - Account onboarding slice added nine screens and a comprehensive `_tmp/verify_account.py` suite.
 - The pre-documentation Task 7 evidence passed the focused wallet, account, shared-route, syntax, AST/security, mobile, and deterministic app-build checks; Task 8 re-runs the complete chain after documentation changes.
 - A6–A10 owner copy approval passed on 2026-08-22; the account slice has no remaining acceptance item.
@@ -14,13 +14,13 @@
 - `文档/页面清单.md` is the full 103-screen inventory: A 12, B 9, C 9, D 12, E 13, F 20, G 4, H 16, I 8, with existing/new annotations.
 - `文档/开发进度安排.md` defines dependency order: foundations, account/wallet, spot trading, Chat/voice, Perp, then system hardening.
 - `文档/测试用例.md` is the cross-module acceptance source, including P0 fund-safety and end-to-end journeys.
-- The current source manifest contains 37 screens. The seven newest routed screens are Hyperliquid Core Perp provider/state projections; shared dialogs and global state variants are not routed-screen units.
+- The current source manifest contains 42 screens. The twelve Hyperliquid routed screens are Core Perp/account provider-state projections; shared dialogs and global state variants are not routed-screen units.
 - Subsequent slices must compare A-tier rows and dependency sequencing rather than simply selecting the numerically next screen.
 
 ## Inventory audit observations
 
 - The authoritative inventory says the HTML milestone covers A-tier only and lists 47 A-tier items. README was reconciled on 2026-08-22 to the same 47 A-tier / 103 total-screen authority.
-- Current 37-screen routed manifest implements the account/wallet-foundation slices, the four inert Send/Result shells, B3/B4/H3/H5 platform projections, and Hyperliquid D1–D7 read-only Core Perp projections.
+- Current 42-screen routed manifest implements the account/wallet-foundation slices, the four inert Send/Result shells, B3/B4/H3/H5 platform projections, and Hyperliquid D1–D12 Core Perp/account projections.
 - Major remaining A-tier gaps include the full-screen chart, credentialed production Hyperliquid Perp execution, direct messages, F3–F5/F12 wallet transfer/result behavior, bridge/approval-recovery flows, seed-backup expansion, and credentialed production provider wiring for the new app-wide surfaces.
 - Notifications do not create durable inbox/read state: they project only allowlisted Firebase, Stream, Hyperliquid, and Privy fixture events. Search is bounded provider fan-out. Privacy export/delete is async PENDING and mutation-free offline. Security shows GoPlus/Chainalysis/Privy facts without a LOOP score.
 - The I1/I2/I3/I5 states preserve exact recovery semantics: offline and 5xx are retryable, regional restriction can return to eligible app surfaces but cannot be bypassed in settings, and force update remains blocking while its official store destination is PENDING.
@@ -174,6 +174,15 @@
 - The deterministic offline `docs.html` SHA-256 is `15bb130fe2f0da6bf9960eaa423fd647f9353dfd4073fd673ae150eb7b77c4ce`.
 - The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid adapter delivery, and remaining A–I work are still pending/in progress.
 
+## Hyperliquid D8–D12 account UI candidate evidence
+
+- This is an isolated pre-Stream 42-screen, twelve-script candidate based on `9f82db1`, not credentialed production delivery or the final combined checkpoint.
+- D8–D12 add margin account, official Spot↔Perp transfer, official Hyperliquid deposit/withdraw, funding details, and current risk acknowledgement. General cross-chain routing remains outside this slice, and D5 remains the owner of position margin/leverage adjustments.
+- All seven account adapter methods require exact descriptor-safe nested DTOs, current-time freshness, Core allowlisting where applicable, and full request/response correlation. D9/D10/D12 bind immutable typed intents; production credentials and eligibility remain PENDING/default-deny before the single F11/Privy review authority.
+- The deterministic 42-screen, twelve-script `app.html` SHA-256 is `4b6d60abf70ff5415527e8d4a830df2e86113e1199dedda8c74e0bd4719ee86c`.
+- The reproducible offline `docs.html` SHA-256 is `f8aa89f8ef6bf72bf2ebad00b3349e897358fc2c90ada319a531564e89dd8e1a`.
+- The global goal remains incomplete; credentialed Hyperliquid adapter delivery, post-Stream semantic rebase, and remaining A–I work are pending/in progress.
+
 ## Hyperliquid Core Perp UI v3 remediation evidence
 
 - The v2 candidate above was rejected by independent audit and remains historical evidence only; it must not be merged.
@@ -211,3 +220,14 @@
 - The deterministic 37-screen, ten-script `app.html` SHA-256 is `e00bff543b5c5e4dce0b0dcaf5751499b5660f81fee32b9ce5d7f5b29cefaade`.
 - The reproducible five-source `docs.html` SHA-256 is `2a02ecb0bd4977608d9d3214fd03dbaaf87eb86bfa0f897599bd268d0f50b20b`.
 - The global goal remains incomplete; credentialed Stream delivery, credentialed Hyperliquid execution, and remaining A–I work remain pending/in progress.
+
+## Hyperliquid D8–D12 post-Stream final candidate evidence
+
+- This candidate is semantically based on the accepted Stream main line `82addd4`; the exact combined manifest is 42 screens / 12 scripts (the accepted 37/10 Stream + Hyperliquid D1–D7 build plus five D8–D12 screens and two account provider/fixture scripts).
+- D8–D12 consume only exact, descriptor-safe, request-correlated and newly frozen account adapter projections. Production reads and writes remain PENDING/fail closed; the explicit testnet fixture is read-only and cannot submit or sign.
+- Current-time freshness is independently recomputed from `performance.now()` and `fetched_at_ms`, checked against DTO freshness, and revalidated after a persisted BFCache restore. Forged self-reported age, expired facts, and navigation away from an action origin clear facts/actions or typed intent.
+- D9 transfer intents enforce the provider minimum and the direction-specific available balance. D10 official-bridge intents enforce the provider deposit/withdraw minimum. D12 provider acknowledgement status gates the first D3 order-confirm transition; the offline fixture remains unacknowledged and cannot bypass the PENDING review.
+- Stream Chat/Video remains the sole communication/presence authority; Home stays disconnected/unavailable/count 0 without a verified handle, RTC/presence state is not persisted, and F11 remains stack-only. Privy remains the sole signing authority.
+- The deterministic 42-screen, twelve-script `app.html` SHA-256 is `087531b07fa2eea0b3755a8ea0143eabc7c9a620f0177ebf3f64f2cced8f4cd3`.
+- The reproducible five-source `docs.html` SHA-256 is `1947b1674216ed66aa640f32563846f348231f805cc0a096e3e3b8ddc8859092`.
+- The global goal remains incomplete; credentialed Hyperliquid account transport, eligibility/region policy, nonce and unknown-submit reconciliation, and remaining A–I work remain pending/in progress.

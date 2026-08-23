@@ -23,6 +23,8 @@ EXPECTED_SCREENS = [
     'home', 'pay', 'notifications', 'search', 'market',
     'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
     'perp-positions', 'perp-orders', 'perp-position',
+    'perp-account', 'perp-transfer', 'perp-deposit', 'perp-funding',
+    'perp-risk-notice',
     'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
@@ -37,6 +39,8 @@ EXPECTED_SCRIPTS = [
     'platform-offline-fixture.js',
     'perp-read-provider.js',
     'perp-offline-fixture.js',
+    'perp-account-provider.js',
+    'perp-account-offline-fixture.js',
     'app.js',
 ]
 EXPECTED_LOCK = {
@@ -393,7 +397,7 @@ screen_manifest_path = SRC / 'screens-order.txt'
 screen_order = (screen_manifest_path.read_text().splitlines()
                 if screen_manifest_path.exists() else [])
 check(screen_order == EXPECTED_SCREENS,
-      f'exact normalized 37-screen order: {screen_order}')
+      f'exact normalized 42-screen order: {screen_order}')
 check(len(screen_order) == len(set(screen_order)),
       'screen manifest has no duplicate entries')
 resolved_screen_paths = {
@@ -408,8 +412,8 @@ check(wallet_index >= 0 and screen_order[wallet_index:wallet_index + 7] ==
       ['wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
        'tx-result'],
       'wallet transfer shells and receive/result follow the exact pinned order')
-check(len(screen_order) == 37 and len(set(screen_order)) == 37,
-      f'37 unique ordered screen fragments: {len(screen_order)} total')
+check(len(screen_order) == 42 and len(set(screen_order)) == 42,
+      f'42 unique ordered screen fragments: {len(screen_order)} total')
 
 screen_ids = []
 for name in screen_order:
@@ -421,8 +425,8 @@ for name in screen_order:
                           fragment)
     check(len(sections) == 1, f'{name}.html contains exactly one .scr section')
     screen_ids.extend(sections)
-check(len(screen_ids) == 37 and len(set(screen_ids)) == 37,
-      f'37 unique screen IDs: {len(screen_ids)} total')
+check(len(screen_ids) == 42 and len(set(screen_ids)) == 42,
+      f'42 unique screen IDs: {len(screen_ids)} total')
 
 for name, heading, live_id in (
         ('asset', 'Asset detail', 'asset-content'),
@@ -3794,6 +3798,31 @@ if not fails:
         # clock.  Use a fresh page for this focused flow so the preceding F11
         # matrix cannot consume the read-only snapshot's bounded lifetime.
         perp_page = browser.new_page()
+        # This D1-D7/F11 projection test models an account for which the
+        # authoritative provider already confirms the current D12 notice.
+        # The production/default adapter remains PENDING and the bundled
+        # account fixture remains acknowledgement_required=true.
+        perp_page.add_init_script("""(()=>{
+          let realProvider=null;
+          Object.defineProperty(globalThis,'LoopHyperliquidAccount',{configurable:false,
+            set(value){realProvider=value},get(){
+              if(!realProvider)return undefined;
+              return Object.freeze({
+                createOfflineReadOnlyAdapter:realProvider.createOfflineReadOnlyAdapter,
+                createPendingProductionAdapter:realProvider.createPendingProductionAdapter,
+                captureAdapter(adapter){
+                  const captured=realProvider.captureAdapter(adapter);
+                  if(!captured)return null;
+                  return Object.freeze({...captured,getRiskNotice(request){
+                    const honest=captured.getRiskNotice(request);
+                    if(honest?.ok!==true)return honest;
+                    return Object.freeze({...honest,value:Object.freeze({...honest.value,
+                      acknowledgement_required:false})});
+                  }});
+                }
+              });
+            }});
+        })()""")
         perp_page.goto(f'{APP.as_uri()}#perp-confirm')
         perp_page.wait_for_timeout(80)
         direct_perp = perp_page.evaluate("""() => ({opened:openPerpSharedReview(
@@ -8640,9 +8669,9 @@ task8_schedule = (ROOT / '文档' / '开发进度安排.md').read_text()
 task8_findings = (ROOT / 'findings.md').read_text()
 task8_docs = '\n'.join((task8_readme, task8_inventory,
                          task8_schedule, task8_findings))
-check('37 个 routed screen fragments' in task8_readme and
-      '37-screen' in task8_findings,
-      'Current docs report the generated 37-screen platform + Perp milestone')
+check('42 个 routed screen fragments' in task8_readme and
+      '42-screen' in task8_findings,
+      'Current docs report the generated 42-screen platform + Perp milestone')
 check('_tmp/verify_wallet_foundation.py' in task8_readme and
       'src/scripts-order.txt' in task8_readme and
       'src/vendor/vendor-lock.json' in task8_readme,

@@ -1,0 +1,22 @@
+      <section class="scr platform-screen perp-screen perp-account-screen" id="scr-perp-account">
+        <div class="pad">
+          <button class="back perp-account-touch" type="button" onclick="back()" aria-label="Back to Perp markets">‹ Markets</button>
+          <div class="perp-heading"><div><p class="eyebrow">Hyperliquid account</p><h1 class="h1">Margin account</h1></div><span class="risk-pill risk-med">Read-only</span></div>
+          <p class="perp-simulation-label" data-perp-account-provider-status>Margin account unavailable — adapter PENDING.</p>
+          <div class="perp-account-summary card" data-perp-account-provider-fact hidden></div>
+          <dl class="perp-stat-list card perp-account-facts">
+            <div><dt>Available margin</dt><dd data-perp-account-available data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Used margin</dt><dd data-perp-account-used data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Maintenance margin</dt><dd data-perp-account-maintenance data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Maintenance margin ratio</dt><dd data-perp-account-ratio data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Risk state</dt><dd data-perp-account-risk data-perp-account-provider-fact hidden></dd></div>
+            <div><dt>Freshness</dt><dd data-perp-account-freshness data-perp-account-provider-fact hidden></dd></div>
+          </dl>
+          <div class="perp-account-actions">
+            <button class="btn btn-ghost perp-account-touch" data-perp-account-provider-action type="button" onclick="openPerpTransfer()" disabled>Spot ↔ Perp transfer</button>
+            <button class="btn btn-ghost perp-account-touch" data-perp-account-provider-action type="button" onclick="openPerpDeposit()" disabled>Deposit / withdraw</button>
+            <button class="btn btn-ghost perp-account-touch" data-perp-account-provider-action type="button" onclick="openPerpRiskNotice()" disabled>Risk notice</button>
+          </div>
+          <p class="perp-policy-note">Independent production recomputation and credentialed provider comparison remain PENDING. No local ledger is maintained.</p>
+        </div>
+      </section>

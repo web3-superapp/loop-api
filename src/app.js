@@ -43,6 +43,24 @@ const perpReadAdapter=(()=>{
 })();
 const perpViewState={coin:'ETH',positionId:'',intent:null,intentDeadlineMs:0};
 let perpFreshnessTimer=null;
+const perpAccountAdapter=(()=>{
+  try{
+    const provider=globalThis.LoopHyperliquidAccount;
+    const fixture=globalThis.LoopHyperliquidAccountOfflineFixture;
+    if(!provider||!fixture||!Object.isFrozen(provider)||!Object.isFrozen(fixture)||
+       typeof provider.captureAdapter!=='function'||
+       typeof provider.createPendingProductionAdapter!=='function'||
+       typeof fixture.create!=='function'||fixture.mode!=='offline_readonly'||
+       fixture.label!==
+        'Simulated Hyperliquid account fixture — read-only, no network, signing, or submission')return null;
+    return provider.captureAdapter(fixture.create())||
+      provider.captureAdapter(provider.createPendingProductionAdapter());
+  }catch(_error){return null}
+})();
+const PERP_ACCOUNT_REQUEST=Object.freeze({account_ref:'fixture-account-1',asset:'USDC',
+  network:'arbitrum',coin:'ETH',notice_id:'core-perp-risk'});
+const perpAccountViewState={intent:null,intentDeadlineMs:0,contexts:Object.create(null)};
+let perpAccountFreshnessTimer=null;
 
 /* ---------- app state (single source of truth) ---------- */
 const REGIONAL_BLOCKED_SESSION_KEY='loop.prototype.regional-blocked.v1';
@@ -118,6 +136,11 @@ const ROUTES = {
   'perp-positions':{screen:'scr-perp-positions',stack:['scr-market','scr-perp-markets','scr-perp-positions']},
   'perp-orders':{screen:'scr-perp-orders',stack:['scr-market','scr-perp-markets','scr-perp-orders']},
   'perp-position':{screen:'scr-perp-position',stack:['scr-market','scr-perp-markets','scr-perp-positions','scr-perp-position']},
+  'perp-account':{screen:'scr-perp-account',stack:['scr-market','scr-perp-markets','scr-perp-account']},
+  'perp-transfer':{screen:'scr-perp-transfer',stack:['scr-market','scr-perp-markets','scr-perp-account','scr-perp-transfer']},
+  'perp-deposit':{screen:'scr-perp-deposit',stack:['scr-market','scr-perp-markets','scr-perp-account','scr-perp-deposit']},
+  'perp-funding':{screen:'scr-perp-funding',stack:['scr-market','scr-perp-markets','scr-perp-funding']},
+  'perp-risk-notice':{screen:'scr-perp-risk-notice',stack:['scr-market','scr-perp-markets','scr-perp-account','scr-perp-risk-notice']},
   launchpad:{screen:'scr-launchpad',stack:['scr-launchpad'],root:true},
   chat:{screen:'scr-chat',stack:['scr-chat'],root:true},
   wallet:{screen:'scr-wallet',stack:['scr-wallet'],root:true},
@@ -1536,6 +1559,7 @@ function render(){
   renderOnboardingFlags();
   renderPlatformScreen(cur);
   renderPerpScreen(cur);
+  renderPerpAccountScreen(cur);
   renderWalletFoundation(cur);
   applyRegionalCapabilityGates();
 }
@@ -3497,6 +3521,14 @@ function perpNumber(value,min,max,{integer=false}={}){
   return Number.isFinite(parsed)&&!Object.is(parsed,-0)&&parsed>=min&&parsed<=max&&
     (!integer||Number.isInteger(parsed))?value:null;
 }
+function perpUsdcUnits(value,{positive=false}={}){
+  if(typeof value!=='string'||
+     !/^(?:0|[1-9]\d{0,15})(?:\.\d{1,6})?$/.test(value))return null;
+  const [whole,fraction='']=value.split('.');
+  const units=BigInt(whole)*1000000n+BigInt((fraction+'000000').slice(0,6));
+  if(units>1000000000000000000000n||(positive&&units===0n))return null;
+  return units;
+}
 function perpCoreCoin(value){return ['BTC','ETH','SOL'].includes(value)?value:null}
 const PERP_MARKET_KEYS=Object.freeze(['coin','display_name','mark_px','change_24h',
   'volume_24h','funding','open_interest','best_bid','best_ask','freshness_ms',
@@ -3885,6 +3917,15 @@ function openPerpOrder(){
   navigate(ROUTES['perp-order'].stack.slice());
 }
 function openPerpConfirmation(){
+  const riskRequired=perpRiskAcknowledgementRequired();
+  if(riskRequired!==false){
+    perpViewState.intent=null;perpViewState.intentDeadlineMs=0;
+    setPerpStatus('scr-perp-order',riskRequired===true?
+      'First-use risk acknowledgement is required before order confirmation.':
+      'Risk acknowledgement status unavailable — order review blocked.');
+    if(riskRequired===true)navigate(ROUTES['perp-risk-notice'].stack.slice());
+    return false;
+  }
   const size=document.getElementById('perp-order-size')?.value||'';
   const leverage=document.getElementById('perp-leverage')?.value||'';
   const result=perpSnapshot('prepareOrderIntent',{
@@ -3969,6 +4010,492 @@ function openPerpCloseConfirmation(){
   status?.focus({preventScroll:true});
   return false;
 }
+
+/* ---------- D8-D12: Hyperliquid account-side presentation ---------- */
+const PERP_ACCOUNT_MAX_AGE_MS=2000;
+const PERP_ACCOUNT_LABEL=
+  'Simulated Hyperliquid account fixture — read-only, no network, signing, or submission';
+const PERP_ACCOUNT_PENDING_MESSAGE=
+  'Account action unavailable until Hyperliquid credentials, eligibility evidence, and the Privy signer handoff are approved.';
+const PERP_ACCOUNT_RECHECKS=Object.freeze([
+  'region','eligibility','policy','nonce','unknown submission'
+]);
+const PERP_ACCOUNT_INTENT_KEYS=Object.freeze(['kind','account_ref','asset','coin','network',
+  'direction','amount','notice_id','notice_revision','accepted','context_revision',
+  'intent_revision']);
+let perpAccountReadFailure='unavailable';
+function clearPerpAccountTimer(){
+  if(perpAccountFreshnessTimer!==null){
+    clearTimeout(perpAccountFreshnessTimer);perpAccountFreshnessTimer=null;
+  }
+}
+function schedulePerpAccountFreshness(ageMs){
+  clearPerpAccountTimer();
+  const delay=Math.max(0,PERP_ACCOUNT_MAX_AGE_MS-ageMs+1);
+  perpAccountFreshnessTimer=setTimeout(()=>{
+    perpAccountFreshnessTimer=null;render();
+  },delay);
+}
+function resetPerpAccountProjection(screen){
+  const host=document.getElementById(screen);
+  if(!host)return;
+  host.querySelectorAll('[data-perp-account-provider-fact]').forEach(node=>{
+    node.textContent='';node.hidden=true;
+  });
+  host.querySelectorAll('[data-perp-account-provider-action]').forEach(node=>{
+    node.disabled=true;
+  });
+  ['perp-funding-history','perp-risk-sections'].forEach(id=>
+    host.querySelector('#'+id)?.replaceChildren());
+}
+function setPerpAccountStatus(screen,message){
+  const node=document.querySelector('#'+screen+' [data-perp-account-provider-status]');
+  if(node)node.textContent=message;
+}
+function setPerpAccountActionStatus(screen,message){
+  const node=document.querySelector('#'+screen+' [data-perp-account-action-status]');
+  if(node)node.textContent=message;
+}
+function showPerpAccountFact(selector,value){
+  const node=document.querySelector(selector);
+  if(node){node.textContent=value;node.hidden=false}
+}
+function enablePerpAccountActions(screen){
+  document.querySelectorAll('#'+screen+' [data-perp-account-provider-action]')
+    .forEach(node=>{node.disabled=false});
+}
+function perpAccountUnavailableMessage(subject){
+  return perpAccountReadFailure==='stale'?`Hyperliquid ${subject} stale — facts cleared and actions blocked.`:
+    perpAccountReadFailure==='malformed'?`Hyperliquid ${subject} malformed — facts cleared and actions blocked.`:
+    `Hyperliquid ${subject} unavailable — adapter PENDING.`;
+}
+function projectPerpAccount(value){
+  const row=projectPerpRecord(value,['account_ref','equity','available_margin','used_margin',
+    'maintenance_margin','maintenance_margin_ratio','risk_level','freshness_ms','source_revision']);
+  if(!row||!perpToken(row.account_ref)||!perpNumber(row.equity,0,1e15)||
+     !perpNumber(row.available_margin,0,1e15)||!perpNumber(row.used_margin,0,1e15)||
+     !perpNumber(row.maintenance_margin,0,1e15)||
+     !perpNumber(row.maintenance_margin_ratio,0,100)||
+     !['healthy','elevated','near_liquidation'].includes(row.risk_level)||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_ACCOUNT_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpTransferContext(value){
+  const row=projectPerpRecord(value,['account_ref','asset','spot_available','perp_available',
+    'minimum_amount','arrival_label','failure_policy','freshness_ms','source_revision']);
+  if(!row||!perpToken(row.account_ref)||row.asset!=='USDC'||
+     perpUsdcUnits(row.spot_available)===null||perpUsdcUnits(row.perp_available)===null||
+     perpUsdcUnits(row.minimum_amount,{positive:true})===null||
+     row.arrival_label!=='Provider-confirmed after official account transfer'||
+     row.failure_policy!=='No local balance mutation; reconcile official account state'||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_ACCOUNT_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpBridgeContext(value){
+  const row=projectPerpRecord(value,['account_ref','asset','network','deposit_minimum',
+    'withdraw_minimum','arrival_label','bridge_authority','freshness_ms','source_revision']);
+  if(!row||!perpToken(row.account_ref)||row.asset!=='USDC'||row.network!=='arbitrum'||
+     perpUsdcUnits(row.deposit_minimum,{positive:true})===null||
+     perpUsdcUnits(row.withdraw_minimum,{positive:true})===null||
+     row.arrival_label!=='Provider-confirmed after official bridge finality'||
+     row.bridge_authority!=='hyperliquid_official_bridge'||
+     !Number.isInteger(row.freshness_ms)||row.freshness_ms<0||
+     row.freshness_ms>PERP_ACCOUNT_MAX_AGE_MS||!perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpFundingRow(value,coin){
+  const row=projectPerpRecord(value,['id','coin','settled_at_ms','rate','payment','plot_y',
+    'source_revision']);
+  if(!row||!perpToken(row.id)||!perpCoreCoin(row.coin)||row.coin!==coin||
+     !Number.isSafeInteger(row.settled_at_ms)||row.settled_at_ms<0||
+     !perpNumber(row.rate,-1,1)||!perpNumber(row.payment,-1e15,1e15)||
+     !Number.isInteger(row.plot_y)||row.plot_y<0||row.plot_y>100||
+     !perpToken(row.source_revision))return null;
+  return Object.freeze({...row});
+}
+function projectPerpFundingSnapshot(value){
+  const row=projectPerpRecord(value,['coin','current_rate','next_settlement_in_ms','history',
+    'freshness_ms','source_revision']);
+  if(!row||!perpCoreCoin(row.coin)||!perpNumber(row.current_rate,-1,1)||
+     !Number.isInteger(row.next_settlement_in_ms)||row.next_settlement_in_ms<0||
+     row.next_settlement_in_ms>28800000||!Number.isInteger(row.freshness_ms)||
+     row.freshness_ms<0||row.freshness_ms>PERP_ACCOUNT_MAX_AGE_MS||
+     !perpToken(row.source_revision))return null;
+  const history=projectPerpArray(row.history,16)?.map(item=>projectPerpFundingRow(item,row.coin));
+  if(!history||history.some(item=>!item)||
+     new Set(history.map(item=>item.id)).size!==history.length)return null;
+  return Object.freeze({...row,history:Object.freeze(history)});
+}
+const PERP_RISK_COPY=Object.freeze([
+  Object.freeze({id:'leverage',heading:'Leverage amplifies loss',
+    body:'Losses can accelerate as leverage increases. A small market move can consume posted margin.'}),
+  Object.freeze({id:'liquidation',heading:'Liquidation is provider controlled',
+    body:'Hyperliquid may liquidate a position when maintenance requirements are not met.'}),
+  Object.freeze({id:'funding',heading:'Funding changes over time',
+    body:'Funding payments can increase the cost of holding a position and are not fixed.'})
+]);
+function projectPerpRiskNotice(value){
+  const row=projectPerpRecord(value,['account_ref','notice_id','revision','title','sections',
+    'acknowledgement_required','freshness_ms','source_revision']);
+  if(!row||!perpToken(row.account_ref)||row.notice_id!=='core-perp-risk'||
+     row.revision!=='risk-notice-2026-08'||
+     row.title!=='Core perpetual leverage and liquidation risk'||
+     typeof row.acknowledgement_required!=='boolean'||!Number.isInteger(row.freshness_ms)||
+     row.freshness_ms<0||row.freshness_ms>PERP_ACCOUNT_MAX_AGE_MS||
+     !perpToken(row.source_revision))return null;
+  const sections=projectPerpArray(row.sections,8);
+  if(!sections||sections.length!==PERP_RISK_COPY.length)return null;
+  const projected=sections.map((value,index)=>{
+    const item=projectPerpRecord(value,['id','heading','body']),expected=PERP_RISK_COPY[index];
+    return item&&item.id===expected.id&&item.heading===expected.heading&&
+      item.body===expected.body?expected:null;
+  });
+  if(projected.some(item=>!item))return null;
+  return Object.freeze({...row,sections:Object.freeze(projected)});
+}
+function projectPerpAccountIntent(value){
+  const intent=projectPerpRecord(value,PERP_ACCOUNT_INTENT_KEYS);
+  if(!intent||!['usd_class_transfer','bridge_deposit','bridge_withdraw',
+     'risk_acknowledgement'].includes(intent.kind)||!perpToken(intent.account_ref)||
+     !perpToken(intent.context_revision)||!perpToken(intent.intent_revision))return null;
+  if(intent.kind==='usd_class_transfer'){
+    if(intent.asset!=='USDC'||intent.coin!==null||intent.network!=='hyperliquid'||
+       !['spot_to_perp','perp_to_spot'].includes(intent.direction)||
+       perpUsdcUnits(intent.amount,{positive:true})===null||intent.notice_id!==null||
+       intent.notice_revision!==null||intent.accepted!==null)return null;
+  }else if(intent.kind==='bridge_deposit'||intent.kind==='bridge_withdraw'){
+    if(intent.asset!=='USDC'||intent.coin!==null||intent.network!=='arbitrum'||
+       intent.direction!==null||perpUsdcUnits(intent.amount,{positive:true})===null||
+       intent.notice_id!==null||intent.notice_revision!==null||intent.accepted!==null)return null;
+  }else if(intent.asset!==null||intent.coin!==null||intent.network!==null||
+           intent.direction!==null||intent.amount!==null||intent.notice_id!=='core-perp-risk'||
+           intent.notice_revision!=='risk-notice-2026-08'||intent.accepted!==true)return null;
+  return Object.freeze({...intent});
+}
+function projectPerpAccountAdapterRequest(method,value){
+  try{
+    let request=null;
+    if(method==='getMarginAccountSnapshot'){
+      request=projectPerpRecord(value,['account_ref']);
+      if(!request||!perpToken(request.account_ref))return null;
+    }else if(method==='getTransferContext'){
+      request=projectPerpRecord(value,['account_ref','asset']);
+      if(!request||!perpToken(request.account_ref)||request.asset!=='USDC')return null;
+    }else if(method==='getBridgeContext'){
+      request=projectPerpRecord(value,['account_ref','asset','network']);
+      if(!request||!perpToken(request.account_ref)||request.asset!=='USDC'||
+         request.network!=='arbitrum')return null;
+    }else if(method==='getFundingSnapshot'){
+      request=projectPerpRecord(value,['coin']);
+      if(!request||!perpCoreCoin(request.coin))return null;
+    }else if(method==='getRiskNotice'){
+      request=projectPerpRecord(value,['account_ref','notice_id']);
+      if(!request||!perpToken(request.account_ref)||request.notice_id!=='core-perp-risk')return null;
+    }else if(method==='prepareAccountIntent'){
+      request=projectPerpRecord(value,['kind','account_ref','asset','coin','network','direction',
+        'amount','notice_id','notice_revision','accepted','context_revision']);
+      const placeholder=request?projectPerpAccountIntent({...request,
+        intent_revision:'request-validation-placeholder'}):null;
+      if(!placeholder)return null;
+    }else if(method==='prepareMutationReview'){
+      return projectPerpAccountIntent(value);
+    }
+    return request?Object.freeze({...request}):null;
+  }catch(_error){return null}
+}
+function projectPerpAccountAdapterValue(method,value,request){
+  try{
+    let projected=null;
+    if(method==='getMarginAccountSnapshot'){
+      projected=projectPerpAccount(value);
+      if(!projected||projected.account_ref!==request.account_ref)return null;
+    }else if(method==='getTransferContext'){
+      projected=projectPerpTransferContext(value);
+      if(!projected||projected.account_ref!==request.account_ref||
+         projected.asset!==request.asset)return null;
+    }else if(method==='getBridgeContext'){
+      projected=projectPerpBridgeContext(value);
+      if(!projected||projected.account_ref!==request.account_ref||
+         projected.asset!==request.asset||projected.network!==request.network)return null;
+    }else if(method==='getFundingSnapshot'){
+      projected=projectPerpFundingSnapshot(value);
+      if(!projected||projected.coin!==request.coin)return null;
+    }else if(method==='getRiskNotice'){
+      projected=projectPerpRiskNotice(value);
+      if(!projected||projected.account_ref!==request.account_ref||
+         projected.notice_id!==request.notice_id)return null;
+    }else if(method==='prepareAccountIntent'){
+      projected=projectPerpAccountIntent(value);
+      const keys=['kind','account_ref','asset','coin','network','direction','amount','notice_id',
+        'notice_revision','accepted','context_revision'];
+      if(!projected||keys.some(key=>projected[key]!==request[key]))return null;
+    }
+    return projected;
+  }catch(_error){return null}
+}
+function projectPerpAccountMeta(value){
+  const meta=projectPerpRecord(value,['source','mode','network','label','fetched_at_ms',
+    'age_ms','stale','partial']);
+  const now=performance.now();
+  const elapsed=Number.isFinite(meta?.fetched_at_ms)?
+    Math.max(0,Math.floor(now-meta.fetched_at_ms)):Number.POSITIVE_INFINITY;
+  if(!meta||meta.source!=='hyperliquid_account_offline_fixture'||
+     meta.mode!=='offline_readonly'||meta.network!=='testnet'||
+     meta.label!==PERP_ACCOUNT_LABEL||!Number.isFinite(meta.fetched_at_ms)||
+     meta.fetched_at_ms<0||meta.fetched_at_ms>now||!Number.isInteger(meta.age_ms)||
+     meta.age_ms<elapsed||meta.age_ms<0||
+     meta.age_ms>PERP_ACCOUNT_MAX_AGE_MS||meta.stale!==false||meta.partial!==false)return null;
+  return Object.freeze({...meta});
+}
+function projectPerpAccountMutationDecision(value,expected){
+  try{
+    const envelope=projectPerpRecord(value,['ok','binding','error']);
+    const binding=envelope?.ok===false?projectPerpAccountIntent(envelope.binding):null;
+    const error=envelope?.ok===false?projectPerpRecord(envelope.error,
+      ['code','retryable','safe_message','rechecks']):null;
+    const rechecks=error?projectPerpArray(error.rechecks,5):null;
+    if(!binding||!expected||PERP_ACCOUNT_INTENT_KEYS.some(key=>binding[key]!==expected[key])||
+       !error||error.code!=='PENDING_default_deny'||error.retryable!==false||
+       error.safe_message!==PERP_ACCOUNT_PENDING_MESSAGE||!rechecks||
+       rechecks.length!==PERP_ACCOUNT_RECHECKS.length||
+       rechecks.some((item,index)=>item!==PERP_ACCOUNT_RECHECKS[index]))return null;
+    return Object.freeze({ok:false,binding,error:Object.freeze({
+      code:'PENDING_default_deny',retryable:false,
+      safe_message:PERP_ACCOUNT_PENDING_MESSAGE,
+      rechecks:Object.freeze([...PERP_ACCOUNT_RECHECKS])
+    })});
+  }catch(_error){return null}
+}
+function perpAccountSnapshot(method,request){
+  try{
+    if(!perpAccountAdapter||typeof perpAccountAdapter[method]!=='function')return null;
+    const canonicalRequest=projectPerpAccountAdapterRequest(method,request);
+    if(!canonicalRequest){clearPerpAccountTimer();perpAccountReadFailure='malformed';return null}
+    const raw=perpAccountAdapter[method](canonicalRequest);
+    const envelope=projectPerpRecord(raw,['ok','value','meta']);
+    const rawMeta=envelope?.ok===true?projectPerpRecord(envelope.meta,
+      ['source','mode','network','label','fetched_at_ms','age_ms','stale','partial']):null;
+    const meta=envelope?.ok===true?projectPerpAccountMeta(envelope.meta):null;
+    if(!meta){clearPerpAccountTimer();
+      perpAccountReadFailure=rawMeta?.stale===true?'stale':'unavailable';return null}
+    const projected=projectPerpAccountAdapterValue(method,envelope.value,canonicalRequest);
+    if(!projected||(Number.isInteger(projected.freshness_ms)&&
+       meta.age_ms<projected.freshness_ms)){
+      clearPerpAccountTimer();perpAccountReadFailure='malformed';return null}
+    perpAccountReadFailure='';schedulePerpAccountFreshness(meta.age_ms);
+    return Object.freeze({ok:true,value:projected,meta});
+  }catch(_error){clearPerpAccountTimer();perpAccountReadFailure='unavailable';return null}
+}
+function renderPerpAccount(){
+  resetPerpAccountProjection('scr-perp-account');
+  const result=perpAccountSnapshot('getMarginAccountSnapshot',{
+    account_ref:PERP_ACCOUNT_REQUEST.account_ref
+  });
+  if(!result){setPerpAccountStatus('scr-perp-account',
+    perpAccountUnavailableMessage('margin account'));return}
+  const account=result.value;perpAccountViewState.contexts.account=account;
+  setPerpAccountStatus('scr-perp-account',result.meta.label);
+  const hero=document.querySelector('#scr-perp-account .perp-account-summary');
+  if(hero){const label=document.createElement('span'),strong=document.createElement('strong'),
+    small=document.createElement('small');label.textContent='Account equity';
+    strong.textContent=formatPerpMoney(account.equity);
+    small.textContent='Provider source · '+account.source_revision;
+    hero.append(label,strong,small);hero.hidden=false}
+  showPerpAccountFact('[data-perp-account-available]',formatPerpMoney(account.available_margin));
+  showPerpAccountFact('[data-perp-account-used]',formatPerpMoney(account.used_margin));
+  showPerpAccountFact('[data-perp-account-maintenance]',formatPerpMoney(account.maintenance_margin));
+  showPerpAccountFact('[data-perp-account-ratio]',formatPerpDecimal(account.maintenance_margin_ratio)+'%');
+  showPerpAccountFact('[data-perp-account-risk]',account.risk_level.replace('_',' '));
+  showPerpAccountFact('[data-perp-account-freshness]',result.meta.age_ms+' ms');
+  enablePerpAccountActions('scr-perp-account');
+}
+function renderPerpTransfer(){
+  resetPerpAccountProjection('scr-perp-transfer');invalidatePerpAccountIntent();
+  const result=perpAccountSnapshot('getTransferContext',{
+    account_ref:PERP_ACCOUNT_REQUEST.account_ref,asset:PERP_ACCOUNT_REQUEST.asset
+  });
+  if(!result){setPerpAccountStatus('scr-perp-transfer',
+    perpAccountUnavailableMessage('transfer context'));return}
+  const context=result.value;perpAccountViewState.contexts.transfer=context;
+  setPerpAccountStatus('scr-perp-transfer',result.meta.label);
+  showPerpAccountFact('[data-perp-transfer-spot]',formatPerpMoney(context.spot_available));
+  showPerpAccountFact('[data-perp-transfer-perp]',formatPerpMoney(context.perp_available));
+  showPerpAccountFact('[data-perp-transfer-minimum]',context.minimum_amount+' '+context.asset);
+  showPerpAccountFact('[data-perp-transfer-arrival]',context.arrival_label);
+  enablePerpAccountActions('scr-perp-transfer');
+}
+function renderPerpDeposit(){
+  resetPerpAccountProjection('scr-perp-deposit');invalidatePerpAccountIntent();
+  const result=perpAccountSnapshot('getBridgeContext',{
+    account_ref:PERP_ACCOUNT_REQUEST.account_ref,asset:PERP_ACCOUNT_REQUEST.asset,
+    network:PERP_ACCOUNT_REQUEST.network
+  });
+  if(!result){setPerpAccountStatus('scr-perp-deposit',
+    perpAccountUnavailableMessage('official bridge context'));return}
+  const context=result.value;perpAccountViewState.contexts.bridge=context;
+  setPerpAccountStatus('scr-perp-deposit',result.meta.label);
+  showPerpAccountFact('[data-perp-bridge-network]','Arbitrum · '+context.asset);
+  showPerpAccountFact('[data-perp-bridge-deposit-min]',context.deposit_minimum+' '+context.asset);
+  showPerpAccountFact('[data-perp-bridge-withdraw-min]',context.withdraw_minimum+' '+context.asset);
+  showPerpAccountFact('[data-perp-bridge-arrival]',context.arrival_label);
+  enablePerpAccountActions('scr-perp-deposit');
+}
+function renderPerpFunding(){
+  resetPerpAccountProjection('scr-perp-funding');
+  const result=perpAccountSnapshot('getFundingSnapshot',{coin:PERP_ACCOUNT_REQUEST.coin});
+  if(!result){setPerpAccountStatus('scr-perp-funding',
+    perpAccountUnavailableMessage('funding history'));return}
+  const funding=result.value;perpAccountViewState.contexts.funding=funding;
+  setPerpAccountStatus('scr-perp-funding',result.meta.label);
+  showPerpAccountFact('[data-perp-funding-current]',formatPerpDecimal(funding.current_rate)+' / 8h');
+  showPerpAccountFact('[data-perp-funding-countdown]',
+    Math.ceil(funding.next_settlement_in_ms/60000)+' min');
+  const curve=document.getElementById('perp-funding-curve');
+  if(curve){funding.history.slice().reverse().forEach(item=>{
+    const bar=document.createElement('span');bar.style.setProperty('--funding-y',item.plot_y+'%');
+    bar.setAttribute('aria-hidden','true');curve.append(bar);
+  });curve.hidden=false}
+  const history=document.getElementById('perp-funding-history');
+  funding.history.forEach(item=>{
+    const article=document.createElement('article');article.className='perp-funding-row card';
+    article.setAttribute('data-perp-account-provider-fact','');
+    const time=document.createElement('time'),rate=document.createElement('b'),payment=document.createElement('span');
+    time.dateTime=new Date(item.settled_at_ms).toISOString();
+    time.textContent=new Date(item.settled_at_ms).toLocaleString([],{
+      month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    rate.textContent=formatPerpDecimal(item.rate)+' / 8h';
+    payment.textContent=formatPerpMoney(item.payment);article.append(time,rate,payment);
+    history?.append(article);
+  });
+  showPerpAccountFact('[data-perp-funding-freshness]',
+    'Snapshot age '+result.meta.age_ms+' ms · '+funding.source_revision);
+}
+function renderPerpRiskNotice(){
+  resetPerpAccountProjection('scr-perp-risk-notice');invalidatePerpAccountIntent();
+  const result=perpAccountSnapshot('getRiskNotice',{
+    account_ref:PERP_ACCOUNT_REQUEST.account_ref,notice_id:PERP_ACCOUNT_REQUEST.notice_id
+  });
+  if(!result){setPerpAccountStatus('scr-perp-risk-notice',
+    perpAccountUnavailableMessage('risk notice'));return}
+  const notice=result.value;perpAccountViewState.contexts.risk=notice;
+  setPerpAccountStatus('scr-perp-risk-notice',result.meta.label);
+  showPerpAccountFact('[data-perp-risk-title]',notice.title);
+  const host=document.getElementById('perp-risk-sections');
+  notice.sections.forEach(item=>{
+    const article=document.createElement('article');article.className='perp-risk-section card';
+    article.setAttribute('data-perp-account-provider-fact','');
+    const heading=document.createElement('h3'),body=document.createElement('p');
+    heading.textContent=item.heading;body.textContent=item.body;article.append(heading,body);
+    host?.append(article);
+  });
+  if(notice.acknowledgement_required)enablePerpAccountActions('scr-perp-risk-notice');
+  const ack=document.getElementById('perp-risk-ack'),review=document.getElementById('perp-risk-review');
+  if(ack){ack.checked=false;ack.disabled=!notice.acknowledgement_required}
+  if(review)review.disabled=true;
+  if(!notice.acknowledgement_required)setPerpAccountActionStatus('scr-perp-risk-notice',
+    'Provider confirms this account already completed the current risk acknowledgement.');
+}
+function renderPerpAccountScreen(screen){
+  const accountScreens=['scr-perp-account','scr-perp-transfer','scr-perp-deposit',
+    'scr-perp-funding','scr-perp-risk-notice'];
+  const intentOrigins=['scr-perp-transfer','scr-perp-deposit','scr-perp-risk-notice'];
+  if(!intentOrigins.includes(screen))invalidatePerpAccountIntent();
+  if(!accountScreens.includes(screen)){clearPerpAccountTimer();return}
+  if(screen==='scr-perp-account')renderPerpAccount();
+  else if(screen==='scr-perp-transfer')renderPerpTransfer();
+  else if(screen==='scr-perp-deposit')renderPerpDeposit();
+  else if(screen==='scr-perp-funding')renderPerpFunding();
+  else renderPerpRiskNotice();
+}
+function invalidatePerpAccountIntent(){
+  perpAccountViewState.intent=null;perpAccountViewState.intentDeadlineMs=0;
+  const ack=document.getElementById('perp-risk-ack'),review=document.getElementById('perp-risk-review');
+  if(review&&ack)review.disabled=ack.disabled||!ack.checked;
+}
+function currentPerpAccountIntentForReview(){
+  const intent=perpAccountViewState.intent;
+  if(!intent||performance.now()>=perpAccountViewState.intentDeadlineMs){
+    perpAccountViewState.intent=null;perpAccountViewState.intentDeadlineMs=0;return null;
+  }
+  return Object.freeze({...intent});
+}
+function preparePerpAccountDraft(kind){
+  if(kind==='transfer'){
+    const context=perpAccountViewState.contexts.transfer;
+    const direction=document.getElementById('perp-transfer-direction')?.value||'';
+    const amount=document.getElementById('perp-transfer-amount')?.value||'';
+    const available=direction==='spot_to_perp'?context?.spot_available:
+      direction==='perp_to_spot'?context?.perp_available:null;
+    const amountUnits=perpUsdcUnits(amount,{positive:true});
+    const minimumUnits=perpUsdcUnits(context?.minimum_amount,{positive:true});
+    const availableUnits=perpUsdcUnits(available);
+    if(!context||amountUnits===null||minimumUnits===null||availableUnits===null||
+       amountUnits<minimumUnits||amountUnits>availableUnits)return null;
+    return {kind:'usd_class_transfer',account_ref:context.account_ref,asset:context.asset,
+      coin:null,network:'hyperliquid',direction,amount,notice_id:null,
+      notice_revision:null,accepted:null,context_revision:context.source_revision};
+  }
+  if(kind==='bridge'){
+    const context=perpAccountViewState.contexts.bridge;
+    const operation=document.getElementById('perp-deposit-operation')?.value||'';
+    const amount=document.getElementById('perp-deposit-amount')?.value||'';
+    const minimum=operation==='deposit'?context?.deposit_minimum:
+      operation==='withdraw'?context?.withdraw_minimum:null;
+    const amountUnits=perpUsdcUnits(amount,{positive:true});
+    const minimumUnits=perpUsdcUnits(minimum,{positive:true});
+    if(!context||amountUnits===null||minimumUnits===null||amountUnits<minimumUnits)return null;
+    return {kind:operation==='deposit'?'bridge_deposit':'bridge_withdraw',
+      account_ref:context.account_ref,asset:context.asset,coin:null,network:context.network,
+      direction:null,amount,
+      notice_id:null,notice_revision:null,accepted:null,
+      context_revision:context.source_revision};
+  }
+  const notice=perpAccountViewState.contexts.risk;
+  const accepted=document.getElementById('perp-risk-ack')?.checked===true;
+  return notice?.acknowledgement_required===true?
+    {kind:'risk_acknowledgement',account_ref:notice.account_ref,asset:null,
+    coin:null,network:null,direction:null,amount:null,notice_id:notice.notice_id,
+    notice_revision:notice.revision,accepted,context_revision:notice.source_revision}:null;
+}
+function perpRiskAcknowledgementRequired(){
+  const result=perpAccountSnapshot('getRiskNotice',{
+    account_ref:PERP_ACCOUNT_REQUEST.account_ref,notice_id:PERP_ACCOUNT_REQUEST.notice_id
+  });
+  return result?result.value.acknowledgement_required:null;
+}
+function reviewPerpAccountAction(kind,trigger){
+  const screen=kind==='transfer'?'scr-perp-transfer':kind==='bridge'?
+    'scr-perp-deposit':'scr-perp-risk-notice';
+  const draft=preparePerpAccountDraft(kind);
+  const prepared=draft?perpAccountSnapshot('prepareAccountIntent',draft):null;
+  if(!prepared){invalidatePerpAccountIntent();
+    setPerpAccountActionStatus(screen,'The account intent was invalid, changed, or stale. Request blocked.');
+    trigger?.focus({preventScroll:true});return false}
+  perpAccountViewState.intent=prepared.value;
+  perpAccountViewState.intentDeadlineMs=performance.now()+
+    Math.max(0,PERP_ACCOUNT_MAX_AGE_MS-prepared.meta.age_ms);
+  const intent=currentPerpAccountIntentForReview();
+  if(!intent){setPerpAccountActionStatus(screen,'The immutable account intent expired. Request blocked.');return false}
+  let decision=null;
+  try{
+    const request=projectPerpAccountAdapterRequest('prepareMutationReview',intent);
+    const raw=request&&perpAccountAdapter?.prepareMutationReview(request);
+    decision=projectPerpAccountMutationDecision(raw,request);
+  }catch(_error){decision=null}
+  if(!decision){invalidatePerpAccountIntent();
+    setPerpAccountActionStatus(screen,'The Hyperliquid policy decision was unavailable. Request blocked.');
+    return false}
+  setPerpAccountActionStatus(screen,decision.error.safe_message+
+    ' Required rechecks: '+decision.error.rechecks.join(' · ')+'.');
+  return false;
+}
+function openPerpAccount(){navigate(ROUTES['perp-account'].stack.slice())}
+function openPerpTransfer(){navigate(ROUTES['perp-transfer'].stack.slice())}
+function openPerpDeposit(){navigate(ROUTES['perp-deposit'].stack.slice())}
+function openPerpFunding(){navigate(ROUTES['perp-funding'].stack.slice())}
+function openPerpRiskNotice(){navigate(ROUTES['perp-risk-notice'].stack.slice())}
 
 
 /* ---------- market list + sparklines ---------- */
@@ -4588,6 +5115,8 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',event=>{
   clearSensitiveAccountState();
+  invalidatePerpAccountIntent();
+  clearPerpAccountTimer();
   if(!event.persisted){
     accountHistoryProof.clear();
     reviewMarkerProof.clear();
@@ -4602,6 +5131,7 @@ window.addEventListener('pageshow',event=>{
   refreshRegionalBlockedSessionLatch();
   voicePanel.open=false;voicePanel.minimized=false;
   renderVoice();
+  renderPerpAccountScreen(activeScr());
   setupAccountScreen(activeScr());
   focusActiveScreen();
   restoreReviewFromCurrentEntry();

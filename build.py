@@ -43,6 +43,11 @@ EXPECTED_SCREENS = (
     'perp-positions',
     'perp-orders',
     'perp-position',
+    'perp-account',
+    'perp-transfer',
+    'perp-deposit',
+    'perp-funding',
+    'perp-risk-notice',
     'token',
     'launchpad',
     'chat',
@@ -70,6 +75,8 @@ EXPECTED_SCRIPTS = (
     'platform-offline-fixture.js',
     'perp-read-provider.js',
     'perp-offline-fixture.js',
+    'perp-account-provider.js',
+    'perp-account-offline-fixture.js',
     'app.js',
 )
 EXPECTED_VENDOR_LOCK = {
@@ -101,7 +108,7 @@ if any(not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', name) for name in order):
 if len(order) != len(set(order)):
     sys.exit('screens-order.txt contains duplicate entries')
 if order != list(EXPECTED_SCREENS):
-    sys.exit('screens-order.txt must contain the exact pinned 37-screen order')
+    sys.exit('screens-order.txt must contain the exact pinned 42-screen order')
 
 screen_paths = {}
 for name in order:
@@ -141,7 +148,7 @@ def confined_source_file(relative, label, *, require_js=False):
 
 
 if scripts_order != list(EXPECTED_SCRIPTS):
-    sys.exit('scripts-order.txt must contain the exact pinned ten-script order')
+    sys.exit('scripts-order.txt must contain the exact pinned twelve-script order')
 script_paths = {
     name: confined_source_file(name, 'script manifest entry', require_js=True)
     for name in scripts_order

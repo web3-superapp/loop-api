@@ -124,6 +124,8 @@ expected_screen_manifest = [
     'home', 'pay', 'notifications', 'search', 'market',
     'perp-markets', 'perp-market', 'perp-order', 'perp-confirm',
     'perp-positions', 'perp-orders', 'perp-position',
+    'perp-account', 'perp-transfer', 'perp-deposit', 'perp-funding',
+    'perp-risk-notice',
     'token', 'launchpad', 'chat', 'group',
     'wallet', 'asset', 'send', 'send-to', 'send-confirm', 'receive',
     'tx-result', 'swap', 'dapp', 'profile', 'privacy', 'security',
@@ -293,16 +295,17 @@ check(all(result['exit'] != 0 and not result['generated']
       f'Marked bundle/license 拒绝 internal/external symlink：'
       f'{locked_file_symlink_results}')
 
-check(manifest == expected_screen_manifest and len(set(manifest)) == 37,
-      f'生成屏 manifest 是精确 37 个唯一有序项（{len(manifest)}）')
-check('37 个 routed screen fragments' in readme and
-      '37-screen routed manifest' in findings_doc,
-      'README/findings 当前生成口径是 37 屏')
+check(manifest == expected_screen_manifest and len(set(manifest)) == 42,
+      f'生成屏 manifest 是精确 42 个唯一有序项（{len(manifest)}）')
+check('42 个 routed screen fragments' in readme and
+      '42-screen routed manifest' in findings_doc,
+      'README/findings 当前生成口径是 42 屏')
 for name, source in (
         ('README', readme), ('页面清单', inventory), ('开发进度安排', schedule)):
     check(all(term in source for term in (
         'Stream E1–E4 final semantic composition',
         '37 screens / 10 scripts',
+        '42 screens / 12 scripts',
         'Stream Chat/Video',
         'disconnected/unavailable/count 0',
         'RTC/presence',
@@ -473,11 +476,15 @@ stream_final_current_app_hash = \
     'e00bff543b5c5e4dce0b0dcaf5751499b5660f81fee32b9ce5d7f5b29cefaade'
 stream_final_current_docs_hash = \
     '2a02ecb0bd4977608d9d3214fd03dbaaf87eb86bfa0f897599bd268d0f50b20b'
+hyper_account_final_app_hash = \
+    '087531b07fa2eea0b3755a8ea0143eabc7c9a620f0177ebf3f64f2cced8f4cd3'
+hyper_account_final_docs_hash = \
+    '1947b1674216ed66aa640f32563846f348231f805cc0a096e3e3b8ddc8859092'
 hashes_in_findings = re.findall(r'\b[a-f0-9]{64}\b', findings_doc)
 actual_app_hash = sha256(ROOT / 'app.html')
 actual_docs_hash = sha256(PAGE)
-check(actual_app_hash == stream_final_current_app_hash and
-      actual_docs_hash == stream_final_current_docs_hash and
+check(actual_app_hash == hyper_account_final_app_hash and
+      actual_docs_hash == hyper_account_final_docs_hash and
       task1_quality_remediation_app_hash != task1_post_spec_fix_app_hash and
       app_pre_review_hash in findings_doc and
       docs_pre_review_hash in findings_doc and
@@ -502,6 +509,8 @@ check(actual_app_hash == stream_final_current_app_hash and
       hyper_ui_v5_current_docs_hash in findings_doc and
       stream_final_current_app_hash in findings_doc and
       stream_final_current_docs_hash in findings_doc and
+      hyper_account_final_app_hash in findings_doc and
+      hyper_account_final_docs_hash in findings_doc and
       set(hashes_in_findings) >= {
           app_pre_review_hash, docs_pre_review_hash, docs_post_remediation_hash,
           docs_quality_remediation_hash, docs_vendored_marked_hash,
@@ -519,7 +528,9 @@ check(actual_app_hash == stream_final_current_app_hash and
           hyper_ui_v5_current_app_hash,
           hyper_ui_v5_current_docs_hash,
           stream_final_current_app_hash,
-          stream_final_current_docs_hash} and
+          stream_final_current_docs_hash,
+          hyper_account_final_app_hash,
+          hyper_account_final_docs_hash} and
       all(term in findings_doc for term in (
           'Task 8 pre-review deterministic evidence',
           'pre-review evidence, not a final checkpoint',
@@ -555,8 +566,10 @@ check(actual_app_hash == stream_final_current_app_hash and
           'Stream E1–E4 final semantic composition evidence',
           'final Stream semantic composition on the audited Hyperliquid v5 main line',
           'exact production manifest remains 37 screens / 10 scripts',
+          'Hyperliquid D8–D12 post-Stream final candidate evidence',
+          'exact combined manifest is 42 screens / 12 scripts',
           'global goal remains incomplete')),
-      f'历史/Task 1/Stream/Hyper v2/v3/v4/v5 checkpoint SHA-256 已区分，当前 Stream final app/docs hash '
+      f'历史 checkpoint SHA-256 已区分，当前 D8–D12 post-Stream app/docs hash '
       f'与对应记录一致：{actual_app_hash}/{actual_docs_hash}')
 
 body_rows = [

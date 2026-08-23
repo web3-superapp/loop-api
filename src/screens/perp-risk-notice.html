@@ -1,0 +1,16 @@
+      <section class="scr platform-screen perp-screen perp-account-screen" id="scr-perp-risk-notice">
+        <div class="pad">
+          <button class="back perp-account-touch" type="button" onclick="back()" aria-label="Back to margin account">‹ Margin account</button>
+          <div class="perp-heading"><div><p class="eyebrow">Required before activation</p><h1 class="h1">Leverage &amp; risk notice</h1></div><span class="risk-pill risk-med">Blocked</span></div>
+          <p class="perp-simulation-label" data-perp-account-provider-status>Risk notice unavailable — adapter PENDING.</p>
+          <h2 data-perp-risk-title data-perp-account-provider-fact hidden></h2>
+          <div class="perp-risk-sections" id="perp-risk-sections" aria-live="polite"></div>
+          <label class="perp-risk-ack card">
+            <input class="perp-account-touch" id="perp-risk-ack" data-perp-account-provider-action type="checkbox" onchange="invalidatePerpAccountIntent()" disabled>
+            <span>I have read the current notice and understand that leverage, liquidation, and funding can cause loss.</span>
+          </label>
+          <button class="btn btn-primary perp-account-touch" id="perp-risk-review" data-perp-account-provider-action type="button" onclick="reviewPerpAccountAction('risk',this)" disabled>Review acknowledgement</button>
+          <p class="perp-blocked-status" data-perp-account-action-status role="status" aria-live="polite">You must confirm the current notice; unchecked or unavailable acknowledgement never enables trading.</p>
+          <p class="perp-policy-note">Acknowledgement does not prove regional eligibility and cannot bypass the production mutation gate.</p>
+        </div>
+      </section>

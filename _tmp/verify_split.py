@@ -13,6 +13,7 @@ PRODUCTION_SCRIPTS = [
     'wallet-review.js', 'wallet-transfer.js', 'stream-chat-provider.js',
     'platform-provider.js', 'platform-offline-fixture.js',
     'perp-read-provider.js', 'perp-offline-fixture.js',
+    'perp-account-provider.js', 'perp-account-offline-fixture.js',
     'app.js',
 ]
 
@@ -42,7 +43,7 @@ def fresh(pg, h):
 manifest = (ROOT / 'src/scripts-order.txt').read_text().splitlines()
 generated = APP.read_text()
 check(manifest == PRODUCTION_SCRIPTS,
-      f'生产脚本为精确十项顺序: {manifest}')
+      f'生产脚本为精确十二项顺序: {manifest}')
 check(generated.count(
     '/* ============ SCRIPT: stream-chat-provider.js ============ */') == 1,
       '生成物恰好包含一次 Stream 生产适配器')

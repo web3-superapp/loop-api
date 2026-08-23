@@ -25,11 +25,14 @@ SCREENS = (
     "perp-position",
 )
 SCRIPTS = ("perp-read-provider.js", "perp-offline-fixture.js")
+ACCOUNT_SCREENS = ("perp-account", "perp-transfer", "perp-deposit",
+                   "perp-funding", "perp-risk-notice")
+ACCOUNT_SCRIPTS = ("perp-account-provider.js", "perp-account-offline-fixture.js")
 EXPECTED_SCREENS = (
     "splash", "auth", "auth-otp", "auth-wallet", "wallet-create",
     "wallet-backup", "seed-show", "seed-verify", "wallet-import",
     "home", "pay", "notifications", "search", "market",
-    *SCREENS,
+    *SCREENS, *ACCOUNT_SCREENS,
     "token", "launchpad", "chat", "group", "wallet", "asset", "send",
     "send-to", "send-confirm", "receive", "tx-result", "swap", "dapp",
     "profile", "privacy", "security",
@@ -37,7 +40,7 @@ EXPECTED_SCREENS = (
 EXPECTED_SCRIPTS = (
     "vendor/qrcode-generator-1.4.4.js", "wallet-provider.js", "wallet-review.js",
     "wallet-transfer.js", "stream-chat-provider.js", "platform-provider.js",
-    "platform-offline-fixture.js", *SCRIPTS, "app.js",
+    "platform-offline-fixture.js", *SCRIPTS, *ACCOUNT_SCRIPTS, "app.js",
 )
 LABEL = "Simulated Hyperliquid testnet fixture — no network, signing, or submission"
 
@@ -63,14 +66,14 @@ def verify() -> None:
     if len(order) != len(set(order)):
         fail("screen order contains duplicates")
     if tuple(order) != EXPECTED_SCREENS:
-        fail("screen order must equal the exact 37-screen platform + Perp manifest")
+        fail("screen order must equal the exact 42-screen platform + Perp manifest")
     positions = [order.index(name) if name in order else -1 for name in SCREENS]
     if -1 in positions or positions != sorted(positions):
         fail("D1-D7 screens must appear once in route order")
 
     scripts = read("src/scripts-order.txt").splitlines()
     if tuple(scripts) != EXPECTED_SCRIPTS:
-        fail("script order must equal the exact ten-script production manifest")
+        fail("script order must equal the exact twelve-script production manifest")
     if any(script not in scripts for script in SCRIPTS):
         fail("perp provider scripts missing from script order")
     if scripts.index(SCRIPTS[1]) != scripts.index(SCRIPTS[0]) + 1:
@@ -83,8 +86,8 @@ def verify() -> None:
         require(build, rf"['\"]{re.escape(screen)}['\"]", f"build missing {screen}")
     for script in SCRIPTS:
         require(build, rf"['\"]{re.escape(script)}['\"]", f"build missing {script}")
-    require(build, r"exact pinned 37-screen order", "builder must pin 37 screens")
-    require(build, r"exact pinned ten-script order", "builder must pin ten scripts")
+    require(build, r"exact pinned 42-screen order", "builder must pin 42 screens")
+    require(build, r"exact pinned twelve-script order", "builder must pin twelve scripts")
 
     fragments = {name: read(f"src/screens/{name}.html") for name in SCREENS}
     expected_ids = {
@@ -167,7 +170,8 @@ def verify() -> None:
     require(app, r"function renderPerpPosition\(\)", "D7 must consume adapter DTOs")
     require(app, r"perpIntentProvider:currentPerpIntentForReview",
             "F11 must receive the immutable typed Perp intent")
-    require(app, r"meta\.stale!==false", "app must reject stale Perp DTOs")
+    require(app, r"meta\.age_ms>PERP_MAX_AGE_MS\|\|\s*meta\.stale!==false",
+            "app must reject stale Perp DTOs")
     require(app, r"function projectPerpAdapterValue\(method,value,request\)",
             "app missing method-specific nested DTO projection boundary")
     require(app, r"function projectPerpAdapterRequest\(method,value\)",
@@ -176,7 +180,7 @@ def verify() -> None:
             "adapter invocation must use only a canonical projected request")
     require(app, r"const projected=projectPerpAdapterValue\(method,envelope\.value,canonicalRequest\)",
             "UI must consume only a canonical projected adapter value")
-    require(app, r"projected\.coin!==request\.coin",
+    require(app, r"const projected=projectPerpMarket\(value\);\s*if\(!projected\|\|projected\.coin!==request\.coin\)",
             "market response must bind the exact requested Core coin")
     require(app, r"projected\.id!==request\.position_id",
             "position response must bind the exact requested position identity")
@@ -322,8 +326,33 @@ def run_runtime() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
+            def new_page(*, viewport):
+                page = browser.new_page(viewport=viewport)
+                page.add_init_script("""(()=>{
+                  let realProvider=null;
+                  Object.defineProperty(globalThis,'LoopHyperliquidAccount',{configurable:false,
+                    set(value){realProvider=value},get(){
+                      if(!realProvider)return undefined;
+                      return Object.freeze({
+                        createOfflineReadOnlyAdapter:realProvider.createOfflineReadOnlyAdapter,
+                        createPendingProductionAdapter:realProvider.createPendingProductionAdapter,
+                        captureAdapter(adapter){
+                          const captured=realProvider.captureAdapter(adapter);
+                          if(!captured)return null;
+                          return Object.freeze({...captured,getRiskNotice(request){
+                            const honest=captured.getRiskNotice(request);
+                            if(honest?.ok!==true)return honest;
+                            return Object.freeze({...honest,value:Object.freeze({...honest.value,
+                              acknowledgement_required:false})});
+                          }});
+                        }
+                      });
+                    }});
+                })()""")
+                return page
+
             for width, height in ((375, 667), (1440, 900)):
-                page = browser.new_page(viewport={"width": width, "height": height})
+                page = new_page(viewport={"width": width, "height": height})
                 errors: list[str] = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 for route in routes:
@@ -345,7 +374,7 @@ def run_runtime() -> None:
                     if state != {"active": [f"scr-{route}"], "inert": False,
                                  "overflow": False, "undersized": []}:
                         fail(f"runtime layout {width}x{height} #{route}: {state}")
-                review_page = browser.new_page(viewport={"width": width, "height": height})
+                review_page = new_page(viewport={"width": width, "height": height})
                 review_page.on("pageerror", lambda error: errors.append(str(error)))
                 review_page.goto(f"{app_uri}#perp-order")
                 review_page.click("#perp-review-order")
@@ -368,7 +397,7 @@ def run_runtime() -> None:
                     fail(f"runtime page errors {width}x{height}: {errors}")
                 page.close()
 
-            canonical = browser.new_page(viewport={"width": 375, "height": 667})
+            canonical = new_page(viewport={"width": 375, "height": 667})
             canonical.goto(f"{app_uri}#perp-markets")
             canonical_state = canonical.evaluate(
                 """() => {
@@ -405,7 +434,7 @@ def run_runtime() -> None:
                      f"{canonical_state}")
             canonical.close()
 
-            unavailable = browser.new_page(viewport={"width": 375, "height": 667})
+            unavailable = new_page(viewport={"width": 375, "height": 667})
             unavailable.add_init_script(
                 """Object.defineProperty(globalThis,'LoopHyperliquidPerpOfflineFixture',
                 {get(){return undefined},set(_value){},configurable:false})"""
@@ -432,7 +461,7 @@ def run_runtime() -> None:
                 fail(f"provider unavailable page errors: {unavailable_errors}")
             unavailable.close()
 
-            missing = browser.new_page(viewport={"width": 375, "height": 667})
+            missing = new_page(viewport={"width": 375, "height": 667})
             missing.add_init_script(
                 """Object.defineProperty(globalThis,'LoopHyperliquidPerp',
                 {get(){return undefined},set(_value){},configurable:false})"""
@@ -448,7 +477,7 @@ def run_runtime() -> None:
                 fail(f"missing provider must fail closed: {missing_state}")
             missing.close()
 
-            malformed = browser.new_page(viewport={"width": 375, "height": 667})
+            malformed = new_page(viewport={"width": 375, "height": 667})
             malformed.add_init_script(
                 """let realProvider=null;
                 Object.defineProperty(globalThis,'LoopHyperliquidPerp',{configurable:false,
@@ -487,7 +516,7 @@ def run_runtime() -> None:
                 ("perp-order", "prepareOrderIntent", True),
             )
             for route, method, submit_draft in malicious_values:
-                malicious = browser.new_page(viewport={"width": 375, "height": 667})
+                malicious = new_page(viewport={"width": 375, "height": 667})
                 malicious_errors: list[str] = []
                 malicious.on("pageerror", lambda error: malicious_errors.append(str(error)))
                 malicious.add_init_script(
@@ -589,7 +618,7 @@ def run_runtime() -> None:
                 ("perp-order", "prepareOrderIntent", True),
             )
             for route, method, submit_draft in mismatched_responses:
-                mismatch = browser.new_page(viewport={"width": 375, "height": 667})
+                mismatch = new_page(viewport={"width": 375, "height": 667})
                 mismatch_errors: list[str] = []
                 mismatch.on("pageerror", lambda error: mismatch_errors.append(str(error)))
                 mismatch.add_init_script(
@@ -657,7 +686,7 @@ def run_runtime() -> None:
                     fail(f"mismatched {method} response errors: {mismatch_errors}")
                 mismatch.close()
 
-            request_page = browser.new_page(viewport={"width": 375, "height": 667})
+            request_page = new_page(viewport={"width": 375, "height": 667})
             request_page.goto(f"{app_uri}#perp-markets")
             unexpected_request = request_page.evaluate(
                 """() => ({markets:perpSnapshot('getMarketsSnapshot',{coin:'ETH'}),
@@ -668,7 +697,7 @@ def run_runtime() -> None:
                 fail(f"no-request methods must reject injected request identity: {unexpected_request}")
             request_page.close()
 
-            stale = browser.new_page(viewport={"width": 375, "height": 667})
+            stale = new_page(viewport={"width": 375, "height": 667})
             stale.add_init_script(
                 """globalThis.__perpTestNow=0;
                 Object.defineProperty(performance,'now',
@@ -698,7 +727,7 @@ def run_runtime() -> None:
                 "custom_copy",
             )
             for decision_case in mutation_decision_cases:
-                decision_page = browser.new_page(viewport={"width": 375, "height": 667})
+                decision_page = new_page(viewport={"width": 375, "height": 667})
                 decision_errors: list[str] = []
                 decision_page.on("pageerror", lambda error: decision_errors.append(str(error)))
                 decision_page.add_init_script(
@@ -785,7 +814,7 @@ def run_runtime() -> None:
                     fail(f"malicious prepareMutationReview {decision_case} errors: {decision_errors}")
                 decision_page.close()
 
-            intent_page = browser.new_page(viewport={"width": 375, "height": 667})
+            intent_page = new_page(viewport={"width": 375, "height": 667})
             intent_errors: list[str] = []
             intent_page.on("pageerror", lambda error: intent_errors.append(str(error)))
             intent_page.goto(f"{eligible_uri}#perp-order")
