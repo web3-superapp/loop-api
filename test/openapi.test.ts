@@ -64,6 +64,38 @@ describe("committed OpenAPI artifact", () => {
       document.paths[
         "/v1/perp/agent-authorizations/{authorization_id}/signatures"
       ]?.["post"];
+    const transferOperations = [
+      [
+        document.paths["/v1/transfer/assets"]?.["get"],
+        "listTransferAssets",
+        false,
+      ],
+      [
+        document.paths["/v1/transfer/recipient-preflight"]?.["post"],
+        "runTransferRecipientPreflight",
+        true,
+      ],
+      [
+        document.paths["/v1/transfer/reviews"]?.["post"],
+        "prepareTransferReview",
+        true,
+      ],
+      [
+        document.paths["/v1/transfer/authorize"]?.["post"],
+        "authorizeTransfer",
+        true,
+      ],
+      [
+        document.paths["/v1/transfer/current-result"]?.["get"],
+        "getCurrentTransferResult",
+        false,
+      ],
+      [
+        document.paths["/v1/transfer/reconciliation"]?.["get"],
+        "getTransferReconciliation",
+        false,
+      ],
+    ] as const;
     const perpReads = [
       [document.paths["/v1/perp/config"]?.["get"], "getPerpConfig"],
       [document.paths["/v1/perp/account"]?.["get"], "getPerpAccount"],
@@ -94,6 +126,12 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/intents/{intent_id}/submit",
       "/v1/perp/orders",
       "/v1/perp/positions",
+      "/v1/transfer/assets",
+      "/v1/transfer/authorize",
+      "/v1/transfer/current-result",
+      "/v1/transfer/recipient-preflight",
+      "/v1/transfer/reconciliation",
+      "/v1/transfer/reviews",
       "/v1/video/token",
     ]);
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
@@ -243,5 +281,61 @@ describe("committed OpenAPI artifact", () => {
     expect(issueAgentAuthorization?.responses).not.toHaveProperty("200");
     expect(getAgentAuthorization).not.toHaveProperty("requestBody");
     expect(submitAgentAuthorizationSignature).toHaveProperty("requestBody");
+
+    for (const [operation, operationId, hasRequestBody] of transferOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(Object.keys(operation?.responses ?? {}).sort()).toEqual([
+        "400",
+        "401",
+        "409",
+        "500",
+        "503",
+      ]);
+      expect(operation?.responses).not.toHaveProperty("200");
+      expect(operation).toHaveProperty(
+        "responses.503.content.application/json.schema.properties.code.enum",
+        [
+          "authentication_unavailable",
+          "transfer_unavailable",
+          "request_timeout",
+        ],
+      );
+      if (hasRequestBody) {
+        expect(operation).toHaveProperty("requestBody");
+      } else {
+        expect(operation).not.toHaveProperty("requestBody");
+      }
+      const serializedRequest = JSON.stringify(operation?.requestBody ?? {});
+      for (const forbidden of [
+        "owner_user_id",
+        "wallet_id",
+        "wallet_epoch",
+        "action_id",
+        "submission_record_id",
+        "nonce",
+        "idempotency_key",
+        "provider_url",
+      ]) {
+        expect(serializedRequest).not.toContain(forbidden);
+      }
+    }
+
+    const prepareTransferReview = transferOperations[2][0];
+    expect(prepareTransferReview).toHaveProperty(
+      "requestBody.content.application/json.schema.properties.amount_decimal.type",
+      "string",
+    );
+    const authorizeTransfer = transferOperations[3][0];
+    expect(authorizeTransfer).toHaveProperty(
+      "requestBody.content.application/json.schema.oneOf.1.properties.authorization_signature.type",
+      "string",
+    );
+    expect(authorizeTransfer).toHaveProperty(
+      "requestBody.content.application/json.schema.oneOf.1.properties.official_formatter_envelope_sha256.pattern",
+      "^[0-9a-f]{64}$",
+    );
   });
 });

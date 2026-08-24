@@ -144,6 +144,41 @@ describe("LOOP API foundation", () => {
     expect(document.paths).not.toHaveProperty("/openapi.json");
   });
 
+  it("composes the transfer surface as authenticated and unavailable", async () => {
+    const { database } = fakeDatabase();
+    const verifyAccessToken = vi.fn(() =>
+      Promise.resolve({ privyUserId: "did:privy:transfer-app-user" }),
+    );
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      privyAccessTokenVerifier: { verifyAccessToken },
+      logger: false,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/transfer/reviews",
+      headers: { authorization: "Bearer header.payload.signature" },
+      payload: {
+        preflight_handle: "unresolved-handle",
+        amount_decimal: "1.25",
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      code: "transfer_unavailable",
+      message: "Transfer operations are unavailable.",
+    });
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(verifyAccessToken).toHaveBeenCalledOnce();
+    expect(database.internalUsers.findByPrivyUserId).toHaveBeenCalledWith(
+      "did:privy:transfer-app-user",
+    );
+  });
+
   it("keeps OpenAPI retrieval disabled when configured off", async () => {
     const { database } = fakeDatabase();
     const app = await buildApp({

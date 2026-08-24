@@ -150,6 +150,14 @@ Without a credentialed Testnet agent workflow and signature-recovery evidence, t
 
 Append domain-specific migrations/repositories for opaque preflight/review/authorization/result handles, wallet epoch bindings, attempts, locks, audit history, replay material, and reconciliation leases. Implement the six exact route paths and request/response variants already reviewed in `contracts/privy-transfer/bff-contract.json:25-369` and summarized in `contracts/privy-transfer/README.md:16-48`, superseding only the authentication transport with current Privy Bearer plus internal principal.
 
+Implementation outcome is narrowed by Decision 0008. The reviewed authority
+does not fix the nested DTOs, handle encodings, authorization-signature bounds,
+or native current-result selection semantics needed for a safe success contract.
+This phase therefore implements all six authenticated top-level route
+boundaries with strict negative validation and no 2xx schema; the durable
+session/replay/reconciliation design in this section remains a future gate and
+is not claimed by the current runtime.
+
 Preserve these contract constraints:
 
 - owner, wallet/provider IDs, epoch, provider URL/action/submission IDs, nonce, expiry, idempotency key, risk verdict, cursor, and provider payloads are never accepted from page requests;
@@ -174,7 +182,7 @@ Update README, local development docs, product decisions, attribution, `.env.exa
 4. **Perp private reads/config.** Define strict DTOs/cursors/config facts, ports, unavailable/fake adapters, routes, and contract tests from reviewed provider fixtures. Enforce server-derived account and decimal strings. Do not install a forbidden SDK or proxy public markets.
 5. **Perp intent and reconciliation.** Add migration 000003, intent/idempotency/audit services, routes, fake adapter tests, restart/unknown-result worker tests, per-action kill switches, and default-deny eligibility. Keep real submission disabled until provider gates close.
 6. **Agent authorization.** Add migration 000004 and the canonical Testnet approveAgent issue/signature/status contract with negative tests. Keep issue/relay disabled without approved workflow and signature evidence.
-7. **Privy transfer.** Add append-only transfer migrations, the six Bearer-authenticated routes, state machine, official formatter boundary, transfer-specific replay/reconciliation worker, and exhaustive state/concurrency/expiry tests. Keep provider calls unavailable when any reviewed gate is missing.
+7. **Privy transfer.** Implement the six Bearer-authenticated top-level routes as an explicit default-closed boundary under Decision 0008. Keep persistence, formatter, provider calls, replay, and reconciliation unavailable until the missing nested DTO and session decisions are approved.
 8. **Final backend contract gate.** Regenerate OpenAPI once, run every unit/integration/worker/contract test, build runtime/migration images, scan tracked bytes for credentials, verify public unconfigured behavior through Cloudflare, update inventory statuses, and push atomic commits. Mobile/device integration starts only after this gate.
 
 Each step must stage only its intended files, run GitNexus `detect_changes(scope="staged")`, review affected flows, commit conventionally, and push. Do not bundle a half-finished provider adapter with a stable HTTP contract.
@@ -290,7 +298,7 @@ implementation_context:
     - "Every protected route verifies a current Privy access token and derives owner/Stream/account subjects server-side."
     - "Chat and Video token interfaces, Perp private reads/intents/status/agent authorization, and six transfer routes are present in generated OpenAPI."
     - "Missing provider credentials/evidence fails before provider side effects and does not claim integration."
-    - "Trading/transfer numerics are decimal strings; unknown writes are durably held and reconciled without blind replay."
+    - "Trading/transfer numerics are decimal strings; implemented durable writes are never blindly replayed, while the default-closed transfer surface has no write path."
     - "Mainnet, withdrawals, automated trading, Pay, HIP-3, TP/SL, TWAP, builder fees, and unapproved historical APIs remain absent/disabled."
     - "Unit, PostgreSQL integration, worker, OpenAPI, build, and secret checks pass; provider/device tests without inputs remain unverified."
   evidence_provenance:
@@ -387,9 +395,9 @@ implementation_context:
     - file: "test/agent-authorizations.test.ts"
       scenarios: ["allowlisted Testnet approveAgent only", "canonical digest/expiry/signature binding", "missing evidence disabled before signable payload"]
     - file: "test/transfer.test.ts"
-      scenarios: ["six exact operations/variants", "forbidden client fields", "wallet epoch/ack/review binding", "exact replay and reconciliation constraints"]
+      scenarios: ["six exact top-level operations/variants", "forbidden client authority and idempotency", "positive decimal strings", "auth/bootstrap", "no 2xx or effectful path"]
     - file: "test/reconciliation-worker.integration.test.ts"
-      scenarios: ["restart resumes unknown state", "lease/fencing rejects stale writer", "Hyperliquid never resubmits", "transfer only uses reviewed one-time replay"]
+      scenarios: ["restart resumes unknown state", "lease/fencing rejects stale writer", "provider boundary is authoritative-read only", "default-closed domain routes cannot enqueue a replay"]
     - file: "test/openapi.test.ts"
       scenarios: ["generated artifact equality", "all canonical paths/statuses/security", "disabled/historical/provider paths absent"]
   verification_commands:
@@ -463,8 +471,8 @@ implementation_context:
 - [x] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly as `blocked-provider`, with Flutter/device integration unverified.
 - [x] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
 - [x] Perp intent/submit/status and Agent-authorization routes implement strict idempotent, owner-bound, immutable prepared/status boundaries and default-deny policy; unknown/reconciling states remain reserved projections with no reachable provider write, finalizer, or blind-replay path.
-- [ ] Six transfer routes implement the reviewed variants, ownership/binding/expiry/replay/reconciliation constraints, and fail closed before unavailable dependencies.
-- [ ] Generated OpenAPI artifact includes every approved route and excludes historical/provider/disabled routes.
+- [x] Six transfer routes implement the reviewed top-level variants, server-owned authority, decimal and default-closed constraints; unresolved ownership-binding/session, persistence, formatter, replay, and reconciliation behavior remains explicitly unavailable under Decision 0008.
+- [x] Generated OpenAPI artifact includes every approved route, exposes no unresolved transfer 2xx schema, and excludes historical/provider/disabled routes.
 - [ ] Unit, integration, worker, contract, format, lint, typecheck, build, Docker, OpenAPI, diff, and tracked-secret checks pass with exact results recorded.
 - [ ] Provider/device credentialed tests that were not run remain explicitly unverified; no provider is labeled integrated prematurely.
 - [ ] Each vertical slice is committed atomically, GitNexus change impact reviewed, pushed to the existing remote branch, and the final worktree is clean.

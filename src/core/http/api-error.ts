@@ -16,6 +16,7 @@ export type ApiErrorCode =
   | "perp_unavailable"
   | "rate_limit_exceeded"
   | "stream_unavailable"
+  | "transfer_unavailable"
   | "wallet_binding_required"
   | "request_timeout";
 
@@ -176,6 +177,14 @@ export class ApiError extends Error {
       statusCode: 503,
       code: "stream_unavailable",
       safeMessage: "Stream token issuance is unavailable.",
+    });
+  }
+
+  static transferUnavailable(): ApiError {
+    return new ApiError({
+      statusCode: 503,
+      code: "transfer_unavailable",
+      safeMessage: "Transfer operations are unavailable.",
     });
   }
 

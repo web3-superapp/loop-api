@@ -6797,6 +6797,1142 @@
           }
         }
       }
+    },
+    "/v1/transfer/assets": {
+      "get": {
+        "operationId": "listTransferAssets",
+        "summary": "List same-chain transfer assets",
+        "tags": ["transfer"],
+        "description": "Reserves the reviewed transfer-asset interface. Provider execution remains unavailable until its exact nested response contract and credentialed evidence are approved.",
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transfer/recipient-preflight": {
+      "post": {
+        "operationId": "runTransferRecipientPreflight",
+        "summary": "Resolve or acknowledge a transfer recipient",
+        "tags": ["transfer"],
+        "description": "Accepts only the reviewed resolve and acknowledge top-level variants. It creates no session or provider state while transfer capability is unavailable.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "command",
+                      "asset_selection_id",
+                      "recipient_input"
+                    ],
+                    "properties": {
+                      "command": { "type": "string", "enum": ["resolve"] },
+                      "asset_selection_id": {
+                        "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                      },
+                      "recipient_input": {
+                        "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "command",
+                      "preflight_handle",
+                      "acknowledgement_kind"
+                    ],
+                    "properties": {
+                      "command": { "type": "string", "enum": ["acknowledge"] },
+                      "preflight_handle": {
+                        "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                      },
+                      "acknowledgement_kind": {
+                        "type": "string",
+                        "enum": ["first_recipient", "history_unknown"]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transfer/reviews": {
+      "post": {
+        "operationId": "prepareTransferReview",
+        "summary": "Prepare a same-chain transfer review",
+        "tags": ["transfer"],
+        "description": "Reserves the reviewed preflight-handle and amount keys without inventing an unresolved review or handle representation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["preflight_handle", "amount_decimal"],
+                "properties": {
+                  "preflight_handle": {
+                    "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                  },
+                  "amount_decimal": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transfer/authorize": {
+      "post": {
+        "operationId": "authorizeTransfer",
+        "summary": "Issue or submit a transfer authorization handoff",
+        "tags": ["transfer"],
+        "description": "Accepts only the reviewed private issue-payload and submit-signature top-level variants. No formatter, signer, session, or provider call is composed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["command", "prepared_review_handle"],
+                    "properties": {
+                      "command": {
+                        "type": "string",
+                        "enum": ["issue_payload"]
+                      },
+                      "prepared_review_handle": {
+                        "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "command",
+                      "prepared_review_handle",
+                      "authorization_signature",
+                      "official_formatter_envelope_sha256"
+                    ],
+                    "properties": {
+                      "command": {
+                        "type": "string",
+                        "enum": ["submit_signature"]
+                      },
+                      "prepared_review_handle": {
+                        "description": "The reviewed transfer contract fixes this key but not its nested wire shape. Only finite plain JSON is accepted, and exact names from the reviewed forbidden_client_keys lists are rejected at every depth."
+                      },
+                      "authorization_signature": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "official_formatter_envelope_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transfer/current-result": {
+      "get": {
+        "operationId": "getCurrentTransferResult",
+        "summary": "Get the authenticated owner's current transfer result",
+        "tags": ["transfer"],
+        "description": "Accepts no caller-selected handle, cursor, action, or submission ID. The route remains unavailable until native current-result selection is defined.",
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transfer/reconciliation": {
+      "get": {
+        "operationId": "getTransferReconciliation",
+        "summary": "Get the authenticated owner's transfer reconciliation",
+        "tags": ["transfer"],
+        "description": "Accepts no caller-selected handle or cursor. The route remains unavailable because the public reconciliation state DTO is not fixed.",
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "transfer_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],
@@ -6813,6 +7949,10 @@
     {
       "name": "perp",
       "description": "Authenticated Hyperliquid Testnet Core perpetual interfaces"
+    },
+    {
+      "name": "transfer",
+      "description": "Authenticated Privy same-chain transfer interfaces; capability remains unavailable"
     }
   ]
 }

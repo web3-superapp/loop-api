@@ -5,7 +5,7 @@ Private Backend-for-Frontend repository for the LOOP Flutter app.
 ## Current status
 
 The runtime foundation and currently approved backend-only HTTP interfaces are
-being implemented as independently verified slices:
+implemented as independently verified slices:
 
 - Node.js 24 LTS, TypeScript, Fastify, and generated OpenAPI 3.1
 - fail-closed environment validation and redacted structured logs
@@ -32,6 +32,10 @@ being implemented as independently verified slices:
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
   absent
+- six authenticated Privy same-chain transfer route boundaries with strict
+  top-level variants, positive decimal-string amounts, server-owned authority,
+  and no 2xx/provider/replay path while nested DTO and credential gates remain
+  unresolved
 - atomic HMAC-subjected user/IP issuance quotas for each Stream token route;
   raw LOOP user IDs and client IPs are not stored as quota subjects
 - a durable provider-operation control plane with scope-wide idempotency,
@@ -52,10 +56,12 @@ the SDK is not installed, and a real Development App key/secret pair is not
 enabled. The Hyperliquid private-read, Perp-intent, and Agent-authorization HTTP
 contracts are present, but their default wallet resolver, reader, reviewer, and
 authorization handoff remain unavailable. Every Perp submit and Agent issuance
-is denied before signer/provider work; there is still no live private account
-connection, trading execution path, Firebase push path, physical-device
-integration, or production deployment. Interfaces, control-plane records, and
-quota primitives do not by themselves enable any provider.
+is denied before signer/provider work. Transfer routes publish only their
+reviewed negative contract and return a sanitized 503 after authentication;
+there is still no live private account connection, trading execution path,
+Privy transfer execution, Firebase push path, physical-device integration, or
+production deployment. Interfaces, control-plane records, and quota primitives
+do not by themselves enable any provider.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -76,6 +82,8 @@ recorded in
 The Testnet Agent-authorization negative interface and durable binding are
 recorded in
 [`docs/decisions/0007-agent-authorization-interface.md`](docs/decisions/0007-agent-authorization-interface.md).
+The Privy same-chain transfer default-closed interface is recorded in
+[`docs/decisions/0008-transfer-interface-default-closed.md`](docs/decisions/0008-transfer-interface-default-closed.md).
 
 ## Quick start
 
@@ -119,6 +127,10 @@ The safe default listens on `http://127.0.0.1:3000` only.
   The default issue route returns `perp_mutation_disabled`; no successful
   signable payload, signature recovery, relay, or reconciliation transition is
   composed.
+- `GET /v1/transfer/assets`, the three transfer POST boundaries, and the two
+  owner-session status routes expose the reviewed top-level contract. All six
+  require bootstrap and currently return `transfer_unavailable`; OpenAPI
+  deliberately publishes no transfer success schema.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 

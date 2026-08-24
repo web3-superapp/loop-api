@@ -31,6 +31,7 @@ import {
   createPerpIntentService,
   type PerpMutationGate,
 } from "./features/perp/perp-intent-service.js";
+import { createUnavailableTransferService } from "./features/transfer/transfer-service.js";
 import {
   createUnavailablePerpWalletBindingResolver,
   type PerpWalletBindingResolver,
@@ -58,6 +59,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
+import { registerTransferRoutes } from "./routes/transfers.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 
@@ -131,8 +133,13 @@ function loggerOptions(
         "config.perpReadCursor.hmacSecret",
         "PERP_READ_CURSOR_HMAC_SECRET",
         "req.body.signature",
+        "req.body.authorization_signature",
         "req.body.typed_data_json",
         "req.body.typedDataJson",
+        "authorization_signature",
+        "official_formatter_envelope_bytes_base64",
+        "formatted_payload_bytes",
+        "wallet_api_payload",
         "signing_request",
         "typed_data_json",
         "typedDataJson",
@@ -224,6 +231,11 @@ export async function buildApp(
           name: "perp",
           description:
             "Authenticated Hyperliquid Testnet Core perpetual interfaces",
+        },
+        {
+          name: "transfer",
+          description:
+            "Authenticated Privy same-chain transfer interfaces; capability remains unavailable",
         },
       ],
       components: {
@@ -331,6 +343,7 @@ export async function buildApp(
       ? {}
       : { mutationGate: options.agentAuthorizationMutationGate }),
   });
+  const transferService = createUnavailableTransferService();
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -365,6 +378,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     agentAuthorizationService,
+  );
+  registerTransferRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    transferService,
   );
 
   if (config.apiDocsEnabled) {

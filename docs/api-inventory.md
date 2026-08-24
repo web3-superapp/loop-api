@@ -163,27 +163,37 @@ evidence that an ambiguous relay has occurred.
 
 ## Privy same-chain transfer routes
 
-All six routes are `approved-contract` with `blocked-provider` capability. They
-use Native Privy Bearer authentication and an internal principal while retaining
-the reviewed variants and bindings in
-`contracts/privy-transfer/bff-contract.json`.
+All six routes are `implemented` with `blocked-provider` capability. They use
+Native Privy Bearer authentication and an existing internal principal while
+retaining only the exact reviewed top-level variants from
+`contracts/privy-transfer/bff-contract.json`. Current OpenAPI contains no
+transfer 2xx schema: every otherwise valid authenticated request returns 503
+`transfer_unavailable` with no durable or provider side effect.
 
-| Method and path                         | Exact request variants                                                                                                                                   | Exact success keys                                                                                                                                                 |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /v1/transfer/assets`               | No body/query                                                                                                                                            | `asset_selections`                                                                                                                                                 |
-| `POST /v1/transfer/recipient-preflight` | resolve: `command`, `asset_selection_id`, `recipient_input`; acknowledge: `command`, `preflight_handle`, `acknowledgement_kind`                          | resolve: `kind`, `preflight_handle`, `recipient_display`, `requires_acknowledgements`; acknowledge: `kind`, `preflight_handle`, `acknowledgements_recorded`        |
-| `POST /v1/transfer/reviews`             | `preflight_handle`, `amount_decimal`                                                                                                                     | `prepared_review_handle`                                                                                                                                           |
-| `POST /v1/transfer/authorize`           | issue: `command`, `prepared_review_handle`; submit: `command`, `prepared_review_handle`, `authorization_signature`, `official_formatter_envelope_sha256` | issue: `kind`, `prepared_review_handle`, `official_formatter_envelope_bytes_base64`, `official_formatter_envelope_sha256`; submit: `kind`, `result_binding_handle` |
-| `GET /v1/transfer/current-result`       | No body/query/handle/cursor                                                                                                                              | `{kind,result}` or unavailable `{kind}`                                                                                                                            |
-| `GET /v1/transfer/reconciliation`       | No body/query                                                                                                                                            | `{kind,state}` or unavailable `{kind}`                                                                                                                             |
+| Method and path                         | Current request boundary                                                                                                                                 | Current result                     |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `GET /v1/transfer/assets`               | No body/query/client idempotency header                                                                                                                  | 503; no asset-selection projection |
+| `POST /v1/transfer/recipient-preflight` | resolve: `command`, `asset_selection_id`, `recipient_input`; acknowledge: `command`, `preflight_handle`, exact acknowledgement enum                      | 503; no preflight session          |
+| `POST /v1/transfer/reviews`             | `preflight_handle`, positive canonical string `amount_decimal`                                                                                           | 503; no prepared review            |
+| `POST /v1/transfer/authorize`           | issue: `command`, `prepared_review_handle`; submit: `command`, `prepared_review_handle`, nonempty opaque signature, lowercase formatter-envelope SHA-256 | 503; no formatter payload or relay |
+| `GET /v1/transfer/current-result`       | No body/query/handle/cursor/client idempotency header                                                                                                    | 503; no current-result projection  |
+| `GET /v1/transfer/reconciliation`       | No body/query/handle/cursor/client idempotency header                                                                                                    | 503; no reconciliation projection  |
 
 Owner, wallet/provider IDs, wallet epoch, provider URL/action/submission IDs,
-nonce, expiry, idempotency key, risk verdict, cursor, and provider payload are
-server-owned and forbidden in page requests. Material change invalidates prior
-acknowledgement, review, and signature state. Provider write state is durable
-before transport. Only this domain permits the reviewed single byte-identical
-replay before the original signed expiry; a second uncertainty remains unknown.
-Unknown Privy statuses are quarantined and projected unavailable.
+nonce, expiry, idempotency key, risk verdict, cursor, and provider payload remain
+server-owned future facts. Unknown top-level fields, client `Idempotency-Key` or
+provider signed headers, and JSON numbers for `amount_decimal` are rejected
+before authentication. Unresolved nested JSON recursively rejects the exact
+names in the reviewed `forbidden_client_keys` list; it does not claim to infer
+unreviewed aliases. Handle and nested projection shapes remain deliberately
+unresolved rather than guessed.
+
+The reviewed material-change, durable write-before-transport, single
+byte-identical replay, unknown-status quarantine, and fenced reconciliation
+rules remain future implementation gates. The current runtime creates no
+transfer session, idempotency record, submission, audit event, replay material,
+result, or reconciliation lease and performs no formatter, signer, resolver,
+screening, polling, or provider call.
 
 ## Excluded and unassigned surfaces
 
