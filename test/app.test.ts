@@ -219,6 +219,94 @@ describe("LOOP API foundation", () => {
     expect(response.body).not.toContain("FST_ERR_HANDLER_TIMEOUT");
   });
 
+  it("logs only the route template and never raw query authorities or cursors", async () => {
+    const logLines: string[] = [];
+    const walletAddress = "0x11111111111111111111111111111111111111aa";
+    const opaqueCursor = `${"A".repeat(80)}.${"B".repeat(43)}`;
+    const { database } = fakeDatabase();
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      logger: {
+        level: "info",
+        stream: {
+          write(line: string): void {
+            logLines.push(line);
+          },
+        },
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/perp/account?address=${walletAddress}&cursor=${opaqueCursor}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const serializedLogs = logLines.join("");
+    expect(serializedLogs).not.toContain(walletAddress);
+    expect(serializedLogs).not.toContain(opaqueCursor);
+    expect(serializedLogs).not.toContain("?address=");
+    expect(serializedLogs).not.toContain("cursor=");
+
+    const entries = logLines.map(
+      (line) => JSON.parse(line) as Record<string, unknown>,
+    );
+    const received = entries.find(
+      (entry) => entry["msg"] === "Request received",
+    );
+    expect(received).toBeDefined();
+    expect(received?.["method"]).toBe("GET");
+    expect(received?.["route"]).toBe("/v1/perp/account");
+    expect(typeof received?.["requestId"]).toBe("string");
+    expect(received?.["requestId"] as string).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(entries.some((entry) => Object.hasOwn(entry, "req"))).toBe(false);
+  });
+
+  it("does not auto-expose HEAD aliases for the exact private-read GET surface", async () => {
+    const { database } = fakeDatabase();
+    const verifyAccessToken = vi.fn(() =>
+      Promise.resolve({ privyUserId: "did:privy:verified-user" }),
+    );
+    const resolve = vi.fn(() => Promise.reject(new Error("must not resolve")));
+    const read = vi.fn(() => Promise.reject(new Error("must not read")));
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      privyAccessTokenVerifier: { verifyAccessToken },
+      perpWalletBindingResolver: { resolve },
+      hyperliquidPrivateReader: { read },
+      logger: false,
+    });
+    apps.push(app);
+
+    for (const path of [
+      "/v1/perp/config",
+      "/v1/perp/account",
+      "/v1/perp/positions",
+      "/v1/perp/orders",
+      "/v1/perp/fills",
+      "/v1/perp/funding",
+    ]) {
+      const response = await app.inject({
+        method: "HEAD",
+        url: path,
+        headers: { authorization: "Bearer header.payload.signature" },
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ code: "not_found" });
+    }
+
+    expect(verifyAccessToken).not.toHaveBeenCalled();
+    expect(database.internalUsers.findByPrivyUserId).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("closes the database pool with the application", async () => {
     const { database } = fakeDatabase();
     const app = await buildApp({

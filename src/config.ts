@@ -48,6 +48,7 @@ const environmentSchema = z
     STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     STREAM_TOKEN_USER_LIMIT_PER_MINUTE: positiveIntegerString(1, 10_000),
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE: positiveIntegerString(1, 100_000),
+    PERP_READ_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -97,6 +98,11 @@ export interface StreamTokenQuotaConfig {
   readonly ipCapacity: number;
 }
 
+export interface PerpReadCursorConfig {
+  readonly hmacSecret: string;
+  readonly ttlSeconds: 600;
+}
+
 export interface AppConfig {
   readonly nodeEnv: "development" | "test" | "production";
   readonly host: string;
@@ -113,6 +119,7 @@ export interface AppConfig {
   readonly privy: PrivyConfig | null;
   readonly stream: StreamConfig | null;
   readonly streamTokenQuota: StreamTokenQuotaConfig | null;
+  readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -188,6 +195,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] ?? "10",
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE:
       environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] ?? "60",
+    PERP_READ_CURSOR_HMAC_SECRET: environment["PERP_READ_CURSOR_HMAC_SECRET"],
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -236,6 +244,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
           userCapacity: parsed.data.STREAM_TOKEN_USER_LIMIT_PER_MINUTE,
           ipCapacity: parsed.data.STREAM_TOKEN_IP_LIMIT_PER_MINUTE,
         });
+  const perpReadCursor =
+    parsed.data.PERP_READ_CURSOR_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.PERP_READ_CURSOR_HMAC_SECRET,
+          ttlSeconds: 600 as const,
+        });
 
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
@@ -252,6 +267,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     privy,
     stream,
     streamTokenQuota,
+    perpReadCursor,
     serviceName: "loop-api",
     serviceVersion,
   });

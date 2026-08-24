@@ -85,19 +85,34 @@ binding, never an agent or client-supplied address. Without it they return
 `wallet_binding_required` before Hyperliquid work. All routes are Core
 BTC/ETH/SOL and Testnet only.
 
-| Method and path          | Key contract                                                                                                        | Interface           | Capability         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------ |
-| `GET /v1/perp/config`    | Network, Core allowlist, sourced/fetched/expires provider constraints, and explicit read/mutation capability states | `approved-contract` | `blocked-provider` |
-| `GET /v1/perp/account`   | Strict private account projection; decimal strings                                                                  | `approved-contract` | `blocked-provider` |
-| `GET /v1/perp/positions` | Strict position projection; bounded limit/opaque cursor where paginated                                             | `approved-contract` | `blocked-provider` |
-| `GET /v1/perp/orders`    | Strict open/order-state projection; bounded limit/opaque cursor                                                     | `approved-contract` | `blocked-provider` |
-| `GET /v1/perp/fills`     | Strict fills projection; bounded limit/opaque cursor                                                                | `approved-contract` | `blocked-provider` |
-| `GET /v1/perp/funding`   | Strict funding projection; bounded limit/opaque cursor                                                              | `approved-contract` | `blocked-provider` |
+| Method and path          | Key contract                                                                                                        | Interface     | Capability         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
+| `GET /v1/perp/config`    | Network, Core allowlist, sourced/fetched/expires provider constraints, and explicit read/mutation capability states | `implemented` | `blocked-provider` |
+| `GET /v1/perp/account`   | Strict private account projection; decimal strings                                                                  | `implemented` | `blocked-provider` |
+| `GET /v1/perp/positions` | Strict position projection; bounded limit/opaque cursor where paginated                                             | `implemented` | `blocked-provider` |
+| `GET /v1/perp/orders`    | Strict current open-limit-order projection; bounded limit/opaque cursor                                             | `implemented` | `blocked-provider` |
+| `GET /v1/perp/fills`     | Strict recent fills projection with bounded coverage; bounded limit/opaque cursor                                   | `implemented` | `blocked-provider` |
+| `GET /v1/perp/funding`   | Strict recent user-funding ledger with bounded coverage; bounded limit/opaque cursor                                | `implemented` | `blocked-provider` |
 
 Stale, malformed, non-Core, nonempty-dex, spot, HIP-3, or unknown provider data
 is unavailable rather than coerced to an empty or zero-valued success. Public
 market data remains a direct read-only Flutter/provider concern and is not
 proxied by these routes.
+
+Config facts expire within 60 seconds and private snapshots within two seconds.
+Positions accept an initial limit of 1–3; the other lists accept 1–50, default 20. A continuation cursor cannot be combined with a limit and is valid for ten
+minutes. AES-256-GCM hides the provider continuation, including any authority a
+malformed adapter might place inside it; an outer HMAC explicitly binds Testnet,
+Core perps, empty DEX, owner, current wallet, binding version, route, and
+original limit. Fills and user funding report `recent_window` coverage and
+whether the provider-bounded window is truncated; they are never described as
+complete history.
+
+The default resolver never selects a first Privy wallet, and the zero address is
+not an empty-account fallback. Until a reviewed server-side wallet binding and
+real provider adapter exist, the routes return `wallet_binding_required` or
+`perp_unavailable` before network work. No Hyperliquid Node/TypeScript package
+has been installed.
 
 ### Perp intent and reconciliation
 

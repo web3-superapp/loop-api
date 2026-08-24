@@ -461,7 +461,7 @@ implementation_context:
 - [x] Shared Native Privy Bearer parsing/principal resolution protects every implemented route and preserves all bootstrap behavior/tests.
 - [x] Append-only migrations, latest-schema readiness, idempotency, audit, provider-operation journals, and reconciliation worker are implemented and PostgreSQL-tested.
 - [x] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly as `blocked-provider`, with Flutter/device integration unverified.
-- [ ] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
+- [x] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
 - [ ] Perp intent/submit/status and agent-authorization routes implement idempotency, default-deny policy, immutable review, unknown/reconciling state, and no blind replay.
 - [ ] Six transfer routes implement the reviewed variants, ownership/binding/expiry/replay/reconciliation constraints, and fail closed before unavailable dependencies.
 - [ ] Generated OpenAPI artifact includes every approved route and excludes historical/provider/disabled routes.

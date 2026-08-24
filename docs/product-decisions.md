@@ -14,11 +14,14 @@ prototype research in `contracts/integration-catalog/` and
 
 The repository now has a local Fastify runtime, the Development
 `POST /v1/bootstrap` Privy verification boundary, and implemented Stream token
-HTTP interfaces backed by persistent issuance policy. It still has no production
-deployment, successful real-token physical-device evidence, licensed Stream
-issuer composition, private trading path, or credentialed provider connection.
-The Stream routes remain `blocked-provider` and return a sanitized 503 through
-the default unavailable adapter.
+HTTP interfaces backed by persistent issuance policy. It also has six strict
+Hyperliquid Testnet private-read HTTP interfaces with server-owned wallet
+authority, freshness, decimal-string, Core-market, and opaque-cursor checks. It
+still has no production deployment, successful real-token physical-device
+evidence, licensed Stream issuer composition, live wallet-binding lifecycle,
+private trading mutation path, or credentialed provider connection. Stream and
+Hyperliquid capabilities remain `blocked-provider`; their default adapters fail
+closed.
 
 ## Identity model
 

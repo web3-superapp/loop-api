@@ -4,8 +4,10 @@ export type ApiErrorCode =
   | "bootstrap_required"
   | "invalid_access_token"
   | "invalid_request"
+  | "perp_unavailable"
   | "rate_limit_exceeded"
   | "stream_unavailable"
+  | "wallet_binding_required"
   | "request_timeout";
 
 interface ApiErrorOptions {
@@ -80,11 +82,27 @@ export class ApiError extends Error {
     });
   }
 
+  static perpUnavailable(): ApiError {
+    return new ApiError({
+      statusCode: 503,
+      code: "perp_unavailable",
+      safeMessage: "Perpetual account data is unavailable.",
+    });
+  }
+
   static streamUnavailable(): ApiError {
     return new ApiError({
       statusCode: 503,
       code: "stream_unavailable",
       safeMessage: "Stream token issuance is unavailable.",
+    });
+  }
+
+  static walletBindingRequired(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "wallet_binding_required",
+      safeMessage: "A verified wallet binding is required.",
     });
   }
 }

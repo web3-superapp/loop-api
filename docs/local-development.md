@@ -31,6 +31,15 @@ present: `@stream-io/node-sdk` is deliberately not installed until its reviewed
 Stream Source Code License Agreement is explicitly accepted and a real
 Development Stream App is approved. No custom JWT implementation is used.
 
+The six `GET /v1/perp/*` private-read interfaces also require the current Bearer
+identity and bootstrap mapping. Set an independent server-only
+`PERP_READ_CURSOR_HMAC_SECRET` of at least 32 characters only when testing with
+an injected verified wallet resolver and fake provider reader. Leaving it blank
+keeps cursor-backed private reads fail closed. The normal local runtime has no
+wallet-binding database lifecycle and no Hyperliquid adapter, does not select a
+linked wallet, and never substitutes the zero address; an authenticated request
+therefore returns `wallet_binding_required` before provider work.
+
 Validate the health and protected-route boundaries:
 
 ```sh
@@ -39,12 +48,20 @@ curl --fail http://127.0.0.1:3000/health/ready
 curl -i -X POST http://127.0.0.1:3000/v1/bootstrap
 curl -i -X POST http://127.0.0.1:3000/v1/chat/token
 curl -i -X POST http://127.0.0.1:3000/v1/video/token
+curl -i http://127.0.0.1:3000/v1/perp/config
+curl -i http://127.0.0.1:3000/v1/perp/account
+curl -i http://127.0.0.1:3000/v1/perp/positions
+curl -i http://127.0.0.1:3000/v1/perp/orders
+curl -i http://127.0.0.1:3000/v1/perp/fills
+curl -i http://127.0.0.1:3000/v1/perp/funding
 ```
 
 These unauthenticated protected-route smoke checks must return a sanitized 401
 with a Bearer challenge and must not create a user row or reserve quota. With a
 valid bootstrapped identity and quota HMAC configured, both Stream routes still
 return a sanitized 503 while the real licensed issuer is unavailable.
+The Perp routes must not reveal or accept a wallet/account address; with a valid
+bootstrapped identity and the default resolver they return a sanitized 409.
 
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server

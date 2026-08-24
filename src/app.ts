@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import helmet from "@fastify/helmet";
 import swagger from "@fastify/swagger";
 import Fastify, {
+  LogController,
   type FastifyInstance,
   type FastifyServerOptions,
 } from "fastify";
@@ -20,6 +21,16 @@ import {
   type StreamTokenService,
 } from "./features/communication/stream-token-service.js";
 import { createBootstrapService } from "./features/identity/bootstrap-service.js";
+import { createPerpPrivateReadCursorCodec } from "./features/perp/private-read-cursor.js";
+import { createPerpPrivateReadService } from "./features/perp/private-read-service.js";
+import {
+  createUnavailablePerpWalletBindingResolver,
+  type PerpWalletBindingResolver,
+} from "./features/perp/wallet-binding-resolver.js";
+import {
+  createUnavailableHyperliquidPrivateReader,
+  type HyperliquidPrivateReader,
+} from "./integrations/hyperliquid/private-reader.js";
 import {
   createUnavailableStreamTokenIssuer,
   type StreamTokenIssuer,
@@ -31,6 +42,7 @@ import {
 } from "./integrations/privy/access-token-verifier.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
@@ -40,7 +52,9 @@ export interface BuildAppOptions {
   readonly database?: Database;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly streamTokenIssuer?: StreamTokenIssuer;
-  readonly logger?: false;
+  readonly perpWalletBindingResolver?: PerpWalletBindingResolver;
+  readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
+  readonly logger?: FastifyServerOptions["logger"];
 }
 
 function createUnavailableStreamTokenService(): StreamTokenService {
@@ -96,6 +110,9 @@ function loggerOptions(
         "streamTokenQuota.hmacSecret",
         "config.streamTokenQuota.hmacSecret",
         "STREAM_TOKEN_QUOTA_HMAC_SECRET",
+        "perpReadCursor.hmacSecret",
+        "config.perpReadCursor.hmacSecret",
+        "PERP_READ_CURSOR_HMAC_SECRET",
       ],
     },
     ...(config.nodeEnv === "development"
@@ -116,15 +133,43 @@ export async function buildApp(
   const fastifyOptions: FastifyServerOptions = {
     bodyLimit: 1_048_576,
     connectionTimeout: 10_000,
+    exposeHeadRoutes: false,
     genReqId: () => randomUUID(),
     handlerTimeout: 15_000,
     keepAliveTimeout: 72_000,
-    logger: options.logger === false ? false : loggerOptions(config),
+    logController: new LogController({ disableRequestLogging: true }),
+    logger: options.logger ?? loggerOptions(config),
     requestIdHeader: false,
     requestTimeout: 15_000,
     trustProxy: config.trustProxy ? localCloudflaredProxyCidrs : false,
   };
   const app = Fastify(fastifyOptions);
+
+  app.addHook("onRequest", (request, _reply, done) => {
+    request.log.info(
+      {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url,
+      },
+      "Request received",
+    );
+    done();
+  });
+
+  app.addHook("onResponse", (request, reply, done) => {
+    request.log.info(
+      {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url,
+        statusCode: reply.statusCode,
+        responseTimeMs: reply.elapsedTime,
+      },
+      "Request completed",
+    );
+    done();
+  });
 
   await app.register(swagger, {
     hideUntagged: true,
@@ -146,6 +191,11 @@ export async function buildApp(
         {
           name: "communication",
           description: "Authenticated Stream Chat and Video token issuance",
+        },
+        {
+          name: "perp",
+          description:
+            "Authenticated Hyperliquid Testnet Core perpetual interfaces",
         },
       ],
       components: {
@@ -219,6 +269,24 @@ export async function buildApp(
             },
           },
         });
+  const perpWalletBindingResolver =
+    options.perpWalletBindingResolver ??
+    createUnavailablePerpWalletBindingResolver();
+  const hyperliquidPrivateReader =
+    options.hyperliquidPrivateReader ??
+    createUnavailableHyperliquidPrivateReader();
+  const perpPrivateReadCursorCodec =
+    config.perpReadCursor === null
+      ? null
+      : createPerpPrivateReadCursorCodec({
+          secret: new TextEncoder().encode(config.perpReadCursor.hmacSecret),
+          ttlSeconds: config.perpReadCursor.ttlSeconds,
+        });
+  const perpPrivateReadService = createPerpPrivateReadService({
+    bindingResolver: perpWalletBindingResolver,
+    cursorCodec: perpPrivateReadCursorCodec,
+    reader: hyperliquidPrivateReader,
+  });
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -238,6 +306,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     streamTokenService,
+  );
+  registerPerpPrivateReadRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    perpPrivateReadService,
   );
 
   if (config.apiDocsEnabled) {

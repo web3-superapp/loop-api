@@ -19,6 +19,11 @@ interfaces are implemented:
 - separate `POST /v1/chat/token` and `POST /v1/video/token` interfaces that
   require an existing bootstrap mapping, derive the Stream user ID server-side,
   and enforce a fixed 3600-second lifetime
+- six authenticated Hyperliquid Testnet private-read interfaces for strict
+  config, account, position, open-order, fill, and user-funding projections;
+  wallet/account authority is always resolved server-side
+- encrypted, owner/wallet/version/route-bound cursors and fail-closed validation
+  for stale, numeric-decimal, non-Core, Spot, HIP-3, and malformed provider data
 - atomic HMAC-subjected user/IP issuance quotas for each Stream token route;
   raw LOOP user IDs and client IPs are not stored as quota subjects
 - a durable provider-operation control plane with scope-wide idempotency,
@@ -36,8 +41,10 @@ but a real phone-issued token has not yet passed the physical-device gate. The
 Stream HTTP interfaces and issuance policy are present, but the default issuer
 returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
 the SDK is not installed, and a real Development App key/secret pair is not
-enabled. There is still no Hyperliquid private account/trading path, Firebase
-push path, physical-device integration, or production deployment. Interfaces,
+enabled. The Hyperliquid private-read HTTP contract is present, but its default
+wallet resolver and provider reader remain unavailable; there is still no live
+private account connection, trading mutation path, Firebase push path,
+physical-device integration, or production deployment. Interfaces,
 control-plane records, and quota primitives do not by themselves enable any
 provider.
 
@@ -52,6 +59,8 @@ The canonical route surface and shared control-plane rules are in
 [`docs/decisions/0003-native-api-control-plane.md`](docs/decisions/0003-native-api-control-plane.md).
 The Stream interface and SDK license gate are recorded in
 [`docs/decisions/0004-stream-token-interface-license-gate.md`](docs/decisions/0004-stream-token-interface-license-gate.md).
+The Hyperliquid private-read boundary is recorded in
+[`docs/decisions/0005-hyperliquid-private-read-interface.md`](docs/decisions/0005-hyperliquid-private-read-interface.md).
 
 ## Quick start
 
@@ -81,6 +90,10 @@ The safe default listens on `http://127.0.0.1:3000` only.
   Privy Bearer boundary plus an existing bootstrap mapping. The interfaces are
   implemented, but return 503 while the quota HMAC capability or real licensed
   Stream issuer is unavailable.
+- `GET /v1/perp/config`, `/account`, `/positions`, `/orders`, `/fills`, and
+  `/funding` require the same current identity plus a unique current
+  server-verified wallet binding. The default runtime returns
+  `wallet_binding_required`; fake success tests do not make Hyperliquid live.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 

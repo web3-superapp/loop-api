@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     expect(config.privy).toBeNull();
     expect(config.stream).toBeNull();
     expect(config.streamTokenQuota).toBeNull();
+    expect(config.perpReadCursor).toBeNull();
     expect(config.serviceName).toBe("loop-api");
   });
 
@@ -122,6 +123,32 @@ describe("loadConfig", () => {
       loadConfig(environment);
     } catch (error) {
       expect(String(error)).not.toContain("weak-secret");
+    }
+  });
+
+  it("enables owner-bound Perp read cursors only with a strong HMAC secret", () => {
+    const environment = validEnvironment();
+    environment["PERP_READ_CURSOR_HMAC_SECRET"] = "p".repeat(32);
+
+    const config = loadConfig(environment);
+
+    expect(config.perpReadCursor).toEqual({
+      hmacSecret: "p".repeat(32),
+      ttlSeconds: 600,
+    });
+    expect(Object.isFrozen(config.perpReadCursor)).toBe(true);
+  });
+
+  it("rejects a weak Perp read cursor secret without echoing it", () => {
+    const environment = validEnvironment();
+    environment["PERP_READ_CURSOR_HMAC_SECRET"] = "weak-cursor-secret";
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+
+    try {
+      loadConfig(environment);
+    } catch (error) {
+      expect(String(error)).not.toContain("weak-cursor-secret");
     }
   });
 

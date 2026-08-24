@@ -16,6 +16,7 @@ interface OpenApiDocument {
       string,
       {
         readonly operationId?: string;
+        readonly parameters?: readonly { readonly name?: string }[];
         readonly security?: readonly Record<string, readonly unknown[]>[];
         readonly responses?: Record<string, unknown>;
       }
@@ -47,6 +48,14 @@ describe("committed OpenAPI artifact", () => {
     const bootstrap = document.paths["/v1/bootstrap"]?.["post"];
     const chatToken = document.paths["/v1/chat/token"]?.["post"];
     const videoToken = document.paths["/v1/video/token"]?.["post"];
+    const perpReads = [
+      [document.paths["/v1/perp/config"]?.["get"], "getPerpConfig"],
+      [document.paths["/v1/perp/account"]?.["get"], "getPerpAccount"],
+      [document.paths["/v1/perp/positions"]?.["get"], "listPerpPositions"],
+      [document.paths["/v1/perp/orders"]?.["get"], "listPerpOrders"],
+      [document.paths["/v1/perp/fills"]?.["get"], "listPerpFills"],
+      [document.paths["/v1/perp/funding"]?.["get"], "listPerpFunding"],
+    ] as const;
 
     expect(document.openapi).toBe("3.1.0");
     expect(document.servers).toEqual([
@@ -57,6 +66,12 @@ describe("committed OpenAPI artifact", () => {
       "/health/ready",
       "/v1/bootstrap",
       "/v1/chat/token",
+      "/v1/perp/account",
+      "/v1/perp/config",
+      "/v1/perp/fills",
+      "/v1/perp/funding",
+      "/v1/perp/orders",
+      "/v1/perp/positions",
       "/v1/video/token",
     ]);
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
@@ -102,6 +117,39 @@ describe("committed OpenAPI artifact", () => {
       expect(operation).toHaveProperty(
         "responses.503.content.application/json.schema.properties.code.enum",
         ["authentication_unavailable", "stream_unavailable", "request_timeout"],
+      );
+    }
+
+    for (const [operation, operationId] of perpReads) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(operation).not.toHaveProperty("requestBody");
+      for (const status of ["200", "400", "401", "409", "500", "503"]) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      expect(operation).toHaveProperty(
+        "responses.409.content.application/json.schema.properties.code.enum",
+        ["bootstrap_required", "wallet_binding_required"],
+      );
+      expect(operation).toHaveProperty(
+        "responses.503.content.application/json.schema.properties.code.enum",
+        ["authentication_unavailable", "perp_unavailable", "request_timeout"],
+      );
+      const serialized = JSON.stringify(operation);
+      expect(serialized).not.toContain("accountAddress");
+      expect(serialized).not.toContain("account_address");
+      expect(serialized).not.toContain("wallet_address");
+      expect(serialized).not.toContain("agent_address");
+      expect(serialized).not.toContain("mainnet");
+    }
+
+    expect(perpReads[0][0]).not.toHaveProperty("parameters");
+    expect(perpReads[1][0]).not.toHaveProperty("parameters");
+    for (const [operation] of perpReads.slice(2)) {
+      expect(operation?.parameters?.map((parameter) => parameter.name)).toEqual(
+        ["limit", "cursor"],
       );
     }
   });
