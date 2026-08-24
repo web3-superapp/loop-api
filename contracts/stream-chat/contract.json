@@ -1,16 +1,26 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "provider": "stream_chat_and_video",
   "implementation_status": "current_contract_baseline_no_live_sdk_runtime_endpoint_or_credentials",
   "production_mode": "fail_closed",
-  "html_mode": "production_boundary_fail_closed_fixture_test_only",
-  "build_integration": {
-    "production_script": "src/stream-chat-provider.js",
-    "production_order_after": "wallet-transfer.js",
-    "production_order_before": "app.js",
-    "offline_fixture": "src/test-fixtures/stream-chat-offline-fixture.js",
+  "migrated_prototype_html_mode": "production_boundary_fail_closed_fixture_test_only",
+  "migrated_prototype_source": {
+    "source_status": "historical_not_present_in_loop_api",
+    "historical_provider_script": "src/stream-chat-provider.js",
+    "historical_order_after": "wallet-transfer.js",
+    "historical_order_before": "app.js",
+    "historical_offline_fixture": "src/test-fixtures/stream-chat-offline-fixture.js",
     "offline_fixture_in_app_html": false,
     "connected_or_ready_success_claim_in_app_html": false
+  },
+  "target_runtime_composition": {
+    "status": "PENDING",
+    "server_framework": null,
+    "server_entrypoint": null,
+    "stream_server_sdk_composition": null,
+    "token_endpoint_implementation": "PENDING",
+    "deployed_endpoint": null,
+    "migrated_prototype_paths_allowed_as_runtime": false
   },
   "authentication": {
     "token_endpoint": "/v1/chat/token",

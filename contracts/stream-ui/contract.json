@@ -1,14 +1,21 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "implementation_status": "current_presentation_baseline_no_live_stream_sdk_runtime_or_endpoint",
   "delivery": {
     "authority": "stream_chat_and_video_only",
-    "production_provider": "src/stream-chat-provider.js",
-    "production_scripts": 10,
+    "target_runtime_composition": "PENDING",
+    "target_provider_adapter": "PENDING",
+    "deployed_endpoint": null,
     "production_connected_claim": false,
     "offline_preview": "explicit_read_only_not_connection_evidence",
     "test_fixture_in_bundle": false,
     "custom_communication_core": false
+  },
+  "migrated_prototype_source": {
+    "source_status": "historical_not_present_in_loop_api",
+    "historical_provider_script": "src/stream-chat-provider.js",
+    "historical_production_script_count": 10,
+    "allowed_as_target_runtime": false
   },
   "routes": {
     "E1": "#chat",

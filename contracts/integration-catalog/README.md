@@ -43,4 +43,9 @@ MoonPay 仅作为 signed hosted widget/WebView 候选，Flutter 支持、KYB、�
 
 `offline-fixtures.json` 的网络固定为 forbidden，凭据省略、mutation 禁用，并且不得回落到生产；fixture 只演示界面和状态，不可作为 provider 成功证据。`implementation-slices.json` 按 wave 和独立文件所有权排序，同 wave 可并行，但每个 slice 仍需通过各自 credentialed R0/R1 gate。任何 `PENDING` 依赖都会传递到 profile 和页面映射，禁止用 fixture、mock 或乐观状态伪装 READY。
 
-验证入口是 `_tmp/verify_integration_catalog.py`。它绑定 canonical 103 每项的 exact id/module/priority/name/surface/route/state/profile/owner、exact 46 provider records、8 candidates、32 profiles、9 selection gates 和 14 slices，并检查 DAG/PENDING 闭包、候选映射、authority/reuse/custom gap、license/integrity/migration、Hookdeck 信任边界、单通知 runtime 和恶意 mutations。Hyperliquid Python 的 exact upstream sdist 作为只读 provenance artifact 放在 `_tmp/integration-catalog-provenance/`，verifier 实际解析 exact license member；它不访问网络、不导入 SDK，也不修改 `app.js` 或 `build.py`。
+原型仓库曾用 `_tmp/verify_integration_catalog.py` 与
+`_tmp/integration-catalog-provenance/` 验证这些锁，并检查当时的 `app.js` 和
+`build.py`。这些路径没有迁入 `loop-api`，只能作为历史验证来源名称，不能
+写进当前 CI、runtime 或发布命令。本目录目前没有可运行的 catalog verifier；
+若重新启用任何候选，必须在新仓建立可追踪的验证入口，而不是假定旧命令仍然
+存在。

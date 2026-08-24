@@ -15,11 +15,12 @@ bindable credentials. Risk presentation is limited to verifiable facts with
 source and observation time; Pay and synthetic AI/numeric risk scoring are out of
 scope.
 
-The production prototype has no Stream credentials and therefore cannot connect.
-Visible conversation data is labeled **Offline preview · not connected** and is
-read-only. It is not the test fixture from `src/test-fixtures/`; that fixture remains
-excluded from `app.html`. All provider writes are disabled and fail closed with
-`STREAM_CHAT_PROVIDER_MUTATION_PENDING`.
+The migrated HTML prototype had no Stream credentials and could not connect.
+Its visible conversation data was labeled **Offline preview · not connected** and
+was read-only. Its historical `src/test-fixtures/` and `app.html` paths are not
+present production files in this backend repository. The current target runtime
+composition and provider adapter are both `PENDING`; all provider writes remain
+disabled and fail closed with `STREAM_CHAT_PROVIDER_MUTATION_PENDING`.
 
 `#dm` reuses the existing conversation shell within the exact 37-screen platform +
 Perp manifest. The shared F11 origin remains stack-only and the four
