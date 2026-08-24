@@ -4,8 +4,8 @@ Private Backend-for-Frontend repository for the LOOP Flutter app.
 
 ## Current status
 
-The runtime foundation, protected identity slice, and Stream token HTTP
-interfaces are implemented:
+The runtime foundation and currently approved backend-only HTTP interfaces are
+being implemented as independently verified slices:
 
 - Node.js 24 LTS, TypeScript, Fastify, and generated OpenAPI 3.1
 - fail-closed environment validation and redacted structured logs
@@ -28,6 +28,10 @@ interfaces are implemented:
   canonical decimal-string DTOs, UUID idempotency, immutable reviews,
   server-generated cloids, PostgreSQL lifecycle records, and a default-deny
   per-action mutation gate
+- three owner-bound Testnet Agent-authorization interfaces with a strict opaque
+  signature input, non-reusable Agent identities, immutable digest bindings,
+  and no reachable signable-payload or relay success while provider evidence is
+  absent
 - atomic HMAC-subjected user/IP issuance quotas for each Stream token route;
   raw LOOP user IDs and client IPs are not stored as quota subjects
 - a durable provider-operation control plane with scope-wide idempotency,
@@ -45,13 +49,13 @@ but a real phone-issued token has not yet passed the physical-device gate. The
 Stream HTTP interfaces and issuance policy are present, but the default issuer
 returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
 the SDK is not installed, and a real Development App key/secret pair is not
-enabled. The Hyperliquid private-read and Perp-intent HTTP contracts are present,
-but their default wallet resolver, reader, and reviewer remain unavailable, and
-every submit is denied before signer/provider work; there is still no live
-private account connection, trading execution path, Firebase push path,
-physical-device integration, or production deployment. Interfaces,
-control-plane records, and quota primitives do not by themselves enable any
-provider.
+enabled. The Hyperliquid private-read, Perp-intent, and Agent-authorization HTTP
+contracts are present, but their default wallet resolver, reader, reviewer, and
+authorization handoff remain unavailable. Every Perp submit and Agent issuance
+is denied before signer/provider work; there is still no live private account
+connection, trading execution path, Firebase push path, physical-device
+integration, or production deployment. Interfaces, control-plane records, and
+quota primitives do not by themselves enable any provider.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -69,6 +73,9 @@ The Hyperliquid private-read boundary is recorded in
 The Perp intent, idempotency, review, persistence, and default-deny boundary is
 recorded in
 [`docs/decisions/0006-perp-intent-interface.md`](docs/decisions/0006-perp-intent-interface.md).
+The Testnet Agent-authorization negative interface and durable binding are
+recorded in
+[`docs/decisions/0007-agent-authorization-interface.md`](docs/decisions/0007-agent-authorization-interface.md).
 
 ## Quick start
 
@@ -107,6 +114,11 @@ The safe default listens on `http://127.0.0.1:3000` only.
   contract. The default runtime cannot prepare without a verified binding and
   reviewer, and submit always returns `perp_mutation_disabled` before provider
   work.
+- `POST /v1/perp/agent-authorizations`, its owner-only status route, and its
+  signature-submission route expose the approved negative Testnet contract.
+  The default issue route returns `perp_mutation_disabled`; no successful
+  signable payload, signature recovery, relay, or reconciliation transition is
+  composed.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 

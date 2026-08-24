@@ -1,4 +1,4 @@
-export const latestMigrationName = "000003_perp_intents";
+export const latestMigrationName = "000004_agent_authorizations";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -9,4 +9,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.perp_intents",
   "public.perp_intent_items",
   "public.perp_intent_events",
+  "public.perp_agent_identities",
+  "public.perp_agent_authorizations",
+  "public.perp_agent_authorization_events",
 ] as const);

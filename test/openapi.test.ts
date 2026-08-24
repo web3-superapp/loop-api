@@ -17,6 +17,7 @@ interface OpenApiDocument {
       {
         readonly operationId?: string;
         readonly parameters?: readonly { readonly name?: string }[];
+        readonly requestBody?: unknown;
         readonly security?: readonly Record<string, readonly unknown[]>[];
         readonly responses?: Record<string, unknown>;
       }
@@ -53,6 +54,16 @@ describe("committed OpenAPI artifact", () => {
       document.paths["/v1/perp/intents/{intent_id}"]?.["get"];
     const submitPerpIntent =
       document.paths["/v1/perp/intents/{intent_id}/submit"]?.["post"];
+    const issueAgentAuthorization =
+      document.paths["/v1/perp/agent-authorizations"]?.["post"];
+    const getAgentAuthorization =
+      document.paths["/v1/perp/agent-authorizations/{authorization_id}"]?.[
+        "get"
+      ];
+    const submitAgentAuthorizationSignature =
+      document.paths[
+        "/v1/perp/agent-authorizations/{authorization_id}/signatures"
+      ]?.["post"];
     const perpReads = [
       [document.paths["/v1/perp/config"]?.["get"], "getPerpConfig"],
       [document.paths["/v1/perp/account"]?.["get"], "getPerpAccount"],
@@ -72,6 +83,9 @@ describe("committed OpenAPI artifact", () => {
       "/v1/bootstrap",
       "/v1/chat/token",
       "/v1/perp/account",
+      "/v1/perp/agent-authorizations",
+      "/v1/perp/agent-authorizations/{authorization_id}",
+      "/v1/perp/agent-authorizations/{authorization_id}/signatures",
       "/v1/perp/config",
       "/v1/perp/fills",
       "/v1/perp/funding",
@@ -193,5 +207,41 @@ describe("committed OpenAPI artifact", () => {
       expect(serialized).not.toContain("nonce");
       expect(serialized).not.toContain("mainnet");
     }
+
+    for (const [operation, operationId, statuses] of [
+      [
+        issueAgentAuthorization,
+        "issueAgentAuthorization",
+        ["400", "401", "403", "409", "500", "503"],
+      ],
+      [
+        getAgentAuthorization,
+        "getAgentAuthorization",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        submitAgentAuthorizationSignature,
+        "submitAgentAuthorizationSignature",
+        ["200", "400", "401", "403", "404", "409", "500", "503"],
+      ],
+    ] as const) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      for (const status of statuses) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      const serializedRequest = JSON.stringify(operation?.requestBody ?? {});
+      expect(serializedRequest).not.toContain("typed_data_json");
+      expect(serializedRequest).not.toContain("typedDataJson");
+      expect(serializedRequest).not.toContain("nonce");
+      expect(serializedRequest).not.toContain("mainnet");
+      expect(serializedRequest).not.toContain("provider_url");
+    }
+    expect(issueAgentAuthorization).not.toHaveProperty("requestBody");
+    expect(issueAgentAuthorization?.responses).not.toHaveProperty("200");
+    expect(getAgentAuthorization).not.toHaveProperty("requestBody");
+    expect(submitAgentAuthorizationSignature).toHaveProperty("requestBody");
   });
 });

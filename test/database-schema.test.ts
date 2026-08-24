@@ -33,6 +33,9 @@ describe("database schema readiness contract", () => {
       "public.perp_intents",
       "public.perp_intent_items",
       "public.perp_intent_events",
+      "public.perp_agent_identities",
+      "public.perp_agent_authorizations",
+      "public.perp_agent_authorization_events",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

@@ -462,7 +462,7 @@ implementation_context:
 - [x] Append-only migrations, latest-schema readiness, idempotency, audit, provider-operation journals, and reconciliation worker are implemented and PostgreSQL-tested.
 - [x] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly as `blocked-provider`, with Flutter/device integration unverified.
 - [x] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
-- [ ] Perp intent/submit/status and agent-authorization routes implement idempotency, default-deny policy, immutable review, unknown/reconciling state, and no blind replay.
+- [x] Perp intent/submit/status and Agent-authorization routes implement strict idempotent, owner-bound, immutable prepared/status boundaries and default-deny policy; unknown/reconciling states remain reserved projections with no reachable provider write, finalizer, or blind-replay path.
 - [ ] Six transfer routes implement the reviewed variants, ownership/binding/expiry/replay/reconciliation constraints, and fail closed before unavailable dependencies.
 - [ ] Generated OpenAPI artifact includes every approved route and excludes historical/provider/disabled routes.
 - [ ] Unit, integration, worker, contract, format, lint, typecheck, build, Docker, OpenAPI, diff, and tracked-secret checks pass with exact results recorded.

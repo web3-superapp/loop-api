@@ -41,6 +41,9 @@ const userSubjectHmac = "d".repeat(64);
 
 const truncateControlPlane = `
   truncate table
+    public.perp_agent_authorization_events,
+    public.perp_agent_authorizations,
+    public.perp_agent_identities,
     public.perp_intent_events,
     public.perp_intent_items,
     public.perp_intents,

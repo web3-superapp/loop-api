@@ -8,6 +8,10 @@ import type {
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
 import {
+  createPostgresAgentAuthorizationRepository,
+  type AgentAuthorizationRepository,
+} from "./agent-authorization-repository.js";
+import {
   createPostgresControlPlaneRepository,
   type ControlPlaneRepository,
 } from "./control-plane-repository.js";
@@ -25,6 +29,7 @@ export interface Database {
   readonly internalUsers: InternalUserRepository;
   readonly controlPlane: ControlPlaneRepository;
   readonly perpIntents: PerpIntentRepository;
+  readonly agentAuthorizations: AgentAuthorizationRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -110,11 +115,13 @@ export function createPostgresDatabase(
   };
   const controlPlane = createPostgresControlPlaneRepository(pool);
   const perpIntents = createPostgresPerpIntentRepository(pool);
+  const agentAuthorizations = createPostgresAgentAuthorizationRepository(pool);
 
   return {
     internalUsers,
     controlPlane,
     perpIntents,
+    agentAuthorizations,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

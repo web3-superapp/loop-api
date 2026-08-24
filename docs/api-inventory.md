@@ -146,17 +146,20 @@ implemented claim.
 
 ### Testnet agent authorization
 
-| Method and path                                                    | Key contract                                                                                                   | Interface           | Capability              |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------- |
-| `POST /v1/perp/agent-authorizations`                               | Issue a new server-owned authorization UUID and canonical Testnet `approveAgent` review                        | `approved-contract` | `blocked-product-legal` |
-| `POST /v1/perp/agent-authorizations/{authorization_id}/signatures` | Submit the signature for the exact stored digest and current expected wallet; persist before one relay attempt | `approved-contract` | `blocked-product-legal` |
-| `GET /v1/perp/agent-authorizations/{authorization_id}`             | Owner-bound status/reconciliation projection                                                                   | `approved-contract` | `blocked-provider`      |
+| Method and path                                                    | Key contract                                                                                                                     | Interface     | Capability              |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------- |
+| `POST /v1/perp/agent-authorizations`                               | No body/query/client key; default 403 before allocation, persistence, formatting, signing, or provider work; deliberately no 2xx | `implemented` | `blocked-product-legal` |
+| `POST /v1/perp/agent-authorizations/{authorization_id}/signatures` | Strict owner-bound opaque signature input; prepared state stops at the default-deny gate before recovery or relay                | `implemented` | `blocked-product-legal` |
+| `GET /v1/perp/agent-authorizations/{authorization_id}`             | Owner-bound sanitized durable status projection                                                                                  | `implemented` | `blocked-provider`      |
 
-The server derives account, network, agent, typed-data primary type, digest, and
-expiry. Arbitrary typed data or URLs, altered fields, Mainnet, transfers,
-withdrawals, and builder approval are rejected. Missing credentialed workflow or
-signature-recovery evidence blocks issuance of signable payloads. Ambiguous relay
-is `unknown` and is not replayed.
+The future audited workflow must derive account, network, Agent, typed-data
+primary type, digest, and expiry server-side. Arbitrary typed data or URLs,
+altered fields, Mainnet, transfers, withdrawals, and builder approval are
+rejected. Missing formatter, nonce-continuation, signature-recovery, credential,
+and Testnet evidence blocks issuance of signable payloads. The current service
+has no path to its durable `persistIssued` boundary and implements no relay or
+reconciliation transition; `unknown` is a reserved future lifecycle state, not
+evidence that an ambiguous relay has occurred.
 
 ## Privy same-chain transfer routes
 

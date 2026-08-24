@@ -1,4 +1,7 @@
 export type ApiErrorCode =
+  | "agent_authorization_expired"
+  | "agent_authorization_not_found"
+  | "agent_authorization_unavailable"
   | "authentication_required"
   | "authentication_unavailable"
   | "bootstrap_required"
@@ -44,6 +47,30 @@ export class ApiError extends Error {
       code: "authentication_required",
       safeMessage: "Authentication is required.",
       includeBearerChallenge: true,
+    });
+  }
+
+  static agentAuthorizationExpired(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "agent_authorization_expired",
+      safeMessage: "The Agent authorization signing request has expired.",
+    });
+  }
+
+  static agentAuthorizationNotFound(): ApiError {
+    return new ApiError({
+      statusCode: 404,
+      code: "agent_authorization_not_found",
+      safeMessage: "The Agent authorization does not exist.",
+    });
+  }
+
+  static agentAuthorizationUnavailable(): ApiError {
+    return new ApiError({
+      statusCode: 503,
+      code: "agent_authorization_unavailable",
+      safeMessage: "Agent authorization is unavailable.",
     });
   }
 

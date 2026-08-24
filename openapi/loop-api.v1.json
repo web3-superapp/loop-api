@@ -5781,6 +5781,1022 @@
           }
         }
       }
+    },
+    "/v1/perp/agent-authorizations": {
+      "post": {
+        "operationId": "issueAgentAuthorization",
+        "summary": "Request a Testnet Agent authorization handoff",
+        "tags": ["perp"],
+        "description": "Checks the default-deny Testnet approveAgent gate. No successful signable payload is available until the official formatter, nonce continuation, recovery, and credentialed evidence gates close.",
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_mutation_disabled"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "agent_authorization_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/perp/agent-authorizations/{authorization_id}": {
+      "get": {
+        "operationId": "getAgentAuthorization",
+        "summary": "Get an Agent authorization",
+        "tags": ["perp"],
+        "description": "Returns only the current authenticated owner's persisted sanitized Agent authorization projection.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "authorization_id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authorization_id",
+                    "state",
+                    "review",
+                    "signature",
+                    "expires_at",
+                    "result",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "authorization_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "submitting",
+                        "accepted",
+                        "active",
+                        "rejected",
+                        "failed",
+                        "unknown",
+                        "reconciling",
+                        "expired"
+                      ]
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "version",
+                        "provider",
+                        "network",
+                        "action",
+                        "account",
+                        "signer_wallet_address",
+                        "agent"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "enum": ["perp_agent_authorization_review_v1"]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["hyperliquid"]
+                        },
+                        "network": { "type": "string", "enum": ["testnet"] },
+                        "action": {
+                          "type": "string",
+                          "enum": ["approve_agent"]
+                        },
+                        "account": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["address", "kind"],
+                          "properties": {
+                            "address": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "not": {
+                                "enum": [
+                                  "0x0000000000000000000000000000000000000000"
+                                ]
+                              }
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": ["master", "subaccount"]
+                            }
+                          }
+                        },
+                        "signer_wallet_address": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$",
+                          "not": {
+                            "enum": [
+                              "0x0000000000000000000000000000000000000000"
+                            ]
+                          }
+                        },
+                        "agent": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["address", "name", "valid_until"],
+                          "properties": {
+                            "address": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "not": {
+                                "enum": [
+                                  "0x0000000000000000000000000000000000000000"
+                                ]
+                              }
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$"
+                            },
+                            "valid_until": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "signature": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["required", "consumed", "expired"]
+                        }
+                      }
+                    },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["state", "observed_at", "reason_code"],
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "rejected",
+                                "failed",
+                                "unknown"
+                              ]
+                            },
+                            "observed_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "reason_code": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["agent_authorization_not_found"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "agent_authorization_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/perp/agent-authorizations/{authorization_id}/signatures": {
+      "post": {
+        "operationId": "submitAgentAuthorizationSignature",
+        "summary": "Submit an Agent authorization signature",
+        "tags": ["perp"],
+        "description": "Accepts only the transient opaque Privy signing result for an existing owner-bound handoff. The current implementation stops locally after its mutation gate and never calls recovery or relay.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["signature"],
+                "properties": {
+                  "signature": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "pattern": "^[\\x21-\\x7e]{1,1024}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "authorization_id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authorization_id",
+                    "state",
+                    "review",
+                    "signature",
+                    "expires_at",
+                    "result",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "authorization_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "submitting",
+                        "accepted",
+                        "active",
+                        "rejected",
+                        "failed",
+                        "unknown",
+                        "reconciling",
+                        "expired"
+                      ]
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "version",
+                        "provider",
+                        "network",
+                        "action",
+                        "account",
+                        "signer_wallet_address",
+                        "agent"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "enum": ["perp_agent_authorization_review_v1"]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["hyperliquid"]
+                        },
+                        "network": { "type": "string", "enum": ["testnet"] },
+                        "action": {
+                          "type": "string",
+                          "enum": ["approve_agent"]
+                        },
+                        "account": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["address", "kind"],
+                          "properties": {
+                            "address": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "not": {
+                                "enum": [
+                                  "0x0000000000000000000000000000000000000000"
+                                ]
+                              }
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": ["master", "subaccount"]
+                            }
+                          }
+                        },
+                        "signer_wallet_address": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$",
+                          "not": {
+                            "enum": [
+                              "0x0000000000000000000000000000000000000000"
+                            ]
+                          }
+                        },
+                        "agent": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["address", "name", "valid_until"],
+                          "properties": {
+                            "address": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "not": {
+                                "enum": [
+                                  "0x0000000000000000000000000000000000000000"
+                                ]
+                              }
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$"
+                            },
+                            "valid_until": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "signature": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["required", "consumed", "expired"]
+                        }
+                      }
+                    },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["state", "observed_at", "reason_code"],
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "rejected",
+                                "failed",
+                                "unknown"
+                              ]
+                            },
+                            "observed_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "reason_code": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_mutation_disabled"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["agent_authorization_not_found"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "bootstrap_required",
+                        "agent_authorization_expired"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "agent_authorization_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],

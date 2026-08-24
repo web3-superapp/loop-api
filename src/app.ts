@@ -24,6 +24,10 @@ import { createBootstrapService } from "./features/identity/bootstrap-service.js
 import { createPerpPrivateReadCursorCodec } from "./features/perp/private-read-cursor.js";
 import { createPerpPrivateReadService } from "./features/perp/private-read-service.js";
 import {
+  createAgentAuthorizationService,
+  type AgentAuthorizationMutationGate,
+} from "./features/perp/agent-authorization-service.js";
+import {
   createPerpIntentService,
   type PerpMutationGate,
 } from "./features/perp/perp-intent-service.js";
@@ -49,6 +53,7 @@ import {
   type PrivyAccessTokenVerifier,
 } from "./integrations/privy/access-token-verifier.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
+import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
@@ -65,6 +70,7 @@ export interface BuildAppOptions {
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
   readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
   readonly perpMutationGate?: PerpMutationGate;
+  readonly agentAuthorizationMutationGate?: AgentAuthorizationMutationGate;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -124,6 +130,12 @@ function loggerOptions(
         "perpReadCursor.hmacSecret",
         "config.perpReadCursor.hmacSecret",
         "PERP_READ_CURSOR_HMAC_SECRET",
+        "req.body.signature",
+        "req.body.typed_data_json",
+        "req.body.typedDataJson",
+        "signing_request",
+        "typed_data_json",
+        "typedDataJson",
       ],
     },
     ...(config.nodeEnv === "development"
@@ -313,6 +325,12 @@ export async function buildApp(
       ? {}
       : { mutationGate: options.perpMutationGate }),
   });
+  const agentAuthorizationService = createAgentAuthorizationService({
+    repository: database.agentAuthorizations,
+    ...(options.agentAuthorizationMutationGate === undefined
+      ? {}
+      : { mutationGate: options.agentAuthorizationMutationGate }),
+  });
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -342,6 +360,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     perpIntentService,
+  );
+  registerAgentAuthorizationRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    agentAuthorizationService,
   );
 
   if (config.apiDocsEnabled) {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
@@ -24,6 +25,7 @@ function testConfig(apiDocsEnabled = true) {
 function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
   return {
     database: {
+      agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
       controlPlane: createUnavailableControlPlaneRepository(),
       perpIntents: createUnavailablePerpIntentRepository(),
       internalUsers: {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import {
   createUnavailableControlPlaneRepository,
   IssuanceQuotaExceededError,
@@ -100,6 +101,7 @@ function dependencies() {
     }),
   );
   const database = {
+    agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
     controlPlane: {
       ...createUnavailableControlPlaneRepository(),
       consumeIssuanceQuota,
