@@ -71,5 +71,13 @@ Supabase enablement requires tested Postgres dump and table-level JSON exports.
 Courier and Trigger.dev IDs stored in LOOP tables are references, not authorities;
 exportable LOOP event/alert definitions remain the migration source of record.
 
-Run `python3 _tmp/verify_app_integrations_p0.py` for the contract, mutation, and
-executable adapter checks.
+The original prototype's `_tmp/verify_app_integrations_p0.py` verifier was not
+migrated and is not a current command in this repository. The only retained local
+adapter check is:
+
+```text
+node server/app-integrations-p0/adapter.mjs --self-test
+```
+
+That self-test validates the historical adapter in isolation; it is not evidence
+of a production BFF runtime or live provider integration.

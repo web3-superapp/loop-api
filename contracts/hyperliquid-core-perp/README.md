@@ -4,7 +4,7 @@ This directory is a reviewable integration contract, **not production-ready** co
 
 Hyperliquid is the only authority for Perp markets, orders, fills, positions, funding, liquidation events, and settlement. Privy remains the only wallet and signing authority. LOOP may add presentation, orchestration, and policy, but must not implement a matching engine, price feed, position ledger, settlement ledger, key store, EIP-712 encoder, or alternate signer.
 
-R0 deliberately installs and imports no Hyperliquid SDK. `oss-lock.json` pins only the top-level candidate and official/source conformance oracles; the runtime dependency graph is explicitly **PENDING**, not locked. Implementation must first generate a complete lockfile with every transitive version, source, integrity, and license and must fail closed on any gap. The only runnable artifact in this slice is the standard-library verifier.
+R0 deliberately installs and imports no Hyperliquid SDK. `oss-lock.json` pins only the top-level candidate and official/source conformance oracles; the runtime dependency graph is explicitly **PENDING**, not locked. Implementation must first generate a complete lockfile with every transitive version, source, integrity, and license and must fail closed on any gap. The migrated contract describes a legacy standard-library verifier, but that verifier was not migrated into this repository; there is currently no runnable Hyperliquid integration or contract-test entry point here.
 
 Production has no implicit network and no fixture fallback. The HTML prototype may load `fixtures/offline-r0.json` only when `LOOP_OFFLINE_HYPERLIQUID_FIXTURE=1` is explicitly set, and it must display the exact simulation label. The fixture cannot send network requests, sign, submit, or imply provider success.
 
@@ -24,8 +24,7 @@ IOC prices enforce both directions: buy requires `ask <= px <= ask*(1+s)` and se
 
 Raw liquidation events preserve only `lid`, `liquidator`, `liquidated_user`, `liquidated_ntl_pos`, and `liquidated_account_value`. LOOP dedupes by account/network/lid and cannot invent time, coin, or size; per-coin UI requires fills plus clearinghouse readback.
 
-Verification from the candidate root:
-
-```text
-python3 _tmp/verify_hyperliquid_perp.py --mutation-suite
-```
+The original prototype used `_tmp/verify_hyperliquid_perp.py` as a mutation
+verifier. That path is historical and absent from `loop-api`; it must not be used
+as a current CI or release command. A replacement automated contract-test entry
+point remains `PENDING` alongside the target runtime composition.
