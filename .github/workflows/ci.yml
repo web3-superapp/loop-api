@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.11-alpine3.24
+        env:
+          POSTGRES_DB: loop_api_test
+          POSTGRES_USER: loop_api
+          POSTGRES_PASSWORD: loop_api_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U loop_api -d loop_api_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      HOST: 127.0.0.1
+      PORT: 3000
+      PUBLIC_BASE_URL: http://127.0.0.1:3000
+      API_DOCS_ENABLED: "false"
+      TRUST_PROXY: "false"
+      LOG_LEVEL: silent
+      DATABASE_URL: postgres://loop_api:loop_api_ci_only@127.0.0.1:5432/loop_api_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Activate pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.0 --activate
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Apply PostgreSQL migrations
+        run: pnpm db:migrate
+
+      - name: Verify source and build
+        run: pnpm check

@@ -1,0 +1,6 @@
+contracts/**
+coverage/**
+dist/**
+node_modules/**
+pnpm-lock.yaml
+server/app-integrations-p0/adapter.mjs

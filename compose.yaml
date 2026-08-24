@@ -1,0 +1,23 @@
+name: loop-api
+
+services:
+  postgres:
+    image: postgres:17.11-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: loop_api_dev
+      POSTGRES_USER: loop_api
+      POSTGRES_PASSWORD: loop_api_local_only
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - loop_api_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loop_api -d loop_api_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  loop_api_postgres_data:
