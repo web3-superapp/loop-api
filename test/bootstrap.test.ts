@@ -32,8 +32,9 @@ function fakes() {
   const getOrCreateByPrivyUserId = vi.fn(() =>
     Promise.resolve({ id: loopUserId }),
   );
+  const findByPrivyUserId = vi.fn(() => Promise.resolve({ id: loopUserId }));
   const database = {
-    internalUsers: { getOrCreateByPrivyUserId },
+    internalUsers: { findByPrivyUserId, getOrCreateByPrivyUserId },
     ping: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
   } satisfies Database;
@@ -43,6 +44,7 @@ function fakes() {
 
   return {
     database,
+    findByPrivyUserId,
     getOrCreateByPrivyUserId,
     privyAccessTokenVerifier,
     verifyAccessToken,

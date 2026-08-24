@@ -11,7 +11,7 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm openapi:check && pnpm test && pnpm build",
     "db:create-migration": "node-pg-migrate create --migration-file-language ts --migration-filename-format index",
     "db:migrate": "node --env-file-if-exists=.env.local ./node_modules/node-pg-migrate/bin/node-pg-migrate up --migrations-dir migrations --pretty",
     "db:rollback": "node --env-file-if-exists=.env.local ./node_modules/node-pg-migrate/bin/node-pg-migrate down --migrations-dir migrations --pretty",
@@ -21,6 +21,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
+    "openapi:check": "tsx scripts/generate-openapi.ts --check",
+    "openapi:generate": "tsx scripts/generate-openapi.ts --write",
     "start": "node dist/src/server.js",
     "start:local": "node --env-file-if-exists=.env.local dist/src/server.js",
     "test": "vitest run --exclude 'test/**/*.integration.test.ts'",

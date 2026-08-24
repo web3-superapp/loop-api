@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import type { AppConfig } from "../config.js";
+import { errorResponseSchema } from "../core/http/schemas.js";
 import type { Database } from "../database/database.js";
 
 const liveResponseSchema = {
@@ -31,17 +32,6 @@ const readyResponseSchema = {
   },
 } as const;
 
-const errorResponseSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["code", "message", "request_id"],
-  properties: {
-    code: { type: "string", minLength: 1 },
-    message: { type: "string", minLength: 1 },
-    request_id: { type: "string", format: "uuid" },
-  },
-} as const;
-
 export function registerHealthRoutes(
   app: FastifyInstance,
   config: AppConfig,
@@ -56,7 +46,8 @@ export function registerHealthRoutes(
         tags: ["health"],
         response: {
           200: liveResponseSchema,
-          500: errorResponseSchema,
+          503: errorResponseSchema(["request_timeout"]),
+          500: errorResponseSchema(["internal_error"]),
         },
       },
     },
@@ -79,8 +70,13 @@ export function registerHealthRoutes(
         tags: ["health"],
         response: {
           200: readyResponseSchema,
-          503: readyResponseSchema,
-          500: errorResponseSchema,
+          503: {
+            oneOf: [
+              readyResponseSchema,
+              errorResponseSchema(["request_timeout"]),
+            ],
+          },
+          500: errorResponseSchema(["internal_error"]),
         },
       },
     },

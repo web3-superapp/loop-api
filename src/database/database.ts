@@ -52,6 +52,24 @@ export function createPostgresDatabase(
   });
 
   const internalUsers: InternalUserRepository = {
+    async findByPrivyUserId(
+      rawPrivyUserId: string,
+    ): Promise<InternalUser | null> {
+      const privyUserId = privyUserIdSchema.parse(rawPrivyUserId);
+      const existing = await pool.query<{ id: string }>({
+        text: `
+          select id
+          from public.loop_users
+          where privy_user_id = $1
+          limit 1
+        `,
+        values: [privyUserId],
+      });
+      const existingRow = existing.rows[0];
+      return existingRow === undefined
+        ? null
+        : internalUserRowSchema.parse(existingRow);
+    },
     async getOrCreateByPrivyUserId(
       rawPrivyUserId: string,
     ): Promise<InternalUser> {
@@ -71,22 +89,13 @@ export function createPostgresDatabase(
         return internalUserRowSchema.parse(insertedRow);
       }
 
-      const existing = await pool.query<{ id: string }>({
-        text: `
-          select id
-          from public.loop_users
-          where privy_user_id = $1
-          limit 1
-        `,
-        values: [privyUserId],
-      });
-      const existingRow = existing.rows[0];
+      const existingUser = await internalUsers.findByPrivyUserId(privyUserId);
 
-      if (existingRow === undefined) {
+      if (existingUser === null) {
         throw new Error("Internal user conflict winner was not found");
       }
 
-      return internalUserRowSchema.parse(existingRow);
+      return existingUser;
     },
   };
 

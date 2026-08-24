@@ -41,6 +41,8 @@ provider contracts before planning or changing behavior.
 - `src/app.ts` owns Fastify composition and cross-cutting HTTP behavior.
 - `src/config.ts` owns fail-closed environment parsing.
 - `src/routes/` owns versioned HTTP surfaces; route schemas are the OpenAPI source.
+- `scripts/generate-openapi.ts` deterministically produces the committed
+  `openapi/loop-api.v1.json`; never hand-edit that artifact.
 - `src/database/` owns PostgreSQL connectivity, not feature policy.
 - Future `src/integrations/` adapters own narrow official-provider boundaries.
 - Future `src/features/` modules own identity, communication bootstrap, account,
@@ -57,6 +59,7 @@ pnpm install --frozen-lockfile
 pnpm format:check
 pnpm lint
 pnpm typecheck
+pnpm openapi:check
 pnpm test
 pnpm build
 docker compose config --quiet

@@ -12,8 +12,10 @@ The runtime foundation and first protected identity slice are implemented:
 - PostgreSQL 17 local development through Docker Compose
 - an initial opaque internal-user migration
 - Privy Bearer access-token verification through the official server SDK
+- a reusable Native Privy Bearer principal boundary for protected routes
 - idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
   server-derived Stream user ID
+- a committed, deterministic OpenAPI artifact with a drift check
 - unit/contract tests, linting, type checking, and production compilation
 
 This is still **not a complete live provider integration**. The Privy server
@@ -28,6 +30,9 @@ recorded in
 [`docs/decisions/0001-node-fastify-foundation.md`](docs/decisions/0001-node-fastify-foundation.md)
 and
 [`docs/decisions/0002-privy-bearer-bootstrap.md`](docs/decisions/0002-privy-bearer-bootstrap.md).
+The canonical route surface and shared control-plane rules are in
+[`docs/api-inventory.md`](docs/api-inventory.md) and
+[`docs/decisions/0003-native-api-control-plane.md`](docs/decisions/0003-native-api-control-plane.md).
 
 ## Quick start
 
@@ -61,6 +66,15 @@ Run all repository checks with:
 ```sh
 pnpm check
 pnpm test:integration
+```
+
+Route schemas are the source of truth for
+[`openapi/loop-api.v1.json`](openapi/loop-api.v1.json). Do not edit the artifact
+by hand:
+
+```sh
+pnpm openapi:generate
+pnpm openapi:check
 ```
 
 See [`docs/local-development.md`](docs/local-development.md) for physical-phone

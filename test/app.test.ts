@@ -23,6 +23,9 @@ function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
   return {
     database: {
       internalUsers: {
+        findByPrivyUserId: vi.fn(() =>
+          Promise.resolve({ id: "6d12a86e-4134-47e6-9312-c5ef75a30f55" }),
+        ),
         getOrCreateByPrivyUserId: vi.fn(() =>
           Promise.resolve({ id: "6d12a86e-4134-47e6-9312-c5ef75a30f55" }),
         ),
@@ -175,6 +178,43 @@ describe("LOOP API foundation", () => {
     expect(response.statusCode).toBe(429);
     expect(response.body).not.toContain("provider detail");
     expect(response.json()).toMatchObject({ code: "internal_error" });
+  });
+
+  it("enforces the application handler deadline with a sanitized 503", async () => {
+    const { database } = fakeDatabase();
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      logger: false,
+    });
+    app.get(
+      "/test-handler-timeout",
+      { handlerTimeout: 10 },
+      async (_request, reply) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return reply.send({ too_late: true });
+      },
+    );
+    apps.push(app);
+
+    expect(
+      (
+        app.initialConfig as unknown as {
+          readonly handlerTimeout?: number;
+        }
+      ).handlerTimeout,
+    ).toBe(15_000);
+    const response = await app.inject({
+      method: "GET",
+      url: "/test-handler-timeout",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      code: "request_timeout",
+      message: "The request timed out.",
+    });
+    expect(response.body).not.toContain("FST_ERR_HANDLER_TIMEOUT");
   });
 
   it("closes the database pool with the application", async () => {

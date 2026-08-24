@@ -1,0 +1,400 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LOOP API",
+    "description": "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
+    "version": "0.1.0"
+  },
+  "components": {
+    "securitySchemes": {
+      "privyBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Current Privy access token"
+      }
+    },
+    "schemas": {}
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "summary": "Report whether the HTTP process is alive",
+        "tags": ["health"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "service", "version"],
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "service": { "type": "string", "enum": ["loop-api"] },
+                    "version": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["request_timeout"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "summary": "Report whether required infrastructure is reachable",
+        "tags": ["health"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "checks"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ready", "not_ready"]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["database"],
+                      "properties": {
+                        "database": { "type": "string", "enum": ["up", "down"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "checks"],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ready", "not_ready"]
+                        },
+                        "checks": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["database"],
+                          "properties": {
+                            "database": {
+                              "type": "string",
+                              "enum": ["up", "down"]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "headers": {
+                        "cache-control": {
+                          "type": "string",
+                          "description": "Sensitive and operational responses are never cached",
+                          "enum": ["no-store"]
+                        },
+                        "x-request-id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Server-generated request correlation ID"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": ["code", "message", "request_id"],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["request_timeout"]
+                        },
+                        "message": { "type": "string", "minLength": 1 },
+                        "request_id": { "type": "string", "format": "uuid" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/bootstrap": {
+      "post": {
+        "operationId": "bootstrapCurrentUser",
+        "summary": "Bootstrap the authenticated LOOP user",
+        "tags": ["identity"],
+        "description": "Verifies a current Privy access token and returns the server-derived LOOP and Stream user IDs.",
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["user", "stream_user_id"],
+                  "properties": {
+                    "user": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id"],
+                      "properties": {
+                        "id": { "type": "string", "format": "uuid" }
+                      }
+                    },
+                    "stream_user_id": {
+                      "type": "string",
+                      "pattern": "^loop_[a-z0-9_-]{8,58}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["authentication_unavailable", "request_timeout"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],
+  "tags": [
+    { "name": "health", "description": "Process and dependency health" },
+    {
+      "name": "identity",
+      "description": "Authenticated internal identity bootstrap"
+    }
+  ]
+}

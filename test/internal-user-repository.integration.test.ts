@@ -83,6 +83,24 @@ describe("PostgreSQL internal-user repository", () => {
     expect(first.id).not.toBe(second.id);
   });
 
+  it("finds only an existing verified identity without creating one", async () => {
+    const missing =
+      await database.internalUsers.findByPrivyUserId("did:privy:missing");
+    const created =
+      await database.internalUsers.getOrCreateByPrivyUserId(
+        "did:privy:existing",
+      );
+    const found =
+      await database.internalUsers.findByPrivyUserId("did:privy:existing");
+    const count = await inspectionPool.query<{ count: string }>(
+      "select count(*)::text as count from public.loop_users",
+    );
+
+    expect(missing).toBeNull();
+    expect(found).toEqual(created);
+    expect(count.rows[0]?.count).toBe("1");
+  });
+
   it("rejects an invalid provider ID before insertion", async () => {
     await expect(
       database.internalUsers.getOrCreateByPrivyUserId("x".repeat(256)),

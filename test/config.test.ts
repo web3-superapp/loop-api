@@ -101,4 +101,13 @@ describe("loadConfig", () => {
       /PUBLIC_BASE_URL: production requires https/,
     );
   });
+
+  it("keeps HTTP OpenAPI retrieval disabled by default in production", () => {
+    const environment = validEnvironment();
+    environment["NODE_ENV"] = "production";
+    environment["PUBLIC_BASE_URL"] = "https://api-dev.quant-dinger.cc";
+    delete environment["API_DOCS_ENABLED"];
+
+    expect(loadConfig(environment).apiDocsEnabled).toBe(false);
+  });
 });
