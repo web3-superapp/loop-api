@@ -1,0 +1,22 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    invalid_use_of_visible_for_testing_member: error
+    missing_required_param: error
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+linter:
+  rules:
+    always_use_package_imports: true
+    avoid_dynamic_calls: true
+    avoid_print: true
+    prefer_final_locals: true
+    unawaited_futures: true
