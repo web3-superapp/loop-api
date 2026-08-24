@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "status": "NOT RUN — CREDENTIALS REQUIRED",
+  "signature_path": "server_formatted_bytes",
+  "method": "PrivyUser.generateAuthorizationSignatureFromBytes",
+  "payload_encoding": "base64_to_Uint8List",
+  "formatter": {
+    "package": "@privy-io/node",
+    "version": "0.29.0",
+    "method": "formatRequestForAuthorizationSignature"
+  },
+  "package": {
+    "name": "privy_flutter",
+    "version": "0.10.1",
+    "publisher": "privy.io",
+    "archive_url": "https://pub.dev/api/archives/privy_flutter-0.10.1.tar.gz",
+    "archive_sha256": "3f3b3215b0ea41ad059ed5a11a9edadcfffa72b6efed45e9694c089281ef643e",
+    "license": "MIT",
+    "repository": "https://github.com/privy-io/flutter-sdk"
+  },
+  "authorization_payload_base64": null,
+  "authorization_payload_sha256": "PENDING",
+  "authorization_signature": null,
+  "public_verification_material": null,
+  "generation": {
+    "command": "task4 generate-official-privy-signature --credentials-required",
+    "tool_versions": {
+      "node": null,
+      "dart": null,
+      "flutter": null
+    },
+    "generated_at": null,
+    "status": "NOT RUN — CREDENTIALS REQUIRED"
+  },
+  "credentialed_staging_required": true,
+  "production_integration_complete": false
+}

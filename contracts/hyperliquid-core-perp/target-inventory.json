@@ -1,0 +1,48 @@
+{
+  "schema_version": "loop.hyperliquid-perp.target-inventory/v10",
+  "authority": "sole_machine_readable_implementation_target_owner_order_root",
+  "catalog_path": "contracts/integration-catalog/implementation-slices.json",
+  "slice_id": "hyperliquid_core_perp",
+  "profiles": [
+    "perp_market_readonly",
+    "perp_trading_mutations"
+  ],
+  "owner_order": [
+    "server/integrations/hyperliquid/core/**",
+    "lib/integrations/hyperliquid/core/**",
+    "contracts/hyperliquid-core-perp/**",
+    "test/conformance/hyperliquid/**"
+  ],
+  "targets": [
+    {"id": "T01", "path": "server/integrations/hyperliquid/core/hyperliquid-config.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T02", "path": "server/integrations/hyperliquid/core/hyperliquid-eligibility.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T03", "path": "server/integrations/hyperliquid/core/hyperliquid-executor.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T04", "path": "server/integrations/hyperliquid/core/hyperliquid-core-scope.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T05", "path": "server/integrations/hyperliquid/core/hyperliquid-client.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T06", "path": "server/integrations/hyperliquid/core/hyperliquid-info.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T07", "path": "server/integrations/hyperliquid/core/hyperliquid-exchange.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T08", "path": "server/integrations/hyperliquid/core/hyperliquid-reconcile.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T09", "path": "server/integrations/hyperliquid/core/hyperliquid-stream.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T10", "path": "server/integrations/hyperliquid/core/hyperliquid-policy.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T11", "path": "server/integrations/hyperliquid/core/hyperliquid-source-identity.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T12", "path": "server/integrations/hyperliquid/core/hyperliquid-market-review.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T13", "path": "server/integrations/hyperliquid/core/hyperliquid-user-limit.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T14", "path": "server/integrations/hyperliquid/core/hyperliquid-types.ts", "owner": "server/integrations/hyperliquid/core/**"},
+    {"id": "T15", "path": "lib/integrations/hyperliquid/core/hyperliquid-dtos.ts", "owner": "lib/integrations/hyperliquid/core/**"},
+    {"id": "T16", "path": "lib/integrations/hyperliquid/core/hyperliquid-risk-notice.ts", "owner": "lib/integrations/hyperliquid/core/**"},
+    {"id": "T17", "path": "contracts/hyperliquid-core-perp/README.md", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T18", "path": "contracts/hyperliquid-core-perp/contract.json", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T19", "path": "contracts/hyperliquid-core-perp/fixtures/offline-r0.json", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T20", "path": "contracts/hyperliquid-core-perp/implementation-plan.md", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T21", "path": "contracts/hyperliquid-core-perp/oss-lock.json", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T22", "path": "contracts/hyperliquid-core-perp/sources.md", "owner": "contracts/hyperliquid-core-perp/**"},
+    {"id": "T23", "path": "test/conformance/hyperliquid/config-and-eligibility.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T24", "path": "test/conformance/hyperliquid/authority-and-executor.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T25", "path": "test/conformance/hyperliquid/info-and-core-scope.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T26", "path": "test/conformance/hyperliquid/exchange-and-market-review.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T27", "path": "test/conformance/hyperliquid/nonce-and-reconciliation.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T28", "path": "test/conformance/hyperliquid/stream-and-user-limit.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T29", "path": "test/conformance/hyperliquid/contract-mutations.test.ts", "owner": "test/conformance/hyperliquid/**"},
+    {"id": "T30", "path": "test/conformance/hyperliquid/credentialed-testnet.test.ts", "owner": "test/conformance/hyperliquid/**"}
+  ]
+}

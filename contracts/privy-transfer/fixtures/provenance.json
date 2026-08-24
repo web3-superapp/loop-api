@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "status": "PENDING — TASK 4 OFFICIAL FORMATTER AUDIT",
+  "signature_path": "server_formatted_bytes",
+  "method": "PrivyUser.generateAuthorizationSignatureFromBytes",
+  "payload_encoding": "base64_to_Uint8List",
+  "authorization_payload_base64": null,
+  "authorization_payload_sha256": "PENDING",
+  "formatter": {
+    "package": "@privy-io/node",
+    "version": "0.29.0",
+    "method": "formatRequestForAuthorizationSignature",
+    "source": "https://github.com/privy-io/node-sdk.git",
+    "integrity": "sha512-Tcpy8ZDi14SzAmqFXRSgKTgMsk8truxAXodHuRR08XjLSfZLAx2Kfh8EBSoKTPxK9KakMjRhO6+nw66RtiiYdg==",
+    "canonical_payload_sha256": null
+  },
+  "flutter": {
+    "package": "privy_flutter",
+    "version": "0.10.1",
+    "publisher": "privy.io",
+    "archive_url": "https://pub.dev/api/archives/privy_flutter-0.10.1.tar.gz",
+    "archive_sha256": "3f3b3215b0ea41ad059ed5a11a9edadcfffa72b6efed45e9694c089281ef643e",
+    "license": "MIT",
+    "repository": "https://github.com/privy-io/flutter-sdk",
+    "method": "PrivyUser.generateAuthorizationSignatureFromBytes",
+    "payload_encoding": "base64_to_Uint8List",
+    "signature_status": "NOT RUN — CREDENTIALS REQUIRED"
+  },
+  "fixture_hashes": {
+    "wallet_api_payload_json_sha256": "9bcd4b5d7b85e58cb56542b998f5bf0b224188d95fde5b27fdf4102ade8f0636",
+    "canonical_payload_sha256": null,
+    "flutter_signature_sha256": null
+  },
+  "generation": {
+    "command": "task4 generate-official-privy-signature --credentials-required",
+    "tool_versions": {
+      "node": null,
+      "dart": null,
+      "flutter": null
+    },
+    "generated_at": null,
+    "status": "PENDING — TASK 4 OFFICIAL FORMATTER AUDIT"
+  }
+}

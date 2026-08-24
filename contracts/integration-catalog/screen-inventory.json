@@ -1,0 +1,933 @@
+{
+  "schema_version": "loop.screen-inventory/v1",
+  "authority": "文档/页面清单.md v1.4 2026-08-23",
+  "screens": [
+    {
+      "id": "A1",
+      "module": "A",
+      "name": "启动闪屏",
+      "surface": "routed_screen",
+      "route": "#splash",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A2",
+      "module": "A",
+      "name": "引导轮播",
+      "surface": "routed_screen",
+      "route": "#onboarding",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "A3",
+      "module": "A",
+      "name": "登录方式选择",
+      "surface": "routed_screen",
+      "route": "#auth",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A4",
+      "module": "A",
+      "name": "邮箱/手机验证码",
+      "surface": "routed_screen",
+      "route": "#auth-otp",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A5",
+      "module": "A",
+      "name": "连接外部钱包",
+      "surface": "routed_screen",
+      "route": "#auth-wallet",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A6",
+      "module": "A",
+      "name": "创建嵌入式钱包",
+      "surface": "routed_screen",
+      "route": "#wallet-create",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A7",
+      "module": "A",
+      "name": "备份与恢复设置",
+      "surface": "routed_screen",
+      "route": "#wallet-backup",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "A8",
+      "module": "A",
+      "name": "助记词展示",
+      "surface": "routed_screen",
+      "route": "#seed-show",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A9",
+      "module": "A",
+      "name": "助记词校验",
+      "surface": "routed_screen",
+      "route": "#seed-verify",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A10",
+      "module": "A",
+      "name": "导入已有钱包",
+      "surface": "routed_screen",
+      "route": "#wallet-import",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "A11",
+      "module": "A",
+      "name": "设置 MFA 与应用锁",
+      "surface": "routed_screen",
+      "route": "#security-setup",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "A12",
+      "module": "A",
+      "name": "首次身份与偏好",
+      "surface": "routed_screen",
+      "route": "#profile-setup",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "B1",
+      "module": "B",
+      "name": "Home 动态首页",
+      "surface": "routed_screen",
+      "route": "#home",
+      "state": "已有",
+      "priority": "A"
+    },
+    {
+      "id": "B2",
+      "module": "B",
+      "name": "净值明细",
+      "surface": "routed_screen",
+      "route": "#networth",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "B3",
+      "module": "B",
+      "name": "通知中心",
+      "surface": "routed_screen",
+      "route": "#notifications",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "B4",
+      "module": "B",
+      "name": "全局搜索",
+      "surface": "routed_screen",
+      "route": "#search",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "B5",
+      "module": "B",
+      "name": "Pay 扫一扫",
+      "surface": "routed_screen",
+      "route": "#pay",
+      "state": "已有",
+      "priority": "A"
+    },
+    {
+      "id": "B6",
+      "module": "B",
+      "name": "Pay 收款码",
+      "surface": "routed_screen",
+      "route": "#pay-receive",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "B7",
+      "module": "B",
+      "name": "Pay 确认支付",
+      "surface": "routed_screen",
+      "route": "#pay-confirm",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "B8",
+      "module": "B",
+      "name": "法币入金",
+      "surface": "routed_screen",
+      "route": "#onramp",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "B9",
+      "module": "B",
+      "name": "安全摘要详情",
+      "surface": "routed_screen",
+      "route": "#security-digest",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "C1",
+      "module": "C",
+      "name": "Market 列表",
+      "surface": "routed_screen",
+      "route": "#market",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "C2",
+      "module": "C",
+      "name": "Token 详情",
+      "surface": "routed_screen",
+      "route": "#token",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "C3",
+      "module": "C",
+      "name": "全屏 K 线",
+      "surface": "routed_screen",
+      "route": "#chart-full",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "C5",
+      "module": "C",
+      "name": "持有人分布",
+      "surface": "routed_screen",
+      "route": "#token-holders",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "C6",
+      "module": "C",
+      "name": "交易活动",
+      "surface": "routed_screen",
+      "route": "#token-trades",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "C7",
+      "module": "C",
+      "name": "自选管理",
+      "surface": "routed_screen",
+      "route": "#watchlist-edit",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "C9",
+      "module": "C",
+      "name": "价格提醒管理",
+      "surface": "routed_screen",
+      "route": "#alerts",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "C10",
+      "module": "C",
+      "name": "新币发现",
+      "surface": "routed_screen",
+      "route": "#new-pairs",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "C11",
+      "module": "C",
+      "name": "聪明钱追踪",
+      "surface": "routed_screen",
+      "route": "#smart-money",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "D1",
+      "module": "D",
+      "name": "Perp 市场列表",
+      "surface": "routed_screen",
+      "route": "#perp",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D2",
+      "module": "D",
+      "name": "Perp 交易主界面",
+      "surface": "routed_screen",
+      "route": "#perp-trade",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D3",
+      "module": "D",
+      "name": "下单确认",
+      "surface": "routed_screen",
+      "route": "#perp-confirm",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D4",
+      "module": "D",
+      "name": "持仓列表",
+      "surface": "routed_screen",
+      "route": "#perp-positions",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D5",
+      "module": "D",
+      "name": "仓位详情与管理",
+      "surface": "routed_screen",
+      "route": "#perp-position",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D6",
+      "module": "D",
+      "name": "委托订单",
+      "surface": "routed_screen",
+      "route": "#perp-orders",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D7",
+      "module": "D",
+      "name": "成交历史",
+      "surface": "routed_screen",
+      "route": "#perp-history",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "D8",
+      "module": "D",
+      "name": "保证金账户",
+      "surface": "routed_screen",
+      "route": "#perp-account",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "D9",
+      "module": "D",
+      "name": "划转（现货↔Perp）",
+      "surface": "routed_screen",
+      "route": "#perp-transfer",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "D10",
+      "module": "D",
+      "name": "Perp 出入金",
+      "surface": "routed_screen",
+      "route": "#perp-deposit",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "D11",
+      "module": "D",
+      "name": "资金费率详情",
+      "surface": "routed_screen",
+      "route": "#perp-funding",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "D12",
+      "module": "D",
+      "name": "杠杆与风险须知",
+      "surface": "routed_screen",
+      "route": "#perp-risk-notice",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "E1",
+      "module": "E",
+      "name": "会话列表",
+      "surface": "routed_screen",
+      "route": "#chat",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "E2",
+      "module": "E",
+      "name": "群聊消息流",
+      "surface": "routed_screen",
+      "route": "#group",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "E3",
+      "module": "E",
+      "name": "群内语音房",
+      "surface": "routed_screen",
+      "route": "#voiceroom",
+      "state": "已有",
+      "priority": "A"
+    },
+    {
+      "id": "E4",
+      "module": "E",
+      "name": "私聊会话",
+      "surface": "routed_screen",
+      "route": "#dm",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "E5",
+      "module": "E",
+      "name": "Token 识别卡",
+      "surface": "component",
+      "route": null,
+      "state": "已有改",
+      "priority": "A"
+    },
+    {
+      "id": "E7",
+      "module": "E",
+      "name": "合约事实弹层",
+      "surface": "sheet",
+      "route": null,
+      "state": "已有改",
+      "priority": "A"
+    },
+    {
+      "id": "E8",
+      "module": "E",
+      "name": "群信息与成员",
+      "surface": "routed_screen",
+      "route": "#group-info",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "E9",
+      "module": "E",
+      "name": "资产消息卡",
+      "surface": "component",
+      "route": null,
+      "state": "已有",
+      "priority": "B"
+    },
+    {
+      "id": "E10",
+      "module": "E",
+      "name": "语音房完整视图",
+      "surface": "routed_screen",
+      "route": "#voiceroom-full",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "E11",
+      "module": "E",
+      "name": "陌生人请求",
+      "surface": "routed_screen",
+      "route": "#dm-requests",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "E12",
+      "module": "E",
+      "name": "消息搜索",
+      "surface": "routed_screen",
+      "route": "#chat-search",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "E13",
+      "module": "E",
+      "name": "视频与会议占位",
+      "surface": "routed_screen",
+      "route": "#meeting",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "E14",
+      "module": "E",
+      "name": "AI Bot 占位",
+      "surface": "component",
+      "route": null,
+      "state": "已有",
+      "priority": "C"
+    },
+    {
+      "id": "F1",
+      "module": "F",
+      "name": "Wallet 总览",
+      "surface": "routed_screen",
+      "route": "#wallet",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "F2",
+      "module": "F",
+      "name": "资产详情",
+      "surface": "routed_screen",
+      "route": "#asset",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F3",
+      "module": "F",
+      "name": "发送-选资产",
+      "surface": "routed_screen",
+      "route": "#send",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F4",
+      "module": "F",
+      "name": "发送-填收款方",
+      "surface": "routed_screen",
+      "route": "#send-to",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F5",
+      "module": "F",
+      "name": "发送-确认",
+      "surface": "routed_screen",
+      "route": "#send-confirm",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F6",
+      "module": "F",
+      "name": "接收",
+      "surface": "routed_screen",
+      "route": "#receive",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F7",
+      "module": "F",
+      "name": "Swap",
+      "surface": "routed_screen",
+      "route": "#swap",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "F8",
+      "module": "F",
+      "name": "Swap 路由详情",
+      "surface": "routed_screen",
+      "route": "#swap-route",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F9",
+      "module": "F",
+      "name": "跨链 Bridge",
+      "surface": "routed_screen",
+      "route": "#bridge",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F10",
+      "module": "F",
+      "name": "Bridge 进度追踪",
+      "surface": "routed_screen",
+      "route": "#bridge-status",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F11",
+      "module": "F",
+      "name": "交易签名确认弹层",
+      "surface": "sheet",
+      "route": null,
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "F12",
+      "module": "F",
+      "name": "交易结果",
+      "surface": "routed_screen",
+      "route": "#tx-result",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F13",
+      "module": "F",
+      "name": "交易历史",
+      "surface": "routed_screen",
+      "route": "#tx-history",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F14",
+      "module": "F",
+      "name": "多钱包管理",
+      "surface": "routed_screen",
+      "route": "#wallets",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F15",
+      "module": "F",
+      "name": "DApp Browser",
+      "surface": "routed_screen",
+      "route": "#dapp",
+      "state": "已有",
+      "priority": "B"
+    },
+    {
+      "id": "F16",
+      "module": "F",
+      "name": "授权拦截弹层",
+      "surface": "sheet",
+      "route": null,
+      "state": "已有",
+      "priority": "A"
+    },
+    {
+      "id": "F17",
+      "module": "F",
+      "name": "授权盘点与回收",
+      "surface": "routed_screen",
+      "route": "#approvals",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F18",
+      "module": "F",
+      "name": "DApp 收藏与历史",
+      "surface": "routed_screen",
+      "route": "#dapp-list",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "F19",
+      "module": "F",
+      "name": "网络与 RPC 管理",
+      "surface": "routed_screen",
+      "route": "#networks",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "F20",
+      "module": "F",
+      "name": "AI Guard 设置",
+      "surface": "routed_screen",
+      "route": "#guard-settings",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "G1",
+      "module": "G",
+      "name": "Launchpad 占位",
+      "surface": "routed_screen",
+      "route": "#launchpad",
+      "state": "已有",
+      "priority": "A"
+    },
+    {
+      "id": "G2",
+      "module": "G",
+      "name": "项目列表",
+      "surface": "routed_screen",
+      "route": "#launch-list",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "G3",
+      "module": "G",
+      "name": "项目详情与认购",
+      "surface": "routed_screen",
+      "route": "#launch-detail",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "G4",
+      "module": "G",
+      "name": "申请发射",
+      "surface": "routed_screen",
+      "route": "#launch-apply",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "H1",
+      "module": "H",
+      "name": "Profile 主页",
+      "surface": "routed_screen",
+      "route": "#profile",
+      "state": "已有扩",
+      "priority": "A"
+    },
+    {
+      "id": "H2",
+      "module": "H",
+      "name": "编辑资料",
+      "surface": "routed_screen",
+      "route": "#profile-edit",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H3",
+      "module": "H",
+      "name": "隐私中心",
+      "surface": "routed_screen",
+      "route": "#privacy",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "H4",
+      "module": "H",
+      "name": "跟单权限设置",
+      "surface": "routed_screen",
+      "route": "#copytrade-perms",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H5",
+      "module": "H",
+      "name": "安全中心",
+      "surface": "routed_screen",
+      "route": "#security",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "H6",
+      "module": "H",
+      "name": "设备与会话管理",
+      "surface": "routed_screen",
+      "route": "#devices",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H7",
+      "module": "H",
+      "name": "助记词备份/查看",
+      "surface": "routed_screen",
+      "route": "#seed-backup",
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "H8",
+      "module": "H",
+      "name": "社交恢复设置",
+      "surface": "routed_screen",
+      "route": "#social-recovery",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H9",
+      "module": "H",
+      "name": "通知设置",
+      "surface": "routed_screen",
+      "route": "#notif-settings",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H10",
+      "module": "H",
+      "name": "关注与粉丝",
+      "surface": "routed_screen",
+      "route": "#connections",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H11",
+      "module": "H",
+      "name": "屏蔽名单",
+      "surface": "routed_screen",
+      "route": "#blocklist",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H12",
+      "module": "H",
+      "name": "通用设置",
+      "surface": "routed_screen",
+      "route": "#settings",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H13",
+      "module": "H",
+      "name": "关于与法务",
+      "surface": "routed_screen",
+      "route": "#about",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H14",
+      "module": "H",
+      "name": "帮助与客服",
+      "surface": "routed_screen",
+      "route": "#support",
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "H15",
+      "module": "H",
+      "name": "挖矿与激励",
+      "surface": "routed_screen",
+      "route": "#mining",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "H16",
+      "module": "H",
+      "name": "邀请好友",
+      "surface": "routed_screen",
+      "route": "#referral",
+      "state": "新",
+      "priority": "C"
+    },
+    {
+      "id": "I1",
+      "module": "I",
+      "name": "无网络",
+      "surface": "global_state",
+      "route": null,
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "I2",
+      "module": "I",
+      "name": "服务端错误",
+      "surface": "global_state",
+      "route": null,
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "I3",
+      "module": "I",
+      "name": "强制更新",
+      "surface": "sheet",
+      "route": null,
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "I4",
+      "module": "I",
+      "name": "系统维护",
+      "surface": "global_state",
+      "route": null,
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "I5",
+      "module": "I",
+      "name": "地区限制",
+      "surface": "global_state",
+      "route": null,
+      "state": "新",
+      "priority": "A"
+    },
+    {
+      "id": "I6",
+      "module": "I",
+      "name": "权限申请说明",
+      "surface": "sheet",
+      "route": null,
+      "state": "新",
+      "priority": "B"
+    },
+    {
+      "id": "I7",
+      "module": "I",
+      "name": "Toast / 全局提示",
+      "surface": "component",
+      "route": null,
+      "state": "已有",
+      "priority": "B"
+    },
+    {
+      "id": "I8",
+      "module": "I",
+      "name": "骨架屏与加载",
+      "surface": "component",
+      "route": null,
+      "state": "新",
+      "priority": "B"
+    }
+  ]
+}

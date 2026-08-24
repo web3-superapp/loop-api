@@ -1,0 +1,76 @@
+{
+  "schema_version": "loop.custom-code-budget/v3",
+  "policy": "LOOP code is limited to UI, orchestration, state projection, policy mapping, thin adapters and copy; durable whole-app business cores require an approved official provider or maintained OSS",
+  "reuse_acceptance": {
+    "qualifying_github_reuse": "mature_application_level_business_capability_or_managed_service",
+    "non_qualifying_as_whole_app_reuse": [
+      "UI_component_library",
+      "screen_template",
+      "demo_or_example_app",
+      "unknown_license_code"
+    ],
+    "unknown_license_copy": "forbidden",
+    "candidate_before_selection_gate": "PENDING_default_deny_not_runtime",
+    "required_before_copy_or_import": [
+      "canonical_repository_identity",
+      "exact_tag_and_commit",
+      "artifact_integrity",
+      "license_and_NOTICE",
+      "SBOM",
+      "upgrade_gate"
+    ]
+  },
+  "allowed_custom_categories": [
+    "ui",
+    "orchestration",
+    "state_projection",
+    "policy_mapping",
+    "thin_adapter",
+    "copy"
+  ],
+  "forbidden_reimplementations": [
+    "custom_wallet",
+    "custom_signer",
+    "custom_key_store",
+    "custom_swap_router",
+    "custom_bridge_router",
+    "custom_im_transport",
+    "custom_rtc_media",
+    "custom_sfu",
+    "custom_matching_engine",
+    "custom_perp_ledger",
+    "custom_market_data",
+    "custom_indexer",
+    "custom_rpc_node",
+    "custom_chart_engine",
+    "custom_push_transport",
+    "custom_crash_ingestion",
+    "custom_analytics_backend",
+    "custom_kyc",
+    "custom_aml_dataset",
+    "custom_transaction_simulator",
+    "custom_profile_store",
+    "custom_social_graph",
+    "custom_relationship_graph",
+    "custom_watchlist_store",
+    "custom_notification_inbox",
+    "custom_price_alert_scheduler",
+    "custom_activity_feed",
+    "custom_search_index",
+    "custom_event_bus",
+    "custom_job_scheduler",
+    "custom_authorization_core",
+    "custom_support_backend"
+  ],
+  "exception_gate": {
+    "required_status": "PENDING",
+    "required_evidence": [
+      "provider_gap",
+      "cost",
+      "security_risk",
+      "maintenance_risk",
+      "replacement_plan"
+    ],
+    "owner_approval": "explicit_written_required"
+  }
+}

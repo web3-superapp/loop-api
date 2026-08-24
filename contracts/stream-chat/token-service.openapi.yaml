@@ -1,0 +1,84 @@
+openapi: 3.1.0
+info:
+  title: LOOP Stream Chat token boundary
+  version: 1.0.0
+  description: >-
+    Exact production contract. The BFF authenticates the LOOP session, derives an
+    opaque Stream subject, and uses server-only environment variable STREAM_API_SECRET
+    to mint an expiring user token for Chat and Video. A client supplied user_id is rejected.
+servers:
+  - url: https://api.loop.example
+paths:
+  /v1/chat/token:
+    post:
+      operationId: mintStreamChatToken
+      summary: Mint a one-hour Stream Chat user token for the authenticated LOOP subject
+      description: >-
+        Requires the existing HttpOnly; Secure; SameSite=Strict LOOP session cookie and
+        an X-CSRF-Token bound to that session. The endpoint accepts no request body,
+        never trusts a client-selected user ID, and never returns STREAM_API_SECRET.
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 32
+            maxLength: 256
+      responses:
+        "200":
+          description: Expiring Stream user token
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [api_key, token, expires_at, user]
+                properties:
+                  api_key:
+                    type: string
+                    minLength: 1
+                  token:
+                    type: string
+                    minLength: 32
+                  expires_at:
+                    type: string
+                    format: date-time
+                  user:
+                    type: object
+                    additionalProperties: false
+                    required: [id, name]
+                    properties:
+                      id:
+                        type: string
+                        pattern: '^loop_[a-z0-9_-]{8,58}$'
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 80
+                      image:
+                        type: [string, "null"]
+                        maxLength: 2048
+        "400":
+          description: Body or client identity input rejected
+        "401":
+          description: Missing or invalid LOOP session
+        "403":
+          description: Missing or invalid CSRF proof
+        "429":
+          description: Per-session and per-subject issuance limit exceeded
+        "503":
+          description: Stream credentials unavailable; fail closed
+      security:
+        - loopSession: []
+components:
+  securitySchemes:
+    loopSession:
+      type: apiKey
+      in: cookie
+      name: __Host-loop-session

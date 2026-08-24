@@ -1,0 +1,57 @@
+{
+  "schema_version": "loop.hyperliquid-perp.oss-lock/v4",
+  "selected_runtime_candidate": {
+    "package": "@nktkas/hyperliquid",
+    "version": "0.33.2",
+    "repository": "https://github.com/nktkas/hyperliquid",
+    "commit": "65431f93edadc9bc3e17502c107b694bf373db34",
+    "license": "MIT",
+    "license_sha256": "dc69b5f489b78ff65d128fe457f39b0e8d1d707d84e23beafe6a6a16209c38e7",
+    "npm_integrity": "sha512-6Jf7USFst6DDI8/5VQjsRJMZLQJJURGIGtVZeXjnsW9II3brfkAPsdS90Z+DhLuC+iTugTb7qwqUuYp6/aCtqQ==",
+    "npm_tarball_sha256": "ef7e9f1425e43b8ac9f537e1ac210cd47b3a3dd56838b81ba7794709a1107f86",
+    "runtime": "Node.js >=22.12.0, ESM-only",
+    "pin_scope": "top_level_package_only",
+    "status": "top_level_candidate_pinned_not_installed_runtime_graph_not_locked"
+  },
+  "official_reference_sdk": {
+    "package": "hyperliquid-python-sdk",
+    "version": "0.24.0",
+    "repository": "https://github.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "commit": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "release_archive_sha256": "18e489f3432da8357a6bd0aa9ccfd057fbc1674a027c0a82e75c79ae67bf5381",
+    "signing_py_sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
+    "exchange_py_sha256": "0bd885c5b64fd77893db58d4982b0d24e92b5be5036d0e9d6d05c40a1812d432",
+    "info_py_sha256": "fc36d225a2b865d474e5682ad4f095d9917e84ef5dba9c80de3d4600467f4882",
+    "websocket_manager_py_sha256": "1382a63068488932a1b9e4995e3a9807f3bf0e68ac71c7cd022edb3fea126b87",
+    "status": "read_only_conformance_oracle_not_installed"
+  },
+  "source_oracles": {
+    "nonce_ts_sha256": "5e93b8ff2ee6cf7ee70d29392a5254f81fa50865d3c0fe8569a011438086ff41",
+    "exchange_shell_ts_sha256": "26deed9a14fb4b3cbfee232d3e64b4d329b912d36ed247f2435ddb920a6d24bc",
+    "subscription_manager_ts_sha256": "1ef6f6afb3161744d68ceab5d2d64daa706426fa977db27239c7619dff0c3700",
+    "user_events_ts_sha256": "c512e1f7024052e955da50e25ac6fc5c55b4928aba5df2ad787c57cb49323850",
+    "order_ts_sha256": "27c361bd9e6d9f3d6c9f548a2c1ae9a29e717cd9cddefaa91f35ea6b84e06650",
+    "deno_json_sha256": "c28dcc1af8b606a1fdf7c499052276bdf3c3ba2b99aa53fa053805534ebad74d"
+  },
+  "price_arithmetic_candidate": {
+    "package": "decimal.js",
+    "declared_range": "^10.6.0",
+    "role": "thin exact-decimal market IOC boundary and Core price-grid policy only",
+    "status": "PENDING_full_transitive_lock_integrity_and_license_gate",
+    "production": "blocked"
+  },
+  "dependency_graph": {
+    "status": "PENDING_full_lockfile_transitive_integrity_and_license_audit_before_implementation",
+    "runtime_graph_locked": false,
+    "declared_ranges": {
+      "@nktkas/rews": "^4.1.0",
+      "@noble/hashes": "^2.2.0",
+      "@std/async/unstable-semaphore": "1.5.0",
+      "@std/msgpack/encode": "^1.0.3",
+      "@valibot/valibot": "^1.4.2",
+      "decimal.js": "^10.6.0"
+    },
+    "implementation_gate": "generate committed complete lockfile; pin every transitive version/source/integrity; collect every license; deny mutable ranges or missing integrity; rerun source and semantic mutations"
+  },
+  "upgrade_gate": "fail closed until complete dependency graph lock; then review upstream diff, license, release provenance, signing and nonce ownership, API schemas, Core-only action allowlist, limits, reconnect behavior, semantic mutations, and credentialed testnet evidence"
+}
