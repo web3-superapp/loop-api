@@ -126,6 +126,34 @@ building the contract are independent controls.
   nonces, secrets, and complete provider authorization payloads are neither
   logged nor retained as ordinary application data.
 
+### Durable control-plane invariants
+
+- A UUID idempotency key is unique within its operation scope, independent of
+  owner. The record permanently binds the key to its first owner, key source,
+  digest version, and request digest. Reuse by another owner or with another
+  digest is the same sanitized conflict and creates no second operation.
+- The generic provider-operation journal permits at most one transport attempt.
+  `prepared -> submitting` atomically records a fresh transport-attempt UUID,
+  deadline, version, and append-only audit event before any bytes may be sent.
+  A stale `submitting` record is conservatively quarantined as `unknown`; it is
+  never evidence that a write was not sent and never authorizes a replay.
+- Business result state is separate from reconciliation scheduling. A worker
+  may move only `unknown/pending -> unknown/leased`, then resolve it from an
+  authoritative read, reschedule it, or park it as
+  `unknown/operator_required`. Lease acquisition increments an independent
+  reconciliation-attempt count, fence token, and record version; it never
+  increments the provider-write attempt count.
+- Worker writes compare owner, worker, fence, expected version, and an unexpired
+  lease using the PostgreSQL wall clock after acquiring and materializing the
+  row lock. The generic worker has only a read port and cannot sign, submit,
+  execute, authorize, or replay provider writes. The transfer-specific
+  byte-identical replay exception is isolated from this journal and worker.
+- Every control-plane transition and its sanitized, versioned audit record
+  commit in one transaction. Audit rows reject update and delete. Token-issuance
+  quotas reserve every required subject bucket atomically using database time,
+  a versioned policy snapshot, and server-HMAC subject keys; raw IP addresses
+  and ordinary enumerable IP hashes are not stored.
+
 ## Consequences
 
 The historical Stream cookie/CSRF contract remains provenance, but this decision

@@ -7,14 +7,19 @@ import type {
   InternalUser,
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
+import {
+  createPostgresControlPlaneRepository,
+  type ControlPlaneRepository,
+} from "./control-plane-repository.js";
+import { latestMigrationName, requiredDatabaseRelations } from "./schema.js";
 
 const { Pool } = pg;
-const requiredMigration = "000001_create_internal_users";
 const privyUserIdSchema = z.string().min(1).max(255);
 const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 
 export interface Database {
   readonly internalUsers: InternalUserRepository;
+  readonly controlPlane: ControlPlaneRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -98,9 +103,11 @@ export function createPostgresDatabase(
       return existingUser;
     },
   };
+  const controlPlane = createPostgresControlPlaneRepository(pool);
 
   return {
     internalUsers,
+    controlPlane,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `
@@ -110,10 +117,14 @@ export function createPostgresDatabase(
               from public.pgmigrations
               where name = $1
             )
-            and to_regclass('public.loop_users') is not null
+            and not exists (
+              select 1
+              from unnest($2::text[]) as required(relation_name)
+              where to_regclass(required.relation_name) is null
+            )
             as schema_ready
         `,
-        values: [requiredMigration],
+        values: [latestMigrationName, requiredDatabaseRelations],
       });
 
       if (result.rows[0]?.schema_ready !== true) {

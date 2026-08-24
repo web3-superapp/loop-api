@@ -7,6 +7,7 @@ import { format } from "prettier";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import { createUnavailablePrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
@@ -22,6 +23,7 @@ function schemaOnlyDependencyInvoked(): never {
 
 function createSchemaOnlyDatabase(): Database {
   return {
+    controlPlane: createUnavailableControlPlaneRepository(),
     internalUsers: {
       findByPrivyUserId: schemaOnlyDependencyInvoked,
       getOrCreateByPrivyUserId: schemaOnlyDependencyInvoked,

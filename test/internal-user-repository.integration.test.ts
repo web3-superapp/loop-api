@@ -24,6 +24,14 @@ const config = loadConfig({
 const logger = {
   error: () => undefined,
 } as unknown as FastifyBaseLogger;
+const truncateControlPlane = `
+  truncate table
+    public.audit_events,
+    public.provider_operations,
+    public.idempotency_records,
+    public.issuance_rate_records,
+    public.loop_users
+`;
 
 describe("PostgreSQL internal-user repository", () => {
   let database: Database;
@@ -34,12 +42,12 @@ describe("PostgreSQL internal-user repository", () => {
   });
 
   beforeEach(async () => {
-    await inspectionPool.query("truncate table public.loop_users");
+    await inspectionPool.query(truncateControlPlane);
   });
 
   afterAll(async () => {
     await database.close();
-    await inspectionPool.query("truncate table public.loop_users");
+    await inspectionPool.query(truncateControlPlane);
     await inspectionPool.end();
   });
 

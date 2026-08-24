@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 
 function testConfig(apiDocsEnabled = true) {
@@ -22,6 +23,7 @@ function testConfig(apiDocsEnabled = true) {
 function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
   return {
     database: {
+      controlPlane: createUnavailableControlPlaneRepository(),
       internalUsers: {
         findByPrivyUserId: vi.fn(() =>
           Promise.resolve({ id: "6d12a86e-4134-47e6-9312-c5ef75a30f55" }),

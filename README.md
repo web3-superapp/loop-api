@@ -15,6 +15,12 @@ The runtime foundation and first protected identity slice are implemented:
 - a reusable Native Privy Bearer principal boundary for protected routes
 - idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
   server-derived Stream user ID
+- a durable provider-operation control plane with scope-wide idempotency,
+  one-attempt write journals, versioned append-only audit events, atomic
+  multi-subject issuance quotas, and stale-submission quarantine
+- a generic reconciliation worker whose provider boundary supports
+  authoritative reads only, with fenced leases, bounded retries, operator hold,
+  and abort-safe shutdown
 - a committed, deterministic OpenAPI artifact with a drift check
 - unit/contract tests, linting, type checking, and production compilation
 
@@ -22,7 +28,8 @@ This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
 but a real phone-issued token has not yet passed the physical-device gate. There
 is still no Stream token minting, Hyperliquid private account/trading path,
-Firebase push path, rate limiter, or production deployment.
+Firebase push path, endpoint-wired issuance policy, or production deployment.
+The control-plane and quota primitives do not by themselves enable any provider.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is

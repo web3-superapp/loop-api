@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import {
   InvalidAccessTokenError,
@@ -34,6 +35,7 @@ function fakes() {
   );
   const findByPrivyUserId = vi.fn(() => Promise.resolve({ id: loopUserId }));
   const database = {
+    controlPlane: createUnavailableControlPlaneRepository(),
     internalUsers: { findByPrivyUserId, getOrCreateByPrivyUserId },
     ping: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
