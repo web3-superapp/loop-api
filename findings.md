@@ -2,6 +2,8 @@
 
 ## 2026-08-24 — Current known state
 
+- Project owner replaced the old HTML-first sequence on 2026-08-24: delivery now proceeds directly as Flutter client + BFF + automated tests in parallel. The HTML build is a frozen interaction/security reference only and is no longer a release gate or a valid measure of implementation progress.
+
 - Static HTML/CSS/JavaScript prototype built from `src/screens-order.txt`, source fragments, `src/app.js`, and `src/style.css`.
 - Generated prototype currently reports a 42-screen routed manifest: the 30-screen platform milestone plus Hyperliquid D1–D12 Core Perp/account routes. I1 offline, I2 server error, I3 force update, and I5 regional restriction are global states and are not counted as routed screens. F11 remains the single shared wallet dialog and Privy remains the only signing authority.
 - Account onboarding slice added nine screens and a comprehensive `_tmp/verify_account.py` suite.
@@ -33,7 +35,7 @@
 - Week 3 separately owns the send flow F3–F5, Swap F7, Bridge F9–F10, and transaction result F12. The current route shells establish only semantic navigation; all F3–F5/F12 behavior remains pending so transaction construction is not mixed into this manifest slice.
 - F11 decodes transfer, limited/unlimited approval, swap, and a blocked Perp extension through one canonical LOOP Intent model. It is an R0/manual-copy-and-number-review gate, even in a simulated HTML prototype.
 - The HTML prototype is explicitly simulation-only: no real chain requests or signing. Tests must use deterministic public fixtures and assert zero network/clipboard/secret leakage.
-- Existing documentation mixes the later Flutter/testnet delivery plan with the current HTML-first milestone. The next design must stay within the HTML A-tier prototype while preserving interfaces needed for later Flutter implementation.
+- The Flutter client and BFF are now the active implementation targets. New work must preserve the audited provider boundaries and fail-closed contracts, but must not extend HTML merely to simulate production progress.
 
 ## Verified wallet-foundation implementation
 
