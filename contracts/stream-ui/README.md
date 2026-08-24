@@ -5,6 +5,16 @@ Video boundary. Stream remains the only communication authority. The UI adds no
 message store, delivery queue, socket, presence service, moderation service,
 participant database, media transport, or reconnect engine.
 
+This is the current communication presentation baseline, but it is not a live
+integration. No Stream SDK/runtime/token endpoint is running from this repository.
+The persistent 200,000-member single-group shape remains a written-provider-
+confirmation Go/No-Go; until accepted, UI and backend design must assume
+partitioned groups/topic channels with aggregate discovery, not a single giant
+channel. User identity is the opaque internal LOOP user ID, while wallets are
+bindable credentials. Risk presentation is limited to verifiable facts with
+source and observation time; Pay and synthetic AI/numeric risk scoring are out of
+scope.
+
 The production prototype has no Stream credentials and therefore cannot connect.
 Visible conversation data is labeled **Offline preview · not connected** and is
 read-only. It is not the test fixture from `src/test-fixtures/`; that fixture remains

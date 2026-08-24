@@ -1,5 +1,12 @@
 # 官方来源与单一锁定真相
 
+> **历史来源索引。** 本页保留候选调研证据，不代表候选进入当前 runtime。
+> 当前通信基线是 Stream Chat + Stream Video/Audio Rooms，但仓库尚无 live
+> SDK/runtime/endpoint。Pay 与支付后端不在本期；MoonPay/Transak 等条目仅供
+> 历史追溯。风险展示只允许有来源与观察时间的可验证事实，不支持 AI Guard
+> 或数值风险分结论。当前范围以仓库 `README.md` 和
+> `docs/product-decisions.md` 为准。
+
 复核日期为 2026-08-23。`provider-lock.json is the single machine-readable pin truth`：所有 provider/OSS canonical identity、GitHub repository、runtime-selected pin、upgrade candidate、版本、tag、commit、registry integrity、license integrity、maintenance evidence、状态与选择/升级门只在该文件出现。本页仅列官方来源与能力边界，不重复任何可漂移的精确 pin。无法从官方文档、registry 和 canonical repository 闭合的能力保持 `PENDING`。
 
 `custom_code_budget` 继续约束全 App：Privy 是 wallet/signature authority，Stream 是 Chat/Video communication authority，Hyperliquid 是 core-whitelist Perp authority；`HIP-3` 禁止。成熟 provider/OSS core 不得复制、fork 或在 LOOP 内重写。

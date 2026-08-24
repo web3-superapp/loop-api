@@ -1,13 +1,16 @@
 openapi: 3.1.0
 info:
-  title: LOOP Stream Chat token boundary
+  title: LOOP Stream Chat token target boundary
   version: 1.0.0
   description: >-
-    Exact production contract. The BFF authenticates the LOOP session, derives an
-    opaque Stream subject, and uses server-only environment variable STREAM_API_SECRET
-    to mint an expiring user token for Chat and Video. A client supplied user_id is rejected.
+    Target fail-closed contract; this is not a deployed endpoint or evidence of a
+    live Stream integration. A future BFF authenticates the LOOP session, derives
+    an opaque internal Stream subject, and uses a server-only secret to mint an
+    expiring user token for Chat and Video. A client-supplied user_id is rejected,
+    and wallets remain bindable credentials rather than account identity.
 servers:
-  - url: https://api.loop.example
+  - url: https://api.loop.invalid
+    description: Non-routable documentation placeholder; no deployed server exists
 paths:
   /v1/chat/token:
     post:
