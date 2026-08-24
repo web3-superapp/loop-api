@@ -1,0 +1,363 @@
+{
+  "schema_version": "loop.integration-slices/v2",
+  "ordering": "ascending_wave_then_order; equal-wave slices are parallel-safe",
+  "slices": [
+    {
+      "id": "platform_foundation",
+      "wave": 0,
+      "order": 1,
+      "provider_slice": "Flutter routing, local state, permissions and policy-copy foundation",
+      "candidate_reuse": [
+        "supabase_app_data_candidate"
+      ],
+      "depends_on": [],
+      "owns": [
+        "lib/platform/foundation/**",
+        "lib/platform/permissions/**",
+        "lib/features/onboarding/**",
+        "lib/features/profile/**",
+        "lib/features/privacy/**",
+        "lib/features/copytrade_policy/**",
+        "lib/features/social_graph/**",
+        "lib/features/settings/**",
+        "lib/features/watchlist/**",
+        "lib/features/about/**",
+        "contracts/platform-foundation/**"
+      ],
+      "profiles": [
+        "app_shell",
+        "onboarding_static",
+        "profile_local",
+        "watchlist",
+        "about_legal",
+        "permissions"
+      ],
+      "credentialed_gate": "resolve package provenance and pass navigation, privacy and permission regression",
+      "status": "PENDING"
+    },
+    {
+      "id": "risk_preview_compliance",
+      "wave": 1,
+      "order": 1,
+      "provider_slice": "GoPlus facts, bounded Chainalysis sanctions, provider preview and regional policy",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/features/security_digest/**",
+        "lib/integrations/risk/**",
+        "server/integrations/risk/**",
+        "server/integrations/compliance/**",
+        "contracts/risk-preview-compliance/**"
+      ],
+      "profiles": [
+        "security_facts",
+        "regional_gate"
+      ],
+      "credentialed_gate": "provider preview audit, Chainalysis access, regional policy, approved_request_kind_policy and fail-closed drills",
+      "status": "PENDING"
+    },
+    {
+      "id": "privy_identity_wallet",
+      "wave": 1,
+      "order": 2,
+      "provider_slice": "Privy identity, embedded wallet, external wallet and receive-address boundary",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/integrations/privy/auth/**",
+        "lib/integrations/privy/wallets/**",
+        "lib/integrations/privy/recovery/**",
+        "lib/integrations/privy/import/**",
+        "lib/integrations/privy/security/**",
+        "lib/integrations/reown/**",
+        "lib/features/pay_receive/**",
+        "server/integrations/privy/identity/**",
+        "contracts/privy-identity-wallet/**"
+      ],
+      "profiles": [
+        "privy_auth",
+        "external_wallet",
+        "privy_wallet",
+        "pay_receive"
+      ],
+      "credentialed_gate": "approved runtime pin, Flutter provenance, auth, recovery, export and external-wallet rejection R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "stream_communication",
+      "wave": 1,
+      "order": 3,
+      "provider_slice": "Stream Chat and Video audio-room communication",
+      "candidate_reuse": [
+        "stream_feeds_candidate"
+      ],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/integrations/stream/chat/**",
+        "lib/integrations/stream/audio/**",
+        "lib/integrations/stream/cards/**",
+        "server/integrations/stream/**",
+        "contracts/stream-communication/**"
+      ],
+      "profiles": [
+        "stream_chat",
+        "stream_audio",
+        "stream_cards"
+      ],
+      "credentialed_gate": "server token, membership, moderation, reconnect, attachment and 200k-channel R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "market_data_charts",
+      "wave": 1,
+      "order": 4,
+      "provider_slice": "provider market data plus licensed JavaScript chart renderers through Flutter WebView",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/integrations/market_data/**",
+        "lib/integrations/charts/basic/**",
+        "lib/integrations/charts/advanced/**",
+        "server/integrations/market_data/**",
+        "contracts/market-data-charts/**"
+      ],
+      "profiles": [
+        "market_data",
+        "lightweight_chart",
+        "advanced_chart"
+      ],
+      "credentialed_gate": "commercial/quota audit, WebView bridge provenance, NOTICE and private-license evidence",
+      "status": "PENDING"
+    },
+    {
+      "id": "notifications_observability",
+      "wave": 1,
+      "order": 5,
+      "provider_slice": "Firebase delivery with Sentry and PostHog policy boundaries",
+      "candidate_reuse": [
+        "novu_notification_candidate",
+        "courier_notification_candidate",
+        "trigger_dev_scheduler_candidate",
+        "hookdeck_event_gateway_candidate"
+      ],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/integrations/notifications/**",
+        "lib/features/price_alerts/**",
+        "lib/integrations/sentry/**",
+        "lib/integrations/posthog/**",
+        "server/integrations/notifications/**",
+        "contracts/notifications-observability/**"
+      ],
+      "profiles": [
+        "notifications"
+      ],
+      "credentialed_gate": "FlutterFire provenance, APNs/Android lifecycle, consent, PII redaction and kill-switch R1",
+      "status": "PENDING"
+    },
+    {
+      "id": "hosted_support",
+      "wave": 1,
+      "order": 6,
+      "provider_slice": "hosted support provider selection and offline help",
+      "candidate_reuse": [
+        "chatwoot_support_candidate"
+      ],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/integrations/support/**",
+        "server/integrations/support/**",
+        "contracts/hosted-support/**"
+      ],
+      "profiles": [
+        "support"
+      ],
+      "credentialed_gate": "provider, SLA, privacy, export/delete, region and maintained integration evidence",
+      "status": "PENDING"
+    },
+    {
+      "id": "hyperliquid_core_perp",
+      "wave": 2,
+      "order": 1,
+      "provider_slice": "Hyperliquid core-whitelist read-only market plus region-gated trading mutations",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation",
+        "risk_preview_compliance",
+        "privy_identity_wallet",
+        "market_data_charts"
+      ],
+      "owns": [
+        "server/integrations/hyperliquid/core/**",
+        "lib/integrations/hyperliquid/core/**",
+        "contracts/hyperliquid-core-perp/**",
+        "test/conformance/hyperliquid/**"
+      ],
+      "profiles": [
+        "perp_market_readonly",
+        "perp_trading_mutations"
+      ],
+      "credentialed_gate": "approved runtime pin, WebView chart, core allowlist, regional/legal/eligibility, nonce, unknown-submit and reconnect R0; HIP-3 forbidden",
+      "status": "PENDING"
+    },
+    {
+      "id": "privy_funds",
+      "wave": 2,
+      "order": 2,
+      "provider_slice": "Privy transfer, swap and Relay bridge with unified F11 review composition",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation",
+        "risk_preview_compliance",
+        "privy_identity_wallet"
+      ],
+      "owns": [
+        "lib/integrations/privy/funds/**",
+        "lib/integrations/pay_scan/**",
+        "lib/features/pay_confirm/**",
+        "lib/integrations/intent_review/**",
+        "server/integrations/privy/funds/**",
+        "contracts/privy-funds/**",
+        "test/conformance/privy-funds/**"
+      ],
+      "profiles": [
+        "pay_scan",
+        "privy_transfer",
+        "privy_swap_bridge",
+        "unified_intent_review_composition"
+      ],
+      "credentialed_gate": "approved runtime pin, exact request-kind composition, preview policy, lifecycle, failure and unknown-submit R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "moonpay_onramp",
+      "wave": 2,
+      "order": 3,
+      "provider_slice": "MoonPay signed hosted widget inside an audited Flutter WebView only",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation",
+        "risk_preview_compliance"
+      ],
+      "owns": [
+        "lib/integrations/moonpay/**",
+        "server/integrations/moonpay/**",
+        "contracts/moonpay-onramp/**",
+        "test/conformance/moonpay/**"
+      ],
+      "profiles": [
+        "onramp"
+      ],
+      "credentialed_gate": "KYB, official Flutter/WebView support, signed URL, camera, callback, region and App Store R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "dapp_browser_isolation",
+      "wave": 2,
+      "order": 4,
+      "provider_slice": "isolated WebView with Privy confirmation handoff",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation",
+        "risk_preview_compliance",
+        "privy_identity_wallet"
+      ],
+      "owns": [
+        "lib/integrations/dapp_browser/**",
+        "server/integrations/dapp_policy/**",
+        "contracts/dapp-browser/**",
+        "test/security/dapp-browser/**"
+      ],
+      "profiles": [
+        "dapp_browser"
+      ],
+      "credentialed_gate": "maintained WebView, document-start injection, origin/method allowlist, unified-review handoff and hostile-DApp R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "approval_revoke",
+      "wave": 2,
+      "order": 5,
+      "provider_slice": "GoPlus approval facts with Privy-bound revoke and unified review handoff",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation",
+        "risk_preview_compliance",
+        "privy_identity_wallet"
+      ],
+      "owns": [
+        "lib/integrations/security/approvals/**",
+        "server/integrations/approvals/**",
+        "contracts/approval-revoke/**",
+        "test/conformance/approvals/**"
+      ],
+      "profiles": [
+        "approvals"
+      ],
+      "credentialed_gate": "raw schema, exact calldata binding, approved_request_kind_policy, sanctions boundary and failure R0",
+      "status": "PENDING"
+    },
+    {
+      "id": "dashboard_search",
+      "wave": 3,
+      "order": 1,
+      "provider_slice": "cross-provider dashboard and federated search projections",
+      "candidate_reuse": [
+        "stream_feeds_candidate",
+        "meilisearch_index_candidate"
+      ],
+      "depends_on": [
+        "platform_foundation",
+        "privy_identity_wallet",
+        "stream_communication",
+        "market_data_charts",
+        "hyperliquid_core_perp"
+      ],
+      "owns": [
+        "lib/features/home/**",
+        "lib/features/networth/**",
+        "server/integrations/search/**",
+        "server/orchestration/dashboard/**",
+        "server/orchestration/search/**",
+        "contracts/dashboard-search/**"
+      ],
+      "profiles": [
+        "dashboard",
+        "federated_search"
+      ],
+      "credentialed_gate": "WebView chart, cross-provider timestamps, exact decimal, privacy, timeout and partial-failure R1",
+      "status": "PENDING"
+    },
+    {
+      "id": "phase2_hold",
+      "wave": 4,
+      "order": 1,
+      "provider_slice": "explicitly disabled Phase 2 surface",
+      "candidate_reuse": [],
+      "depends_on": [
+        "platform_foundation"
+      ],
+      "owns": [
+        "lib/features/phase2_placeholders/**",
+        "contracts/phase2-disabled/**"
+      ],
+      "profiles": [
+        "phase2_placeholder"
+      ],
+      "credentialed_gate": "new provider/legal audit and explicit written owner approval before implementation",
+      "status": "PENDING"
+    }
+  ]
+}

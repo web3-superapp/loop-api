@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loop.local/contracts/stream-ui/dto.schema.json",
+  "title": "LOOP Stream read-only presentation DTO",
+  "oneOf": [
+    {"$ref": "#/$defs/channel_list"},
+    {"$ref": "#/$defs/message_timeline"},
+    {"$ref": "#/$defs/audio_room"}
+  ],
+  "$defs": {
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cid", "kind", "name", "member_count", "unread_count", "muted", "last_message"],
+      "properties": {
+        "cid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_-]{0,63}$"},
+        "kind": {"enum": ["group", "voice", "dm"]},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "member_count": {"type": "integer", "minimum": 0},
+        "unread_count": {"type": "integer", "minimum": 0},
+        "muted": {"type": "boolean"},
+        "last_message": {"type": ["string", "null"], "maxLength": 280}
+      }
+    },
+    "channel_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "mode", "connected", "channels"],
+      "properties": {
+        "authority": {"const": "stream_chat_sdk_state"},
+        "mode": {"const": "offline_preview"},
+        "connected": {"const": false},
+        "channels": {"type": "array", "items": {"$ref": "#/$defs/channel"}, "maxItems": 100}
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "cid", "user_id", "alias", "text", "created_at", "parent_id", "mentioned_user_ids", "reaction_counts", "pinned_at"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "cid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_-]{0,63}$"},
+        "user_id": {"type": "string", "pattern": "^loop_[a-z0-9_-]{8,58}$"},
+        "alias": {"type": "string", "minLength": 1, "maxLength": 80},
+        "text": {"type": "string", "maxLength": 5000},
+        "created_at": {"type": "string", "format": "date-time"},
+        "parent_id": {"type": ["string", "null"], "maxLength": 128},
+        "mentioned_user_ids": {"type": "array", "items": {"type": "string", "pattern": "^loop_[a-z0-9_-]{8,58}$"}, "uniqueItems": true},
+        "reaction_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "pinned_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "message_timeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "mode", "connected", "cid", "messages"],
+      "properties": {
+        "authority": {"const": "stream_chat_sdk_channel_state"},
+        "mode": {"const": "offline_preview"},
+        "connected": {"const": false},
+        "cid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_-]{0,63}$"},
+        "messages": {"type": "array", "items": {"$ref": "#/$defs/message"}, "maxItems": 100}
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "alias", "is_speaking"],
+      "properties": {
+        "user_id": {"type": "string", "pattern": "^loop_[a-z0-9_-]{8,58}$"},
+        "alias": {"type": "string", "minLength": 1, "maxLength": 80},
+        "is_speaking": {"type": "boolean"}
+      }
+    },
+    "audio_room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "mode", "connection", "status", "participant_count", "visible_participants", "complete_roster_status"],
+      "allOf": [{
+        "if": {"properties": {"mode": {"const": "offline_preview"}}, "required": ["mode"]},
+        "then": {
+          "properties": {
+            "connection": {"const": "disconnected"},
+            "status": {"const": "unavailable"},
+            "participant_count": {"const": 0},
+            "visible_participants": {"maxItems": 0}
+          }
+        }
+      }],
+      "properties": {
+        "authority": {"const": "stream_video_sdk_call_state"},
+        "mode": {"const": "offline_preview"},
+        "connection": {"const": "disconnected"},
+        "status": {"const": "unavailable"},
+        "participant_count": {"type": "integer", "minimum": 0, "maximum": 50000},
+        "visible_participants": {"type": "array", "items": {"$ref": "#/$defs/participant"}, "maxItems": 250},
+        "complete_roster_status": {"const": "PENDING"}
+      }
+    }
+  }
+}

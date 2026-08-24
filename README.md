@@ -4,7 +4,7 @@ Private Backend-for-Frontend repository for the LOOP Flutter app.
 
 ## Current status
 
-The repository boundary is ready, but the production backend is not implemented yet. Do not report Privy, Hyperliquid, or Agora as live until credentialed integration and testnet/device evidence exists.
+The repository boundary is ready, and the original repository's provider contracts and prototype adapter have been migrated here with source history. The production backend is not implemented yet. Do not report Privy, Hyperliquid, or Agora as live until credentialed integration and testnet/device evidence exists.
 
 ## Responsibilities
 
@@ -25,6 +25,14 @@ The repository boundary is ready, but the production backend is not implemented 
 ## Related repositories
 
 - Flutter app: <https://github.com/web3-superapp/loop-mobile>
-- Historical prototype and product contracts: <https://github.com/Doog-bot534/web3-superapp-prototype>
+- Frozen HTML prototype, product documents, research, and historical verifiers: <https://github.com/web3-superapp/loop-mobile/tree/main/reference/legacy-prototype>
+- Original repository retained for migration traceability: <https://github.com/Doog-bot534/web3-superapp-prototype>
+
+## Migrated material
+
+- `contracts/hyperliquid-core-perp/` and `contracts/privy-transfer/` are reusable contract baselines, not proof of a live integration.
+- `contracts/app-integrations-p0/`, `contracts/integration-catalog/`, and `contracts/stream-*` are historical decision records. In particular, Stream is superseded by Agora Chat + RTC.
+- `server/app-integrations-p0/adapter.mjs` is a historical prototype adapter, not the production LOOP API entry point.
+- The migration merge commit keeps the original Git history as a parent so earlier decisions remain traceable.
 
 Framework selection, deployment topology, data persistence, and production credentials remain explicit follow-up decisions. Start with provider testnet/sandbox contracts and fail closed when configuration is missing.

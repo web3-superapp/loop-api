@@ -1,0 +1,191 @@
+{
+  "schema_version": 5,
+  "provider": "stream_chat_and_video",
+  "production_mode": "fail_closed",
+  "html_mode": "production_boundary_fail_closed_fixture_test_only",
+  "build_integration": {
+    "production_script": "src/stream-chat-provider.js",
+    "production_order_after": "wallet-transfer.js",
+    "production_order_before": "app.js",
+    "offline_fixture": "src/test-fixtures/stream-chat-offline-fixture.js",
+    "offline_fixture_in_app_html": false,
+    "connected_or_ready_success_claim_in_app_html": false
+  },
+  "authentication": {
+    "token_endpoint": "/v1/chat/token",
+    "transport": "same_origin_authenticated_https",
+    "csrf": "required",
+    "api_secret_location": "server_only",
+    "client_user_id_input": "forbidden",
+    "user_id_source": "server_derived_opaque_loop_subject",
+    "subject_pattern": "^loop_[a-z0-9_-]{8,58}$",
+    "token_ttl_seconds": 3600,
+    "refresh": "sdk_token_provider",
+    "response_cache": "no_store",
+    "logout": "disconnect_chat_and_video_then_clear_memory"
+  },
+  "operations": {
+    "connect_user": {"authority": "stream_chat_sdk_connectUser_upsert", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "disconnect_chat": {"authority": "stream_chat_sdk_disconnectUser", "mutation": false, "provider_state_effect": "connection_teardown_only"},
+    "query_channels": {"authority": "stream_chat_sdk_queryChannels_delivery_reporter_markChannelsDelivered", "mutation": true, "availability": "pending_proven_no_write_channel_list_path", "fail_closed": true},
+    "watch_channel": {"authority": "stream_chat_sdk_channel.watch_get_or_create", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "send_message": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "update_message": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "delete_message": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "send_thread_reply": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "send_reaction": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "delete_reaction": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "mark_read": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "mark_unread": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "query_members": {"authority": "stream_chat_sdk", "mutation": false},
+    "flag_message": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "mute_user": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "ban_user": {"authority": "stream_chat_sdk_permissions", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "upload_attachment": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "delete_attachment": {"authority": "stream_chat_sdk", "mutation": true, "availability": "pending_credentialed_chat_mutation_audit", "fail_closed": true},
+    "refresh_attachment": {"authority": "stream_chat_sdk_get_message", "mutation": false},
+    "reconcile_chat_object": {"authority": "stream_chat_sdk_authoritative_query", "mutation": false},
+    "map_token_card_attachment": {"authority": "loop_presentation_dto_to_stream_attachment", "mutation": false},
+    "connect_video": {"authority": "stream_video_sdk", "mutation": true},
+    "disconnect_video": {"authority": "stream_video_sdk", "mutation": true},
+    "make_audio_room": {"authority": "stream_video_sdk", "mutation": false},
+    "get_or_create_audio_room": {"authority": "stream_video_sdk_permissions", "mutation": true},
+    "join_audio_room": {"authority": "stream_video_sdk", "mutation": true},
+    "leave_audio_room": {"authority": "stream_video_sdk", "mutation": true},
+    "set_microphone_enabled": {"authority": "stream_video_sdk_permissions", "mutation": true},
+    "request_speaking_permission": {"authority": "stream_video_sdk_permissions", "mutation": true},
+    "go_live": {"authority": "stream_video_sdk_host_permissions", "mutation": true},
+    "stop_live": {"authority": "stream_video_sdk_host_permissions", "mutation": true},
+    "end_audio_room": {"authority": "stream_video_sdk_host_permissions", "mutation": true},
+    "observe_call_participants": {"authority": "CallState.callParticipants", "mutation": false},
+    "mute_audio_room_user": {"authority": "stream_video_sdk_moderator_permissions", "mutation": true},
+    "block_audio_room_user": {"authority": "stream_video_sdk_moderator_permissions", "mutation": true},
+    "kick_audio_room_user": {"authority": "stream_video_sdk_moderator_permissions", "mutation": true}
+  },
+  "chat_provider_mutation_policy": {
+    "scope": "every_exposed_operation_that_can_write_persistent_Stream_Chat_provider_state",
+    "blocked_operations": [
+      "ban_user", "connect_user", "delete_attachment", "delete_message", "delete_reaction",
+      "flag_message", "mark_read", "mark_unread", "mute_user", "query_channels", "send_message",
+      "send_reaction", "send_thread_reply", "update_message", "upload_attachment", "watch_channel"
+    ],
+    "connect_user_official_behavior": "connectUser_upserts_user",
+    "watch_channel_official_behavior": "channel.watch_get_or_create",
+    "query_channels_official_behavior": "queryChannels_watch_false_submits_delivery_candidates_then_markChannelsDelivered",
+    "production_adapter_chat_mutation_bridge_methods": [],
+    "production_adapter_read_bridge_methods": ["disconnectUser", "getMessage", "queryMembers"],
+    "production_gate": "all_exposed_chat_provider_mutations_fail_closed",
+    "release_evidence": "PENDING"
+  },
+  "sdk_side_effect_classification": {
+    "basis": "pinned_stream_chat_10_3_0_actual_call_graph_not_method_name_or_watch_flag",
+    "query_channels_watch_false": "persistent_provider_delivery_mutation_via_ChannelDeliveryReporter_then_markChannelsDelivered",
+    "query_members": "direct_general_api_query_no_client_mark_read_watch_or_delivery_hook_in_pinned_source",
+    "get_message": "direct_message_api_query_no_client_mark_read_watch_or_delivery_hook_in_pinned_source",
+    "disconnect_user": "connection_teardown_only",
+    "forbidden_mutating_or_side_effect_aliases": [
+      "channel.watch", "connectUser", "markChannelsDelivered", "markRead", "markUnread", "queryChannels"
+    ],
+    "channel_list_no_write_path": "PENDING_official_server_or_BFF_query_with_source_and_credentialed_runtime_proof"
+  },
+  "chat_write_safety": {
+    "sdk_observed_behavior": "RetryQueue_retries_failed_messages_on_connection_recovered",
+    "automatic_retry_suppression_evidence": "PENDING",
+    "production_write_gate": "disabled_pending_credentialed_chat_mutation_audit",
+    "provider_stable_id": "same_id_for_submit_receipt_and_authoritative_query",
+    "ambiguous_outcome": "hold_same_id_and_reconcile_never_replay",
+    "same_id_refresh_and_replay": "forbidden",
+    "new_id_without_user_reconfirmation": "forbidden"
+  },
+  "event_projection": {
+    "authority": "official_sdk_controllers_and_state",
+    "dedupe": "none_lossless_allow_duplicates",
+    "timestamp_authority": false,
+    "ordered_projection": "arrival_sequence_for_presentation_only",
+    "convergence": "provider_object_identity_then_official_sdk_requery",
+    "chat_provider_events": [
+      "connection.changed", "connection.recovered", "message.new", "message.updated",
+      "message.deleted", "message.read", "reaction.new", "reaction.updated",
+      "reaction.deleted", "member.added", "member.updated", "member.removed",
+      "notification.mark_read", "notification.mark_unread"
+    ],
+    "video_provider_events": [
+      "call.session_participant_joined", "call.session_participant_left",
+      "call.permission_request", "call.ended", "call.updated", "call.live_started"
+    ],
+    "video_event_normalization": {
+      "call.session_participant_joined": "read_call_participants_projection",
+      "call.session_participant_left": "read_call_participants_projection",
+      "call.permission_request": "read_call_permissions_projection",
+      "call.ended": "read_call_state_projection",
+      "call.updated": "read_call_state_projection",
+      "call.live_started": "read_call_state_projection"
+    },
+    "video_state_sources": {
+      "connection": "StreamVideo.state.connection",
+      "call_status": "CallState.status",
+      "participants": "CallState.callParticipants"
+    }
+  },
+  "message_lifecycle": {
+    "states": ["draft", "blocked_pending_retry_audit", "sending", "sent", "failed", "ambiguous_reconciling"],
+    "provider_object_id": "client_fixed_Stream_Message.id_before_submit",
+    "ambiguous_reconciliation": "getMessage_same_provider_object_id_only",
+    "retry": "never_release_same_id_for_refresh_and_replay"
+  },
+  "attachment_lifecycle": {
+    "states": ["selected", "validated", "blocked_pending_retry_audit", "uploading", "uploaded", "sending", "sent", "failed", "cancelled", "deleting", "deleted"],
+    "authority": "stream_cdn_or_configured_stream_uploader",
+    "server_policy_is_final": true,
+    "signed_url_ttl_days": 14,
+    "expired_url_refresh": "get_message_same_provider_object_id",
+    "persist_signed_url": false,
+    "ambiguous_send": "hold_and_reconcile_before_cleanup_never_replay"
+  },
+  "audio_room_lifecycle": {
+    "authority": "stream_video_sdk_and_ui_kit",
+    "call_type": "audio_room",
+    "states": ["idle", "connecting", "joining", "joined", "reconnecting", "reconnection_failed", "disconnected", "ended"],
+    "participants": {
+      "realtime_source": "CallState.callParticipants",
+      "visible_projection_limit": 250,
+      "complete_count_source": "CallState.participantCount",
+      "query_members_is_realtime_participants": false,
+      "large_room_delivery": "PENDING"
+    },
+    "media_transport": "stream_global_edge_sfu",
+    "microphone": "sdk_permission_and_track_state",
+    "custom_rtc": false,
+    "custom_participant_presence": false,
+    "automatic_media_retry": "sdk_owned"
+  },
+  "privacy": {
+    "wallet_address_as_user_id": false,
+    "opaque_internal_user_id": true,
+    "alias_is_mutable_display_data": true,
+    "persist_tokens": false,
+    "persist_signed_urls": false,
+    "tokens_in_logs": false,
+    "message_payload_secrets": false,
+    "server_export_delete_only": true,
+    "large_group_e2ee_claim": false
+  },
+  "credentialed_r0_gates": [
+    "token_identity_binding",
+    "connect_user_identity_upsert",
+    "watch_channel_get_or_create",
+    "query_channels_delivery_receipt_or_proven_no_write_list_path",
+    "chat_retry_queue_suppression_or_safe_integration",
+    "ambiguous_write_same_id_reconciliation",
+    "channel_membership_permissions",
+    "message_thread_reaction_read_unread",
+    "moderation_roles",
+    "attachment_access_refresh_delete",
+    "reconnect_recovery",
+    "privacy_export_delete",
+    "enterprise_large_channel_semantics",
+    "audio_room_permissions_lifecycle",
+    "audio_room_reconnect_media_privacy",
+    "audio_room_scale_over_250"
+  ]
+}

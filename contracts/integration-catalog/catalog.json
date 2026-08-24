@@ -1,0 +1,1830 @@
+{
+  "schema_version": "loop.integration-catalog/v3",
+  "whole_app_reuse_policy_ref": "provider-lock.json#whole_app_reuse_policy",
+  "authorities": {
+    "wallet": "privy_service",
+    "communication": "stream_service",
+    "perp": "hyperliquid_service"
+  },
+  "credential_categories": [
+    "none_public",
+    "public_app_config",
+    "server_secret",
+    "user_authorization",
+    "provider_account",
+    "provider_account_kyb",
+    "device_permission",
+    "legal_compliance",
+    "phase2_disabled"
+  ],
+  "intent_review_composition": {
+    "profile": "unified_intent_review_composition",
+    "signature_authority": "privy_service",
+    "source_profiles": [
+      "privy_transfer",
+      "privy_swap_bridge",
+      "approvals",
+      "dapp_browser"
+    ],
+    "source_screens": [
+      "F5",
+      "F7",
+      "F9",
+      "F15",
+      "F16",
+      "F17"
+    ],
+    "request_kind_policy": "approved_request_kind_policy",
+    "preview_authorities": [
+      "privy_preview_service",
+      "blockaid_service"
+    ],
+    "simulator_policy": "provider_only_no_custom_transaction_simulator"
+  },
+  "profiles": [
+    {
+      "id": "app_shell",
+      "capability": "routing, startup, maintenance, offline/error projection and deterministic app metadata",
+      "primary_authority": "product_spec_authority",
+      "official_interface": "Flutter Router API plus LOOP health/version BFF contract",
+      "reuse": [
+        "go_router_package",
+        "connectivity_package",
+        "package_info_package",
+        "sentry_flutter_package"
+      ],
+      "credential_category": "none_public",
+      "offline_fixture": "fixture_app_shell",
+      "fail_closed": "show_offline_or_maintenance_state_and_disable_dependent_mutations",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "resolve package commits, then navigation/offline/update accessibility regression",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_rpc_node",
+        "custom_crash_ingestion"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "onboarding_static",
+      "capability": "static onboarding copy and local completion projection",
+      "primary_authority": "product_spec_authority",
+      "official_interface": "canonical inventory copy plus declarative route",
+      "reuse": [
+        "go_router_package"
+      ],
+      "credential_category": "none_public",
+      "offline_fixture": "fixture_onboarding",
+      "fail_closed": "show_local_onboarding_without_claiming_account_creation",
+      "custom_categories": [
+        "ui",
+        "copy",
+        "state_projection"
+      ],
+      "upgrade_gate": "resolve router provenance and owner copy review",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "privy_auth",
+      "capability": "email/OAuth/passkey authentication, OTP and embedded account session",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy Flutter authentication and server verification",
+      "reuse": [
+        "privy_flutter_package",
+        "privy_node_runtime_pin"
+      ],
+      "credential_category": "public_app_config",
+      "offline_fixture": "fixture_privy_auth",
+      "fail_closed": "disable_authentication_when_privy_configuration_or_sdk_is_missing",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "source provenance, credentialed OTP/OAuth/passkey/MFA and logout R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_key_store"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "external_wallet",
+      "capability": "external-wallet discovery, WalletConnect session and provider-owned signature prompt",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy connected-wallet boundary with Reown AppKit Flutter",
+      "reuse": [
+        "privy_service",
+        "reown_appkit_package"
+      ],
+      "credential_category": "public_app_config",
+      "offline_fixture": "fixture_external_wallet",
+      "fail_closed": "disable_external_connect_when_reown_license_or_project_id_is_unapproved",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "Reown license/tag/commit, wallet allowlist, privacy and rejection/timeout R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "privy_wallet",
+      "capability": "embedded wallet create/import/recovery/security, balances, addresses, wallet list and provider history",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy Flutter plus Wallet API/BFF",
+      "reuse": [
+        "privy_flutter_package",
+        "privy_node_runtime_pin",
+        "local_auth_package"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_privy_wallet",
+      "fail_closed": "disable_wallet_mutations_and_show_explicit_provider_unavailable_state",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "source provenance, credentialed wallet-class matrix, recovery/export truth and local-auth R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer",
+        "custom_key_store",
+        "custom_indexer"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "profile_local",
+      "capability": "LOOP alias, privacy, following, blocklist and local display preferences",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "riverpod_package",
+        "stream_service",
+        "posthog_flutter_package"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_profile",
+      "fail_closed": "show_private_defaults_and_disable_broadcast_or_copy_trade_until_server_policy_is_loaded",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "copy"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_analytics_backend",
+        "custom_authorization_core",
+        "custom_im_transport",
+        "custom_profile_store",
+        "custom_relationship_graph",
+        "custom_social_graph"
+      ],
+      "selection_gates": [
+        "social_profile_store",
+        "relationship_graph"
+      ]
+    },
+    {
+      "id": "notifications",
+      "capability": "provider-event push delivery, notification inbox projection, preferences and price-alert delivery",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "firebase_service",
+        "firebase_messaging_package",
+        "stream_service",
+        "hyperliquid_service",
+        "privy_service"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_notifications",
+      "fail_closed": "disable_push_registration_and_show_in_app_authoritative_state_when_delivery_is_unconfigured",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_event_bus",
+        "custom_job_scheduler",
+        "custom_notification_inbox",
+        "custom_price_alert_scheduler",
+        "custom_push_transport"
+      ],
+      "selection_gates": [
+        "notification_inbox",
+        "price_alert_scheduler",
+        "provider_event_ingestion"
+      ]
+    },
+    {
+      "id": "dashboard",
+      "capability": "net-worth and cross-provider summary projection including provider-fed trend series",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "privy_service",
+        "hyperliquid_service",
+        "coingecko_service",
+        "lightweight_charts_package",
+        "inappwebview_package"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_dashboard",
+      "fail_closed": "show_partial_or_stale_provider_sections_and_chart_unavailable_without_synthesizing_totals_or_rendering_direct_JS",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_activity_feed",
+        "custom_chart_engine",
+        "custom_indexer",
+        "custom_market_data",
+        "custom_perp_ledger"
+      ],
+      "selection_gates": [
+        "activity_feed"
+      ]
+    },
+    {
+      "id": "federated_search",
+      "capability": "federated token, contract, user, group and core Perp market search",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "coingecko_service",
+        "stream_service",
+        "hyperliquid_service"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_search",
+      "fail_closed": "show_source_scoped_unavailable_results_and_never_cache_private_queries_globally",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_im_transport",
+        "custom_indexer",
+        "custom_market_data",
+        "custom_search_index"
+      ],
+      "selection_gates": [
+        "federated_search_indexing"
+      ]
+    },
+    {
+      "id": "pay_scan",
+      "capability": "camera QR decode and normalized payment intent handoff",
+      "primary_authority": "privy_service",
+      "official_interface": "mobile_scanner decode then Privy transfer review contract",
+      "reuse": [
+        "mobile_scanner_package",
+        "privy_service",
+        "goplus_service"
+      ],
+      "credential_category": "device_permission",
+      "offline_fixture": "fixture_pay_scan",
+      "fail_closed": "disable_payment_handoff_for_malformed_unsupported_or_unverified_qr_payloads",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "scanner commit, permission, duplicate-frame, hostile URI and transfer binding R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "pay_receive",
+      "capability": "provider address projection and offline QR encoding",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy address read plus existing pinned local QR renderer",
+      "reuse": [
+        "privy_service",
+        "qrcode_generator_package"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_pay_receive",
+      "fail_closed": "show_address_only_and_disable_amount_encoding_when_chain_or_encoder_is_unverified",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "QR provenance, chain/address payload vectors and local-only rendering R1",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "privy_transfer",
+      "capability": "same-chain transfer, confirmation, action lifecycle, result and provider history",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy Wallet Actions transfer/action lifecycle through the approved runtime pin; intent review composes separately into F11",
+      "reuse": [
+        "privy_flutter_package",
+        "privy_node_runtime_pin",
+        "goplus_service",
+        "chainalysis_service"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_privy_transfer",
+      "fail_closed": "disable_transfer_on_missing_credentials_stale_or_malformed_review_sanctions_unknown_or_material_mismatch",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "existing Privy transfer R0 plus Chainalysis boundary and exact handoff to unified intent review",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer",
+        "custom_indexer",
+        "custom_aml_dataset",
+        "custom_transaction_simulator"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "privy_swap_bridge",
+      "capability": "Privy swap and Relay-backed cross-chain route/action lifecycle",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy Wallet Actions swap/transfer/bridge capabilities; Relay is provider-owned routing; intent review composes separately into F11",
+      "reuse": [
+        "privy_flutter_package",
+        "privy_node_runtime_pin"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_privy_swap_bridge",
+      "fail_closed": "disable_quote_or_route_when_provider_does_not_expose_fresh_supported_action_and_never_add_an_alternate_route",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "credentialed quote expiry, approval, route visibility, claim/failure, lifecycle and unified-review handoff R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_swap_router",
+        "custom_bridge_router",
+        "custom_signer",
+        "custom_transaction_simulator"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "unified_intent_review_composition",
+      "capability": "unified F11 intent review composition for transfer, swap, bridge, approval and DApp/provider facts before Privy signature",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy remains sole signature authority; LOOP composes exact provider payloads and approved_request_kind_policy with preview only from audited Privy or credentialed Blockaid",
+      "reuse": [
+        "privy_service",
+        "privy_node_runtime_pin",
+        "goplus_service",
+        "chainalysis_service",
+        "privy_preview_service",
+        "blockaid_service"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_intent_review",
+      "fail_closed": "show_preview_unavailable_and_apply_approved_request_kind_policy_allowing_eligible_transfer_or_approval_only_after_explicit_strong_acknowledgement_while_disabling_sanctions_blocked_or_unavailable_stale_malformed_material_mismatch_unknown_request_kinds_and_unbound_DApp_facts",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "credentialed transfer/swap/bridge/approval/DApp composition vectors, signature-authority binding and provider preview failure R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer",
+        "custom_swap_router",
+        "custom_bridge_router",
+        "custom_transaction_simulator",
+        "custom_aml_dataset"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "onramp",
+      "capability": "hosted fiat ramp, provider KYC and regional payment flow",
+      "primary_authority": "moonpay_service",
+      "official_interface": "MoonPay signed hosted widget",
+      "reuse": [
+        "moonpay_service",
+        "inappwebview_package",
+        "url_launcher_package"
+      ],
+      "credential_category": "provider_account_kyb",
+      "offline_fixture": "fixture_onramp",
+      "fail_closed": "disable_onramp_until_kyb_flutter_support_region_and_signed_widget_are_verified",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "MoonPay Flutter support, KYB, signed URL, camera/callback/region and store-review R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_kyc"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "security_facts",
+      "capability": "token, address, approval, phishing and transaction facts without invented scores",
+      "primary_authority": "goplus_service",
+      "official_interface": "GoPlus v1.5.6 facts, bounded Chainalysis sanctions boundary, Privy preview or credentialed Blockaid after exact audit, and approved_request_kind_policy",
+      "reuse": [
+        "goplus_service",
+        "chainalysis_service",
+        "privy_preview_service",
+        "blockaid_service"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_security_facts",
+      "fail_closed": "show_preview_unavailable_and_defer_eligible_transfer_or_approval_continuation_to_approved_request_kind_policy_while_disabling_sanctions_blocked_or_unavailable_stale_malformed_material_mismatch_and_unknown_request_kinds",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "Chainalysis availability, preview schema/coverage, false-positive and quota tests, plus approved_request_kind_policy conformance R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_aml_dataset",
+        "custom_indexer"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "market_data",
+      "capability": "spot lists, pairs, holders, trades, new pools and Smart Money labels",
+      "primary_authority": "coingecko_service",
+      "official_interface": "CoinGecko v3 plus DexScreener/GeckoTerminal/Birdeye/Nansen source-specific BFF adapters",
+      "reuse": [
+        "coingecko_service",
+        "dexscreener_service",
+        "geckoterminal_service",
+        "birdeye_service",
+        "nansen_service",
+        "goplus_service"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_market_data",
+      "fail_closed": "show_source_and_timestamp_scoped_partial_data_and_disable_actions_on_stale_or_missing_required_facts",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "pending service contracts, commercial terms, quotas, cache TTL and source reconciliation R1",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_market_data",
+        "custom_indexer"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "lightweight_chart",
+      "capability": "basic interactive candlestick, line and funding chart rendering in Flutter",
+      "primary_authority": "lightweight_charts_package",
+      "official_interface": "TradingView Lightweight Charts is a JavaScript renderer candidate and may run only through audited flutter_inappwebview bridge with attribution",
+      "reuse": [
+        "lightweight_charts_package",
+        "coingecko_service",
+        "inappwebview_package"
+      ],
+      "credential_category": "none_public",
+      "offline_fixture": "fixture_lightweight_chart",
+      "fail_closed": "show_chart_unavailable_when_WebView_bridge_data_or_renderer_integrity_is_unverified",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "PENDING WebView bridge source provenance, NOTICE/attribution, message schema, lifecycle, visual and performance R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_chart_engine",
+        "custom_market_data"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "advanced_chart",
+      "capability": "C3 multi-period MA/MACD/RSI and drawing tools in Flutter",
+      "primary_authority": "tradingview_advanced_pending",
+      "official_interface": "PENDING TradingView Advanced Charts licensed JavaScript artifact through audited flutter_inappwebview bridge",
+      "reuse": [
+        "tradingview_advanced_pending",
+        "lightweight_charts_package",
+        "inappwebview_package"
+      ],
+      "credential_category": "provider_account",
+      "offline_fixture": "fixture_advanced_chart",
+      "fail_closed": "show_chart_unavailable_and_disable_unlicensed_indicators_or_drawing_tools_until_Flutter_bridge_is_audited",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "private artifact/license/hash, WebView bridge, no redistribution, attribution and mobile performance R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_chart_engine"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "watchlist",
+      "capability": "user watchlist ordering, local optimistic projection and server reconciliation",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "riverpod_package",
+        "posthog_flutter_package"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_watchlist",
+      "fail_closed": "show_read_only_local_snapshot_when_server_state_is_unavailable",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_analytics_backend",
+        "custom_watchlist_store"
+      ],
+      "selection_gates": [
+        "watchlist_store"
+      ]
+    },
+    {
+      "id": "perp_market_readonly",
+      "capability": "Hyperliquid core-whitelist Perp market and funding read-only projection",
+      "primary_authority": "hyperliquid_service",
+      "official_interface": "Hyperliquid official Info/WebSocket reads through runtime_selected_pin; JavaScript charts only through audited Flutter WebView bridge; HIP-3 prohibited",
+      "reuse": [
+        "hyperliquid_service",
+        "hyperliquid_ts_runtime_pin",
+        "hyperliquid_python_package",
+        "lightweight_charts_package",
+        "inappwebview_package"
+      ],
+      "credential_category": "none_public",
+      "offline_fixture": "fixture_hyperliquid",
+      "fail_closed": "show_read_only_market_or_chart_unavailable_on_non_core_market_stale_feed_unknown_provider_or_unverified_WebView_bridge",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "provider schema, core allowlist, WebView chart bridge, rate-limit and reconnect R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_matching_engine",
+        "custom_perp_ledger",
+        "custom_market_data",
+        "custom_chart_engine"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "perp_trading_mutations",
+      "capability": "Hyperliquid core-whitelist Perp orders, positions, margin, transfer and bridge mutations",
+      "primary_authority": "hyperliquid_service",
+      "official_interface": "Hyperliquid exchange/bridge APIs through runtime_selected_pin and Privy authority behind server-signed regional legal eligibility policy; HIP-3 prohibited",
+      "reuse": [
+        "hyperliquid_service",
+        "hyperliquid_ts_runtime_pin",
+        "hyperliquid_python_package",
+        "privy_service",
+        "product_spec_authority",
+        "lightweight_charts_package",
+        "inappwebview_package"
+      ],
+      "credential_category": "legal_compliance",
+      "offline_fixture": "fixture_hyperliquid",
+      "fail_closed": "disable_all_perp_mutations_when_regional_legal_or_eligibility_policy_is_unknown_restricted_stale_unsigned_or_when_submission_state_is_unknown",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "PENDING regional legal eligibility approval plus credentialed testnet, core allowlist, WebView chart, Privy policy, nonce, unknown-submit and reconnect R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_signer",
+        "custom_matching_engine",
+        "custom_perp_ledger",
+        "custom_market_data",
+        "custom_chart_engine",
+        "custom_transaction_simulator"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "stream_chat",
+      "capability": "conversation list, group/DM message flow, membership, requests and message search",
+      "primary_authority": "stream_service",
+      "official_interface": "Stream Chat Flutter 10.3.0 UI/core SDK and server-signed expiring token",
+      "reuse": [
+        "stream_service",
+        "stream_chat_package"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_stream_chat",
+      "fail_closed": "disable_chat_mutations_without_server_token_membership_or_authoritative_sdk_state",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "license, identity binding, permission, search, moderation, offline/reconnect and 200k-channel R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_im_transport"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "stream_audio",
+      "capability": "group audio room, seats, permissions, moderator controls and reconnect lifecycle",
+      "primary_authority": "stream_service",
+      "official_interface": "Stream Video Flutter 1.4.3 audio_room SDK/UI Kit",
+      "reuse": [
+        "stream_service",
+        "stream_video_package",
+        "stream_chat_package"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_stream_audio",
+      "fail_closed": "disable_join_or_microphone_when_token_permission_media_or_reconnect_state_is_unavailable",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "license, audio interruptions/background, moderator permissions, reconnect and scale R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_rtc_media",
+        "custom_sfu"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "stream_cards",
+      "capability": "Stream custom attachments carrying stable identifiers with live provider rendering",
+      "primary_authority": "stream_service",
+      "official_interface": "Stream v10 custom attachment builder plus provider reads at render time",
+      "reuse": [
+        "stream_service",
+        "stream_chat_package",
+        "goplus_service",
+        "coingecko_service",
+        "privy_service"
+      ],
+      "credential_category": "server_secret",
+      "offline_fixture": "fixture_stream_cards",
+      "fail_closed": "disable_buy_or_copy_action_when_live_facts_permissions_or_provider_action_are_unavailable",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "attachment schema/version, no stale price persistence, risk facts and Privy handoff R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_im_transport",
+        "custom_market_data",
+        "custom_wallet"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "phase2_placeholder",
+      "capability": "explicitly disabled Phase 2 surface",
+      "primary_authority": "phase2_disabled",
+      "official_interface": "no production capability; canonical disabled placeholder only",
+      "reuse": [
+        "phase2_disabled"
+      ],
+      "credential_category": "phase2_disabled",
+      "offline_fixture": "fixture_phase2",
+      "fail_closed": "show_coming_later_and_disable_all_mutations",
+      "custom_categories": [
+        "ui",
+        "copy",
+        "state_projection"
+      ],
+      "upgrade_gate": "PENDING provider/legal audit and explicit written owner approval before any capability",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_kyc",
+        "custom_matching_engine"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "dapp_browser",
+      "capability": "isolated DApp WebView, document-start provider injection, domain policy and Privy confirmation handoff",
+      "primary_authority": "privy_service",
+      "official_interface": "Privy provider through audited flutter_inappwebview/flutter_web3_webview adapter",
+      "reuse": [
+        "privy_service",
+        "inappwebview_package",
+        "flutter_web3_webview_package",
+        "reown_appkit_package",
+        "goplus_service"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_dapp_browser",
+      "fail_closed": "disable_web3_methods_or_navigation_when_origin_provider_or_security_policy_is_unverified",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "maintained WebView decision, source provenance, origin/method allowlists and hostile-DApp R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_wallet",
+        "custom_signer",
+        "custom_key_store"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "approvals",
+      "capability": "approval facts, exact provider review, provider-owned preview and revoke action handoff",
+      "primary_authority": "goplus_service",
+      "official_interface": "GoPlus Approval APIs plus Privy action/RPC boundary; preview via audited Privy capability or credentialed Blockaid; LOOP applies approved_request_kind_policy",
+      "reuse": [
+        "goplus_service",
+        "privy_service",
+        "privy_preview_service",
+        "blockaid_service",
+        "chainalysis_service"
+      ],
+      "credential_category": "user_authorization",
+      "offline_fixture": "fixture_approvals",
+      "fail_closed": "show_preview_unavailable_and_allow_only_eligible_approval_after_explicit_strong_acknowledgement_under_approved_request_kind_policy_while_disabling_sanctions_blocked_or_unavailable_stale_malformed_material_mismatch_and_unknown_request_kinds",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "approval schema, exact calldata binding, sanctions boundary, provider-preview and approved_request_kind_policy conformance R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_signer",
+        "custom_indexer",
+        "custom_aml_dataset"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "about_legal",
+      "capability": "version, agreements, risk disclosures and open-source notices",
+      "primary_authority": "product_spec_authority",
+      "official_interface": "signed remote policy manifest plus package_info and generated dependency notices",
+      "reuse": [
+        "package_info_package",
+        "url_launcher_package"
+      ],
+      "credential_category": "legal_compliance",
+      "offline_fixture": "fixture_about",
+      "fail_closed": "show_bundled_last_approved_documents_and_disable_unverified_external_links",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "copy",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "package provenance, legal owner approval, document signature and URL allowlist",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_aml_dataset"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "support",
+      "capability": "FAQ, support tickets and provider status links",
+      "primary_authority": "whole_app_core_selection_pending",
+      "official_interface": "provider_selection_gate=PENDING/default-deny; only an owner-approved official provider or maintained OSS may supply durable core; LOOP may implement UI/orchestration/state projection/policy/thin adapter only",
+      "reuse": [
+        "whole_app_core_selection_pending",
+        "url_launcher_package"
+      ],
+      "credential_category": "provider_account",
+      "offline_fixture": "fixture_support",
+      "fail_closed": "show_offline_help_and_disable_ticket_submission_until_provider_is_selected",
+      "custom_categories": [
+        "ui",
+        "state_projection",
+        "copy",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "close every named capability selection gate with exact identity/release/integrity/license/maintenance/security/privacy/migration/conformance evidence",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_im_transport",
+        "custom_support_backend"
+      ],
+      "selection_gates": [
+        "hosted_support"
+      ]
+    },
+    {
+      "id": "regional_gate",
+      "capability": "server-authoritative region/legal feature gating for on-ramp and Perp",
+      "primary_authority": "product_spec_authority",
+      "official_interface": "signed compliance-policy BFF response; providers remain action authorities",
+      "reuse": [
+        "chainalysis_service",
+        "moonpay_service",
+        "hyperliquid_service"
+      ],
+      "credential_category": "legal_compliance",
+      "offline_fixture": "fixture_region",
+      "fail_closed": "disable_restricted_features_when_policy_location_or_provider_eligibility_is_unknown",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "policy_mapping",
+        "thin_adapter",
+        "copy"
+      ],
+      "upgrade_gate": "PENDING legal opinion, country matrix, provider eligibility and VPN/unknown handling R0",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_aml_dataset"
+      ],
+      "selection_gates": []
+    },
+    {
+      "id": "permissions",
+      "capability": "pre-permission education and OS camera/notification/biometric permission projection",
+      "primary_authority": "product_spec_authority",
+      "official_interface": "permission_handler and local_auth OS APIs",
+      "reuse": [
+        "permission_handler_package",
+        "local_auth_package",
+        "mobile_scanner_package",
+        "firebase_messaging_package"
+      ],
+      "credential_category": "device_permission",
+      "offline_fixture": "fixture_permissions",
+      "fail_closed": "show_settings_guidance_and_disable_dependent_capability_when_permission_is_denied",
+      "custom_categories": [
+        "ui",
+        "orchestration",
+        "state_projection",
+        "copy",
+        "thin_adapter"
+      ],
+      "upgrade_gate": "package provenance, manifest/plist audit and denied/permanently-denied matrix",
+      "status": "PENDING",
+      "forbidden_custom": [
+        "custom_key_store"
+      ],
+      "selection_gates": []
+    }
+  ],
+  "screen_mappings": [
+    {
+      "screen_id": "A1",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "启动编排、状态投影与品牌界面",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A2",
+      "profile": "onboarding_static",
+      "thin_adapter_owner": "lib/features/onboarding/*",
+      "custom_gap": "轮播界面、已看状态与已批准文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A3",
+      "profile": "privy_auth",
+      "thin_adapter_owner": "lib/integrations/privy/auth/*",
+      "custom_gap": "登录入口编排、禁用态与错误文案",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A4",
+      "profile": "privy_auth",
+      "thin_adapter_owner": "lib/integrations/privy/auth/*",
+      "custom_gap": "验证码界面、倒计时投影与锁定提示",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A5",
+      "profile": "external_wallet",
+      "thin_adapter_owner": "lib/integrations/reown/*",
+      "custom_gap": "连接选择界面、会话状态投影与来源说明",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A6",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "创建进度界面与非托管边界文案",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A7",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/recovery/*",
+      "custom_gap": "恢复方式选择、警示文案与状态投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A8",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/recovery/*",
+      "custom_gap": "敏感信息遮罩、界面保护与逐字文案",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A9",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/recovery/*",
+      "custom_gap": "校验界面、错误编排与锁定投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A10",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/import/*",
+      "custom_gap": "导入方式界面、能力矩阵与错误投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A11",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/security/*",
+      "custom_gap": "安全设置编排、设备能力投影与警示文案",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "A12",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/profile/setup/*",
+      "custom_gap": "别名与偏好界面、隐私默认值及通知引导",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B1",
+      "profile": "dashboard",
+      "thin_adapter_owner": "lib/features/home/*",
+      "custom_gap": "跨来源摘要编排、时间戳与部分失败投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B2",
+      "profile": "dashboard",
+      "thin_adapter_owner": "lib/features/networth/*",
+      "custom_gap": "净值拆分界面、来源标注与精确值投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B3",
+      "profile": "notifications",
+      "thin_adapter_owner": "lib/integrations/notifications/*",
+      "custom_gap": "通知分组界面、已读投影与权限说明",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B4",
+      "profile": "federated_search",
+      "thin_adapter_owner": "server/integrations/search/*",
+      "custom_gap": "有界聚合编排、结果分组与来源标注",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B5",
+      "profile": "pay_scan",
+      "thin_adapter_owner": "lib/integrations/pay_scan/*",
+      "custom_gap": "扫码界面、支付意图归一化与安全提示",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B6",
+      "profile": "pay_receive",
+      "thin_adapter_owner": "lib/features/pay_receive/*",
+      "custom_gap": "收款参数界面、链提示与本地二维码投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B7",
+      "profile": "privy_transfer",
+      "thin_adapter_owner": "lib/features/pay_confirm/*",
+      "custom_gap": "支付意图审阅、费用与事实来源投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B8",
+      "profile": "onramp",
+      "thin_adapter_owner": "lib/integrations/moonpay/*",
+      "custom_gap": "托管流程容器、地区提示与回跳状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "B9",
+      "profile": "security_facts",
+      "thin_adapter_owner": "lib/features/security_digest/*",
+      "custom_gap": "安全事实时间线、来源和未知态展示",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C1",
+      "profile": "market_data",
+      "thin_adapter_owner": "lib/integrations/market_data/*",
+      "custom_gap": "现货分栏、来源合并与陈旧数据投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C2",
+      "profile": "lightweight_chart",
+      "thin_adapter_owner": "lib/integrations/charts/basic/*",
+      "custom_gap": "详情布局、图表桥接与安全事实组合",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C3",
+      "profile": "advanced_chart",
+      "thin_adapter_owner": "lib/integrations/charts/advanced/*",
+      "custom_gap": "横屏容器、周期选择与许可能力投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C5",
+      "profile": "market_data",
+      "thin_adapter_owner": "lib/integrations/market_data/*",
+      "custom_gap": "持有人表格、来源标注与不可得状态",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C6",
+      "profile": "market_data",
+      "thin_adapter_owner": "lib/integrations/market_data/*",
+      "custom_gap": "成交流编排、大单标签与时间投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C7",
+      "profile": "watchlist",
+      "thin_adapter_owner": "lib/features/watchlist/*",
+      "custom_gap": "排序分组界面、乐观投影与冲突恢复",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C9",
+      "profile": "notifications",
+      "thin_adapter_owner": "lib/features/price_alerts/*",
+      "custom_gap": "提醒规则界面、触发历史与权限投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C10",
+      "profile": "market_data",
+      "thin_adapter_owner": "lib/integrations/market_data/*",
+      "custom_gap": "新池流、事实预筛与高危折叠策略",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "C11",
+      "profile": "market_data",
+      "thin_adapter_owner": "lib/integrations/market_data/*",
+      "custom_gap": "关注地址界面、标签来源与成本上限投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D1",
+      "profile": "perp_market_readonly",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "核心市场白名单界面、行情状态与断线投影；只读 provider gate 与 WebView 图表未审计时不可用",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D2",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "交易界面编排、订单簿原子投影与陈旧态禁用；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D3",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "订单意图审阅、强平和费用字段投影；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D4",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "仓位列表界面、精确值和陈旧态投影；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D5",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "仓位操作编排、部分平仓与冲突恢复；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D6",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "委托界面、改单撤单意图与未知提交冻结；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D7",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "成交与费用历史投影及导出编排；地区、法律或资格未知时禁止交易",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D8",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "保证金字段投影、风险提示与人工复算证据；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D9",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "划转意图审阅、状态追踪与失败说明；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D10",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "官方桥流程编排、最低额与未知状态说明；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D11",
+      "profile": "perp_market_readonly",
+      "thin_adapter_owner": "server/integrations/hyperliquid/core/*",
+      "custom_gap": "资金费曲线、结算倒计时与来源时间投影；只读 provider gate 与 WebView 图表未审计时不可用",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "D12",
+      "profile": "perp_trading_mutations",
+      "thin_adapter_owner": "lib/integrations/hyperliquid/core/risk_notice/*",
+      "custom_gap": "风险披露界面、首次确认与地区策略投影；地区、法律或资格未知时禁止交易",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E1",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "会话混合列表、匿名别名与连接状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E2",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "群聊布局定制、置顶条与权限状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E3",
+      "profile": "stream_audio",
+      "thin_adapter_owner": "lib/integrations/stream/audio/*",
+      "custom_gap": "内嵌语音房布局、全局通话条与生命周期投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E4",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "私聊布局、注销和屏蔽状态及加密声明边界",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E5",
+      "profile": "stream_cards",
+      "thin_adapter_owner": "lib/integrations/stream/cards/*",
+      "custom_gap": "稳定标识卡片、实时事实投影与购买入口策略",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E7",
+      "profile": "stream_cards",
+      "thin_adapter_owner": "lib/integrations/stream/cards/*",
+      "custom_gap": "合约事实弹层、来源标注与举报编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E8",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "成员分页界面、大群降级与公告投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E9",
+      "profile": "stream_cards",
+      "thin_adapter_owner": "lib/integrations/stream/cards/*",
+      "custom_gap": "资产快照卡片、权限显示与执行入口编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E10",
+      "profile": "stream_audio",
+      "thin_adapter_owner": "lib/integrations/stream/audio/*",
+      "custom_gap": "完整房间布局、举手队列与主持权限投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E11",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "请求列表界面、接受忽略举报编排",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E12",
+      "profile": "stream_chat",
+      "thin_adapter_owner": "lib/integrations/stream/chat/*",
+      "custom_gap": "消息筛选界面与搜索结果状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E13",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用占位界面与已批准文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "E14",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用入口与已批准文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F1",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "资产摘要布局、能力矩阵与部分失败投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F2",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "资产详情布局、精确金额和历史字段投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F3",
+      "profile": "privy_transfer",
+      "thin_adapter_owner": "lib/integrations/privy/funds/transfer/*",
+      "custom_gap": "资产选择界面、余额能力与零余额投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F4",
+      "profile": "privy_transfer",
+      "thin_adapter_owner": "lib/integrations/privy/funds/transfer/*",
+      "custom_gap": "收款方输入、名称解析状态与地址事实编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F5",
+      "profile": "privy_transfer",
+      "thin_adapter_owner": "lib/integrations/privy/funds/transfer/*",
+      "custom_gap": "转账意图审阅、费用和模拟事实投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F6",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "地址二维码界面、链警示与复制反馈",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F7",
+      "profile": "privy_swap_bridge",
+      "thin_adapter_owner": "lib/integrations/privy/funds/actions/*",
+      "custom_gap": "报价界面、过期编排和提供方生命周期投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F8",
+      "profile": "privy_swap_bridge",
+      "thin_adapter_owner": "lib/integrations/privy/funds/actions/*",
+      "custom_gap": "仅展示提供方实际暴露的费用和路径字段",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F9",
+      "profile": "privy_swap_bridge",
+      "thin_adapter_owner": "lib/integrations/privy/funds/actions/*",
+      "custom_gap": "跨链意图界面、路线状态与大额不可用说明",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F10",
+      "profile": "privy_swap_bridge",
+      "thin_adapter_owner": "lib/integrations/privy/funds/actions/*",
+      "custom_gap": "跨链进度投影、离开恢复与人工领取说明",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F11",
+      "profile": "unified_intent_review_composition",
+      "thin_adapter_owner": "lib/integrations/intent_review/composition/*",
+      "custom_gap": "统一意图审阅，组合 transfer、swap/bridge、approval、DApp/provider facts 与 approved_request_kind_policy，不实现模拟器",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F12",
+      "profile": "privy_transfer",
+      "thin_adapter_owner": "lib/integrations/privy/funds/transfer/*",
+      "custom_gap": "提供方结果投影、未知态和浏览器链接编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F13",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "历史筛选界面、字段来源和导出编排",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F14",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/wallets/*",
+      "custom_gap": "多账户切换、重命名和能力状态投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F15",
+      "profile": "dapp_browser",
+      "thin_adapter_owner": "lib/integrations/dapp_browser/*",
+      "custom_gap": "隔离浏览容器、来源提示和签名请求编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F16",
+      "profile": "approvals",
+      "thin_adapter_owner": "lib/integrations/security/approvals/*",
+      "custom_gap": "授权意图解码展示、限额选择和审阅编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F17",
+      "profile": "approvals",
+      "thin_adapter_owner": "lib/integrations/security/approvals/*",
+      "custom_gap": "授权事实列表、回收意图和批量操作约束",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F18",
+      "profile": "dapp_browser",
+      "thin_adapter_owner": "lib/integrations/dapp_browser/*",
+      "custom_gap": "收藏历史界面、本地状态和网址策略投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F19",
+      "profile": "dapp_browser",
+      "thin_adapter_owner": "lib/integrations/dapp_browser/*",
+      "custom_gap": "网络选择界面、连通性状态和自定义端点警示",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "F20",
+      "profile": "approvals",
+      "thin_adapter_owner": "lib/integrations/security/approvals/*",
+      "custom_gap": "安全策略界面、关闭警示与提供方能力投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "G1",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用占位界面与已批准定位文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "G2",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用列表占位与范围文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "G3",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用详情占位与合规提示",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "G4",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用申请占位与流程说明",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H1",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/profile/*",
+      "custom_gap": "资料摘要布局、隐私默认值与状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H2",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/profile/*",
+      "custom_gap": "资料编辑界面、别名冲突与可见范围投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H3",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/privacy/*",
+      "custom_gap": "隐私矩阵界面、群白名单与二次确认策略",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H4",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/copytrade_policy/*",
+      "custom_gap": "默认关闭权限界面、额度策略与撤销编排",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H5",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/security/*",
+      "custom_gap": "安全能力汇总、缺失恢复警示与状态投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H6",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/security/*",
+      "custom_gap": "设备会话界面、远程下线编排与当前设备保护",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H7",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/recovery/*",
+      "custom_gap": "二次验证、敏感信息遮罩与锁定投影",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H8",
+      "profile": "privy_wallet",
+      "thin_adapter_owner": "lib/integrations/privy/recovery/*",
+      "custom_gap": "恢复参与者界面、确认状态与阈值说明",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H9",
+      "profile": "notifications",
+      "thin_adapter_owner": "lib/integrations/notifications/*",
+      "custom_gap": "分类通知开关、系统权限和提供方订阅投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H10",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/social_graph/*",
+      "custom_gap": "关注关系列表、空态和屏蔽编排",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H11",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/social_graph/*",
+      "custom_gap": "用户合约域名屏蔽清单与解除编排",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H12",
+      "profile": "profile_local",
+      "thin_adapter_owner": "lib/features/settings/*",
+      "custom_gap": "语言货币主题与数据用量的本地投影",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H13",
+      "profile": "about_legal",
+      "thin_adapter_owner": "lib/features/about/*",
+      "custom_gap": "版本、法务文件和开源许可界面",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H14",
+      "profile": "support",
+      "thin_adapter_owner": "lib/integrations/support/*",
+      "custom_gap": "离线帮助、工单入口与服务状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H15",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用激励占位与无收益承诺文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "H16",
+      "profile": "phase2_placeholder",
+      "thin_adapter_owner": "lib/features/phase2_placeholders/*",
+      "custom_gap": "禁用邀请占位与无奖励承诺文案",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I1",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "全局断网横幅、服务区分与重试状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I2",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "服务错误兜底、关联标识与安全重试编排",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I3",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "强制更新阻断、版本比较投影与商店跳转",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I4",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "维护公告界面、时间范围与恢复投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I5",
+      "profile": "regional_gate",
+      "thin_adapter_owner": "server/integrations/compliance/*",
+      "custom_gap": "地区限制界面、签名策略投影与功能联动",
+      "review_tier": "R0",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I6",
+      "profile": "permissions",
+      "thin_adapter_owner": "lib/platform/permissions/*",
+      "custom_gap": "权限前置说明、拒绝后引导与能力状态投影",
+      "review_tier": "R1",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I7",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "全局提示队列、无障碍播报与严重度样式",
+      "review_tier": "R2",
+      "status": "PENDING"
+    },
+    {
+      "screen_id": "I8",
+      "profile": "app_shell",
+      "thin_adapter_owner": "lib/platform/foundation/app_shell/*",
+      "custom_gap": "列表详情图表加载占位和减少动画适配",
+      "review_tier": "R2",
+      "status": "PENDING"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": "loop.app-integrations-p0.offline-fixture/v1",
+  "mode": "EXPLICIT_OFFLINE_R0",
+  "production": false,
+  "network": "FORBIDDEN",
+  "mutations": "FORBIDDEN",
+  "provider_truth": "FORBIDDEN",
+  "banner": "Offline fixture — sample app records and notification projections only",
+  "records": {
+    "profile": {"alias": "loop-demo", "fixture": true},
+    "watchlist": [{"asset_key": "BTC", "fixture": true}],
+    "notifications": [{"event_type": "price_alert_triggered", "fixture": true}]
+  }
+}

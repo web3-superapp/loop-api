@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "declared_runtime_targets": [
+    "production_bff",
+    "flutter_client"
+  ],
+  "installed": false,
+  "enablement": "credential_and_capability_audit_required",
+  "packages": [
+    {
+      "name": "viem",
+      "version": "2.55.10",
+      "registry": "npm",
+      "integrity": "sha512-Q9Ba+/ma81U2M5o5P2AQ7Ux8rTIwmCZvUcr8rKdQ22bV0IBFHllM2m5gWDP8hFaUN2nH2oW3QG44amRazflYNQ==",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/viem/-/viem-2.55.10.tgz",
+      "repository": "https://github.com/wevm/viem.git",
+      "role": "evm_address_and_ens_adapter",
+      "runtime_target": "production_bff",
+      "installed": false,
+      "enablement": "credential_and_capability_audit_required"
+    },
+    {
+      "name": "@solana/addresses",
+      "version": "6.10.0",
+      "registry": "npm",
+      "integrity": "sha512-vEoCGBTxG0HCERAn84KXkrJjl+pDaNzOpZ0qbgcPS98fYxP5yzbKB8SNOY2bzrbkRUmmw5Q3hqTRERemUN2Gcw==",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/@solana/addresses/-/addresses-6.10.0.tgz",
+      "repository": "https://github.com/anza-xyz/kit.git",
+      "role": "solana_address_adapter",
+      "runtime_target": "production_bff",
+      "installed": false,
+      "enablement": "credential_and_capability_audit_required"
+    },
+    {
+      "name": "@privy-io/node",
+      "version": "0.29.0",
+      "registry": "npm",
+      "integrity": "sha512-Tcpy8ZDi14SzAmqFXRSgKTgMsk8truxAXodHuRR08XjLSfZLAx2Kfh8EBSoKTPxK9KakMjRhO6+nw66RtiiYdg==",
+      "license": "Apache-2.0",
+      "source": "https://registry.npmjs.org/@privy-io/node/-/node-0.29.0.tgz",
+      "repository": "https://github.com/privy-io/node-sdk.git",
+      "role": "official_server_formatter",
+      "runtime_target": "production_bff",
+      "installed": false,
+      "enablement": "credential_and_capability_audit_required"
+    },
+    {
+      "name": "privy_flutter",
+      "version": "0.10.1",
+      "registry": "pub",
+      "integrity": "3f3b3215b0ea41ad059ed5a11a9edadcfffa72b6efed45e9694c089281ef643e",
+      "license": "MIT",
+      "source": "https://pub.dev/api/archives/privy_flutter-0.10.1.tar.gz",
+      "repository": "https://github.com/privy-io/flutter-sdk",
+      "role": "official_flutter_authorization_signature",
+      "runtime_target": "flutter_client",
+      "installed": false,
+      "enablement": "credential_and_capability_audit_required"
+    }
+  ]
+}
