@@ -9,27 +9,57 @@ const booleanString = z
 const positiveIntegerString = (minimum: number, maximum: number) =>
   z.coerce.number().int().min(minimum).max(maximum);
 
-const environmentSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]),
-  HOST: z.string().trim().min(1).max(255),
-  PORT: positiveIntegerString(1, 65_535),
-  PUBLIC_BASE_URL: z.string().url(),
-  API_DOCS_ENABLED: booleanString,
-  TRUST_PROXY: booleanString,
-  LOG_LEVEL: z.enum([
-    "fatal",
-    "error",
-    "warn",
-    "info",
-    "debug",
-    "trace",
-    "silent",
-  ]),
-  DATABASE_URL: z.string().trim().min(1),
-  DATABASE_POOL_MAX: positiveIntegerString(1, 50),
-  DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
-  DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
-});
+const blankStringToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
+const optionalCredential = (maximumLength: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    z.string().trim().min(1).max(maximumLength).optional(),
+  );
+
+const environmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]),
+    HOST: z.string().trim().min(1).max(255),
+    PORT: positiveIntegerString(1, 65_535),
+    PUBLIC_BASE_URL: z.string().url(),
+    API_DOCS_ENABLED: booleanString,
+    TRUST_PROXY: booleanString,
+    LOG_LEVEL: z.enum([
+      "fatal",
+      "error",
+      "warn",
+      "info",
+      "debug",
+      "trace",
+      "silent",
+    ]),
+    PRIVY_APP_ID: optionalCredential(255),
+    PRIVY_APP_SECRET: optionalCredential(4_096),
+    DATABASE_URL: z.string().trim().min(1),
+    DATABASE_POOL_MAX: positiveIntegerString(1, 50),
+    DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
+    DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+  })
+  .superRefine((value, context) => {
+    const hasAppId = value.PRIVY_APP_ID !== undefined;
+    const hasAppSecret = value.PRIVY_APP_SECRET !== undefined;
+
+    if (hasAppId !== hasAppSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "PRIVY_APP_ID and PRIVY_APP_SECRET must be configured together",
+        path: ["PRIVY_APP_ID"],
+      });
+    }
+  });
+
+export interface PrivyConfig {
+  readonly appId: string;
+  readonly appSecret: string;
+}
 
 export interface AppConfig {
   readonly nodeEnv: "development" | "test" | "production";
@@ -44,6 +74,7 @@ export interface AppConfig {
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
+  readonly privy: PrivyConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -109,6 +140,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       (rawNodeEnv === "production" ? "false" : "true"),
     TRUST_PROXY: environment["TRUST_PROXY"] ?? "false",
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    PRIVY_APP_ID: environment["PRIVY_APP_ID"],
+    PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -131,6 +164,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
   assertPublicBaseUrl(parsed.data.NODE_ENV, publicBaseUrl);
   assertDatabaseUrl(databaseUrl);
+  const privy =
+    parsed.data.PRIVY_APP_ID !== undefined &&
+    parsed.data.PRIVY_APP_SECRET !== undefined
+      ? Object.freeze({
+          appId: parsed.data.PRIVY_APP_ID,
+          appSecret: parsed.data.PRIVY_APP_SECRET,
+        })
+      : null;
 
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
@@ -144,6 +185,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    privy,
     serviceName: "loop-api",
     serviceVersion,
   });

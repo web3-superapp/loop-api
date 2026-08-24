@@ -22,6 +22,11 @@ function testConfig(apiDocsEnabled = true) {
 function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
   return {
     database: {
+      internalUsers: {
+        getOrCreateByPrivyUserId: vi.fn(() =>
+          Promise.resolve({ id: "6d12a86e-4134-47e6-9312-c5ef75a30f55" }),
+        ),
+      },
       ping,
       close: vi.fn(() => Promise.resolve()),
     } satisfies Database,
@@ -148,6 +153,28 @@ describe("LOOP API foundation", () => {
       message: "The requested resource does not exist.",
     });
     expect(response.headers["x-request-id"]).toBe(payload.request_id);
+  });
+
+  it("preserves non-bootstrap client error status codes", async () => {
+    const { database } = fakeDatabase();
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      logger: false,
+    });
+    app.get("/test-rate-limit", () => {
+      throw Object.assign(new Error("provider detail"), { statusCode: 429 });
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/test-rate-limit",
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.body).not.toContain("provider detail");
+    expect(response.json()).toMatchObject({ code: "internal_error" });
   });
 
   it("closes the database pool with the application", async () => {

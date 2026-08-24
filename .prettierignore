@@ -1,5 +1,7 @@
 contracts/**
+.gitnexus/**
 coverage/**
+docs/plans/*-gitnexus-plan-*.md
 dist/**
 node_modules/**
 pnpm-lock.yaml

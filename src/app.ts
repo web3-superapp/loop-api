@@ -9,11 +9,19 @@ import Fastify, {
 
 import type { AppConfig } from "./config.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
+import { createBootstrapService } from "./features/identity/bootstrap-service.js";
+import {
+  createPrivyAccessTokenVerifier,
+  createUnavailablePrivyAccessTokenVerifier,
+  type PrivyAccessTokenVerifier,
+} from "./integrations/privy/access-token-verifier.js";
+import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerHealthRoutes } from "./routes/health.js";
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly database?: Database;
+  readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly logger?: false;
 }
 
@@ -49,6 +57,10 @@ function loggerOptions(
         "req.headers.cookie",
         'req.headers["x-csrf-token"]',
         'res.headers["set-cookie"]',
+        "appSecret",
+        "privy.appSecret",
+        "config.privy.appSecret",
+        "PRIVY_APP_SECRET",
       ],
     },
     ...(config.nodeEnv === "development"
@@ -89,13 +101,38 @@ export async function buildApp(
         version: config.serviceVersion,
       },
       servers: [{ url: config.publicBaseUrl.replace(/\/$/, "") }],
-      tags: [{ name: "health", description: "Process and dependency health" }],
+      tags: [
+        { name: "health", description: "Process and dependency health" },
+        {
+          name: "identity",
+          description: "Authenticated internal identity bootstrap",
+        },
+      ],
+      components: {
+        securitySchemes: {
+          privyBearer: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "JWT",
+            description: "Current Privy access token",
+          },
+        },
+      },
     },
   });
 
   await app.register(helmet);
 
+  const privyAccessTokenVerifier =
+    options.privyAccessTokenVerifier ??
+    (config.privy === null
+      ? createUnavailablePrivyAccessTokenVerifier()
+      : createPrivyAccessTokenVerifier(config.privy));
   const database = options.database ?? createPostgresDatabase(config, app.log);
+  const bootstrapService = createBootstrapService(
+    privyAccessTokenVerifier,
+    database.internalUsers,
+  );
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -106,6 +143,7 @@ export async function buildApp(
   });
 
   registerHealthRoutes(app, config, database);
+  registerBootstrapRoute(app, bootstrapService);
 
   if (config.apiDocsEnabled) {
     app.get(
@@ -137,8 +175,20 @@ export async function buildApp(
       details.statusCode !== undefined &&
       details.statusCode >= 400 &&
       details.statusCode < 500;
-    const statusCode = isClientError ? details.statusCode : 500;
-    const code = details.hasValidation ? "invalid_request" : "internal_error";
+    const isBootstrapInputError =
+      request.routeOptions.url === "/v1/bootstrap" &&
+      (details.statusCode === 400 ||
+        details.statusCode === 413 ||
+        details.statusCode === 415);
+    const statusCode = isBootstrapInputError
+      ? 400
+      : isClientError
+        ? details.statusCode
+        : 500;
+    const code =
+      details.hasValidation || isBootstrapInputError
+        ? "invalid_request"
+        : "internal_error";
     const message =
       code === "invalid_request"
         ? "The request is invalid."

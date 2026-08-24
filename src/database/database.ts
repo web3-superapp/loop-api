@@ -1,12 +1,20 @@
 import type { FastifyBaseLogger } from "fastify";
 import pg from "pg";
+import { z } from "zod";
 
 import type { AppConfig } from "../config.js";
+import type {
+  InternalUser,
+  InternalUserRepository,
+} from "../features/identity/internal-user-repository.js";
 
 const { Pool } = pg;
 const requiredMigration = "000001_create_internal_users";
+const privyUserIdSchema = z.string().min(1).max(255);
+const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 
 export interface Database {
+  readonly internalUsers: InternalUserRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -43,7 +51,47 @@ export function createPostgresDatabase(
     );
   });
 
+  const internalUsers: InternalUserRepository = {
+    async getOrCreateByPrivyUserId(
+      rawPrivyUserId: string,
+    ): Promise<InternalUser> {
+      const privyUserId = privyUserIdSchema.parse(rawPrivyUserId);
+      const inserted = await pool.query<{ id: string }>({
+        text: `
+          insert into public.loop_users (privy_user_id)
+          values ($1)
+          on conflict (privy_user_id) do nothing
+          returning id
+        `,
+        values: [privyUserId],
+      });
+      const insertedRow = inserted.rows[0];
+
+      if (insertedRow !== undefined) {
+        return internalUserRowSchema.parse(insertedRow);
+      }
+
+      const existing = await pool.query<{ id: string }>({
+        text: `
+          select id
+          from public.loop_users
+          where privy_user_id = $1
+          limit 1
+        `,
+        values: [privyUserId],
+      });
+      const existingRow = existing.rows[0];
+
+      if (existingRow === undefined) {
+        throw new Error("Internal user conflict winner was not found");
+      }
+
+      return internalUserRowSchema.parse(existingRow);
+    },
+  };
+
   return {
+    internalUsers,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

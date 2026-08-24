@@ -23,8 +23,52 @@ describe("loadConfig", () => {
     expect(config.apiDocsEnabled).toBe(false);
     expect(config.trustProxy).toBe(false);
     expect(config.databasePoolMax).toBe(10);
+    expect(config.privy).toBeNull();
     expect(config.serviceName).toBe("loop-api");
   });
+
+  it("enables Privy verification only when both credentials are present", () => {
+    const environment = validEnvironment();
+    environment["PRIVY_APP_ID"] = "app_test";
+    environment["PRIVY_APP_SECRET"] = "secret_test";
+
+    const config = loadConfig(environment);
+
+    expect(config.privy).toEqual({
+      appId: "app_test",
+      appSecret: "secret_test",
+    });
+    expect(Object.isFrozen(config.privy)).toBe(true);
+  });
+
+  it("treats blank Privy placeholders as unconfigured", () => {
+    const environment = validEnvironment();
+    environment["PRIVY_APP_ID"] = "";
+    environment["PRIVY_APP_SECRET"] = "   ";
+
+    expect(loadConfig(environment).privy).toBeNull();
+  });
+
+  it.each([
+    ["PRIVY_APP_ID", "app_test"],
+    ["PRIVY_APP_SECRET", "do-not-log-this-secret"],
+  ] as const)(
+    "rejects a partial Privy credential pair without leaking %s",
+    (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+
+      expect(() => loadConfig(environment)).toThrowError(
+        /PRIVY_APP_ID and PRIVY_APP_SECRET must be configured together/,
+      );
+
+      try {
+        loadConfig(environment);
+      } catch (error) {
+        expect(String(error)).not.toContain(value);
+      }
+    },
+  );
 
   it("fails closed when the database URL is missing", () => {
     const environment = validEnvironment();

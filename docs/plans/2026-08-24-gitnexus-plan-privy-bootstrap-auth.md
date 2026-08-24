@@ -4,11 +4,13 @@
 > Evidence verified at commit 38e5e92b4f91a6ca2531677adfedd38411c9f8fc; GitNexus index refreshed this session with --index-only --pdg. GitNexus 1.6.9 emitted metadata schema 5 without the runner identity expected by the skill, so graph/PDG findings are advisory and source-weighted unless source-verified.
 > Evidence provenance schema 2; global dirty digest 0a9c85780067d9afcd0764f307b60891e3cee927ee11eaeb5ec7826d10fd82cd; cited-path manifest 28 sorted entries; exact generated plan path excluded.
 
+> Implementation refinement: a source-read Flutter product constraint outside this target repository's pinned evidence requires bootstrap to return a backend-derived Stream user ID. The plan now derives loop_<uuid-without-hyphens> without connecting Stream or minting a provider token.
+
 ## 1. Objective
 
-[verified] Add a Development-only endpoint that accepts the current Privy access token from Flutter, verifies it server-side, derives the trusted Privy user ID from verified claims, maps it to the existing opaque Loop UUID, and returns only that UUID.
+[verified] Add a Development-only endpoint that accepts the current Privy access token from Flutter, verifies it server-side, derives the trusted Privy user ID from verified claims, maps it to the existing opaque Loop UUID, and returns that UUID plus the deterministic server-derived Stream user ID.
 
-[inferred] This establishes authentication/identity bootstrap only. Stream, Firebase push, wallet actions, private Hyperliquid trading, withdrawals, Mainnet, and automated trading remain disconnected.
+[inferred] This establishes authentication/identity bootstrap and a server-owned Stream subject only. Stream token minting/connection, Firebase push, wallet actions, private Hyperliquid trading, withdrawals, Mainnet, and automated trading remain disconnected.
 
 ## 2. Current Behaviour
 
@@ -52,13 +54,13 @@
 
 ## 6. Proposed Changes
 
-1. docs/decisions/0002-privy-bearer-bootstrap.md: approve POST /v1/bootstrap, native Bearer auth, exact @privy-io/node 0.29.0, {user:{id}}, stable errors, and explicit deferrals.
+1. docs/decisions/0002-privy-bearer-bootstrap.md: approve POST /v1/bootstrap, native Bearer auth, exact @privy-io/node 0.29.0, {user:{id},stream_user_id}, stable errors, and explicit deferrals.
 2. package.json/pnpm-lock.yaml/attribution: add the exact SDK pin already recorded in contracts/privy-transfer/dependency-lock.json, plus a dedicated DB integration script.
 3. .env.example and src/config.ts: add blank placeholders and immutable configured-or-null PRIVY_APP_ID/PRIVY_APP_SECRET pair; no secret value in errors/logs.
 4. src/integrations/privy/access-token-verifier.ts: add a narrow port and process-scoped official adapter; call utils().auth().verifyAccessToken per request; expose only trusted user ID.
 5. Identity repository/service modules: define the ID mapping port and enforce verifier-before-database order.
 6. src/database/database.ts: preserve ping/close and add parameterized atomic mapping using the existing table/constraint; no migration change.
-7. src/routes/bootstrap.ts: no requestBody, reject any body first, strict bounded single Bearer, no-store, 401 challenge, stable {code,message,request_id}, success only {user:{id}}.
+7. src/routes/bootstrap.ts: no requestBody, reject any body first, strict bounded single Bearer, no-store, 401 challenge, stable {code,message,request_id}, success only {user:{id},stream_user_id}, with the Stream ID derived server-side from the opaque UUID.
 8. src/app.ts: inject/compose dependencies, add OpenAPI bearer scheme/tag, register the route, preserve existing lifecycle/errors.
 9. Tests/CI/docs: synthetic-JWT adapter tests, fake-driven route tests, real PostgreSQL concurrency tests, CI execution, truthful README/local setup/attribution.
 
@@ -129,7 +131,7 @@ implementation_context: {
     "acceptance_criteria": [
       "Invalid or missing authentication causes zero database calls and a sanitized 401.",
       "A process-scoped @privy-io/node verifier trusts only verified claims.user_id.",
-      "Valid requests return one stable server-generated Loop UUID and expose no provider data.",
+      "Valid requests return one stable server-generated Loop UUID plus a deterministic server-derived Stream user ID and expose no provider credential or token.",
       "Sequential and concurrent calls for one Privy identity leave one row and return the same UUID.",
       "OpenAPI, config, CI, tests, docs, and attribution truthfully describe only this slice."
     ],
@@ -652,7 +654,7 @@ implementation_context: {
       "Verify the token on every request through the singleton SDK client.",
       "Pass only verified claims.user_id to the internal-user repository.",
       "INSERT ... ON CONFLICT DO NOTHING RETURNING; SELECT in a fresh statement on conflict.",
-      "Return 200 with only user.id, no-store, and request ID."
+      "Return 200 with user.id and stream_user_id, no-store, and request ID."
     ],
     "pdg_constraints": [
       {
@@ -875,7 +877,7 @@ implementation_context: {
           "missing/malformed/duplicate/oversized -> 401 and zero DB",
           "any body -> 400 before verifier",
           "unconfigured -> 503",
-          "valid -> only user.id/no-store",
+          "valid -> user.id plus derived stream_user_id/no-store",
           "replay -> stable ID",
           "DB failure -> sanitized 500",
           "OpenAPI -> bearer/no requestBody"
@@ -919,16 +921,16 @@ implementation_context: {
       "Re-check public readiness before device handoff."
     ],
     "open_questions": [
-      "No blocking contract question: decision 0002 locks POST /v1/bootstrap and {user:{id}}.",
+      "No blocking contract question: decision 0002 locks POST /v1/bootstrap and {user:{id},stream_user_id}.",
       "Real phone-issued token verification waits for the mobile adapter.",
-      "Static verification key, rate limiting, Stream, wallet, and trading are separate decisions."
+      "Static verification key, rate limiting, Stream token minting/connection, wallet, and trading are separate decisions."
     ],
     "avoid": [
       "Do not repeat full repository discovery.",
       "Do not replace established patterns without evidence.",
       "Do not read, print, log, commit, forward, or snapshot .env.local or secrets/tokens.",
       "Do not accept client-selected internal/provider/Stream/wallet IDs or refresh tokens.",
-      "Do not implement Stream, wallet, private trading, withdrawals, Mainnet, or automation here.",
+      "Do not implement Stream token minting/connection, wallet, private trading, withdrawals, Mainnet, or automation here.",
       "Do not edit migration 000001 or add a redundant migration.",
       "Do not treat no-taint output as security proof."
     ]
@@ -942,14 +944,14 @@ implementation_context: {
 - [assumed] PostgreSQL is reachable; prove via migration and integration suite.
 - [assumed] Cloudflare still routes the Development hostname; prove public readiness before handoff.
 
-No blocking contract question remains. Decision 0002 locks POST /v1/bootstrap and {user:{id}}. Deferred: mobile adapter/real-token phone test, static verification key, rate limiting, Stream, push, wallet, private trading, withdrawals, Mainnet, automation.
+No blocking contract question remains. Decision 0002 locks POST /v1/bootstrap and {user:{id},stream_user_id}. Deferred: mobile adapter/real-token phone test, static verification key, rate limiting, Stream token minting/connection, push, wallet, private trading, withdrawals, Mainnet, automation.
 
 ## 13. Definition of Done
 
 - Decision 0002 approves exactly this boundary.
 - Exact SDK is locked, typechecked, tested, and attributed.
 - Missing/invalid auth or any body produces no DB call and only sanitized errors.
-- Valid auth trusts only verified claims.user_id and returns one opaque UUID with no-store.
+- Valid auth trusts only verified claims.user_id and returns one opaque UUID plus its deterministic server-derived Stream ID with no-store.
 - Real PostgreSQL tests prove sequential/concurrent idempotency.
 - Existing app behavior and OpenAPI checks pass.
 - pnpm db:migrate, pnpm test:integration, pnpm check, and git diff --check pass.

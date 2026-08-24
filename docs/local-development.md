@@ -11,12 +11,21 @@ pnpm db:migrate
 pnpm dev
 ```
 
+Set `PRIVY_APP_ID` and `PRIVY_APP_SECRET` only in the ignored `.env.local` to
+enable `POST /v1/bootstrap`. Leave both blank to keep authentication disabled;
+providing only one is a startup error. The mobile client sends only its current
+Privy access token as a Bearer value and never sends a refresh token.
+
 Validate the two health boundaries:
 
 ```sh
 curl --fail http://127.0.0.1:3000/health/live
 curl --fail http://127.0.0.1:3000/health/ready
+curl -i -X POST http://127.0.0.1:3000/v1/bootstrap
 ```
+
+The unauthenticated bootstrap smoke check must return a sanitized 401 with a
+Bearer challenge and must not create a user row.
 
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server
@@ -67,6 +76,11 @@ cd <loop-mobile-repository>
 bin/flutter run \
   --dart-define=LOOP_BACKEND_BASE_URL=https://api-dev.quant-dinger.cc
 ```
+
+Before using a real phone token, repeat the unauthenticated smoke check against
+`https://api-dev.quant-dinger.cc/v1/bootstrap`. A successful credentialed 200 is
+not verified until the Flutter backend adapter is implemented and exercised on
+the physical device.
 
 Provider-specific device testing begins only after the matching server secret is
 stored outside Git and the corresponding sandbox/Testnet gate is implemented.

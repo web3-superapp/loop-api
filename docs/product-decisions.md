@@ -12,16 +12,21 @@ prototype research in `contracts/integration-catalog/` and
 - LOOP implements thin adapters, policy mapping, orchestration, and projections;
   it does not implement replacement wallet, matching, Chat, RTC, or SFU cores.
 
-The repository currently has no production backend runtime, installed live
-provider composition, deployed endpoint, provider credentials, connected data
-path, or credentialed sandbox/testnet/device evidence. Contract paths such as
-`POST /v1/chat/token` are target interfaces only.
+The repository now has a local Fastify runtime and the Development
+`POST /v1/bootstrap` Privy verification boundary. It still has no production
+deployment, successful real-token physical-device evidence, Stream server
+composition, private trading path, or credentialed provider connection. Contract
+paths such as `POST /v1/chat/token` remain target interfaces only.
 
 ## Identity model
 
 The durable LOOP account key is a random, opaque internal user ID. Stream user
 IDs and other provider subjects are derived or mapped server-side from that
 internal identity.
+
+Bootstrap derives the future Stream subject as
+`loop_<lowercase-internal-uuid-without-hyphens>`. Returning that subject does not
+connect Stream or mint a Chat/Video token.
 
 Wallets are bindable, replaceable credentials. A user may attach, rotate, or
 remove an eligible wallet without replacing the internal account, social graph,

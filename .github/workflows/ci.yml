@@ -63,5 +63,8 @@ jobs:
       - name: Apply PostgreSQL migrations
         run: pnpm db:migrate
 
+      - name: Verify PostgreSQL identity mapping
+        run: pnpm test:integration
+
       - name: Verify source and build
         run: pnpm check

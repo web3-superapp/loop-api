@@ -9,6 +9,7 @@ are recorded in `pnpm-lock.yaml`.
 | Fastify            |  5.12.1 | HTTP server and route lifecycle    | MIT        |
 | `@fastify/swagger` |   9.8.1 | OpenAPI 3.1 generation             | MIT        |
 | `@fastify/helmet`  |  13.1.1 | HTTP security headers              | MIT        |
+| `@privy-io/node`   |  0.29.0 | Privy access-token verification    | Apache-2.0 |
 | `pg`               |  8.23.0 | PostgreSQL driver and pooling      | MIT        |
 | Zod                |   4.4.3 | Fail-closed environment validation | MIT        |
 | `node-pg-migrate`  |   9.0.0 | PostgreSQL schema migrations       | MIT        |
@@ -18,6 +19,6 @@ are recorded in `pnpm-lock.yaml`.
 | Prettier           |   3.9.6 | Deterministic source formatting    | MIT        |
 | `tsx`              | 4.23.12 | Local TypeScript execution/watch   | MIT        |
 
-This file does not cover Provider SDKs because none are installed by the
-foundation slice. Provider SDK attribution and commercial-license review must be
-added in the same change that introduces each SDK.
+The Privy SDK entry covers only the access-token verification boundary approved
+by Decision 0002. Other provider SDKs must be registered with their own reviewed
+integration change.

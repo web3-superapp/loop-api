@@ -4,25 +4,30 @@ Private Backend-for-Frontend repository for the LOOP Flutter app.
 
 ## Current status
 
-The first backend runtime foundation is implemented:
+The runtime foundation and first protected identity slice are implemented:
 
 - Node.js 24 LTS, TypeScript, Fastify, and generated OpenAPI 3.1
 - fail-closed environment validation and redacted structured logs
 - process liveness and PostgreSQL-backed readiness endpoints
 - PostgreSQL 17 local development through Docker Compose
 - an initial opaque internal-user migration
+- Privy Bearer access-token verification through the official server SDK
+- idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
+  server-derived Stream user ID
 - unit/contract tests, linting, type checking, and production compilation
 
-This is a runtime foundation, **not a live provider integration**. There is still
-no credentialed Privy verification, Stream token minting, Hyperliquid private
-account/trading path, Firebase push path, or production deployment. Do not report
-those capabilities as connected until their credentialed testnet/sandbox and
-physical-device gates pass.
+This is still **not a complete live provider integration**. The Privy server
+verification boundary is implemented and can be enabled with local credentials,
+but a real phone-issued token has not yet passed the physical-device gate. There
+is still no Stream token minting, Hyperliquid private account/trading path,
+Firebase push path, rate limiter, or production deployment.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
 recorded in
-[`docs/decisions/0001-node-fastify-foundation.md`](docs/decisions/0001-node-fastify-foundation.md).
+[`docs/decisions/0001-node-fastify-foundation.md`](docs/decisions/0001-node-fastify-foundation.md)
+and
+[`docs/decisions/0002-privy-bearer-bootstrap.md`](docs/decisions/0002-privy-bearer-bootstrap.md).
 
 ## Quick start
 
@@ -45,6 +50,9 @@ The safe default listens on `http://127.0.0.1:3000` only.
 
 - `GET /health/live` proves that the HTTP process is alive.
 - `GET /health/ready` proves that required PostgreSQL access is working.
+- `POST /v1/bootstrap` verifies a current Privy Bearer token and returns the
+  server-derived LOOP and Stream user IDs. It returns 503 when Privy is
+  unconfigured; returning the Stream ID does not connect Stream or mint a token.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 
@@ -52,6 +60,7 @@ Run all repository checks with:
 
 ```sh
 pnpm check
+pnpm test:integration
 ```
 
 See [`docs/local-development.md`](docs/local-development.md) for physical-phone
