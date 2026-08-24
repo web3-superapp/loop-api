@@ -41,11 +41,13 @@ implemented as independently verified slices:
 - a durable provider-operation control plane with scope-wide idempotency,
   one-attempt write journals, versioned append-only audit events, atomic
   multi-subject issuance quotas, and stale-submission quarantine
-- a generic reconciliation worker whose provider boundary supports
+- a generic reconciliation worker library shell whose provider boundary supports
   authoritative reads only, with fenced leases, bounded retries, operator hold,
-  and abort-safe shutdown
+  and abort-safe shutdown; it is not yet composed as a deployed worker process
 - a committed, deterministic OpenAPI artifact with a drift check
-- unit/contract tests, linting, type checking, and production compilation
+- unit, contract, worker, and PostgreSQL integration gates; a high-confidence
+  tracked-secret guard; linting; type checking; production compilation; and
+  separate migration/runtime image builds
 
 This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
@@ -137,9 +139,21 @@ The safe default listens on `http://127.0.0.1:3000` only.
 Run all repository checks with:
 
 ```sh
-pnpm check
+pnpm secrets:check
+pnpm test:contract
+pnpm test:worker
 pnpm test:integration
+pnpm check
+pnpm docker:build:migration
+pnpm docker:build:runtime
 ```
+
+`pnpm secrets:check` guards the current Git-tracked snapshot against forbidden
+credential files and a small set of high-confidence token patterns. It does not
+scan Git history, infer arbitrary opaque provider secrets, or read the ignored
+local `.env.local`; that file remains the only local place for the current Privy
+credentials. The two Docker commands build distinct migration and lean runtime
+targets and do not deploy either image.
 
 Route schemas are the source of truth for
 [`openapi/loop-api.v1.json`](openapi/loop-api.v1.json). Do not edit the artifact

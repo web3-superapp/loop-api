@@ -91,7 +91,7 @@ Append migrations; never edit `000001`.
 - `000002_api_control_plane`: `api_idempotency_records`, `provider_operations`, `audit_events`, and issuance-rate records. Store opaque IDs, internal user IDs, request/intent digests, status, non-secret provider references, timestamps, lease/fencing metadata, and sanitized outcome codes only.
 - Update readiness to require the latest expected migration name and all mandatory tables, while returning only `up/down`.
 - Add transaction helpers and repositories behind feature ports. Every mutation transaction creates/locks the idempotency/operation row and audit event before a provider call.
-- Add `src/worker.ts` and a PostgreSQL-backed reconciliation runner. A lease selects work; it is not claimed as a signer fence. Unknown provider results remain held until an authoritative read resolves them.
+- Add `src/worker.ts` as a generic reconciliation worker shell plus a separately PostgreSQL-tested control-plane repository. A lease selects work; it is not claimed as a signer fence. Unknown provider results remain held until an authoritative read resolves them. An executable worker process/composition remains deferred until a provider write path is approved.
 
 Default request/provider policy recorded in ADR 0003:
 
@@ -180,10 +180,10 @@ Update README, local development docs, product decisions, attribution, `.env.exa
 2. **Persistent control plane.** Add migration 000002, transaction/repository ports, audit/idempotency/provider-operation state, latest-migration readiness, reconciliation worker shell, and PostgreSQL integration tests. No provider SDK call yet.
 3. **Stream routes.** Add Chat/Video token services, exact route schemas, quotas, unavailable/fake issuers, OpenAPI/tests, and configuration. Perform official package/license research before any real issuer dependency. Commit the stable interface even when the real issuer remains unavailable.
 4. **Perp private reads/config.** Define strict DTOs/cursors/config facts, ports, unavailable/fake adapters, routes, and contract tests from reviewed provider fixtures. Enforce server-derived account and decimal strings. Do not install a forbidden SDK or proxy public markets.
-5. **Perp intent and reconciliation.** Add migration 000003, intent/idempotency/audit services, routes, fake adapter tests, restart/unknown-result worker tests, per-action kill switches, and default-deny eligibility. Keep real submission disabled until provider gates close.
+5. **Perp intent and reconciliation.** Add migration 000003, intent/idempotency/audit services, routes, fake adapter tests, durable unknown-result records, worker-shell tests, per-action kill switches, and default-deny eligibility. Keep real submission disabled until provider gates close.
 6. **Agent authorization.** Add migration 000004 and the canonical Testnet approveAgent issue/signature/status contract with negative tests. Keep issue/relay disabled without approved workflow and signature evidence.
 7. **Privy transfer.** Implement the six Bearer-authenticated top-level routes as an explicit default-closed boundary under Decision 0008. Keep persistence, formatter, provider calls, replay, and reconciliation unavailable until the missing nested DTO and session decisions are approved.
-8. **Final backend contract gate.** Regenerate OpenAPI once, run every unit/integration/worker/contract test, build runtime/migration images, scan tracked bytes for credentials, verify public unconfigured behavior through Cloudflare, update inventory statuses, and push atomic commits. Mobile/device integration starts only after this gate.
+8. **Final backend contract gate.** Regenerate OpenAPI once, run every unit/integration/worker/contract test, build runtime/migration images, scan tracked bytes for credentials, update inventory statuses, and push atomic commits. Per the operator's backend-first sequencing decision, public Cloudflare, mobile/device, and credentialed provider smoke tests remain explicitly unverified until the later integration phase.
 
 Each step must stage only its intended files, run GitNexus `detect_changes(scope="staged")`, review affected flows, commit conventionally, and push. Do not bundle a half-finished provider adapter with a stable HTTP contract.
 
@@ -222,7 +222,7 @@ Each step must stage only its intended files, run GitNexus `detect_changes(scope
 - intent review digest changes on every material input/source/account change; repeated key/digest returns the same intent;
 - timeout/post-send 429/5xx -> unknown, adapter called once, GET status reconciles by action-specific reads;
 - states cover submitting/accepted/partial/filled/cancelled/rejected/unknown/reconciling; unknown provider status stays quarantined;
-- process restart resumes reconciliation and never resubmits.
+- repository lease/fence/reclaim tests preserve held reconciliation work across worker owners, while the worker shell performs authoritative reads only and never submits a provider mutation.
 
 ### Agent authorization
 
@@ -384,20 +384,20 @@ implementation_context:
   tests:
     - file: "test/authentication.test.ts"
       scenarios: ["duplicate/malformed/missing Bearer -> reject before verifier", "valid verified but unbootstrapped identity -> bootstrap_required", "protected routes verify every request"]
-    - file: "test/control-plane.integration.test.ts"
-      scenarios: ["same key/same digest concurrency -> one operation", "same key/different digest -> conflict", "crash cut points -> held/reconciling", "latest migration readiness"]
-    - file: "test/stream-tokens.test.ts"
+    - file: "test/control-plane-repository.integration.test.ts"
+      scenarios: ["same key/same digest concurrency -> one operation", "same key/different digest -> conflict", "lease/fence/reclaim", "latest migration readiness"]
+    - file: "test/stream-token-routes.test.ts"
       scenarios: ["Chat/Video derived subject and one-hour expiry", "body/query/client ID rejection", "quota before issuer", "unconfigured and sanitized failures"]
-    - file: "test/perp-reads.test.ts"
+    - file: "test/perp-private-read-routes.test.ts"
       scenarios: ["server-derived account", "strict decimal/provider DTOs", "Core/Testnet only", "cursor/freshness/unavailable behavior"]
-    - file: "test/perp-intents.test.ts"
+    - file: "test/perp-intent-routes.test.ts"
       scenarios: ["strict action unions and disabled features", "idempotent prepare/submit", "unknown result no replay", "status/reconciliation state coverage"]
-    - file: "test/agent-authorizations.test.ts"
+    - file: "test/agent-authorization-routes.test.ts"
       scenarios: ["allowlisted Testnet approveAgent only", "canonical digest/expiry/signature binding", "missing evidence disabled before signable payload"]
-    - file: "test/transfer.test.ts"
+    - file: "test/transfer-routes.test.ts"
       scenarios: ["six exact top-level operations/variants", "forbidden client authority and idempotency", "positive decimal strings", "auth/bootstrap", "no 2xx or effectful path"]
-    - file: "test/reconciliation-worker.integration.test.ts"
-      scenarios: ["restart resumes unknown state", "lease/fencing rejects stale writer", "provider boundary is authoritative-read only", "default-closed domain routes cannot enqueue a replay"]
+    - file: "test/worker.test.ts"
+      scenarios: ["stable worker identity with fresh request UUID per run", "overlap suppression", "abort-safe loop", "provider boundary is authoritative-read only"]
     - file: "test/openapi.test.ts"
       scenarios: ["generated artifact equality", "all canonical paths/statuses/security", "disabled/historical/provider paths absent"]
   verification_commands:
@@ -465,14 +465,25 @@ implementation_context:
 
 ## 13. Definition of Done
 
+Final backend-only gate evidence recorded on 2026-08-25:
+
+- `pnpm check`: format, lint, typecheck, OpenAPI drift, build, and 26 unit/behavior files with 619 tests passed.
+- `pnpm test:contract`: 12 files and 377 tests passed.
+- `pnpm test:worker`: 2 files and 18 library-shell tests passed; this is not a deployed worker process or worker/PostgreSQL end-to-end suite.
+- `pnpm test:integration`: 5 files and 41 real PostgreSQL repository/migration tests passed.
+- `pnpm secrets:check`: current Git-tracked snapshot passed the forbidden-file and high-confidence-token guard; Git history and arbitrary opaque provider secrets are outside this scanner's claim.
+- `pnpm docker:build:migration` and `pnpm docker:build:runtime`: both image targets built successfully; no deployment or provider behavior is implied.
+- `docker compose config --quiet`, latest `pnpm db:migrate`, and `git diff --check`: passed.
+- Cloudflare public smoke, Flutter/physical-device flows, credentialed Privy/Stream/Hyperliquid/Transfer tests, provider execution, executable worker deployment, and production deployment were intentionally not run in this backend-first gate and remain unverified.
+
 - [x] ADR 0003 and `docs/api-inventory.md` define the exact canonical route table, ownership, auth, deadlines, idempotency, capability states, and disabled surfaces.
 - [x] Shared Native Privy Bearer parsing/principal resolution protects every implemented route and preserves all bootstrap behavior/tests.
-- [x] Append-only migrations, latest-schema readiness, idempotency, audit, provider-operation journals, and reconciliation worker are implemented and PostgreSQL-tested.
+- [x] Append-only migrations, latest-schema readiness, idempotency, audit, and provider-operation journals are PostgreSQL-tested; the separate reconciliation worker library shell is unit-tested and remains undeployed.
 - [x] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly as `blocked-provider`, with Flutter/device integration unverified.
 - [x] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
 - [x] Perp intent/submit/status and Agent-authorization routes implement strict idempotent, owner-bound, immutable prepared/status boundaries and default-deny policy; unknown/reconciling states remain reserved projections with no reachable provider write, finalizer, or blind-replay path.
 - [x] Six transfer routes implement the reviewed top-level variants, server-owned authority, decimal and default-closed constraints; unresolved ownership-binding/session, persistence, formatter, replay, and reconciliation behavior remains explicitly unavailable under Decision 0008.
 - [x] Generated OpenAPI artifact includes every approved route, exposes no unresolved transfer 2xx schema, and excludes historical/provider/disabled routes.
-- [ ] Unit, integration, worker, contract, format, lint, typecheck, build, Docker, OpenAPI, diff, and tracked-secret checks pass with exact results recorded.
-- [ ] Provider/device credentialed tests that were not run remain explicitly unverified; no provider is labeled integrated prematurely.
-- [ ] Each vertical slice is committed atomically, GitNexus change impact reviewed, pushed to the existing remote branch, and the final worktree is clean.
+- [x] Unit, integration, worker, contract, format, lint, typecheck, build, Docker, OpenAPI, diff, and tracked-secret checks pass with exact results recorded.
+- [x] Provider/device credentialed tests that were not run remain explicitly unverified; no provider is labeled integrated prematurely.
+- [x] Each vertical slice is committed atomically, GitNexus change impact reviewed, pushed to the existing remote branch, and the final worktree is clean after the final gate commit.

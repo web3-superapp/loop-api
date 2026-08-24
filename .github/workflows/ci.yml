@@ -13,7 +13,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17.11-alpine3.24
@@ -57,6 +57,9 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Scan tracked files for credentials
+        run: pnpm secrets:check
+
       - name: Validate Docker Compose
         run: docker compose config --quiet
 
@@ -66,5 +69,17 @@ jobs:
       - name: Verify PostgreSQL repositories
         run: pnpm test:integration
 
+      - name: Verify HTTP and data contracts
+        run: pnpm test:contract
+
+      - name: Verify reconciliation worker
+        run: pnpm test:worker
+
       - name: Verify source and build
         run: pnpm check
+
+      - name: Build migration image
+        run: pnpm docker:build:migration
+
+      - name: Build runtime image
+        run: pnpm docker:build:runtime
