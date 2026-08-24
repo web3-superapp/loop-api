@@ -11,6 +11,10 @@ import {
   createPostgresControlPlaneRepository,
   type ControlPlaneRepository,
 } from "./control-plane-repository.js";
+import {
+  createPostgresPerpIntentRepository,
+  type PerpIntentRepository,
+} from "./perp-intent-repository.js";
 import { latestMigrationName, requiredDatabaseRelations } from "./schema.js";
 
 const { Pool } = pg;
@@ -20,6 +24,7 @@ const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 export interface Database {
   readonly internalUsers: InternalUserRepository;
   readonly controlPlane: ControlPlaneRepository;
+  readonly perpIntents: PerpIntentRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -104,10 +109,12 @@ export function createPostgresDatabase(
     },
   };
   const controlPlane = createPostgresControlPlaneRepository(pool);
+  const perpIntents = createPostgresPerpIntentRepository(pool);
 
   return {
     internalUsers,
     controlPlane,
+    perpIntents,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

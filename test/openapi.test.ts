@@ -48,6 +48,11 @@ describe("committed OpenAPI artifact", () => {
     const bootstrap = document.paths["/v1/bootstrap"]?.["post"];
     const chatToken = document.paths["/v1/chat/token"]?.["post"];
     const videoToken = document.paths["/v1/video/token"]?.["post"];
+    const preparePerpIntent = document.paths["/v1/perp/intents"]?.["post"];
+    const getPerpIntent =
+      document.paths["/v1/perp/intents/{intent_id}"]?.["get"];
+    const submitPerpIntent =
+      document.paths["/v1/perp/intents/{intent_id}/submit"]?.["post"];
     const perpReads = [
       [document.paths["/v1/perp/config"]?.["get"], "getPerpConfig"],
       [document.paths["/v1/perp/account"]?.["get"], "getPerpAccount"],
@@ -70,6 +75,9 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/config",
       "/v1/perp/fills",
       "/v1/perp/funding",
+      "/v1/perp/intents",
+      "/v1/perp/intents/{intent_id}",
+      "/v1/perp/intents/{intent_id}/submit",
       "/v1/perp/orders",
       "/v1/perp/positions",
       "/v1/video/token",
@@ -151,6 +159,39 @@ describe("committed OpenAPI artifact", () => {
       expect(operation?.parameters?.map((parameter) => parameter.name)).toEqual(
         ["limit", "cursor"],
       );
+    }
+
+    for (const [operation, operationId, statuses] of [
+      [
+        preparePerpIntent,
+        "preparePerpIntent",
+        ["200", "400", "401", "409", "429", "500", "503"],
+      ],
+      [
+        getPerpIntent,
+        "getPerpIntent",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        submitPerpIntent,
+        "submitPerpIntent",
+        ["200", "400", "401", "403", "404", "409", "500", "503"],
+      ],
+    ] as const) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      for (const status of statuses) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      const serialized = JSON.stringify(operation);
+      expect(serialized).not.toContain("account_address");
+      expect(serialized).not.toContain("wallet_address");
+      expect(serialized).not.toContain("agent_address");
+      expect(serialized).not.toContain("signature");
+      expect(serialized).not.toContain("nonce");
+      expect(serialized).not.toContain("mainnet");
     }
   });
 });

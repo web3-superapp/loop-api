@@ -26,6 +26,9 @@ const logger = {
 } as unknown as FastifyBaseLogger;
 const truncateControlPlane = `
   truncate table
+    public.perp_intent_events,
+    public.perp_intent_items,
+    public.perp_intents,
     public.audit_events,
     public.provider_operations,
     public.idempotency_records,

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000002_api_control_plane";
+export const latestMigrationName = "000003_perp_intents";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -6,4 +6,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.idempotency_records",
   "public.audit_events",
   "public.issuance_rate_records",
+  "public.perp_intents",
+  "public.perp_intent_items",
+  "public.perp_intent_events",
 ] as const);

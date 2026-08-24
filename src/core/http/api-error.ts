@@ -4,6 +4,12 @@ export type ApiErrorCode =
   | "bootstrap_required"
   | "invalid_access_token"
   | "invalid_request"
+  | "idempotency_conflict"
+  | "perp_intent_claim_rate_limited"
+  | "perp_intent_expired"
+  | "perp_intent_not_found"
+  | "perp_intent_stale"
+  | "perp_mutation_disabled"
   | "perp_unavailable"
   | "rate_limit_exceeded"
   | "stream_unavailable"
@@ -11,7 +17,7 @@ export type ApiErrorCode =
   | "request_timeout";
 
 interface ApiErrorOptions {
-  readonly statusCode: 400 | 401 | 409 | 429 | 503;
+  readonly statusCode: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 503;
   readonly code: ApiErrorCode;
   readonly safeMessage: string;
   readonly includeBearerChallenge?: boolean;
@@ -71,6 +77,54 @@ export class ApiError extends Error {
       statusCode: 400,
       code: "invalid_request",
       safeMessage: "The request is invalid.",
+    });
+  }
+
+  static idempotencyConflict(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "idempotency_conflict",
+      safeMessage: "The idempotency key conflicts with another request.",
+    });
+  }
+
+  static perpIntentExpired(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "perp_intent_expired",
+      safeMessage: "The perpetual intent has expired.",
+    });
+  }
+
+  static perpIntentClaimRateLimited(): ApiError {
+    return new ApiError({
+      statusCode: 429,
+      code: "perp_intent_claim_rate_limited",
+      safeMessage: "Too many unfinished perpetual intent preparations.",
+    });
+  }
+
+  static perpIntentNotFound(): ApiError {
+    return new ApiError({
+      statusCode: 404,
+      code: "perp_intent_not_found",
+      safeMessage: "The perpetual intent does not exist.",
+    });
+  }
+
+  static perpIntentStale(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "perp_intent_stale",
+      safeMessage: "The perpetual intent must be reviewed again.",
+    });
+  }
+
+  static perpMutationDisabled(): ApiError {
+    return new ApiError({
+      statusCode: 403,
+      code: "perp_mutation_disabled",
+      safeMessage: "Perpetual mutations are disabled.",
     });
   }
 

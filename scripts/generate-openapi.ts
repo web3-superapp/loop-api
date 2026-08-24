@@ -9,6 +9,7 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
+import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
 import { createUnavailablePrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,6 +25,7 @@ function schemaOnlyDependencyInvoked(): never {
 function createSchemaOnlyDatabase(): Database {
   return {
     controlPlane: createUnavailableControlPlaneRepository(),
+    perpIntents: createUnavailablePerpIntentRepository(),
     internalUsers: {
       findByPrivyUserId: schemaOnlyDependencyInvoked,
       getOrCreateByPrivyUserId: schemaOnlyDependencyInvoked,

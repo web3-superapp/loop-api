@@ -30,6 +30,9 @@ describe("database schema readiness contract", () => {
       "public.idempotency_records",
       "public.audit_events",
       "public.issuance_rate_records",
+      "public.perp_intents",
+      "public.perp_intent_items",
+      "public.perp_intent_events",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

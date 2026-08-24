@@ -24,6 +24,10 @@ import { createBootstrapService } from "./features/identity/bootstrap-service.js
 import { createPerpPrivateReadCursorCodec } from "./features/perp/private-read-cursor.js";
 import { createPerpPrivateReadService } from "./features/perp/private-read-service.js";
 import {
+  createPerpIntentService,
+  type PerpMutationGate,
+} from "./features/perp/perp-intent-service.js";
+import {
   createUnavailablePerpWalletBindingResolver,
   type PerpWalletBindingResolver,
 } from "./features/perp/wallet-binding-resolver.js";
@@ -31,6 +35,10 @@ import {
   createUnavailableHyperliquidPrivateReader,
   type HyperliquidPrivateReader,
 } from "./integrations/hyperliquid/private-reader.js";
+import {
+  createUnavailableHyperliquidPerpIntentReviewer,
+  type HyperliquidPerpIntentReviewer,
+} from "./integrations/hyperliquid/perp-intent-reviewer.js";
 import {
   createUnavailableStreamTokenIssuer,
   type StreamTokenIssuer,
@@ -43,6 +51,7 @@ import {
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
+import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
@@ -54,6 +63,8 @@ export interface BuildAppOptions {
   readonly streamTokenIssuer?: StreamTokenIssuer;
   readonly perpWalletBindingResolver?: PerpWalletBindingResolver;
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
+  readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
+  readonly perpMutationGate?: PerpMutationGate;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -131,6 +142,11 @@ export async function buildApp(
 ): Promise<FastifyInstance> {
   const { config } = options;
   const fastifyOptions: FastifyServerOptions = {
+    ajv: {
+      customOptions: {
+        removeAdditional: false,
+      },
+    },
     bodyLimit: 1_048_576,
     connectionTimeout: 10_000,
     exposeHeadRoutes: false,
@@ -287,6 +303,16 @@ export async function buildApp(
     cursorCodec: perpPrivateReadCursorCodec,
     reader: hyperliquidPrivateReader,
   });
+  const perpIntentService = createPerpIntentService({
+    repository: database.perpIntents,
+    bindingResolver: perpWalletBindingResolver,
+    reviewer:
+      options.hyperliquidPerpIntentReviewer ??
+      createUnavailableHyperliquidPerpIntentReviewer(),
+    ...(options.perpMutationGate === undefined
+      ? {}
+      : { mutationGate: options.perpMutationGate }),
+  });
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -311,6 +337,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     perpPrivateReadService,
+  );
+  registerPerpIntentRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    perpIntentService,
   );
 
   if (config.apiDocsEnabled) {

@@ -24,6 +24,10 @@ interfaces are implemented:
   wallet/account authority is always resolved server-side
 - encrypted, owner/wallet/version/route-bound cursors and fail-closed validation
   for stale, numeric-decimal, non-Core, Spot, HIP-3, and malformed provider data
+- strict Perp intent preparation, owner-only status, and submit interfaces with
+  canonical decimal-string DTOs, UUID idempotency, immutable reviews,
+  server-generated cloids, PostgreSQL lifecycle records, and a default-deny
+  per-action mutation gate
 - atomic HMAC-subjected user/IP issuance quotas for each Stream token route;
   raw LOOP user IDs and client IPs are not stored as quota subjects
 - a durable provider-operation control plane with scope-wide idempotency,
@@ -41,9 +45,10 @@ but a real phone-issued token has not yet passed the physical-device gate. The
 Stream HTTP interfaces and issuance policy are present, but the default issuer
 returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
 the SDK is not installed, and a real Development App key/secret pair is not
-enabled. The Hyperliquid private-read HTTP contract is present, but its default
-wallet resolver and provider reader remain unavailable; there is still no live
-private account connection, trading mutation path, Firebase push path,
+enabled. The Hyperliquid private-read and Perp-intent HTTP contracts are present,
+but their default wallet resolver, reader, and reviewer remain unavailable, and
+every submit is denied before signer/provider work; there is still no live
+private account connection, trading execution path, Firebase push path,
 physical-device integration, or production deployment. Interfaces,
 control-plane records, and quota primitives do not by themselves enable any
 provider.
@@ -61,6 +66,9 @@ The Stream interface and SDK license gate are recorded in
 [`docs/decisions/0004-stream-token-interface-license-gate.md`](docs/decisions/0004-stream-token-interface-license-gate.md).
 The Hyperliquid private-read boundary is recorded in
 [`docs/decisions/0005-hyperliquid-private-read-interface.md`](docs/decisions/0005-hyperliquid-private-read-interface.md).
+The Perp intent, idempotency, review, persistence, and default-deny boundary is
+recorded in
+[`docs/decisions/0006-perp-intent-interface.md`](docs/decisions/0006-perp-intent-interface.md).
 
 ## Quick start
 
@@ -94,6 +102,11 @@ The safe default listens on `http://127.0.0.1:3000` only.
   `/funding` require the same current identity plus a unique current
   server-verified wallet binding. The default runtime returns
   `wallet_binding_required`; fake success tests do not make Hyperliquid live.
+- `POST /v1/perp/intents`, `GET /v1/perp/intents/{intent_id}`, and
+  `POST /v1/perp/intents/{intent_id}/submit` expose the durable Testnet/Core
+  contract. The default runtime cannot prepare without a verified binding and
+  reviewer, and submit always returns `perp_mutation_disabled` before provider
+  work.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 

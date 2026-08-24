@@ -2946,6 +2946,2841 @@
           }
         }
       }
+    },
+    "/v1/perp/intents": {
+      "post": {
+        "operationId": "preparePerpIntent",
+        "summary": "Prepare a reviewed Perp intent",
+        "tags": ["perp"],
+        "description": "Creates or replays one owner-bound Hyperliquid Testnet Core-perpetual review. Preparation never submits a provider mutation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "coin",
+                      "side",
+                      "order_type",
+                      "size",
+                      "limit_price",
+                      "time_in_force",
+                      "reduce_only"
+                    ],
+                    "properties": {
+                      "action": { "type": "string", "enum": ["order"] },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "side": { "type": "string", "enum": ["buy", "sell"] },
+                      "order_type": { "type": "string", "enum": ["limit"] },
+                      "size": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                      },
+                      "limit_price": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                      },
+                      "time_in_force": {
+                        "type": "string",
+                        "enum": ["gtc", "alo", "ioc"]
+                      },
+                      "reduce_only": { "type": "boolean" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "coin",
+                      "side",
+                      "order_type",
+                      "size",
+                      "max_slippage_percent",
+                      "reduce_only"
+                    ],
+                    "properties": {
+                      "action": { "type": "string", "enum": ["order"] },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "side": { "type": "string", "enum": ["buy", "sell"] },
+                      "order_type": { "type": "string", "enum": ["market"] },
+                      "size": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                      },
+                      "max_slippage_percent": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:1(?:\\.0+)?|0\\.(?=[0-9]*[1-9])[0-9]+)$"
+                      },
+                      "reduce_only": { "type": "boolean" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["action", "coin", "target"],
+                    "properties": {
+                      "action": { "type": "string", "enum": ["cancel"] },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "order_id"],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["order_id"]
+                              },
+                              "order_id": {
+                                "type": "string",
+                                "maxLength": 20,
+                                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "client_order_id"],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["client_order_id"]
+                              },
+                              "client_order_id": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{32}$"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "coin",
+                      "target",
+                      "side",
+                      "size",
+                      "limit_price",
+                      "time_in_force",
+                      "reduce_only"
+                    ],
+                    "properties": {
+                      "action": { "type": "string", "enum": ["modify"] },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "order_id"],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["order_id"]
+                              },
+                              "order_id": {
+                                "type": "string",
+                                "maxLength": 20,
+                                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "client_order_id"],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["client_order_id"]
+                              },
+                              "client_order_id": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{32}$"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "side": { "type": "string", "enum": ["buy", "sell"] },
+                      "size": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                      },
+                      "limit_price": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                      },
+                      "time_in_force": {
+                        "type": "string",
+                        "enum": ["gtc", "alo", "ioc"]
+                      },
+                      "reduce_only": { "type": "boolean" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["action", "modifications"],
+                    "properties": {
+                      "action": { "type": "string", "enum": ["batch_modify"] },
+                      "modifications": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 39,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "coin",
+                            "target",
+                            "side",
+                            "size",
+                            "limit_price",
+                            "time_in_force",
+                            "reduce_only"
+                          ],
+                          "properties": {
+                            "coin": {
+                              "type": "string",
+                              "enum": ["BTC", "ETH", "SOL"]
+                            },
+                            "target": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["kind", "order_id"],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["order_id"]
+                                    },
+                                    "order_id": {
+                                      "type": "string",
+                                      "maxLength": 20,
+                                      "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["kind", "client_order_id"],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["client_order_id"]
+                                    },
+                                    "client_order_id": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{32}$"
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "side": {
+                              "type": "string",
+                              "enum": ["buy", "sell"]
+                            },
+                            "size": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                            },
+                            "limit_price": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                            },
+                            "time_in_force": {
+                              "type": "string",
+                              "enum": ["gtc", "alo", "ioc"]
+                            },
+                            "reduce_only": { "type": "boolean" }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["action", "coin", "margin_mode", "leverage"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["update_leverage"]
+                      },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "margin_mode": {
+                        "type": "string",
+                        "enum": ["cross", "isolated"]
+                      },
+                      "leverage": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^[1-9][0-9]*$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["action", "coin", "margin_delta_usdc"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["update_isolated_margin"]
+                      },
+                      "coin": {
+                        "type": "string",
+                        "enum": ["BTC", "ETH", "SOL"]
+                      },
+                      "margin_delta_usdc": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^(?:(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6})|-(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6}))$"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "intent_id",
+                    "action",
+                    "state",
+                    "review",
+                    "expires_at",
+                    "submission",
+                    "result",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "intent_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "order",
+                        "cancel",
+                        "modify",
+                        "batch_modify",
+                        "update_leverage",
+                        "update_isolated_margin"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "submitting",
+                        "accepted",
+                        "partial",
+                        "filled",
+                        "cancelled",
+                        "rejected",
+                        "unknown",
+                        "reconciling",
+                        "expired"
+                      ]
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "version",
+                        "provider",
+                        "network",
+                        "market",
+                        "dex",
+                        "action",
+                        "source"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "enum": ["perp_review_v1"]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["hyperliquid"]
+                        },
+                        "network": { "type": "string", "enum": ["testnet"] },
+                        "market": { "type": "string", "enum": ["core_perps"] },
+                        "dex": { "type": "string", "enum": [""] },
+                        "action": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["limit"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "max_slippage_percent",
+                                "reduce_only",
+                                "final_limit_price",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["market"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "max_slippage_percent": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:1(?:\\.0+)?|0\\.(?=[0-9]*[1-9])[0-9]+)$"
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "final_limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "coin", "target"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["cancel"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "target",
+                                "side",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "replacement_client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["modify"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "replacement_client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "modifications"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["batch_modify"]
+                                },
+                                "modifications": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 39,
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "coin",
+                                      "target",
+                                      "side",
+                                      "size",
+                                      "limit_price",
+                                      "time_in_force",
+                                      "reduce_only",
+                                      "replacement_client_order_id"
+                                    ],
+                                    "properties": {
+                                      "coin": {
+                                        "type": "string",
+                                        "enum": ["BTC", "ETH", "SOL"]
+                                      },
+                                      "target": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": ["kind", "order_id"],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["order_id"]
+                                              },
+                                              "order_id": {
+                                                "type": "string",
+                                                "maxLength": 20,
+                                                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": [
+                                              "kind",
+                                              "client_order_id"
+                                            ],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["client_order_id"]
+                                              },
+                                              "client_order_id": {
+                                                "type": "string",
+                                                "pattern": "^0x[0-9a-f]{32}$"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "side": {
+                                        "type": "string",
+                                        "enum": ["buy", "sell"]
+                                      },
+                                      "size": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "limit_price": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "time_in_force": {
+                                        "type": "string",
+                                        "enum": ["gtc", "alo", "ioc"]
+                                      },
+                                      "reduce_only": { "type": "boolean" },
+                                      "replacement_client_order_id": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_mode",
+                                "leverage"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_leverage"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_mode": {
+                                  "type": "string",
+                                  "enum": ["cross", "isolated"]
+                                },
+                                "leverage": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^[1-9][0-9]*$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_delta_usdc"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_isolated_margin"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_delta_usdc": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6})|-(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6}))$"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "source": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["fetched_at", "expires_at"],
+                          "properties": {
+                            "fetched_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "submission": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["disabled", "requires_revalidation"]
+                        }
+                      }
+                    },
+                    "result": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["observed_at", "items"],
+                          "properties": {
+                            "observed_at": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            },
+                            "items": {
+                              "type": "array",
+                              "minItems": 1,
+                              "maxItems": 39,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "index",
+                                  "state",
+                                  "order_id",
+                                  "client_order_id",
+                                  "filled_size",
+                                  "average_fill_price",
+                                  "reason_code"
+                                ],
+                                "properties": {
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 38
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "accepted",
+                                      "partial",
+                                      "filled",
+                                      "cancelled",
+                                      "rejected",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 20,
+                                        "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "client_order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "filled_size": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "average_fill_price": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "reason_code": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "bootstrap_required",
+                        "wallet_binding_required",
+                        "idempotency_conflict",
+                        "perp_intent_stale"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_intent_claim_rate_limited"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "perp_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/perp/intents/{intent_id}": {
+      "get": {
+        "operationId": "getPerpIntent",
+        "summary": "Get a Perp intent",
+        "tags": ["perp"],
+        "description": "Returns only the current authenticated owner's persisted Perp intent projection.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "intent_id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "intent_id",
+                    "action",
+                    "state",
+                    "review",
+                    "expires_at",
+                    "submission",
+                    "result",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "intent_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "order",
+                        "cancel",
+                        "modify",
+                        "batch_modify",
+                        "update_leverage",
+                        "update_isolated_margin"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "submitting",
+                        "accepted",
+                        "partial",
+                        "filled",
+                        "cancelled",
+                        "rejected",
+                        "unknown",
+                        "reconciling",
+                        "expired"
+                      ]
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "version",
+                        "provider",
+                        "network",
+                        "market",
+                        "dex",
+                        "action",
+                        "source"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "enum": ["perp_review_v1"]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["hyperliquid"]
+                        },
+                        "network": { "type": "string", "enum": ["testnet"] },
+                        "market": { "type": "string", "enum": ["core_perps"] },
+                        "dex": { "type": "string", "enum": [""] },
+                        "action": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["limit"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "max_slippage_percent",
+                                "reduce_only",
+                                "final_limit_price",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["market"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "max_slippage_percent": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:1(?:\\.0+)?|0\\.(?=[0-9]*[1-9])[0-9]+)$"
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "final_limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "coin", "target"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["cancel"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "target",
+                                "side",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "replacement_client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["modify"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "replacement_client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "modifications"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["batch_modify"]
+                                },
+                                "modifications": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 39,
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "coin",
+                                      "target",
+                                      "side",
+                                      "size",
+                                      "limit_price",
+                                      "time_in_force",
+                                      "reduce_only",
+                                      "replacement_client_order_id"
+                                    ],
+                                    "properties": {
+                                      "coin": {
+                                        "type": "string",
+                                        "enum": ["BTC", "ETH", "SOL"]
+                                      },
+                                      "target": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": ["kind", "order_id"],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["order_id"]
+                                              },
+                                              "order_id": {
+                                                "type": "string",
+                                                "maxLength": 20,
+                                                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": [
+                                              "kind",
+                                              "client_order_id"
+                                            ],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["client_order_id"]
+                                              },
+                                              "client_order_id": {
+                                                "type": "string",
+                                                "pattern": "^0x[0-9a-f]{32}$"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "side": {
+                                        "type": "string",
+                                        "enum": ["buy", "sell"]
+                                      },
+                                      "size": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "limit_price": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "time_in_force": {
+                                        "type": "string",
+                                        "enum": ["gtc", "alo", "ioc"]
+                                      },
+                                      "reduce_only": { "type": "boolean" },
+                                      "replacement_client_order_id": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_mode",
+                                "leverage"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_leverage"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_mode": {
+                                  "type": "string",
+                                  "enum": ["cross", "isolated"]
+                                },
+                                "leverage": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^[1-9][0-9]*$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_delta_usdc"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_isolated_margin"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_delta_usdc": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6})|-(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6}))$"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "source": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["fetched_at", "expires_at"],
+                          "properties": {
+                            "fetched_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "submission": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["disabled", "requires_revalidation"]
+                        }
+                      }
+                    },
+                    "result": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["observed_at", "items"],
+                          "properties": {
+                            "observed_at": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            },
+                            "items": {
+                              "type": "array",
+                              "minItems": 1,
+                              "maxItems": 39,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "index",
+                                  "state",
+                                  "order_id",
+                                  "client_order_id",
+                                  "filled_size",
+                                  "average_fill_price",
+                                  "reason_code"
+                                ],
+                                "properties": {
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 38
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "accepted",
+                                      "partial",
+                                      "filled",
+                                      "cancelled",
+                                      "rejected",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 20,
+                                        "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "client_order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "filled_size": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "average_fill_price": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "reason_code": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_intent_not_found"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "perp_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/perp/intents/{intent_id}/submit": {
+      "post": {
+        "operationId": "submitPerpIntent",
+        "summary": "Submit a prepared Perp intent",
+        "tags": ["perp"],
+        "description": "Checks the persisted review and the action-specific mutation gate. The current production gate denies before any provider or signer work.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "intent_id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "intent_id",
+                    "action",
+                    "state",
+                    "review",
+                    "expires_at",
+                    "submission",
+                    "result",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "intent_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "order",
+                        "cancel",
+                        "modify",
+                        "batch_modify",
+                        "update_leverage",
+                        "update_isolated_margin"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "submitting",
+                        "accepted",
+                        "partial",
+                        "filled",
+                        "cancelled",
+                        "rejected",
+                        "unknown",
+                        "reconciling",
+                        "expired"
+                      ]
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "version",
+                        "provider",
+                        "network",
+                        "market",
+                        "dex",
+                        "action",
+                        "source"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "enum": ["perp_review_v1"]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["hyperliquid"]
+                        },
+                        "network": { "type": "string", "enum": ["testnet"] },
+                        "market": { "type": "string", "enum": ["core_perps"] },
+                        "dex": { "type": "string", "enum": [""] },
+                        "action": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["limit"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "side",
+                                "order_type",
+                                "size",
+                                "max_slippage_percent",
+                                "reduce_only",
+                                "final_limit_price",
+                                "client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["order"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "order_type": {
+                                  "type": "string",
+                                  "enum": ["market"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "max_slippage_percent": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:1(?:\\.0+)?|0\\.(?=[0-9]*[1-9])[0-9]+)$"
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "final_limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "coin", "target"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["cancel"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "target",
+                                "side",
+                                "size",
+                                "limit_price",
+                                "time_in_force",
+                                "reduce_only",
+                                "replacement_client_order_id"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["modify"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["order_id"]
+                                        },
+                                        "order_id": {
+                                          "type": "string",
+                                          "maxLength": 20,
+                                          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["kind", "client_order_id"],
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["client_order_id"]
+                                        },
+                                        "client_order_id": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{32}$"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "side": {
+                                  "type": "string",
+                                  "enum": ["buy", "sell"]
+                                },
+                                "size": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "limit_price": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                },
+                                "time_in_force": {
+                                  "type": "string",
+                                  "enum": ["gtc", "alo", "ioc"]
+                                },
+                                "reduce_only": { "type": "boolean" },
+                                "replacement_client_order_id": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{32}$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["action", "modifications"],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["batch_modify"]
+                                },
+                                "modifications": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 39,
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "coin",
+                                      "target",
+                                      "side",
+                                      "size",
+                                      "limit_price",
+                                      "time_in_force",
+                                      "reduce_only",
+                                      "replacement_client_order_id"
+                                    ],
+                                    "properties": {
+                                      "coin": {
+                                        "type": "string",
+                                        "enum": ["BTC", "ETH", "SOL"]
+                                      },
+                                      "target": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": ["kind", "order_id"],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["order_id"]
+                                              },
+                                              "order_id": {
+                                                "type": "string",
+                                                "maxLength": 20,
+                                                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": [
+                                              "kind",
+                                              "client_order_id"
+                                            ],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["client_order_id"]
+                                              },
+                                              "client_order_id": {
+                                                "type": "string",
+                                                "pattern": "^0x[0-9a-f]{32}$"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "side": {
+                                        "type": "string",
+                                        "enum": ["buy", "sell"]
+                                      },
+                                      "size": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "limit_price": {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      "time_in_force": {
+                                        "type": "string",
+                                        "enum": ["gtc", "alo", "ioc"]
+                                      },
+                                      "reduce_only": { "type": "boolean" },
+                                      "replacement_client_order_id": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_mode",
+                                "leverage"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_leverage"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_mode": {
+                                  "type": "string",
+                                  "enum": ["cross", "isolated"]
+                                },
+                                "leverage": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^[1-9][0-9]*$"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "action",
+                                "coin",
+                                "margin_delta_usdc"
+                              ],
+                              "properties": {
+                                "action": {
+                                  "type": "string",
+                                  "enum": ["update_isolated_margin"]
+                                },
+                                "coin": {
+                                  "type": "string",
+                                  "enum": ["BTC", "ETH", "SOL"]
+                                },
+                                "margin_delta_usdc": {
+                                  "type": "string",
+                                  "maxLength": 128,
+                                  "pattern": "^(?:(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6})|-(?:[1-9][0-9]*(?:\\.[0-9]{1,6})?|0\\.(?=[0-9]{0,5}[1-9])[0-9]{1,6}))$"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "source": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["fetched_at", "expires_at"],
+                          "properties": {
+                            "fetched_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "submission": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["disabled", "requires_revalidation"]
+                        }
+                      }
+                    },
+                    "result": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["observed_at", "items"],
+                          "properties": {
+                            "observed_at": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            },
+                            "items": {
+                              "type": "array",
+                              "minItems": 1,
+                              "maxItems": 39,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "index",
+                                  "state",
+                                  "order_id",
+                                  "client_order_id",
+                                  "filled_size",
+                                  "average_fill_price",
+                                  "reason_code"
+                                ],
+                                "properties": {
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 38
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "accepted",
+                                      "partial",
+                                      "filled",
+                                      "cancelled",
+                                      "rejected",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 20,
+                                        "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "client_order_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{32}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "filled_size": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "average_fill_price": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 128,
+                                        "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "reason_code": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["invalid_request"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_required",
+                        "invalid_access_token"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_mutation_disabled"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["perp_intent_not_found"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["bootstrap_required", "perp_intent_expired"]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "authentication_unavailable",
+                        "perp_unavailable",
+                        "request_timeout"
+                      ]
+                    },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],

@@ -11,6 +11,7 @@ import {
   type ControlPlaneRepository,
 } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
+import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
 import { STREAM_TOKEN_CAPABILITIES } from "../src/features/communication/stream-token-service.js";
 import {
   StreamTokenIssuerUnavailableError,
@@ -103,6 +104,7 @@ function dependencies() {
       ...createUnavailableControlPlaneRepository(),
       consumeIssuanceQuota,
     },
+    perpIntents: createUnavailablePerpIntentRepository(),
     internalUsers: { findByPrivyUserId, getOrCreateByPrivyUserId },
     ping: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
