@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "implementation_status": "current_presentation_baseline_no_live_stream_sdk_runtime_or_endpoint",
   "delivery": {
     "authority": "stream_chat_and_video_only",
     "production_provider": "src/stream-chat-provider.js",
@@ -61,6 +62,13 @@
     "large_group_e2ee_claim": false,
     "copy": "transport_and_message_protection_depend_on_provider_and_account_policy"
   },
+  "current_scope": {
+    "identity": "opaque_internal_user_id_with_bindable_wallet_credentials",
+    "risk_display": "verifiable_sourced_time_stamped_facts_only_no_ai_guard_or_numeric_score",
+    "pay_or_payment_backend": "out_of_scope",
+    "persistent_200000_member_single_group": "PENDING_WRITTEN_STREAM_CONFIRMATION_GO_NO_GO",
+    "unconfirmed_group_model": "partitioned_groups_or_topic_channels_with_aggregate_discovery"
+  },
   "accessibility": {
     "minimum_target_css_px": 44,
     "focus_visible": true,
@@ -68,5 +76,5 @@
     "reduced_motion": true,
     "mobile_and_desktop": true
   },
-  "pending_gates": ["credentials", "license", "enterprise_200k_channels", "audio_room_r0", "complete_audio_roster_over_250", "all_chat_provider_writes"]
+  "pending_gates": ["credentials", "license", "written_provider_confirmation_then_credentialed_200000_member_single_group_or_partitioned_channel_fallback", "audio_room_r0", "complete_audio_roster_over_250", "all_chat_provider_writes"]
 }

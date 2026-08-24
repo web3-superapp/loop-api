@@ -1,5 +1,12 @@
 # LOOP 全 App 成熟能力复用目录候选
 
+> **历史调研与页面清单，不是当前实施授权。** 当前供应商口径以仓库根目录
+> `README.md` 与 `docs/product-decisions.md` 为准：通信选用 Stream Chat +
+> Stream Video/Audio Rooms，但尚无 live SDK/runtime/endpoint；Pay 不在本期，
+> 后端不得实现支付；风险展示只能使用带来源与时间的可验证事实，不给 AI
+> Guard 或数值风险分背书。目录中 Pay、MoonPay、AI Guard 等记录仅保留迁移
+> 追溯，不得据此启动实现。
+
 本目录是 LOOP App A–I 的“整 App 成熟业务能力与代码复用合同”，不是 UI 组件清单，也不安装或导入任何 SDK。`screen-inventory.json` 固定来自 `文档/页面清单.md` v1.4 的 103 个页面（A 档 47、B 档 46、C 档 10）；`catalog.json` 将每个页面映射到能力 profile、主权威、官方接口、成熟复用项、薄适配器所有权、凭据类别、离线 fixture、失败语义和替换门。无法从官方文档、canonical GitHub 仓库和 registry 同时闭合的时效信息统一标为 `PENDING`，不得猜版本、能力或许可证。
 
 `GitHub 复用`在机器合同中的唯一含义是成熟的应用级业务能力、托管服务或其官方 SDK/高维护 OSS core；UI component library、screen template、demo/example app 都不能计入 whole-app reuse 交付。未知许可代码禁止复制。候选 identity、exact tag/commit、许可、部署、维护、出口和 credentialed gate 可以先锁定，但候选不等于 runtime；9 个 selection gate 的 `runtime_selected` 在正式评审前都必须为 `null`。

@@ -1,5 +1,11 @@
 # P0 managed app integrations — R0 contract v2
 
+> **Historical, runtime-disabled input.** This package remains useful for typed
+> boundary and fail-closed review, but it is not the current LOOP API runtime.
+> Current scope is defined by the repository `README.md` and
+> `docs/product-decisions.md`; in particular, Pay is out of scope and risk UI may
+> show only verifiable sourced facts, never an AI Guard verdict or numeric score.
+
 This package is an isolated, runtime-disabled contract and thin server adapter for
 three managed application capabilities:
 

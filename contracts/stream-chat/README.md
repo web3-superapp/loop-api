@@ -2,17 +2,40 @@
 
 Stream is the sole communication authority for production Chat and Stream Video/Audio Rooms. LOOP does not implement a parallel message store, socket protocol, delivery engine, member database, moderation service, attachment CDN, token issuer, participant presence system, SFU/WebRTC transport, or media reconnect engine. This directory is a reviewable provider contract, not a chat backend or RTC backend.
 
+## Current scope status
+
+Stream Chat + Stream Video/Audio Rooms is the current provider selection. It is
+not live: this repository contains no installed production SDK, composed server
+runtime, deployed token endpoint, Stream credentials, or credentialed device
+evidence. Paths and operations below describe the target fail-closed contract;
+they do not prove an available service.
+
+LOOP identity is an opaque internal user ID. Wallets are bindable credentials
+attached to that identity and must never be used as a Stream user ID or durable
+account primary key. Chat token cards and other risk-related presentation may
+carry only verifiable facts with source and observation time; they may not claim
+an AI Guard verdict or synthesize a numeric risk score. Pay and payment backend
+work are outside the current phase.
+
+The proposed persistent 200,000-member single group is a provider-confirmation
+Go/No-Go. It stays blocked until Stream confirms in writing the exact member
+limit, persistence and history semantics, concurrent-connection behavior,
+moderation, pagination, rate limits, pricing, support model, and SLA. Without
+accepted written confirmation, LOOP must use partitioned groups/topic channels
+with an application-level directory and aggregate discovery experience. It must
+not assume, simulate, or custom-build a single 200,000-member provider channel.
+
 ## Delivery state
 
 - **credentials later:** the owner has not supplied a Stream application, public API key, secret, or Enterprise entitlements.
 - Production therefore **fails closed** (`fail closed`). Missing API key, server token endpoint, token provider, injected official SDK bridge, role grant, or channel capability leaves Chat unavailable; it never falls back to a custom transport or the fixture.
-- The production thin boundary is bundled exactly once from `src/stream-chat-provider.js`, after `wallet-transfer.js` and before `app.js`. It remains fail closed and makes no connected/ready success claim.
+- The migrated HTML prototype expected a thin boundary at `src/stream-chat-provider.js`, after `wallet-transfer.js` and before `app.js`. Those paths are historical contract evidence, not files or a runtime entry point in this backend repository. Any future production composition must remain fail closed and make no connected/ready success claim before credentialed proof.
 - The **explicit offline fixture** lives only at `src/test-fixtures/stream-chat-offline-fixture.js`. Tests may load it directly; `build.py` excludes it and `app.html` must contain neither its bytes nor its label. It is deterministic read-only review data, never evidence of a connected Stream environment.
 - This slice performs **no SDK install/import**. It records exact future Flutter pins and verifies an injected bridge contract without adding package/build dependencies.
 
 ## Boundary
 
-The app authenticates to LOOP first. `POST /v1/chat/token` uses the existing same-origin authenticated session and CSRF protection; it accepts no client-selected `user_id`. The BFF derives a random opaque internal chat subject matching exactly `^loop_[a-z0-9_-]{8,58}$`, mints an expiring Stream user token with the server-only secret, and returns `Cache-Control: no-store`. Flutter supplies that endpoint as the official SDK token provider. The OpenAPI schema, JavaScript boundary, runtime tests, and fixture identities use this one grammar.
+The target flow authenticates to LOOP first. A future `POST /v1/chat/token` endpoint must use a same-origin authenticated session and CSRF protection and accept no client-selected `user_id`. The BFF must derive a random opaque internal chat subject matching exactly `^loop_[a-z0-9_-]{8,58}$`, mint an expiring Stream user token with the server-only secret, and return `Cache-Control: no-store`. Flutter will supply that endpoint as the official SDK token provider after deployment. The OpenAPI file records this target grammar; it is not evidence that the endpoint exists.
 
 The thin LOOP adapter delegates only the pinned client's direct `queryMembers` and `getMessage` API queries, same-provider-object reconciliation, independent Chat/Video disconnect, and Audio Room operations to injected official SDK bridges. It implements no Chat transport or state engine. Stream's Chat controllers/channel state and Video `CallState` remain authoritative. Channel listing is not delegated: the pinned client path has a delivery side effect, while a proven no-write official server/BFF listing path is still PENDING.
 
@@ -52,7 +75,7 @@ Important: the current `v10.3.0` repository license is the proprietary **Stream 
 4. Upload type/size policy, progress/cancel, orphan cleanup, signed URL membership denial, 14-day expiry refresh, and deletion tests.
 5. Flag/mute/ban/moderator/hard-delete workflows and audit evidence.
 6. Privacy retention, export, pruning/hard deletion, and incident-log redaction tests.
-7. Stream Enterprise large-channel proof for the target 200k-member group: partitioning, messages, replies, reactions, mentions, read semantics, member pagination, concurrent connections, rate limits, and sales-confirmed pricing/SLA.
+7. Written Stream confirmation for the target persistent 200,000-member single group, followed by credentialed proof of messages, replies, reactions, mentions, read semantics, member pagination, concurrent connections, moderation, rate limits, pricing, support, and SLA. If written confirmation is absent or rejects any required semantic, the release architecture must use partitioned groups/topic channels instead.
 8. Stream Audio Room proof for target audience tiers: role/capability grants, backstage/go-live, join/leave, request-to-speak, microphone permissions, moderator mute/kick/block/end, interruption/background/audio-route behavior, reconnection failure, participant privacy, the 250-entry real-time projection boundary, and the sales-confirmed 500/5,000/50,000 listener delivery model.
 
 Until all R0 evidence passes, the bundled production seam stays fail closed and production Chat stays unavailable. The labelled offline fixture remains test-only and is never bundled into `app.html`.

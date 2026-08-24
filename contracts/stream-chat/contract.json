@@ -1,6 +1,7 @@
 {
   "schema_version": 5,
   "provider": "stream_chat_and_video",
+  "implementation_status": "current_contract_baseline_no_live_sdk_runtime_endpoint_or_credentials",
   "production_mode": "fail_closed",
   "html_mode": "production_boundary_fail_closed_fixture_test_only",
   "build_integration": {
@@ -170,6 +171,29 @@
     "server_export_delete_only": true,
     "large_group_e2ee_claim": false
   },
+  "product_scope": {
+    "identity_primary_key": "opaque_internal_loop_user_id",
+    "wallet_role": "bindable_credential_not_user_identity",
+    "risk_display": "verifiable_sourced_time_stamped_facts_only",
+    "ai_guard_or_numeric_risk_score_endorsement": false,
+    "pay_or_payment_backend_current_phase": false,
+    "persistent_200000_member_single_group": {
+      "status": "PENDING_WRITTEN_STREAM_CONFIRMATION_GO_NO_GO",
+      "required_confirmation": [
+        "member_limit",
+        "persistence_and_history_semantics",
+        "concurrent_connections",
+        "moderation",
+        "pagination",
+        "rate_limits",
+        "pricing",
+        "support_model",
+        "sla"
+      ],
+      "fallback_without_confirmation": "partitioned_groups_and_topic_channels_with_application_directory_and_aggregate_discovery",
+      "custom_single_channel_emulation": "forbidden"
+    }
+  },
   "credentialed_r0_gates": [
     "token_identity_binding",
     "connect_user_identity_upsert",
@@ -183,7 +207,7 @@
     "attachment_access_refresh_delete",
     "reconnect_recovery",
     "privacy_export_delete",
-    "enterprise_large_channel_semantics",
+    "written_provider_confirmation_then_credentialed_200000_member_single_group_semantics_or_partitioned_channel_fallback",
     "audio_room_permissions_lifecycle",
     "audio_room_reconnect_media_privacy",
     "audio_room_scale_over_250"
