@@ -10,7 +10,9 @@
 
 ## File ownership for the next independent slice
 
-Canonical whole-app owner: hyperliquid_core_perp. `target-inventory.json` is the sole machine-readable source of exact target paths, owner roots, and order. This plan references only the stable symbolic IDs below. Apply-time verification must read the merged catalog declared by that inventory and prove every structured target resolves to exactly one normalized, disjoint owner root. The verifier pins the exact digest and byte size of every contract artifact, so any prose, comment, marker, entity, Unicode, or copied-path change requires a new reviewed contract version.
+Canonical whole-app owner: hyperliquid_core_perp. `target-inventory.json` is the sole machine-readable source of exact target paths, owner roots, and order. This plan references only the stable symbolic IDs below.
+
+The original prototype's R0 verifier and mutation suite are historical provenance and were not migrated into `loop-api`. There is currently no replacement validation command; the current contract-test and mutation-suite entry point is **PENDING**. Before implementing any target below, the implementation slice must first create and review a new, traceable contract-test/mutation suite in this repository. That suite must read the merged catalog declared by the inventory, prove every structured target resolves to exactly one normalized, disjoint owner root, and pin the exact digest and byte size of every contract artifact. After that entry point exists, any prose, comment, marker, entity, Unicode, or copied-path change requires a new reviewed contract version. No task may invoke or claim evidence from the absent legacy verifier.
 
 - Target T01: explicit network and credential validation; no defaults; fail closed.
 - Target T02: authoritative, versioned, expiring regional, legal, sanctions, product, age-or-entity, and provider-terms decision gate before any production SDK or Privy mutation call; read-only capabilities stay separate.
@@ -49,7 +51,7 @@ Canonical whole-app owner: hyperliquid_core_perp. `target-inventory.json` is the
 2. Run only the new tests and record RED.
 3. Generate a committed full lockfile; pin every transitive version, source, and integrity value and collect every license for the currently declared ranges in `oss-lock.json`, including `decimal.js` before any IOC price policy exists. SDK import, decimal policy, and production remain blocked until this gate passes.
 4. Implement exact `mainnet` and `testnet` config loading with every credential represented by a secret reference, never a checked-in value. Implement one default-deny production-mutation eligibility gate over exact user, account, jurisdiction, product, action, and provider-terms context and authoritative evidence reference, policy version, checked-at, and expiry. Public Info and market reads use a separate capability gate with no signer or ExchangeClient path.
-5. Verify GREEN and run the R0 verifier unchanged.
+5. Verify GREEN with the newly created, repository-tracked contract-test/mutation suite. If that replacement entry point is still `PENDING`, stop; do not invoke or claim evidence from the absent legacy R0 verifier.
 6. Commit only the config, complete dependency evidence, and tests.
 
 ## Task 2 — Pinned SDK client and Privy authority boundary
@@ -104,7 +106,7 @@ Canonical whole-app owner: hyperliquid_core_perp. `target-inventory.json` is the
 ## Task 7 — Integration and go-live review
 
 1. Expose immutable adapter capabilities to the future Perp UI without editing shared application files in this slice.
-2. Run all Perp tests, R0 verifier and mutations, wallet regressions, security scans, and deterministic builds.
+2. Run all Perp tests, the repository-tracked replacement contract-test/mutation suite, wallet regressions, security scans, and deterministic builds. The replacement suite must exist and be reviewed before this task can pass; the historical R0 verifier is not a valid command or evidence source.
 3. Validate Core non-trigger statuses exactly: `open` is nonterminal; the scoped terminal allowlist terminates; trigger, vault, and spot statuses are rejected; unknown values and `unknownOid` remain quarantined rather than hanging or being coerced.
 4. Keep builder fields and `approveBuilderFee` rejected. Any future builder enablement needs a new owner-approved audit with the exact lowercase LOOP address, exact fee cap, main-wallet approval, both provider readbacks, credentials, and mutations.
 5. Independently review complete dependency locks and licenses including decimal arithmetic, SDK source diff, protected executor topology, old-agent owner or Privy revocation and negative probe, signing and nonce vectors, IOC two-sided rounding, adapter source identity, logs, persisted journal fields, action-specific unknown submission, limits, and WebSocket recovery.
