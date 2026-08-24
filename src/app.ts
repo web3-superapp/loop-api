@@ -14,7 +14,16 @@ import {
   registerAuthenticationHooks,
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
+import {
+  createStreamTokenService,
+  StreamTokenUnavailableError,
+  type StreamTokenService,
+} from "./features/communication/stream-token-service.js";
 import { createBootstrapService } from "./features/identity/bootstrap-service.js";
+import {
+  createUnavailableStreamTokenIssuer,
+  type StreamTokenIssuer,
+} from "./integrations/stream/token-issuer.js";
 import {
   createPrivyAccessTokenVerifier,
   createUnavailablePrivyAccessTokenVerifier,
@@ -22,12 +31,22 @@ import {
 } from "./integrations/privy/access-token-verifier.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
+
+const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly database?: Database;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
+  readonly streamTokenIssuer?: StreamTokenIssuer;
   readonly logger?: false;
+}
+
+function createUnavailableStreamTokenService(): StreamTokenService {
+  return Object.freeze({
+    issueToken: () => Promise.reject(new StreamTokenUnavailableError()),
+  });
 }
 
 function classifyRequestError(error: unknown): {
@@ -69,6 +88,14 @@ function loggerOptions(
         "privy.appSecret",
         "config.privy.appSecret",
         "PRIVY_APP_SECRET",
+        "apiSecret",
+        "stream.apiSecret",
+        "config.stream.apiSecret",
+        "STREAM_API_SECRET",
+        "hmacSecret",
+        "streamTokenQuota.hmacSecret",
+        "config.streamTokenQuota.hmacSecret",
+        "STREAM_TOKEN_QUOTA_HMAC_SECRET",
       ],
     },
     ...(config.nodeEnv === "development"
@@ -95,7 +122,7 @@ export async function buildApp(
     logger: options.logger === false ? false : loggerOptions(config),
     requestIdHeader: false,
     requestTimeout: 15_000,
-    trustProxy: config.trustProxy,
+    trustProxy: config.trustProxy ? localCloudflaredProxyCidrs : false,
   };
   const app = Fastify(fastifyOptions);
 
@@ -115,6 +142,10 @@ export async function buildApp(
         {
           name: "identity",
           description: "Authenticated internal identity bootstrap",
+        },
+        {
+          name: "communication",
+          description: "Authenticated Stream Chat and Video token issuance",
         },
       ],
       components: {
@@ -147,6 +178,47 @@ export async function buildApp(
     authenticationService,
   );
   const bootstrapService = createBootstrapService(database.internalUsers);
+  const streamTokenIssuer =
+    options.streamTokenIssuer ?? createUnavailableStreamTokenIssuer();
+  const streamTokenService =
+    config.streamTokenQuota === null
+      ? createUnavailableStreamTokenService()
+      : createStreamTokenService({
+          issuer: streamTokenIssuer,
+          quota: database.controlPlane,
+          quotaHmacSecret: new TextEncoder().encode(
+            config.streamTokenQuota.hmacSecret,
+          ),
+          policy: {
+            policyVersion: config.streamTokenQuota.policyVersion,
+            quotaByProduct: {
+              chat: {
+                user: {
+                  capacity: config.streamTokenQuota.userCapacity,
+                  windowDurationSeconds:
+                    config.streamTokenQuota.windowDurationSeconds,
+                },
+                ip: {
+                  capacity: config.streamTokenQuota.ipCapacity,
+                  windowDurationSeconds:
+                    config.streamTokenQuota.windowDurationSeconds,
+                },
+              },
+              video: {
+                user: {
+                  capacity: config.streamTokenQuota.userCapacity,
+                  windowDurationSeconds:
+                    config.streamTokenQuota.windowDurationSeconds,
+                },
+                ip: {
+                  capacity: config.streamTokenQuota.ipCapacity,
+                  windowDurationSeconds:
+                    config.streamTokenQuota.windowDurationSeconds,
+                },
+              },
+            },
+          },
+        });
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -161,6 +233,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticatePrivyBearer,
     bootstrapService,
+  );
+  registerStreamTokenRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    streamTokenService,
   );
 
   if (config.apiDocsEnabled) {

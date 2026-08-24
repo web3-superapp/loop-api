@@ -12,11 +12,13 @@ prototype research in `contracts/integration-catalog/` and
 - LOOP implements thin adapters, policy mapping, orchestration, and projections;
   it does not implement replacement wallet, matching, Chat, RTC, or SFU cores.
 
-The repository now has a local Fastify runtime and the Development
-`POST /v1/bootstrap` Privy verification boundary. It still has no production
-deployment, successful real-token physical-device evidence, Stream server
-composition, private trading path, or credentialed provider connection. Contract
-paths such as `POST /v1/chat/token` remain target interfaces only.
+The repository now has a local Fastify runtime, the Development
+`POST /v1/bootstrap` Privy verification boundary, and implemented Stream token
+HTTP interfaces backed by persistent issuance policy. It still has no production
+deployment, successful real-token physical-device evidence, licensed Stream
+issuer composition, private trading path, or credentialed provider connection.
+The Stream routes remain `blocked-provider` and return a sanitized 503 through
+the default unavailable adapter.
 
 ## Identity model
 

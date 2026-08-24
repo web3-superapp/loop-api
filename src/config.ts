@@ -18,6 +18,12 @@ const optionalCredential = (maximumLength: number) =>
     z.string().trim().min(1).max(maximumLength).optional(),
   );
 
+const optionalOpaqueSecret = (minimumLength: number, maximumLength: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    z.string().min(minimumLength).max(maximumLength).optional(),
+  );
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]),
@@ -37,6 +43,11 @@ const environmentSchema = z
     ]),
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
+    STREAM_API_KEY: optionalCredential(255),
+    STREAM_API_SECRET: optionalOpaqueSecret(1, 4_096),
+    STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    STREAM_TOKEN_USER_LIMIT_PER_MINUTE: positiveIntegerString(1, 10_000),
+    STREAM_TOKEN_IP_LIMIT_PER_MINUTE: positiveIntegerString(1, 100_000),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -54,11 +65,36 @@ const environmentSchema = z
         path: ["PRIVY_APP_ID"],
       });
     }
+
+    const hasStreamApiKey = value.STREAM_API_KEY !== undefined;
+    const hasStreamApiSecret = value.STREAM_API_SECRET !== undefined;
+
+    if (hasStreamApiKey !== hasStreamApiSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "STREAM_API_KEY and STREAM_API_SECRET must be configured together",
+        path: ["STREAM_API_KEY"],
+      });
+    }
   });
 
 export interface PrivyConfig {
   readonly appId: string;
   readonly appSecret: string;
+}
+
+export interface StreamConfig {
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface StreamTokenQuotaConfig {
+  readonly hmacSecret: string;
+  readonly policyVersion: "stream_token_v1";
+  readonly windowDurationSeconds: 60;
+  readonly userCapacity: number;
+  readonly ipCapacity: number;
 }
 
 export interface AppConfig {
@@ -75,6 +111,8 @@ export interface AppConfig {
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
   readonly privy: PrivyConfig | null;
+  readonly stream: StreamConfig | null;
+  readonly streamTokenQuota: StreamTokenQuotaConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -142,6 +180,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    STREAM_API_KEY: environment["STREAM_API_KEY"],
+    STREAM_API_SECRET: environment["STREAM_API_SECRET"],
+    STREAM_TOKEN_QUOTA_HMAC_SECRET:
+      environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"],
+    STREAM_TOKEN_USER_LIMIT_PER_MINUTE:
+      environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] ?? "10",
+    STREAM_TOKEN_IP_LIMIT_PER_MINUTE:
+      environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] ?? "60",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -172,6 +218,24 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
           appSecret: parsed.data.PRIVY_APP_SECRET,
         })
       : null;
+  const stream =
+    parsed.data.STREAM_API_KEY !== undefined &&
+    parsed.data.STREAM_API_SECRET !== undefined
+      ? Object.freeze({
+          apiKey: parsed.data.STREAM_API_KEY,
+          apiSecret: parsed.data.STREAM_API_SECRET,
+        })
+      : null;
+  const streamTokenQuota =
+    parsed.data.STREAM_TOKEN_QUOTA_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.STREAM_TOKEN_QUOTA_HMAC_SECRET,
+          policyVersion: "stream_token_v1" as const,
+          windowDurationSeconds: 60 as const,
+          userCapacity: parsed.data.STREAM_TOKEN_USER_LIMIT_PER_MINUTE,
+          ipCapacity: parsed.data.STREAM_TOKEN_IP_LIMIT_PER_MINUTE,
+        });
 
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
@@ -186,6 +250,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
     privy,
+    stream,
+    streamTokenQuota,
     serviceName: "loop-api",
     serviceVersion,
   });

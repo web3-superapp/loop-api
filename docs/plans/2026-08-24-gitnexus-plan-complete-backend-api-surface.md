@@ -458,9 +458,9 @@ implementation_context:
 ## 13. Definition of Done
 
 - [x] ADR 0003 and `docs/api-inventory.md` define the exact canonical route table, ownership, auth, deadlines, idempotency, capability states, and disabled surfaces.
-- [ ] Shared Native Privy Bearer parsing/principal resolution protects every route and preserves all bootstrap behavior/tests.
+- [x] Shared Native Privy Bearer parsing/principal resolution protects every implemented route and preserves all bootstrap behavior/tests.
 - [x] Append-only migrations, latest-schema readiness, idempotency, audit, provider-operation journals, and reconciliation worker are implemented and PostgreSQL-tested.
-- [ ] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly.
+- [x] Chat and Video token endpoints exist with exact OpenAPI/no-store/TTL/quota/fail-closed contracts; real issuer status is reported honestly as `blocked-provider`, with Flutter/device integration unverified.
 - [ ] Perp config/private reads reject client-selected account/provider fields and strictly preserve decimal strings/freshness.
 - [ ] Perp intent/submit/status and agent-authorization routes implement idempotency, default-deny policy, immutable review, unknown/reconciling state, and no blind replay.
 - [ ] Six transfer routes implement the reviewed variants, ownership/binding/expiry/replay/reconciliation constraints, and fail closed before unavailable dependencies.

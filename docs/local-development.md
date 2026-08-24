@@ -16,16 +16,35 @@ enable `POST /v1/bootstrap`. Leave both blank to keep authentication disabled;
 providing only one is a startup error. The mobile client sends only its current
 Privy access token as a Bearer value and never sends a refresh token.
 
-Validate the two health boundaries:
+The implemented `POST /v1/chat/token` and `POST /v1/video/token` interfaces use
+that same current Bearer token and require the Privy identity to have completed
+`POST /v1/bootstrap`. Both reject body/query/client-selected user IDs and fix the
+token lifetime at 3600 seconds. Set a unique server-only
+`STREAM_TOKEN_QUOTA_HMAC_SECRET` of at least 32 characters in `.env.local` to
+enable their atomic per-route user/IP quota boundary; raw LOOP user IDs and IPs
+are not stored as quota subjects. If this secret is absent, the routes fail
+closed with 503.
+
+Do not enable `STREAM_API_KEY` or `STREAM_API_SECRET` yet. They are an
+all-or-nothing pair, but the default issuer still returns 503 even when both are
+present: `@stream-io/node-sdk` is deliberately not installed until its reviewed
+Stream Source Code License Agreement is explicitly accepted and a real
+Development Stream App is approved. No custom JWT implementation is used.
+
+Validate the health and protected-route boundaries:
 
 ```sh
 curl --fail http://127.0.0.1:3000/health/live
 curl --fail http://127.0.0.1:3000/health/ready
 curl -i -X POST http://127.0.0.1:3000/v1/bootstrap
+curl -i -X POST http://127.0.0.1:3000/v1/chat/token
+curl -i -X POST http://127.0.0.1:3000/v1/video/token
 ```
 
-The unauthenticated bootstrap smoke check must return a sanitized 401 with a
-Bearer challenge and must not create a user row.
+These unauthenticated protected-route smoke checks must return a sanitized 401
+with a Bearer challenge and must not create a user row or reserve quota. With a
+valid bootstrapped identity and quota HMAC configured, both Stream routes still
+return a sanitized 503 while the real licensed issuer is unavailable.
 
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server
@@ -69,6 +88,12 @@ PUBLIC_BASE_URL=https://api-dev.quant-dinger.cc
 TRUST_PROXY=true
 ```
 
+In the current local-tunnel implementation, `TRUST_PROXY=true` trusts forwarded
+client-address metadata only from loopback (`127.0.0.0/8` and `::1/128`), where
+the local `cloudflared` process connects to Fastify. It is not a general
+trust-all proxy setting and must not be reused for a remote load balancer or a
+different network topology without a separate deployment decision.
+
 Then build Flutter with:
 
 ```sh
@@ -80,7 +105,9 @@ bin/flutter run \
 Before using a real phone token, repeat the unauthenticated smoke check against
 `https://api-dev.quant-dinger.cc/v1/bootstrap`. A successful credentialed 200 is
 not verified until the Flutter backend adapter is implemented and exercised on
-the physical device.
+the physical device. Backend-to-Flutter, physical-device, and credentialed
+Stream integration are intentionally not being run during the current
+backend-only phase.
 
 Provider-specific device testing begins only after the matching server secret is
 stored outside Git and the corresponding sandbox/Testnet gate is implemented.

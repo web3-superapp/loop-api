@@ -24,6 +24,8 @@ describe("loadConfig", () => {
     expect(config.trustProxy).toBe(false);
     expect(config.databasePoolMax).toBe(10);
     expect(config.privy).toBeNull();
+    expect(config.stream).toBeNull();
+    expect(config.streamTokenQuota).toBeNull();
     expect(config.serviceName).toBe("loop-api");
   });
 
@@ -47,6 +49,80 @@ describe("loadConfig", () => {
     environment["PRIVY_APP_SECRET"] = "   ";
 
     expect(loadConfig(environment).privy).toBeNull();
+  });
+
+  it("parses an all-or-nothing Stream credential pair", () => {
+    const environment = validEnvironment();
+    environment["STREAM_API_KEY"] = "stream_key";
+    environment["STREAM_API_SECRET"] = "stream_secret";
+
+    const config = loadConfig(environment);
+
+    expect(config.stream).toEqual({
+      apiKey: "stream_key",
+      apiSecret: "stream_secret",
+    });
+    expect(Object.isFrozen(config.stream)).toBe(true);
+  });
+
+  it("treats blank Stream placeholders as unconfigured", () => {
+    const environment = validEnvironment();
+    environment["STREAM_API_KEY"] = "";
+    environment["STREAM_API_SECRET"] = "   ";
+
+    expect(loadConfig(environment).stream).toBeNull();
+  });
+
+  it.each([
+    ["STREAM_API_KEY", "stream_key"],
+    ["STREAM_API_SECRET", "do-not-log-stream-secret"],
+  ] as const)(
+    "rejects a partial Stream credential pair without leaking %s",
+    (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+
+      expect(() => loadConfig(environment)).toThrowError(
+        /STREAM_API_KEY and STREAM_API_SECRET must be configured together/,
+      );
+
+      try {
+        loadConfig(environment);
+      } catch (error) {
+        expect(String(error)).not.toContain(value);
+      }
+    },
+  );
+
+  it("enables a versioned Stream token quota only with a strong HMAC secret", () => {
+    const environment = validEnvironment();
+    environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"] = "h".repeat(32);
+    environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] = "7";
+    environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] = "40";
+
+    const config = loadConfig(environment);
+
+    expect(config.streamTokenQuota).toEqual({
+      hmacSecret: "h".repeat(32),
+      policyVersion: "stream_token_v1",
+      windowDurationSeconds: 60,
+      userCapacity: 7,
+      ipCapacity: 40,
+    });
+    expect(Object.isFrozen(config.streamTokenQuota)).toBe(true);
+  });
+
+  it("rejects a weak Stream token quota secret without echoing it", () => {
+    const environment = validEnvironment();
+    environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"] = "weak-secret";
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+
+    try {
+      loadConfig(environment);
+    } catch (error) {
+      expect(String(error)).not.toContain("weak-secret");
+    }
   });
 
   it.each([

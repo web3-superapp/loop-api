@@ -4,7 +4,8 @@ Private Backend-for-Frontend repository for the LOOP Flutter app.
 
 ## Current status
 
-The runtime foundation and first protected identity slice are implemented:
+The runtime foundation, protected identity slice, and Stream token HTTP
+interfaces are implemented:
 
 - Node.js 24 LTS, TypeScript, Fastify, and generated OpenAPI 3.1
 - fail-closed environment validation and redacted structured logs
@@ -15,6 +16,11 @@ The runtime foundation and first protected identity slice are implemented:
 - a reusable Native Privy Bearer principal boundary for protected routes
 - idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
   server-derived Stream user ID
+- separate `POST /v1/chat/token` and `POST /v1/video/token` interfaces that
+  require an existing bootstrap mapping, derive the Stream user ID server-side,
+  and enforce a fixed 3600-second lifetime
+- atomic HMAC-subjected user/IP issuance quotas for each Stream token route;
+  raw LOOP user IDs and client IPs are not stored as quota subjects
 - a durable provider-operation control plane with scope-wide idempotency,
   one-attempt write journals, versioned append-only audit events, atomic
   multi-subject issuance quotas, and stale-submission quarantine
@@ -26,10 +32,14 @@ The runtime foundation and first protected identity slice are implemented:
 
 This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
-but a real phone-issued token has not yet passed the physical-device gate. There
-is still no Stream token minting, Hyperliquid private account/trading path,
-Firebase push path, endpoint-wired issuance policy, or production deployment.
-The control-plane and quota primitives do not by themselves enable any provider.
+but a real phone-issued token has not yet passed the physical-device gate. The
+Stream HTTP interfaces and issuance policy are present, but the default issuer
+returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
+the SDK is not installed, and a real Development App key/secret pair is not
+enabled. There is still no Hyperliquid private account/trading path, Firebase
+push path, physical-device integration, or production deployment. Interfaces,
+control-plane records, and quota primitives do not by themselves enable any
+provider.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -40,6 +50,8 @@ and
 The canonical route surface and shared control-plane rules are in
 [`docs/api-inventory.md`](docs/api-inventory.md) and
 [`docs/decisions/0003-native-api-control-plane.md`](docs/decisions/0003-native-api-control-plane.md).
+The Stream interface and SDK license gate are recorded in
+[`docs/decisions/0004-stream-token-interface-license-gate.md`](docs/decisions/0004-stream-token-interface-license-gate.md).
 
 ## Quick start
 
@@ -65,6 +77,10 @@ The safe default listens on `http://127.0.0.1:3000` only.
 - `POST /v1/bootstrap` verifies a current Privy Bearer token and returns the
   server-derived LOOP and Stream user IDs. It returns 503 when Privy is
   unconfigured; returning the Stream ID does not connect Stream or mint a token.
+- `POST /v1/chat/token` and `POST /v1/video/token` require the same current
+  Privy Bearer boundary plus an existing bootstrap mapping. The interfaces are
+  implemented, but return 503 while the quota HMAC capability or real licensed
+  Stream issuer is unavailable.
 - `GET /openapi.json` exposes the generated development contract when
   `API_DOCS_ENABLED=true`.
 

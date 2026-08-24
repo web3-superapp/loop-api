@@ -55,18 +55,28 @@ is not provider-integration evidence.
 `GET /openapi.json` is a conditional Development documentation endpoint when
 `API_DOCS_ENABLED=true`; it is not a mobile business route.
 
-## Stream token routes
+## Implemented Stream token routes
 
-| Method and path        | Request                              | Success projection                        | Interface           | Capability         |
-| ---------------------- | ------------------------------------ | ----------------------------------------- | ------------------- | ------------------ |
-| `POST /v1/chat/token`  | Bearer only; no body/query/client ID | `{api_key, token, expires_at, user:{id}}` | `approved-contract` | `blocked-provider` |
-| `POST /v1/video/token` | Bearer only; no body/query/client ID | `{api_key, token, expires_at, user:{id}}` | `approved-contract` | `blocked-provider` |
+| Method and path        | Request                                              | Success projection                        | Interface     | Capability         |
+| ---------------------- | ---------------------------------------------------- | ----------------------------------------- | ------------- | ------------------ |
+| `POST /v1/chat/token`  | Bearer + existing bootstrap; no body/query/client ID | `{api_key, token, expires_at, user:{id}}` | `implemented` | `blocked-provider` |
+| `POST /v1/video/token` | Bearer + existing bootstrap; no body/query/client ID | `{api_key, token, expires_at, user:{id}}` | `implemented` | `blocked-provider` |
 
 Both tokens bind the same server-derived Stream subject, expire after 3600
-seconds, are never cached or persisted, and are persistently rate-limited per
-internal user and IP. Quota exhaustion is `429`; missing or partial provider
-configuration fails closed. These routes do not authorize server Chat/Video
-mutations or claim connected Stream state.
+seconds, and are never cached or persisted. Chat and Video have separate
+capability quotas; each attempt atomically reserves both an internal-user bucket
+and a canonical-IP bucket using domain-separated HMAC-SHA256 subjects, so raw
+LOOP user IDs and IP addresses are not persisted in quota subjects. Quota
+exhaustion is `429` without an issuer call. A missing quota HMAC capability or
+unavailable real issuer returns `503`; a partial Stream API key/secret pair is a
+startup error.
+
+The default issuer remains unavailable even when a complete key/secret pair is
+present. `@stream-io/node-sdk` is not installed and real credentials are not
+enabled until its reviewed Stream Source Code License Agreement is explicitly
+accepted and the Development App gate closes. These interfaces have not been
+exercised with Flutter or a physical device, do not authorize server Chat/Video
+mutations, and do not claim connected Stream state.
 
 ## Hyperliquid Testnet private routes
 

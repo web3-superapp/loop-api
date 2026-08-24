@@ -45,12 +45,20 @@ describe("committed OpenAPI artifact", () => {
     );
     const operationIds = operations.map((operation) => operation.operationId);
     const bootstrap = document.paths["/v1/bootstrap"]?.["post"];
+    const chatToken = document.paths["/v1/chat/token"]?.["post"];
+    const videoToken = document.paths["/v1/video/token"]?.["post"];
 
     expect(document.openapi).toBe("3.1.0");
     expect(document.servers).toEqual([
       { url: "https://api-dev.quant-dinger.cc" },
     ]);
-    expect(paths).toEqual(["/health/live", "/health/ready", "/v1/bootstrap"]);
+    expect(paths).toEqual([
+      "/health/live",
+      "/health/ready",
+      "/v1/bootstrap",
+      "/v1/chat/token",
+      "/v1/video/token",
+    ]);
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
@@ -73,5 +81,28 @@ describe("committed OpenAPI artifact", () => {
       "responses.503.content.application/json.schema.properties.code.enum",
       ["authentication_unavailable", "request_timeout"],
     );
+
+    for (const [operation, operationId] of [
+      [chatToken, "issueStreamChatToken"],
+      [videoToken, "issueStreamVideoToken"],
+    ] as const) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(operation).not.toHaveProperty("parameters");
+      expect(operation).not.toHaveProperty("requestBody");
+      for (const status of ["200", "400", "401", "409", "429", "500", "503"]) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      expect(operation).toHaveProperty(
+        "responses.429.content.application/json.schema.properties.code.enum",
+        ["rate_limit_exceeded"],
+      );
+      expect(operation).toHaveProperty(
+        "responses.503.content.application/json.schema.properties.code.enum",
+        ["authentication_unavailable", "stream_unavailable", "request_timeout"],
+      );
+    }
   });
 });
