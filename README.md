@@ -6,6 +6,12 @@ Web3 超级应用（钱包 + 匿名社交 + 行情，"发现→讨论→执行"�
 - **项目路径**：`/Volumes/硬盘/Claude Workspace/项目/dinolabs/web3-superapp-prototype`
 - **线上地址**：https://web3-superapp-prototype.vercel.app/
 
+## 当前代码仓库
+
+- **Flutter 前端**：https://github.com/web3-superapp/loop-mobile
+- **BFF 后端**：https://github.com/web3-superapp/loop-api
+- 本仓库保留周末原型、迁移历史和产品契约；新功能分别进入上述前后端仓库，避免继续扩成混合仓库
+
 ## 已拍板前置决策（2026-08-21）
 
 1. 交易形态：**路线 C** —— 多链现货 + Hyperliquid 永续双形态

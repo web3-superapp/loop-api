@@ -2,6 +2,8 @@
 
 LOOP 的正式客户端是 **Flutter App**，目标平台为 iOS 与 Android。`web/` 仅用于本地 UI 自动化与响应式预览，不是独立网页产品，也不是生产交付目标。
 
+正式前端仓库：<https://github.com/web3-superapp/loop-mobile>。历史 HTML 原型和迁移记录仍保留在 <https://github.com/Doog-bot534/web3-superapp-prototype>，不再作为 Flutter 开发入口。
+
 ## 当前已完成
 
 - 六个固定主入口：Home / Market / Launch / Chat / Wallet / Profile
