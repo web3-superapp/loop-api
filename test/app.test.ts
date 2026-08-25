@@ -8,7 +8,10 @@ import { createUnavailableAgentAuthorizationRepository } from "../src/database/a
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
-import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
+import {
+  createUnavailablePerpWalletBindingRepository,
+  type PerpWalletBindingRepository,
+} from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 
@@ -55,6 +58,7 @@ describe("LOOP API foundation", () => {
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map(async (app) => app.close()));
+    vi.unstubAllGlobals();
   });
 
   it("reports liveness without touching PostgreSQL", async () => {
@@ -147,6 +151,7 @@ describe("LOOP API foundation", () => {
     expect(document.openapi).toBe("3.1.0");
     expect(document.paths).toHaveProperty("/health/live");
     expect(document.paths).toHaveProperty("/health/ready");
+    expect(document.paths).toHaveProperty("/v1/perp/wallet-binding");
     expect(document.paths["/health/live"]).toHaveProperty("get.responses.500");
     expect(document.paths["/health/ready"]).toHaveProperty("get.responses.503");
     expect(document.paths).not.toHaveProperty("/openapi.json");
@@ -352,6 +357,147 @@ describe("LOOP API foundation", () => {
     expect(database.internalUsers.findByPrivyUserId).not.toHaveBeenCalled();
     expect(resolve).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("composes enabled private reads through binding, quota, and the fixed Testnet transport", async () => {
+    const ownerUserId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
+    const privyUserId = "did:privy:composition-user";
+    const accountAddress = "0x1111111111111111111111111111111111111111";
+    const { database } = fakeDatabase();
+    const get = vi.fn<PerpWalletBindingRepository["get"]>(() =>
+      Promise.resolve({
+        ownerUserId,
+        privyUserId,
+        state: "bound",
+        walletId: "wallet-a",
+        accountAddress,
+        accountKind: "master",
+        bindingVersion: "1",
+        lastVerifiedAt: "2026-08-25T04:00:00.000Z",
+        createdAt: "2026-08-25T04:00:00.000Z",
+        updatedAt: "2026-08-25T04:00:00.000Z",
+      }),
+    );
+    const consumeIssuanceQuota = vi.fn<
+      Database["controlPlane"]["consumeIssuanceQuota"]
+    >(() => Promise.resolve([]));
+    const composedDatabase = {
+      ...database,
+      controlPlane: { ...database.controlPlane, consumeIssuanceQuota },
+      perpWalletBindings: {
+        get,
+        putVerifiedBinding:
+          vi.fn<PerpWalletBindingRepository["putVerifiedBinding"]>(),
+        unbind: vi.fn<PerpWalletBindingRepository["unbind"]>(),
+      },
+    } satisfies Database;
+    const readCurrentUser = vi.fn(() =>
+      Promise.resolve({
+        id: privyUserId,
+        linked_accounts: [
+          {
+            type: "wallet",
+            chain_type: "ethereum",
+            wallet_client_type: "privy",
+            connector_type: "embedded",
+            id: "wallet-a",
+            address: accountAddress,
+          },
+        ],
+      }),
+    );
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            universe: [
+              {
+                szDecimals: 5,
+                name: "BTC",
+                maxLeverage: 40,
+                marginTableId: 0,
+              },
+              {
+                szDecimals: 4,
+                name: "ETH",
+                maxLeverage: 25,
+                marginTableId: 0,
+              },
+              {
+                szDecimals: 2,
+                name: "SOL",
+                maxLeverage: 20,
+                marginTableId: 0,
+              },
+            ],
+            marginTables: [
+              [
+                0,
+                {
+                  description: "",
+                  marginTiers: [{ lowerBound: "0.0", maxLeverage: 40 }],
+                },
+              ],
+            ],
+            collateralToken: 0,
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      API_DOCS_ENABLED: "true",
+      LOG_LEVEL: "silent",
+      DATABASE_URL:
+        "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+      PRIVY_APP_ID: "test-privy-app",
+      PRIVY_APP_SECRET: "test-privy-app-secret",
+      PERP_READ_CURSOR_HMAC_SECRET: "c".repeat(32),
+      HYPERLIQUID_PRIVATE_READS_ENABLED: "true",
+      HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: "q".repeat(32),
+    });
+    const app = await buildApp({
+      config,
+      database: composedDatabase,
+      privyAccessTokenVerifier: {
+        verifyAccessToken: vi.fn(() => Promise.resolve({ privyUserId })),
+      },
+      privyUserReader: { readCurrentUser },
+      logger: false,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/perp/config",
+      headers: { authorization: "Bearer header.payload.signature" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      scope: { network: "testnet", coins: ["BTC", "ETH", "SOL"] },
+      capabilities: {
+        private_reads: "available",
+        trading_mutations: "disabled",
+      },
+    });
+    expect(get).toHaveBeenCalledWith({ ownerUserId, privyUserId });
+    expect(readCurrentUser).toHaveBeenCalledOnce();
+    expect(consumeIssuanceQuota).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "hyperliquid_info",
+        cost: 20,
+      }),
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api.hyperliquid-testnet.xyz/info",
+    );
+    expect(fetch.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ type: "meta", dex: "" }),
+    );
   });
 
   it("closes the database pool with the application", async () => {

@@ -39,15 +39,20 @@ import {
   createPerpIntentService,
   type PerpMutationGate,
 } from "./features/perp/perp-intent-service.js";
+import { createPerpWalletBindingService } from "./features/perp/wallet-binding-service.js";
 import { createUnavailableTransferService } from "./features/transfer/transfer-service.js";
 import {
   createWatchlistService,
   type WatchlistService,
 } from "./features/watchlist/watchlist-service.js";
 import {
+  createPerpWalletBindingResolver,
   createUnavailablePerpWalletBindingResolver,
   type PerpWalletBindingResolver,
 } from "./features/perp/wallet-binding-resolver.js";
+import { createHyperliquidInfoPrivateReader } from "./integrations/hyperliquid/info-private-reader.js";
+import { createPostgresHyperliquidInfoQuota } from "./integrations/hyperliquid/info-quota.js";
+import { createLosslessHyperliquidInfoTransport } from "./integrations/hyperliquid/lossless-info-transport.js";
 import {
   createUnavailableHyperliquidPrivateReader,
   type HyperliquidPrivateReader,
@@ -61,16 +66,23 @@ import {
   type StreamTokenIssuer,
 } from "./integrations/stream/token-issuer.js";
 import {
-  createPrivyAccessTokenVerifier,
+  createPrivyAccessTokenVerifierWithClient,
   createUnavailablePrivyAccessTokenVerifier,
   type PrivyAccessTokenVerifier,
 } from "./integrations/privy/access-token-verifier.js";
+import { createPrivyServerClient } from "./integrations/privy/client.js";
+import {
+  createPrivyUserReader,
+  createUnavailablePrivyUserReader,
+  type PrivyUserReader,
+} from "./integrations/privy/user-reader.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
+import { registerPerpWalletBindingRoutes } from "./routes/perp-wallet-binding.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
@@ -82,6 +94,7 @@ export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly database?: Database;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
+  readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
   readonly perpWalletBindingResolver?: PerpWalletBindingResolver;
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
@@ -150,6 +163,10 @@ function loggerOptions(
         "perpReadCursor.hmacSecret",
         "config.perpReadCursor.hmacSecret",
         "PERP_READ_CURSOR_HMAC_SECRET",
+        "quotaHmacSecret",
+        "hyperliquidPrivateReads.quotaHmacSecret",
+        "config.hyperliquidPrivateReads.quotaHmacSecret",
+        "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
         "req.body.signature",
         "req.body.authorization_signature",
         "req.body.typed_data_json",
@@ -284,11 +301,21 @@ export async function buildApp(
 
   await app.register(helmet);
 
+  const privyServerClient =
+    config.privy === null ? null : createPrivyServerClient(config.privy);
   const privyAccessTokenVerifier =
     options.privyAccessTokenVerifier ??
-    (config.privy === null
+    (config.privy === null || privyServerClient === null
       ? createUnavailablePrivyAccessTokenVerifier()
-      : createPrivyAccessTokenVerifier(config.privy));
+      : createPrivyAccessTokenVerifierWithClient(
+          config.privy,
+          privyServerClient,
+        ));
+  const privyUserReader =
+    options.privyUserReader ??
+    (privyServerClient === null
+      ? createUnavailablePrivyUserReader()
+      : createPrivyUserReader(privyServerClient.users()));
   const database = options.database ?? createPostgresDatabase(config, app.log);
   const authenticationService = createAuthenticationService(
     privyAccessTokenVerifier,
@@ -342,10 +369,30 @@ export async function buildApp(
         });
   const perpWalletBindingResolver =
     options.perpWalletBindingResolver ??
-    createUnavailablePerpWalletBindingResolver();
+    (config.privy === null
+      ? createUnavailablePerpWalletBindingResolver()
+      : createPerpWalletBindingResolver({
+          repository: database.perpWalletBindings,
+          userReader: privyUserReader,
+        }));
+  const perpWalletBindingService = createPerpWalletBindingService({
+    repository: database.perpWalletBindings,
+    userReader: privyUserReader,
+  });
   const hyperliquidPrivateReader =
     options.hyperliquidPrivateReader ??
-    createUnavailableHyperliquidPrivateReader();
+    (config.hyperliquidPrivateReads === null
+      ? createUnavailableHyperliquidPrivateReader()
+      : createHyperliquidInfoPrivateReader({
+          quota: createPostgresHyperliquidInfoQuota({
+            repository: database.controlPlane,
+            quotaHmacSecret: new TextEncoder().encode(
+              config.hyperliquidPrivateReads.quotaHmacSecret,
+            ),
+            policy: config.hyperliquidPrivateReads,
+          }),
+          transport: createLosslessHyperliquidInfoTransport(),
+        }));
   const perpPrivateReadCursorCodec =
     config.perpReadCursor === null
       ? null
@@ -416,6 +463,11 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     alertService,
+  );
+  registerPerpWalletBindingRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    perpWalletBindingService,
   );
   registerPerpPrivateReadRoutes(
     app,

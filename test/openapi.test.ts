@@ -144,6 +144,20 @@ describe("committed OpenAPI artifact", () => {
       [document.paths["/v1/perp/fills"]?.["get"], "listPerpFills"],
       [document.paths["/v1/perp/funding"]?.["get"], "listPerpFunding"],
     ] as const;
+    const walletBindingOperations = [
+      [
+        document.paths["/v1/perp/wallet-binding"]?.["get"],
+        "getPerpWalletBinding",
+      ],
+      [
+        document.paths["/v1/perp/wallet-binding"]?.["put"],
+        "putPerpWalletBinding",
+      ],
+      [
+        document.paths["/v1/perp/wallet-binding"]?.["delete"],
+        "deletePerpWalletBinding",
+      ],
+    ] as const;
 
     expect(document.openapi).toBe("3.1.0");
     expect(document.servers).toEqual([
@@ -170,6 +184,7 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/intents/{intent_id}/submit",
       "/v1/perp/orders",
       "/v1/perp/positions",
+      "/v1/perp/wallet-binding",
       "/v1/profile",
       "/v1/profile/privacy",
       "/v1/transfer/assets",
@@ -184,7 +199,7 @@ describe("committed OpenAPI artifact", () => {
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
-    expect(operationIds).toHaveLength(37);
+    expect(operationIds).toHaveLength(40);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapCurrentUser",
@@ -353,6 +368,53 @@ describe("committed OpenAPI artifact", () => {
         ["limit", "cursor"],
       );
     }
+
+    for (const [operation, operationId] of walletBindingOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      for (const status of ["200", "400", "401", "409", "500", "503"]) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      expect(operation).toHaveProperty(
+        "responses.200.headers.cache-control.schema.const",
+        "no-store",
+      );
+      expect(operation).toHaveProperty(
+        "responses.200.content.application/json.schema.properties.account_kind.anyOf.0.enum",
+        ["master"],
+      );
+      const serialized = JSON.stringify(operation);
+      for (const forbidden of [
+        "account_address",
+        "wallet_id",
+        "privy_user_id",
+        "owner_user_id",
+        "subaccount",
+        "did:privy",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+    const getWalletBinding = walletBindingOperations[0][0];
+    const putWalletBinding = walletBindingOperations[1][0];
+    const deleteWalletBinding = walletBindingOperations[2][0];
+    expect(getWalletBinding).not.toHaveProperty("parameters");
+    expect(getWalletBinding).not.toHaveProperty("requestBody");
+    expect(putWalletBinding).not.toHaveProperty("parameters");
+    expect(putWalletBinding).toHaveProperty(
+      "requestBody.content.application/json.schema.required",
+      ["expected_binding_version"],
+    );
+    expect(putWalletBinding).toHaveProperty(
+      "requestBody.content.application/json.schema.additionalProperties",
+      false,
+    );
+    expect(deleteWalletBinding).not.toHaveProperty("requestBody");
+    expect(
+      deleteWalletBinding?.parameters?.map((parameter) => parameter.name),
+    ).toEqual(["expected_binding_version"]);
 
     for (const [operation, operationId, statuses] of [
       [
