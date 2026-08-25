@@ -14,6 +14,7 @@ import {
 } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
+import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import { STREAM_TOKEN_CAPABILITIES } from "../src/features/communication/stream-token-service.js";
@@ -110,6 +111,7 @@ function dependencies() {
       ...createUnavailableControlPlaneRepository(),
       consumeIssuanceQuota,
     },
+    perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
     perpIntents: createUnavailablePerpIntentRepository(),
     profiles: createUnavailableProfileRepository(),
     watchlists: createUnavailableWatchlistRepository(),

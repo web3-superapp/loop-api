@@ -55,6 +55,8 @@ const truncateAll = `
     public.watchlist_versions,
     public.privacy_preferences,
     public.user_profiles,
+    public.perp_wallet_binding_events,
+    public.perp_wallet_bindings,
     public.perp_agent_authorization_events,
     public.perp_agent_authorizations,
     public.perp_agent_identities,

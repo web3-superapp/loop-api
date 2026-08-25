@@ -24,6 +24,10 @@ import {
   type PerpIntentRepository,
 } from "./perp-intent-repository.js";
 import {
+  createPostgresPerpWalletBindingRepository,
+  type PerpWalletBindingRepository,
+} from "./perp-wallet-binding-repository.js";
+import {
   createPostgresProfileRepository,
   type ProfileRepository,
 } from "./profile-repository.js";
@@ -40,6 +44,7 @@ const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 export interface Database {
   readonly internalUsers: InternalUserRepository;
   readonly controlPlane: ControlPlaneRepository;
+  readonly perpWalletBindings: PerpWalletBindingRepository;
   readonly perpIntents: PerpIntentRepository;
   readonly agentAuthorizations: AgentAuthorizationRepository;
   readonly profiles: ProfileRepository;
@@ -129,6 +134,7 @@ export function createPostgresDatabase(
     },
   };
   const controlPlane = createPostgresControlPlaneRepository(pool);
+  const perpWalletBindings = createPostgresPerpWalletBindingRepository(pool);
   const perpIntents = createPostgresPerpIntentRepository(pool);
   const agentAuthorizations = createPostgresAgentAuthorizationRepository(pool);
   const profiles = createPostgresProfileRepository(pool);
@@ -138,6 +144,7 @@ export function createPostgresDatabase(
   return {
     internalUsers,
     controlPlane,
+    perpWalletBindings,
     perpIntents,
     agentAuthorizations,
     profiles,
