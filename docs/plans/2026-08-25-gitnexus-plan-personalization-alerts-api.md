@@ -87,7 +87,7 @@ Canonical new operations:
 | Watchlist | `GET /v1/watchlist` | Return grouped ordered asset references plus collection version. |
 | Watchlist | `PUT /v1/watchlist` | Atomically replace the entire normalized snapshot with optimistic conflict protection. |
 | Alerts | `GET /v1/alerts` | List the owner’s non-deleted inactive definitions with bounded offset pagination. |
-| Alerts | `POST /v1/alerts` | Idempotently create one inactive definition; require a lowercase UUID `Idempotency-Key`. |
+| Alerts | `POST /v1/alerts` | Idempotently create one inactive definition; require a lowercase UUID `Idempotency-Key`; replay after later soft deletion conflicts without resurrection. |
 | Alerts | `GET /v1/alerts/{alert_id}` | Return one owner-bound non-deleted definition. |
 | Alerts | `PUT /v1/alerts/{alert_id}` | Full replacement using `expected_version`, with identical-retry success. |
 | Alerts | `DELETE /v1/alerts/{alert_id}` | Soft-delete with required `expected_version`; already absent/deleted is a non-enumerating 204. |
@@ -139,7 +139,7 @@ Implement `src/features/alerts/`, `src/database/alert-repository.ts`, and `src/r
 - Alert conditions are exactly `above`, `at_or_above`, `below`, and `at_or_below`; thresholds remain canonical decimal strings and JavaScript numbers are rejected.
 - Asset keys are opaque references. The request accepts no source/provider URL, owner, user, DID, wallet, price fact, delivery target, Firebase token, or scheduler field.
 - Every definition is returned with `state=inactive`, `evaluation.state=unavailable`, and `delivery.state=unavailable`. No route activates a rule in this slice.
-- POST hashes a versioned canonical request and binds it to the required UUID idempotency key. Same key/same owner/same digest returns the same resource; any other reuse returns `idempotency_conflict` before another insert.
+- POST hashes a versioned canonical request and binds it to the required UUID idempotency key. Same key/same owner/same digest returns the same resource while it exists; after soft deletion it returns `idempotency_resource_deleted` without resurrection. Any other reuse returns `idempotency_conflict` before another insert.
 - GET/list/update/delete are owner-bound. Updates use normalized full replacement and version comparison; deletion is soft so future genuine history remains referentially intact.
 - Notification preferences cover the historical fixed event types (`price_alert_triggered`, `provider_activity_projected`, `security_notice`, `support_update`) and default to disabled. Persisting `enabled=true` records user intent only; the response still says delivery is unavailable until Firebase/provider work is composed.
 - Alert history exposes bounded offset pagination over persisted `price_alert_events`. Events include only sanitized asset/condition/threshold/value, source code, opaque fact reference, and observation time. There is no public event-write route and no fixture fallback.
@@ -185,7 +185,7 @@ Implement `src/features/alerts/`, `src/database/alert-repository.ts`, and `src/r
 ### Alerts/preferences/history
 
 - Required lowercase UUID idempotency header is checked before authentication and storage.
-- Same-key/same-digest concurrency creates one alert; cross-owner or different-digest reuse conflicts.
+- Same-key/same-digest concurrency creates one alert; cross-owner or different-digest reuse conflicts, and replay after soft deletion returns the dedicated deleted-resource conflict without resurrection.
 - Numeric/exponent/malformed decimal thresholds, provider/source/owner authority fields, invalid conditions, and expired malformed timestamps are rejected.
 - Owner-bound get/list/update/delete, version conflicts, identical replay, soft deletion, and non-enumerating repeated delete are covered.
 - Preferences default to all disabled, replace atomically, and continue to report delivery unavailable even when intent is enabled.

@@ -39,6 +39,9 @@ is not provider-integration evidence.
   numbers.
 - Protected responses are `Cache-Control: no-store`. Errors use stable LOOP
   codes and never expose raw provider or database messages.
+- Local Profile, Watchlist, alert, and notification-preference replacements use
+  an explicit resource version. A stale different state conflicts; an identical
+  already-applied retry returns the committed resource instead of overwriting it.
 - Total request deadline: 15 seconds. Provider read attempt: 5 seconds, with at
   most one pre-response transport/5xx retry inside the total deadline. Provider
   write attempt: 10 seconds, with no generic retry; ambiguous outcomes become
@@ -54,6 +57,39 @@ is not provider-integration evidence.
 
 `GET /openapi.json` is a conditional Development documentation endpoint when
 `API_DOCS_ENABLED=true`; it is not a mobile business route.
+
+## Personalization and inactive alert routes
+
+LOOP PostgreSQL is the system of record for the authenticated owner's local
+presentation and preference records. Alias, visibility, group, and asset keys
+are untrusted presentation references: none are authentication, wallet, market,
+social-graph, or trading authority.
+
+| Method and path                    | Key contract                                                                                                       | Interface     | Capability                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------- |
+| `GET /v1/profile`                  | Owner-only alias and opaque avatar reference; non-writing version-0 default                                        | `implemented` | `implemented`                                                             |
+| `PUT /v1/profile`                  | Full replacement with `expected_version` and identical-retry success                                               | `implemented` | `implemented`                                                             |
+| `GET /v1/profile/privacy`          | Fail-closed discoverability/copy-visibility preference; non-writing version-0 default                              | `implemented` | `implemented`; the value is not copy-trading authorization                |
+| `PUT /v1/profile/privacy`          | Full replacement with `expected_version`; no social relationship is created                                        | `implemented` | `implemented`                                                             |
+| `GET /v1/watchlist`                | Owner-only grouped ordered asset-reference snapshot                                                                | `implemented` | `implemented`; asset keys are not market facts                            |
+| `PUT /v1/watchlist`                | Atomic whole-snapshot replacement, at most 20 groups/100 items, optimistic version protection                      | `implemented` | `implemented`                                                             |
+| `GET /v1/alerts`                   | Bounded list of non-deleted inactive definitions                                                                   | `implemented` | storage `implemented`; evaluation and delivery `explicitly-disabled`      |
+| `POST /v1/alerts`                  | UUID `Idempotency-Key`; strict asset/condition/decimal/optional-expiry definition; replay after deletion conflicts | `implemented` | creates `inactive` only                                                   |
+| `GET /v1/alerts/{alert_id}`        | Owner-bound inactive definition                                                                                    | `implemented` | storage `implemented`; no activation                                      |
+| `PUT /v1/alerts/{alert_id}`        | Full replacement with `expected_version` and identical-retry success                                               | `implemented` | remains `inactive`                                                        |
+| `DELETE /v1/alerts/{alert_id}`     | Version-protected soft delete; absent/deleted remains non-enumerating                                              | `implemented` | no scheduler or delivery side effect                                      |
+| `GET /v1/alerts/history`           | Bounded newest-first list of persisted sanitized real trigger facts; no public writer or fixture fallback          | `implemented` | read interface `implemented`; trigger production `explicitly-disabled`    |
+| `GET /v1/notification-preferences` | Fixed event preferences, disabled version-0 defaults, explicit delivery unavailable                                | `implemented` | preference storage `implemented`; Firebase delivery `explicitly-disabled` |
+| `PUT /v1/notification-preferences` | Atomic full fixed-set replacement with `expected_version`; enabled records intent only                             | `implemented` | delivery remains `explicitly-disabled`                                    |
+
+Alert definitions accept no owner, provider/source URL, market fact, Firebase
+token, delivery target, or scheduler field. Every alert remains `inactive` and
+reports evaluation/delivery unavailable. The history relation is append-only,
+but no current public or worker path can create an event. Empty history is
+therefore a truthful empty list, not demo data. Decision 0009 defines the exact
+ownership and closed-capability boundary. A create-key replay after the target
+was soft-deleted returns `idempotency_resource_deleted`; it never resurrects or
+projects the deleted definition as current.
 
 ## Implemented Stream token routes
 
@@ -202,9 +238,10 @@ off-ramp, settlement and payment webhooks, Hyperliquid Mainnet, deposits,
 withdrawals, automated trading or trading automation, HIP-3, trigger orders,
 TP/SL, TWAP, builder fees, and public Hyperliquid market proxying.
 
-Push device registration, Profile/Privacy, Watchlist/Alerts, Search, Support, and
-multiple-wallet selection have no approved ownership and exact path decision.
-They are unassigned, not implied APIs; no guessed route may be added. Privy
-OTP/wallet creation, Stream messages/calls/moderation, and provider `/info`,
-`/exchange`, or `/ws` operations remain official SDK/provider surfaces rather
-than LOOP routes.
+Push device registration, a notification inbox, alert activation/evaluation,
+Search, Support, public profile/social graph, following/followers/blocklist, and
+multiple-wallet selection have no approved complete runtime contract. They are
+unassigned or explicitly closed, not implied APIs; no guessed route may be
+added. Privy OTP/wallet creation, Stream messages/calls/moderation, and provider
+`/info`, `/exchange`, or `/ws` operations remain official SDK/provider surfaces
+rather than LOOP routes.

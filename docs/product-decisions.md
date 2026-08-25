@@ -39,6 +39,26 @@ Chat identity, preferences, or audit ownership. Client-selected wallet addresses
 must not become database primary keys, Stream user IDs, or trusted authorization
 claims.
 
+## Local personalization and inactive alerts
+
+Decision 0009 selects LOOP PostgreSQL as the narrow system of record for the
+current user's mutable alias/opaque avatar reference, privacy preferences,
+grouped ordered Watchlist, inactive price-alert definitions, notification
+preferences, and sanitized alert-event history.
+
+This ownership is deliberately local and non-authoritative. Alias is display
+data, asset keys are references rather than market facts, and
+`copy_trade_visibility` does not authorize following or trading. Profile and
+Watchlist replacements use optimistic versions; alert creation uses a UUID
+idempotency key and canonical decimal-string threshold.
+
+No alert can be activated in the current runtime. There is no selected price
+fact/evaluator/scheduler, no trigger writer, no Firebase device registration or
+delivery, and no notification inbox. An enabled preference records user intent
+while the API continues to report delivery unavailable. Social discovery,
+following/followers/blocklist, copy-trading authorization, account export/delete,
+and retention automation require separate decisions.
+
 ## Stream large-group Go/No-Go
 
 The product target includes a persistent group with up to 200,000 members. LOOP

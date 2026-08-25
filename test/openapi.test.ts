@@ -49,6 +49,46 @@ describe("committed OpenAPI artifact", () => {
     const bootstrap = document.paths["/v1/bootstrap"]?.["post"];
     const chatToken = document.paths["/v1/chat/token"]?.["post"];
     const videoToken = document.paths["/v1/video/token"]?.["post"];
+    const personalizationOperations = [
+      [document.paths["/v1/profile"]?.["get"], "getCurrentProfile"],
+      [document.paths["/v1/profile"]?.["put"], "replaceCurrentProfile"],
+      [
+        document.paths["/v1/profile/privacy"]?.["get"],
+        "getCurrentPrivacyPreferences",
+      ],
+      [
+        document.paths["/v1/profile/privacy"]?.["put"],
+        "replaceCurrentPrivacyPreferences",
+      ],
+      [document.paths["/v1/watchlist"]?.["get"], "getWatchlist"],
+      [document.paths["/v1/watchlist"]?.["put"], "replaceWatchlist"],
+    ] as const;
+    const alertOperations = [
+      [document.paths["/v1/alerts"]?.["get"], "listAlerts", "200"],
+      [document.paths["/v1/alerts"]?.["post"], "createAlert", "200"],
+      [document.paths["/v1/alerts/{alert_id}"]?.["get"], "getAlert", "200"],
+      [document.paths["/v1/alerts/{alert_id}"]?.["put"], "replaceAlert", "200"],
+      [
+        document.paths["/v1/alerts/{alert_id}"]?.["delete"],
+        "deleteAlert",
+        "204",
+      ],
+      [
+        document.paths["/v1/alerts/history"]?.["get"],
+        "listAlertHistory",
+        "200",
+      ],
+      [
+        document.paths["/v1/notification-preferences"]?.["get"],
+        "getNotificationPreferences",
+        "200",
+      ],
+      [
+        document.paths["/v1/notification-preferences"]?.["put"],
+        "replaceNotificationPreferences",
+        "200",
+      ],
+    ] as const;
     const preparePerpIntent = document.paths["/v1/perp/intents"]?.["post"];
     const getPerpIntent =
       document.paths["/v1/perp/intents/{intent_id}"]?.["get"];
@@ -112,8 +152,12 @@ describe("committed OpenAPI artifact", () => {
     expect(paths).toEqual([
       "/health/live",
       "/health/ready",
+      "/v1/alerts",
+      "/v1/alerts/history",
+      "/v1/alerts/{alert_id}",
       "/v1/bootstrap",
       "/v1/chat/token",
+      "/v1/notification-preferences",
       "/v1/perp/account",
       "/v1/perp/agent-authorizations",
       "/v1/perp/agent-authorizations/{authorization_id}",
@@ -126,6 +170,8 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/intents/{intent_id}/submit",
       "/v1/perp/orders",
       "/v1/perp/positions",
+      "/v1/profile",
+      "/v1/profile/privacy",
       "/v1/transfer/assets",
       "/v1/transfer/authorize",
       "/v1/transfer/current-result",
@@ -133,10 +179,12 @@ describe("committed OpenAPI artifact", () => {
       "/v1/transfer/reconciliation",
       "/v1/transfer/reviews",
       "/v1/video/token",
+      "/v1/watchlist",
     ]);
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
+    expect(operationIds).toHaveLength(37);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapCurrentUser",
@@ -179,6 +227,99 @@ describe("committed OpenAPI artifact", () => {
         ["authentication_unavailable", "stream_unavailable", "request_timeout"],
       );
     }
+
+    for (const [operation, operationId] of personalizationOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      for (const status of ["200", "400", "401", "409", "500", "503"]) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      expect(operation).toHaveProperty(
+        "responses.200.headers.cache-control.schema.const",
+        "no-store",
+      );
+      const serialized = JSON.stringify(operation);
+      for (const forbidden of [
+        "owner_user_id",
+        "privy_user_id",
+        "wallet_address",
+        "provider_url",
+        "firebase_token",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+
+    expect(document.paths["/v1/profile"]?.["put"]).toHaveProperty(
+      "requestBody.content.application/json.schema.properties.profile.properties.alias.anyOf.0.minLength",
+      1,
+    );
+    expect(document.paths["/v1/profile"]?.["put"]).toHaveProperty(
+      "requestBody.content.application/json.schema.properties.profile.properties.alias.anyOf.0.pattern",
+    );
+    expect(document.paths["/v1/watchlist"]?.["put"]).toHaveProperty(
+      "requestBody.content.application/json.schema.properties.groups.description",
+      "Complete snapshot with at most 20 groups and at most 100 items in aggregate across all groups.",
+    );
+    expect(document.paths["/v1/watchlist"]?.["get"]).toHaveProperty(
+      "responses.200.content.application/json.schema.properties.groups.description",
+      "Committed snapshot with at most 20 groups and at most 100 items in aggregate across all groups.",
+    );
+
+    for (const [operation, operationId, successStatus] of alertOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      for (const status of ["400", "401", "409", "500", "503"]) {
+        expect(operation?.responses).toHaveProperty(status);
+      }
+      expect(operation?.responses).toHaveProperty(successStatus);
+      expect(operation).toHaveProperty(
+        `responses.${successStatus}.headers.cache-control.schema.const`,
+        "no-store",
+      );
+      const serializedRequest = JSON.stringify(operation?.requestBody ?? {});
+      for (const forbidden of [
+        "owner_user_id",
+        "privy_user_id",
+        "wallet_address",
+        "provider_url",
+        "source_fact",
+        "firebase_token",
+        "delivery_target",
+        "scheduler",
+      ]) {
+        expect(serializedRequest).not.toContain(forbidden);
+      }
+    }
+
+    expect(document.paths["/v1/alerts"]?.["post"]).toHaveProperty(
+      "parameters.0.name",
+      "idempotency-key",
+    );
+    expect(document.paths["/v1/alerts"]?.["post"]).toHaveProperty(
+      "responses.409.content.application/json.schema.properties.code.enum",
+      [
+        "bootstrap_required",
+        "idempotency_conflict",
+        "idempotency_resource_deleted",
+      ],
+    );
+    expect(document.paths["/v1/alerts"]?.["get"]).not.toHaveProperty(
+      "responses.200.content.application/json.schema.properties.items.items.headers",
+    );
+    expect(
+      document.paths["/v1/alerts/{alert_id}"]?.["get"]?.responses,
+    ).toHaveProperty("404");
+    expect(
+      document.paths["/v1/alerts/{alert_id}"]?.["put"]?.responses,
+    ).toHaveProperty("404");
+    expect(
+      document.paths["/v1/alerts/{alert_id}"]?.["delete"]?.responses,
+    ).not.toHaveProperty("404");
 
     for (const [operation, operationId] of perpReads) {
       expect(operation).toMatchObject({

@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
+import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
+import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 
 function testConfig(apiDocsEnabled = true) {
   return loadConfig({
@@ -25,9 +28,12 @@ function testConfig(apiDocsEnabled = true) {
 function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
   return {
     database: {
+      alerts: createUnavailableAlertRepository(),
       agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
       controlPlane: createUnavailableControlPlaneRepository(),
       perpIntents: createUnavailablePerpIntentRepository(),
+      profiles: createUnavailableProfileRepository(),
+      watchlists: createUnavailableWatchlistRepository(),
       internalUsers: {
         findByPrivyUserId: vi.fn(() =>
           Promise.resolve({ id: "6d12a86e-4134-47e6-9312-c5ef75a30f55" }),

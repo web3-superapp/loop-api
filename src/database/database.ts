@@ -8,6 +8,10 @@ import type {
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
 import {
+  createPostgresAlertRepository,
+  type AlertRepository,
+} from "./alert-repository.js";
+import {
   createPostgresAgentAuthorizationRepository,
   type AgentAuthorizationRepository,
 } from "./agent-authorization-repository.js";
@@ -19,7 +23,15 @@ import {
   createPostgresPerpIntentRepository,
   type PerpIntentRepository,
 } from "./perp-intent-repository.js";
+import {
+  createPostgresProfileRepository,
+  type ProfileRepository,
+} from "./profile-repository.js";
 import { latestMigrationName, requiredDatabaseRelations } from "./schema.js";
+import {
+  createPostgresWatchlistRepository,
+  type WatchlistRepository,
+} from "./watchlist-repository.js";
 
 const { Pool } = pg;
 const privyUserIdSchema = z.string().min(1).max(255);
@@ -30,6 +42,9 @@ export interface Database {
   readonly controlPlane: ControlPlaneRepository;
   readonly perpIntents: PerpIntentRepository;
   readonly agentAuthorizations: AgentAuthorizationRepository;
+  readonly profiles: ProfileRepository;
+  readonly watchlists: WatchlistRepository;
+  readonly alerts: AlertRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -116,12 +131,18 @@ export function createPostgresDatabase(
   const controlPlane = createPostgresControlPlaneRepository(pool);
   const perpIntents = createPostgresPerpIntentRepository(pool);
   const agentAuthorizations = createPostgresAgentAuthorizationRepository(pool);
+  const profiles = createPostgresProfileRepository(pool);
+  const watchlists = createPostgresWatchlistRepository(pool);
+  const alerts = createPostgresAlertRepository(pool);
 
   return {
     internalUsers,
     controlPlane,
     perpIntents,
     agentAuthorizations,
+    profiles,
+    watchlists,
+    alerts,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

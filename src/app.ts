@@ -16,11 +16,19 @@ import {
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
 import {
+  createAlertService,
+  type AlertService,
+} from "./features/alerts/alert-service.js";
+import {
   createStreamTokenService,
   StreamTokenUnavailableError,
   type StreamTokenService,
 } from "./features/communication/stream-token-service.js";
 import { createBootstrapService } from "./features/identity/bootstrap-service.js";
+import {
+  createProfileService,
+  type ProfileService,
+} from "./features/profile/profile-service.js";
 import { createPerpPrivateReadCursorCodec } from "./features/perp/private-read-cursor.js";
 import { createPerpPrivateReadService } from "./features/perp/private-read-service.js";
 import {
@@ -32,6 +40,10 @@ import {
   type PerpMutationGate,
 } from "./features/perp/perp-intent-service.js";
 import { createUnavailableTransferService } from "./features/transfer/transfer-service.js";
+import {
+  createWatchlistService,
+  type WatchlistService,
+} from "./features/watchlist/watchlist-service.js";
 import {
   createUnavailablePerpWalletBindingResolver,
   type PerpWalletBindingResolver,
@@ -55,11 +67,14 @@ import {
 } from "./integrations/privy/access-token-verifier.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
+import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
+import { registerProfileRoutes } from "./routes/profile.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
+import { registerWatchlistRoutes } from "./routes/watchlist.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 
@@ -73,6 +88,9 @@ export interface BuildAppOptions {
   readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
   readonly perpMutationGate?: PerpMutationGate;
   readonly agentAuthorizationMutationGate?: AgentAuthorizationMutationGate;
+  readonly profileService?: ProfileService;
+  readonly watchlistService?: WatchlistService;
+  readonly alertService?: AlertService;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -228,6 +246,19 @@ export async function buildApp(
           description: "Authenticated Stream Chat and Video token issuance",
         },
         {
+          name: "profile",
+          description: "Owner-bound Profile and privacy preferences",
+        },
+        {
+          name: "watchlist",
+          description: "Owner-bound grouped Watchlist preferences",
+        },
+        {
+          name: "alerts",
+          description:
+            "Owner-bound inactive alert definitions, preferences, and real history",
+        },
+        {
           name: "perp",
           description:
             "Authenticated Hyperliquid Testnet Core perpetual interfaces",
@@ -344,6 +375,13 @@ export async function buildApp(
       : { mutationGate: options.agentAuthorizationMutationGate }),
   });
   const transferService = createUnavailableTransferService();
+  const profileService =
+    options.profileService ?? createProfileService(database.profiles);
+  const watchlistService =
+    options.watchlistService ??
+    createWatchlistService({ repository: database.watchlists });
+  const alertService =
+    options.alertService ?? createAlertService({ repository: database.alerts });
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -363,6 +401,21 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     streamTokenService,
+  );
+  registerProfileRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    profileService,
+  );
+  registerWatchlistRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    watchlistService,
+  );
+  registerAlertRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    alertService,
   );
   registerPerpPrivateReadRoutes(
     app,

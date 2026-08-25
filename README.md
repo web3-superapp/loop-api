@@ -16,6 +16,13 @@ implemented as independently verified slices:
 - a reusable Native Privy Bearer principal boundary for protected routes
 - idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
   server-derived Stream user ID
+- owner-bound Profile/privacy reads and replacements with non-writing defaults,
+  optimistic versions, bounded display fields, and fail-closed privacy defaults
+- atomic grouped Watchlist reads and replacements with server-derived order,
+  snapshot versions, and bounded owner-local asset references
+- inactive price-alert definition CRUD, notification-preference persistence,
+  and read-only real alert history with UUID create idempotency and canonical
+  decimal strings; evaluation and delivery remain unavailable
 - separate `POST /v1/chat/token` and `POST /v1/video/token` interfaces that
   require an existing bootstrap mapping, derive the Stream user ID server-side,
   and enforce a fixed 3600-second lifetime
@@ -63,7 +70,10 @@ reviewed negative contract and return a sanitized 503 after authentication;
 there is still no live private account connection, trading execution path,
 Privy transfer execution, Firebase push path, physical-device integration, or
 production deployment. Interfaces, control-plane records, and quota primitives
-do not by themselves enable any provider.
+do not by themselves enable any provider. Profile/Watchlist and inactive alert
+records are local PostgreSQL capabilities, but there is no price evaluator or
+scheduler, Firebase device-token/delivery path, notification inbox, or social
+graph.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -86,6 +96,9 @@ recorded in
 [`docs/decisions/0007-agent-authorization-interface.md`](docs/decisions/0007-agent-authorization-interface.md).
 The Privy same-chain transfer default-closed interface is recorded in
 [`docs/decisions/0008-transfer-interface-default-closed.md`](docs/decisions/0008-transfer-interface-default-closed.md).
+The local Profile, Watchlist, inactive alert, and notification-preference
+ownership boundary is recorded in
+[`docs/decisions/0009-personalization-alerts-api.md`](docs/decisions/0009-personalization-alerts-api.md).
 
 ## Quick start
 
@@ -115,6 +128,14 @@ The safe default listens on `http://127.0.0.1:3000` only.
   Privy Bearer boundary plus an existing bootstrap mapping. The interfaces are
   implemented, but return 503 while the quota HMAC capability or real licensed
   Stream issuer is unavailable.
+- `GET`/`PUT /v1/profile`, `/v1/profile/privacy`, and `/v1/watchlist` expose
+  only the current owner's local presentation/preferences. PUT uses
+  `expected_version`; stale different state conflicts and an identical retry
+  succeeds.
+- `/v1/alerts` exposes owner-bound inactive definition CRUD,
+  `/v1/alerts/history` exposes persisted real events only, and
+  `/v1/notification-preferences` stores the fixed preference set. These routes
+  do not activate evaluation or imply Firebase delivery.
 - `GET /v1/perp/config`, `/account`, `/positions`, `/orders`, `/fills`, and
   `/funding` require the same current identity plus a unique current
   server-verified wallet binding. The default runtime returns
@@ -204,6 +225,8 @@ and aggregate discovery experience.
 - No Mainnet, withdrawals, automated trading, Pay, or payment backend in the
   current phase
 - No custom matching engine, ledger, bridge, IM, RTC, or proprietary risk score
+- No custom social graph, price-alert scheduler/evaluator, notification inbox,
+  or Firebase delivery claim in the current runtime
 - No custom Chat or media transport; communication uses the selected Stream
   products through thin adapters
 - No AI Guard endorsement and no synthetic or numeric risk score
