@@ -39,12 +39,13 @@ function databaseConnectionUrl(source: string, databaseName: string): string {
 async function migrate(
   targetDatabaseUrl: string,
   direction: "up" | "down",
+  count = direction === "down" ? 1 : undefined,
 ): Promise<void> {
   await runner({
     databaseUrl: targetDatabaseUrl,
     dir: migrationsDirectory,
     direction,
-    ...(direction === "down" ? { count: 1 } : {}),
+    ...(count === undefined ? {} : { count }),
     migrationsTable: "pgmigrations",
     log: () => undefined,
   });
@@ -65,6 +66,7 @@ async function createTemporaryDatabase(): Promise<TemporaryDatabase> {
   const targetDatabaseUrl = databaseConnectionUrl(databaseUrl, databaseName);
   try {
     await migrate(targetDatabaseUrl, "up");
+    await migrate(targetDatabaseUrl, "down", 1);
     return {
       databaseName,
       databaseUrl: targetDatabaseUrl,
@@ -217,7 +219,7 @@ describe("000004 Agent authorization migration against PostgreSQL", () => {
         latest_migration: "000003_perp_intents",
       });
 
-      await migrate(database.databaseUrl, "up");
+      await migrate(database.databaseUrl, "up", 1);
       const restored = await database.pool.query<{
         agent_table: string | null;
         digest_version: string;

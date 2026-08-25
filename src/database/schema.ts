@@ -1,4 +1,4 @@
-export const latestMigrationName = "000004_agent_authorizations";
+export const latestMigrationName = "000005_personalization_alerts";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -12,4 +12,13 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.perp_agent_identities",
   "public.perp_agent_authorizations",
   "public.perp_agent_authorization_events",
+  "public.user_profiles",
+  "public.privacy_preferences",
+  "public.watchlist_versions",
+  "public.watchlist_groups",
+  "public.watchlist_items",
+  "public.price_alert_definitions",
+  "public.notification_preference_versions",
+  "public.notification_preferences",
+  "public.price_alert_events",
 ] as const);

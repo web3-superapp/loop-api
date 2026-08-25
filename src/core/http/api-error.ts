@@ -2,6 +2,7 @@ export type ApiErrorCode =
   | "agent_authorization_expired"
   | "agent_authorization_not_found"
   | "agent_authorization_unavailable"
+  | "alert_not_found"
   | "authentication_required"
   | "authentication_unavailable"
   | "bootstrap_required"
@@ -17,6 +18,7 @@ export type ApiErrorCode =
   | "rate_limit_exceeded"
   | "stream_unavailable"
   | "transfer_unavailable"
+  | "version_conflict"
   | "wallet_binding_required"
   | "request_timeout";
 
@@ -80,6 +82,14 @@ export class ApiError extends Error {
       statusCode: 503,
       code: "authentication_unavailable",
       safeMessage: "Authentication is unavailable.",
+    });
+  }
+
+  static alertNotFound(): ApiError {
+    return new ApiError({
+      statusCode: 404,
+      code: "alert_not_found",
+      safeMessage: "The alert does not exist.",
     });
   }
 
@@ -185,6 +195,14 @@ export class ApiError extends Error {
       statusCode: 503,
       code: "transfer_unavailable",
       safeMessage: "Transfer operations are unavailable.",
+    });
+  }
+
+  static versionConflict(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "version_conflict",
+      safeMessage: "The resource has changed. Refresh and try again.",
     });
   }
 

@@ -46,6 +46,15 @@ const generatedClientOrderId = "0x11111111111111111111111111111111";
 
 const truncateAll = `
   truncate table
+    public.price_alert_events,
+    public.notification_preferences,
+    public.notification_preference_versions,
+    public.price_alert_definitions,
+    public.watchlist_items,
+    public.watchlist_groups,
+    public.watchlist_versions,
+    public.privacy_preferences,
+    public.user_profiles,
     public.perp_agent_authorization_events,
     public.perp_agent_authorizations,
     public.perp_agent_identities,
