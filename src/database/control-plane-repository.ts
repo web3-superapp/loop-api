@@ -153,6 +153,7 @@ const issuanceQuotaInputSchema = z
   .object({
     capability: codeSchema,
     policyVersion: codeSchema,
+    cost: z.number().int().min(1).max(100_000).default(1),
     buckets: z.array(issuanceQuotaBucketSchema).min(1).max(4),
   })
   .strict()
@@ -301,6 +302,7 @@ export interface IssuanceQuotaBucket {
 export interface ConsumeIssuanceQuotaInput {
   readonly capability: string;
   readonly policyVersion: string;
+  readonly cost?: number;
   readonly buckets: readonly IssuanceQuotaBucket[];
 }
 
@@ -1164,8 +1166,9 @@ export function createPostgresControlPlaneRepository(
                 capacity,
                 issued_count
               )
-              select $1, $2, $3, $4, window_started_at, $5, $6, 1
+              select $1, $2, $3, $4, window_started_at, $5, $6, $8::integer
               from quota_window
+              where $8::integer <= $6::integer
               on conflict (
                 capability,
                 policy_version,
@@ -1174,13 +1177,14 @@ export function createPostgresControlPlaneRepository(
                 window_started_at
               )
               do update set
-                issued_count = issuance_rate_records.issued_count + 1,
+                issued_count = issuance_rate_records.issued_count +
+                  excluded.issued_count,
                 updated_at = clock_timestamp()
               where issuance_rate_records.window_duration_seconds =
                     excluded.window_duration_seconds
                 and issuance_rate_records.capacity = excluded.capacity
-                and issuance_rate_records.issued_count <
-                    issuance_rate_records.capacity
+                and issuance_rate_records.issued_count <=
+                    issuance_rate_records.capacity - excluded.issued_count
               returning issued_count, window_started_at
             `,
             values: [
@@ -1191,6 +1195,7 @@ export function createPostgresControlPlaneRepository(
               bucket.windowDurationSeconds,
               bucket.capacity,
               observedAt,
+              input.cost,
             ],
           });
           const parsed = z

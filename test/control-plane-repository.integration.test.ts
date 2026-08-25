@@ -811,6 +811,60 @@ describe("PostgreSQL control-plane repository", () => {
     ]);
   });
 
+  it("charges a weighted cost atomically without partially consuming buckets", async () => {
+    const input = {
+      capability: "hyperliquid_info",
+      policyVersion: "hyperliquid_info_v1",
+      cost: 20,
+      buckets: [
+        {
+          subjectKind: "global",
+          subjectHmac: ipSubjectHmac,
+          windowDurationSeconds: 60,
+          capacity: 60,
+        },
+        {
+          subjectKind: "user",
+          subjectHmac: userSubjectHmac,
+          windowDurationSeconds: 60,
+          capacity: 40,
+        },
+      ],
+    } as const;
+
+    await expect(
+      database.controlPlane.consumeIssuanceQuota(input),
+    ).resolves.toEqual([
+      expect.objectContaining({ subjectKind: "global", issuedCount: 20 }),
+      expect.objectContaining({ subjectKind: "user", issuedCount: 20 }),
+    ]);
+    await expect(
+      database.controlPlane.consumeIssuanceQuota(input),
+    ).resolves.toEqual([
+      expect.objectContaining({ subjectKind: "global", issuedCount: 40 }),
+      expect.objectContaining({ subjectKind: "user", issuedCount: 40 }),
+    ]);
+    await expect(
+      database.controlPlane.consumeIssuanceQuota(input),
+    ).rejects.toBeInstanceOf(IssuanceQuotaExceededError);
+
+    const counters = await inspectionPool.query<{
+      issued_count: number;
+      subject_kind: string;
+    }>({
+      text: `
+        select subject_kind, issued_count
+        from public.issuance_rate_records
+        where capability = 'hyperliquid_info'
+        order by subject_kind
+      `,
+    });
+    expect(counters.rows).toEqual([
+      { issued_count: 40, subject_kind: "global" },
+      { issued_count: 40, subject_kind: "user" },
+    ]);
+  });
+
   it("keeps a versioned append-only audit without JSON or raw payload fields", async () => {
     const owner = await database.internalUsers.getOrCreateByPrivyUserId(
       "did:privy:audit-contract",
