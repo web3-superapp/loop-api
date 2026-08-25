@@ -9,6 +9,7 @@ export type ApiErrorCode =
   | "invalid_access_token"
   | "invalid_request"
   | "idempotency_conflict"
+  | "idempotency_resource_deleted"
   | "perp_intent_claim_rate_limited"
   | "perp_intent_expired"
   | "perp_intent_not_found"
@@ -123,6 +124,15 @@ export class ApiError extends Error {
       statusCode: 409,
       code: "idempotency_conflict",
       safeMessage: "The idempotency key conflicts with another request.",
+    });
+  }
+
+  static idempotencyResourceDeleted(): ApiError {
+    return new ApiError({
+      statusCode: 409,
+      code: "idempotency_resource_deleted",
+      safeMessage:
+        "The resource created with this idempotency key has been deleted.",
     });
   }
 

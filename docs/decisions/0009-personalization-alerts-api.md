@@ -52,7 +52,9 @@ notification preference is not evidence of delivery.
   owner-local references, never authorization or market facts.
 - Alert creation requires one lowercase UUID `Idempotency-Key`. A versioned
   canonical request digest is bound to the owner and created record using the
-  shared idempotency table. Same key, owner, and digest returns the same alert;
+  shared idempotency table. Same key, owner, and digest returns the same alert
+  while that resource exists. After soft deletion, replay returns
+  `idempotency_resource_deleted` and never presents or recreates a deleted row;
   any other reuse returns `idempotency_conflict`.
 - Alert definitions accept only an asset key, allowlisted comparison condition,
   canonical decimal-string threshold, and optional expiry. They remain
