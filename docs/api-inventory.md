@@ -179,19 +179,20 @@ WebSocket, Mainnet, or mutation path has been installed.
 
 ### Perp intent and reconciliation
 
-| Method and path                            | Key contract                                                                                                                                                                                       | Interface     | Capability              |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------- |
-| `POST /v1/perp/intents`                    | UUID `Idempotency-Key`; exact union of `order`, `cancel`, `modify`, `batch_modify`, `update_leverage`, or `update_isolated_margin`; returns server intent ID, immutable review, expiry, `prepared` | `implemented` | `blocked-product-legal` |
-| `POST /v1/perp/intents/{intent_id}/submit` | Owner-bound path ID; no body; checks expiry and the action-specific default-deny gate; no signer or Exchange adapter is composed                                                                   | `implemented` | `blocked-product-legal` |
-| `GET /v1/perp/intents/{intent_id}`         | Owner-bound durable status/reconciliation projection                                                                                                                                               | `implemented` | `blocked-provider`      |
+| Method and path                            | Key contract                                                                                                                                                                                       | Interface     | Capability                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------- |
+| `POST /v1/perp/intents`                    | UUID `Idempotency-Key`; exact union of `order`, `cancel`, `modify`, `batch_modify`, `update_leverage`, or `update_isolated_margin`; returns server intent ID, immutable review, expiry, `prepared` | `implemented` | `blocked-product-legal`                                     |
+| `POST /v1/perp/intents/{intent_id}/submit` | Owner-bound path ID; no body; checks expiry and the action-specific default-deny gate; no signer or Exchange adapter is composed                                                                   | `implemented` | `blocked-product-legal`                                     |
+| `GET /v1/perp/intents/{intent_id}`         | Owner-bound durable status/reconciliation projection                                                                                                                                               | `implemented` | limit-`order` readback default-off; nonempty E2E unverified |
 
 Status is one of `prepared`, `submitting`, `accepted`, `partial`, `filled`,
 `cancelled`, `rejected`, `unknown`, `reconciling`, or `expired`. A repeated
 owner/key/digest returns the same intent; a changed digest or owner conflicts
-before provider work. Client timeout never authorizes resubmission. The later
-provider lifecycle states are reserved by the resource contract, but no submit
-executor, transport journal writer, or Perp domain reconciliation finalizer is
-composed in this phase.
+before provider work. Client timeout never authorizes resubmission. There is no
+submit executor or transport journal writer. A separately enabled worker can
+only consume an already-unknown Core limit `order`, read strict cloid-bound
+Testnet Info evidence, and atomically finalize its generic operation plus Perp
+intent/items. It cannot create or replay that provider write.
 
 The idempotency owner/digest reservation commits before reviewer work. The
 generic operation journal, immutable review, generated cloids, sanitized events,
@@ -203,9 +204,12 @@ authority is resolved again after review latency. The real wallet resolver is
 composed when Privy is configured, but the reviewer remains unavailable, and
 every production submit is denied with `perp_mutation_disabled` before a wallet
 re-resolution, reviewer, signer, SDK, or provider write. Tests may inject review
-fixtures, but no Hyperliquid mutation SDK, executor, or domain lifecycle
-finalizer is installed. Provider timeout and authoritative readback behavior
-remain a mandatory future gate, not a currently implemented claim.
+fixtures, but no Hyperliquid mutation SDK or executor is installed. The
+read-only domain finalizer accepts only exact Core limit-`order` evidence;
+market orders, `modify`, `batch_modify`, `cancel`, `update_leverage`, and
+`update_isolated_margin` are operator-held before provider reads. Nonempty
+Testnet-account conformance and a deployed worker remain mandatory evidence
+gates.
 
 ### Testnet agent authorization
 

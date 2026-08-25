@@ -58,6 +58,70 @@ describe("lossless Hyperliquid Info transport", () => {
     expect(String(result["oid"])).toBe("18446744073709551615");
   });
 
+  it("serializes orderStatus only with a lowercase generated cloid", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(jsonResponse('{"status":"unknownOid"}')),
+    );
+    const transport = createLosslessHyperliquidInfoTransport({ fetch });
+    const clientOrderId = `0x${"ab".repeat(16)}`;
+
+    await transport.post(
+      {
+        type: "orderStatus",
+        user: accountAddress,
+        oid: clientOrderId,
+      },
+      new AbortController().signal,
+      callId,
+    );
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        type: "orderStatus",
+        user: accountAddress,
+        oid: clientOrderId,
+      }),
+    );
+  });
+
+  it.each([
+    ["numeric oid", { type: "orderStatus", user: accountAddress, oid: 1 }],
+    [
+      "decimal-string oid",
+      { type: "orderStatus", user: accountAddress, oid: "1" },
+    ],
+    [
+      "uppercase cloid",
+      {
+        type: "orderStatus",
+        user: accountAddress,
+        oid: `0x${"AB".repeat(16)}`,
+      },
+    ],
+    [
+      "orderStatus dex override",
+      {
+        type: "orderStatus",
+        user: accountAddress,
+        oid: `0x${"ab".repeat(16)}`,
+        dex: "",
+      },
+    ],
+  ])("rejects %s before fetch", async (_label, badRequest) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const transport = createLosslessHyperliquidInfoTransport({ fetch });
+
+    await expect(
+      transport.post(
+        badRequest as unknown as HyperliquidInfoRequest,
+        new AbortController().signal,
+        callId,
+      ),
+    ).rejects.toBeInstanceOf(HyperliquidPrivateReaderUnavailableError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("rejects request keys and authorities outside the allowlist before fetch", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const transport = createLosslessHyperliquidInfoTransport({ fetch });

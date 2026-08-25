@@ -24,7 +24,8 @@ The Privy SDK entry covers the access-token verification boundary approved by
 Decision 0002 and the verified current-user/wallet lookup approved by Decision 0010. It provides no backend signing or wallet execution path. Other provider
 SDKs must be registered with their own reviewed integration change.
 
-Decision 0011 limits `lossless-json` to unauthenticated Hyperliquid Testnet
-Info response parsing. The narrow adapter compiles one Testnet URL; the package
-introduces no configurable provider URL, provider SDK, signer, credentials, or
+Decisions 0011 and 0013 limit `lossless-json` to unauthenticated Hyperliquid
+Testnet Info response parsing for private projections and order reconciliation.
+The narrow adapters compile one Testnet URL; the package introduces no
+configurable provider URL, provider SDK, signer, credentials, replay, or
 mutation capability.

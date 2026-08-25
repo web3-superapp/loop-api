@@ -110,22 +110,39 @@ const environmentSchema = z
     }
   });
 
-const reconciliationWorkerEnvironmentSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]),
-  LOG_LEVEL: z.enum([
-    "fatal",
-    "error",
-    "warn",
-    "info",
-    "debug",
-    "trace",
-    "silent",
-  ]),
-  DATABASE_URL: z.string().trim().min(1),
-  DATABASE_POOL_MAX: positiveIntegerString(1, 50),
-  DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
-  DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
-});
+const reconciliationWorkerEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]),
+    LOG_LEVEL: z.enum([
+      "fatal",
+      "error",
+      "warn",
+      "info",
+      "debug",
+      "trace",
+      "silent",
+    ]),
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED: booleanString,
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
+    DATABASE_URL: z.string().trim().min(1),
+    DATABASE_POOL_MAX: positiveIntegerString(1, 50),
+    DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
+    DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+  })
+  .superRefine((value, context) => {
+    if (
+      value.HYPERLIQUID_RECONCILIATION_READS_ENABLED &&
+      value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Hyperliquid reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
+        path: ["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+      });
+    }
+  });
 
 export interface PrivyConfig {
   readonly appId: string;
@@ -187,6 +204,7 @@ export interface ReconciliationWorkerConfig {
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
+  readonly hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -364,8 +382,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
 
 /**
  * The reconciliation process deliberately has no HTTP or provider credential
- * configuration. Provider readers are enabled only through reviewed code
- * composition, never by accidentally inheriting API-process environment flags.
+ * configuration. Its one read-only provider capability has a separate,
+ * default-off switch and never inherits the API process's private-read flag.
  */
 export function loadReconciliationWorkerConfig(
   environment: NodeJS.ProcessEnv,
@@ -373,6 +391,12 @@ export function loadReconciliationWorkerConfig(
   const parsed = reconciliationWorkerEnvironmentSchema.safeParse({
     NODE_ENV: environment["NODE_ENV"] ?? "development",
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED:
+      environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
+      environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
+      environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -390,6 +414,22 @@ export function loadReconciliationWorkerConfig(
 
   const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
   assertDatabaseUrl(databaseUrl);
+  let hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null =
+    null;
+  if (parsed.data.HYPERLIQUID_RECONCILIATION_READS_ENABLED) {
+    const quotaHmacSecret = parsed.data.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET;
+    if (quotaHmacSecret === undefined) {
+      throw new ConfigurationError([
+        "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: required when reconciliation reads are enabled",
+      ]);
+    }
+    hyperliquidReconciliationReads = Object.freeze({
+      quotaHmacSecret,
+      policyVersion: "hyperliquid_info_v1",
+      windowDurationSeconds: 60,
+      weightCapacity: parsed.data.HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE,
+    });
+  }
 
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
@@ -398,6 +438,7 @@ export function loadReconciliationWorkerConfig(
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    hyperliquidReconciliationReads,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

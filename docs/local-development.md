@@ -118,14 +118,32 @@ For the compiled local entry point, use `pnpm build` followed by
 `pnpm worker:start:local`. A deployed environment uses `pnpm worker:start` or
 the `worker` Docker target and injects its database settings externally.
 
-This process reads only `NODE_ENV`, `LOG_LEVEL`, and `DATABASE_*`. It does not
-load Privy, Stream, Hyperliquid, transfer, signing, or relay configuration. The
-production reader registry is intentionally empty, so the current process
-makes no provider call and cannot complete real Perp or transfer work. It can
-quarantine an expired submission and conservatively park an unknown due
-operation as `operator_required`; it never submits or replays provider bytes.
+By default this process reads its database and logging settings and makes no
+provider call. To enable the narrow Testnet order reader, add all three values
+to ignored `.env.local`:
+
+```text
+HYPERLIQUID_RECONCILIATION_READS_ENABLED=true
+HYPERLIQUID_INFO_QUOTA_HMAC_SECRET=<independent-secret-at-least-32-characters>
+HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE=960
+```
+
+The switch is independent from the HTTP process's
+`HYPERLIQUID_PRIVATE_READS_ENABLED`. An enabled worker with a missing or weak
+quota secret fails at startup. When API and worker share an outbound IP, every
+replica must share this quota secret, capacity, policy, and PostgreSQL database
+so the 960-weight global budget remains one bucket. The adapter is fixed to
+Hyperliquid Testnet and may only read `orderStatus`, open orders, bounded fills,
+and clearinghouse state. It can atomically finalize a strictly matching Core
+limit `order`; market orders, modify, batch-modify, cancel, leverage,
+isolated-margin, unknown domains, and ambiguous evidence are parked as
+`operator_required`. It never loads a Privy credential, wallet key, signer,
+Exchange adapter, transfer executor, or relay, and it never submits or replays
+provider bytes.
+
 With no due control-plane work, it stays idle until `SIGINT` or `SIGTERM` and
-then closes PostgreSQL cleanly.
+then closes PostgreSQL cleanly. A real nonempty Testnet account and deployed
+worker remain unverified.
 
 ## Physical phone on a trusted LAN
 

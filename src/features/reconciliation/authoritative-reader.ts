@@ -65,29 +65,115 @@ export type AuthoritativeResultReader = (
   input: AuthoritativeReadInput,
 ) => Promise<AuthoritativeReadResult>;
 
+export interface AtomicDomainLeaseIdentity {
+  readonly workerId: string;
+  readonly fenceToken: string;
+  readonly recordVersion: string;
+  readonly attemptCommittedAt: string | null;
+}
+
+export interface AtomicDomainReconciliationInput extends AuthoritativeReadInput {
+  readonly finalizationRequestId: string;
+  readonly lease: AtomicDomainLeaseIdentity;
+}
+
+/**
+ * An atomic-domain handler owns both the authoritative provider read and the
+ * domain transaction. Returning `resolved` certifies that the domain and
+ * generic provider operation were finalized together; the generic service
+ * must not perform a second completion write. The handler must call
+ * `input.signal.throwIfAborted()` after its provider read and immediately
+ * before it enters the database finalizer.
+ */
+export type AtomicDomainReconciliationHandler = (
+  input: AtomicDomainReconciliationInput,
+) => Promise<AuthoritativeReadResult>;
+
+export type AuthoritativeReconciliationHandler =
+  | Readonly<{
+      mode: "generic_control_plane";
+      read: AuthoritativeResultReader;
+    }>
+  | Readonly<{
+      mode: "atomic_domain";
+      run: AtomicDomainReconciliationHandler;
+    }>;
+
+export type AuthoritativeReaderRegistryEntry =
+  AuthoritativeResultReader | AuthoritativeReconciliationHandler;
+
 export interface AuthoritativeReaderRegistry {
-  find(domain: string): AuthoritativeResultReader | undefined;
+  find(domain: string): AuthoritativeReconciliationHandler | undefined;
 }
 
 export function createAuthoritativeReaderRegistry(
-  entries: ReadonlyArray<readonly [string, AuthoritativeResultReader]>,
+  entries: ReadonlyArray<readonly [string, AuthoritativeReaderRegistryEntry]>,
 ): AuthoritativeReaderRegistry {
-  const readers = new Map<string, AuthoritativeResultReader>();
+  const handlers = new Map<string, AuthoritativeReconciliationHandler>();
 
-  for (const [domain, reader] of entries) {
+  for (const [domain, entry] of entries) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(domain)) {
       throw new Error("Authoritative reader domain is invalid");
     }
-    if (readers.has(domain)) {
+    if (handlers.has(domain)) {
       throw new Error("Authoritative reader domain is duplicated");
     }
 
-    readers.set(domain, reader);
+    const rawEntry: unknown = entry;
+    if (typeof rawEntry === "function") {
+      handlers.set(
+        domain,
+        Object.freeze({
+          mode: "generic_control_plane",
+          read: rawEntry as AuthoritativeResultReader,
+        }),
+      );
+      continue;
+    }
+
+    if (
+      typeof rawEntry !== "object" ||
+      rawEntry === null ||
+      Array.isArray(rawEntry)
+    ) {
+      throw new Error("Authoritative reader handler is invalid");
+    }
+    const handler = rawEntry as Record<string, unknown>;
+
+    if (
+      handler["mode"] === "generic_control_plane" &&
+      typeof handler["read"] === "function"
+    ) {
+      handlers.set(
+        domain,
+        Object.freeze({
+          mode: "generic_control_plane",
+          read: handler["read"] as AuthoritativeResultReader,
+        }),
+      );
+      continue;
+    }
+
+    if (
+      handler["mode"] === "atomic_domain" &&
+      typeof handler["run"] === "function"
+    ) {
+      handlers.set(
+        domain,
+        Object.freeze({
+          mode: "atomic_domain",
+          run: handler["run"] as AtomicDomainReconciliationHandler,
+        }),
+      );
+      continue;
+    }
+
+    throw new Error("Authoritative reader handler is invalid");
   }
 
   return Object.freeze({
-    find(domain: string): AuthoritativeResultReader | undefined {
-      return readers.get(domain);
+    find(domain: string): AuthoritativeReconciliationHandler | undefined {
+      return handlers.get(domain);
     },
   });
 }

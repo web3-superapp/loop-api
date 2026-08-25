@@ -5,6 +5,7 @@ import type {
   InternalUser,
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
+import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import {
   createPostgresAlertRepository,
   type AlertRepository,
@@ -21,6 +22,7 @@ import {
   createPostgresPerpIntentRepository,
   type PerpIntentRepository,
 } from "./perp-intent-repository.js";
+import { createPostgresPerpReconciliationRepository } from "./perp-reconciliation-repository.js";
 import {
   createPostgresPerpWalletBindingRepository,
   type PerpWalletBindingRepository,
@@ -50,6 +52,10 @@ export interface Database {
   readonly alerts: AlertRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface PostgresDatabase extends Database {
+  readonly perpReconciliation: PerpReconciliationRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -83,7 +89,7 @@ function safePostgresErrorCode(error: unknown): string {
 export function createPostgresDatabase(
   config: PostgresDatabaseConfig,
   logger: PostgresDatabaseLogger,
-): Database {
+): PostgresDatabase {
   const pool = new Pool({
     application_name: config.serviceName,
     connectionString: config.databaseUrl,
@@ -149,6 +155,7 @@ export function createPostgresDatabase(
   const controlPlane = createPostgresControlPlaneRepository(pool);
   const perpWalletBindings = createPostgresPerpWalletBindingRepository(pool);
   const perpIntents = createPostgresPerpIntentRepository(pool);
+  const perpReconciliation = createPostgresPerpReconciliationRepository(pool);
   const agentAuthorizations = createPostgresAgentAuthorizationRepository(pool);
   const profiles = createPostgresProfileRepository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
@@ -159,6 +166,7 @@ export function createPostgresDatabase(
     controlPlane,
     perpWalletBindings,
     perpIntents,
+    perpReconciliation,
     agentAuthorizations,
     profiles,
     watchlists,

@@ -10,9 +10,9 @@ import {
 } from "./features/reconciliation/reconciliation-service.js";
 
 /**
- * Provider-specific authoritative readers are added only after their separate
- * dependency, credential, and conformance gates close. The current production
- * worker therefore has no provider capability.
+ * Safe library default for tests and direct callers. The process runtime owns
+ * the reviewed, configuration-gated production composition and passes it
+ * explicitly; absence of that composition always means no provider capability.
  */
 export const productionAuthoritativeReaders = createAuthoritativeReaderRegistry(
   [],

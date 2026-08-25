@@ -4,7 +4,10 @@ import {
   type PostgresDatabaseConfig,
   type PostgresDatabaseLogger,
 } from "./database/database.js";
+import type { ControlPlaneRepository } from "./database/control-plane-repository.js";
+import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
+import { createReconciliationWorkerReaders } from "./reconciliation-worker-readers.js";
 import type {
   ReconciliationWorkerLogFields,
   ReconciliationWorkerLogger,
@@ -23,7 +26,9 @@ export interface WorkerSignalSource {
 }
 
 export interface ReconciliationWorkerDatabase {
-  readonly controlPlane: ReconciliationControlPlane;
+  readonly controlPlane: ReconciliationControlPlane &
+    Pick<ControlPlaneRepository, "consumeIssuanceQuota">;
+  readonly perpReconciliation: PerpReconciliationRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -105,6 +110,10 @@ export async function runReconciliationWorker(
 
     const worker = workerFactory({
       controlPlane: database.controlPlane,
+      readers: createReconciliationWorkerReaders({
+        config: options.config,
+        database,
+      }),
       onInfrastructureBackoff: (event) => {
         options.logger.warn(
           { ...logFields(), ...event },

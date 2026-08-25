@@ -12,6 +12,7 @@ export const HYPERLIQUID_INFO_DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const maximumConfiguredResponseBytes = 8 * 1024 * 1024;
 const addressPattern = /^0x[0-9a-f]{40}$/;
 const zeroAddress = `0x${"0".repeat(40)}`;
+const clientOrderIdPattern = /^0x[0-9a-f]{32}$/;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -47,6 +48,12 @@ interface FundingRequest {
   readonly endTime: number;
 }
 
+interface OrderStatusByClientOrderIdRequest {
+  readonly type: "orderStatus";
+  readonly user: string;
+  readonly oid: string;
+}
+
 interface BodyReadResult {
   readonly done: boolean;
   readonly value?: Uint8Array;
@@ -59,7 +66,12 @@ interface BodyReader {
 }
 
 export type HyperliquidInfoRequest =
-  MetaRequest | AccountRequest | OrdersRequest | FillsRequest | FundingRequest;
+  | MetaRequest
+  | AccountRequest
+  | OrdersRequest
+  | FillsRequest
+  | FundingRequest
+  | OrderStatusByClientOrderIdRequest;
 
 export interface HyperliquidLosslessInfoTransport {
   post(
@@ -199,6 +211,20 @@ function serializeRequest(value: HyperliquidInfoRequest): string {
         user: rawValue["user"],
         startTime: rawValue["startTime"],
         endTime: rawValue["endTime"],
+      });
+    case "orderStatus":
+      if (
+        !hasExactDataProperties(rawValue, ["type", "user", "oid"]) ||
+        !isValidUser(rawValue["user"]) ||
+        typeof rawValue["oid"] !== "string" ||
+        !clientOrderIdPattern.test(rawValue["oid"])
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "orderStatus",
+        user: rawValue["user"],
+        oid: rawValue["oid"],
       });
     default:
       return unavailable();

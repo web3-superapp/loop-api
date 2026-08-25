@@ -55,8 +55,9 @@ implemented as independently verified slices:
   multi-subject issuance quotas, and stale-submission quarantine
 - a standalone reconciliation worker process whose provider boundary supports
   authoritative reads only, with fenced leases, bounded retries, operator hold,
-  abort-safe shutdown, and an independently buildable image; its production
-  reader registry is empty and the process is not deployed
+  abort-safe shutdown, and an independently buildable image; a default-off
+  fixed-Testnet limit-order reader can atomically finalize generic and Perp
+  state, while market orders and every other Perp action remain operator-held
 - a committed, deterministic OpenAPI artifact with a drift check
 - unit, contract, worker, and PostgreSQL integration gates; a high-confidence
   tracked-secret guard; linting; type checking; production compilation; and
@@ -82,8 +83,12 @@ alert records are local PostgreSQL capabilities, but there is no price
 evaluator or scheduler, Firebase device-token/delivery path, notification
 inbox, or social graph.
 
-The standalone worker is operational infrastructure only: it has no provider
-reader, signer, executor, replay path, or Perp/transfer domain finalizer.
+The standalone worker remains read-only operational infrastructure. Its
+Hyperliquid limit-order reconciliation capability is default-off and has not
+passed a nonempty Testnet-account conformance or deployment gate. It has no
+signer, executor, replay path, transfer finalizer, or mutation capability;
+market orders, modify, batch-modify, cancel, leverage, and isolated-margin
+reconciliation remain operator-held.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -115,6 +120,9 @@ and the lossless fixed-Testnet private reader and weighted quota are recorded in
 [`docs/decisions/0011-lossless-hyperliquid-private-reader.md`](docs/decisions/0011-lossless-hyperliquid-private-reader.md).
 The separate, empty-reader reconciliation process boundary is recorded in
 [`docs/decisions/0012-standalone-reconciliation-worker.md`](docs/decisions/0012-standalone-reconciliation-worker.md).
+The default-off, limit-order-only Testnet authoritative reader and atomic Perp
+finalizer are recorded in
+[`docs/decisions/0013-testnet-perp-order-authoritative-reconciliation.md`](docs/decisions/0013-testnet-perp-order-authoritative-reconciliation.md).
 
 ## Quick start
 
@@ -134,10 +142,12 @@ pnpm dev
 ```
 
 In a separate terminal, the independently runnable control-plane worker can be
-started with `pnpm worker:dev`. It reads only the database and logging values
-from `.env.local`. Because its production authoritative-reader registry is
-empty, it makes no provider request; normally it remains idle, and any due
-unknown domain is parked for an operator instead of guessed or replayed.
+started with `pnpm worker:dev`. With its default configuration it makes no
+provider request; normally it remains idle, and any due unsupported domain or
+action is parked for an operator instead of guessed or replayed. Explicitly
+setting `HYPERLIQUID_RECONCILIATION_READS_ENABLED=true` plus the independent
+quota secret enables only the fixed-Testnet, read-only limit-order evidence
+path. No setting enables submission or replay.
 
 The safe default listens on `http://127.0.0.1:3000` only.
 

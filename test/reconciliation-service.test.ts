@@ -7,6 +7,7 @@ import {
 } from "../src/database/control-plane-repository.js";
 import {
   createAuthoritativeReaderRegistry,
+  type AtomicDomainReconciliationHandler,
   type AuthoritativeResultReader,
 } from "../src/features/reconciliation/authoritative-reader.js";
 import {
@@ -123,6 +124,22 @@ function serviceFor(
   return { service, uuids };
 }
 
+function serviceForAtomic(
+  controlPlane: ReconciliationControlPlane,
+  handler: AtomicDomainReconciliationHandler,
+) {
+  const uuids = uuidSequence();
+  const service = createReconciliationService({
+    controlPlane,
+    readers: createAuthoritativeReaderRegistry([
+      ["perp", { mode: "atomic_domain", run: handler }],
+    ]),
+    workerId,
+    createUuid: () => uuids.createUuid(),
+  });
+  return { service, uuids };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -216,6 +233,290 @@ describe("authoritative reconciliation service", () => {
       requestId: uuids.created[3],
       state: "succeeded",
     });
+  });
+
+  it("preserves direct-call this semantics for the legacy reader shorthand", async () => {
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    let receivedUndefinedThis = false;
+    const reader: AuthoritativeResultReader = function (
+      this: unknown,
+      { signal },
+    ) {
+      signal.throwIfAborted();
+      receivedUndefinedThis = this === undefined;
+      return Promise.resolve({ kind: "pending" });
+    };
+    const { service } = serviceFor(controlPlane, reader);
+
+    await expect(service.runOnce()).resolves.toMatchObject({
+      kind: "rescheduled",
+      operationId,
+    });
+    expect(receivedUndefinedThis).toBe(true);
+  });
+
+  it("lets an atomic-domain handler own the sole resolved completion", async () => {
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(() =>
+      Promise.resolve({ kind: "resolved", state: "succeeded" }),
+    );
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["perp", { mode: "atomic_domain", run: handler }],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    await expect(service.runOnce()).resolves.toEqual({
+      kind: "resolved",
+      operationId,
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    const handlerInput = handler.mock.calls[0]?.[0];
+    expect(handlerInput).toMatchObject({
+      readRequestId: uuids.created[2],
+      finalizationRequestId: uuids.created[3],
+      subject: {
+        operationId,
+        ownerUserId,
+        domain: "perp",
+        operationKind: "order",
+        transportAttemptId,
+      },
+      lease: {
+        workerId,
+        fenceToken: "1",
+        recordVersion: "4",
+        attemptCommittedAt: "2026-08-24T12:00:00.000Z",
+      },
+    });
+    expect(handlerInput?.signal).toBeInstanceOf(AbortSignal);
+    expect(new Set(uuids.created).size).toBe(uuids.created.length);
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.holdProviderOperationForOperator,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("uses the generic control plane for an unresolved atomic-domain result", async () => {
+    const operation = leasedOperation({ reconciliationAttemptCount: 2 });
+    const controlPlane = fakeControlPlane(operation);
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(() =>
+      Promise.resolve({ kind: "pending" }),
+    );
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["perp", { mode: "atomic_domain", run: handler }],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    await expect(service.runOnce()).resolves.toEqual({
+      kind: "rescheduled",
+      operationId,
+      retryDelayMs: 10_000,
+    });
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: uuids.created[4],
+        reasonCode: "authoritative_result_pending",
+        retryDelayMs: 10_000,
+      }),
+    );
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("discards an atomic finalizer stale lease without any fallback write", async () => {
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(() =>
+      Promise.reject(new StaleProviderOperationLeaseError()),
+    );
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["perp", { mode: "atomic_domain", run: handler }],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    await expect(service.runOnce()).resolves.toEqual({
+      kind: "stale_lease_discarded",
+      operationId,
+    });
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.holdProviderOperationForOperator,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("awaits an in-flight atomic finalizer across the read deadline", async () => {
+    vi.useFakeTimers();
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    let finishFinalizer: (() => void) | undefined;
+    let handlerSignal: AbortSignal | undefined;
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(({ signal }) => {
+      // This models the required boundary immediately before the handler
+      // enters its domain transaction.
+      signal.throwIfAborted();
+      handlerSignal = signal;
+      return new Promise((resolve) => {
+        finishFinalizer = () => {
+          resolve({ kind: "resolved", state: "succeeded" });
+        };
+      });
+    });
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["perp", { mode: "atomic_domain", run: handler }],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    const run = service.runOnce();
+    const settled = vi.fn();
+    void run.then(settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handlerSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(RECONCILIATION_READ_DEADLINE_MS);
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(settled).not.toHaveBeenCalled();
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.holdProviderOperationForOperator,
+    ).not.toHaveBeenCalled();
+
+    if (finishFinalizer === undefined) {
+      throw new Error("The atomic finalizer did not start");
+    }
+    finishFinalizer();
+    await expect(run).resolves.toEqual({ kind: "resolved", operationId });
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.holdProviderOperationForOperator,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("maps an atomic provider-stage abort to the deadline policy", async () => {
+    vi.useFakeTimers();
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("authoritative read aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const { service } = serviceForAtomic(controlPlane, handler);
+
+    const run = service.runOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(RECONCILIATION_READ_DEADLINE_MS);
+
+    await expect(run).resolves.toEqual({
+      kind: "rescheduled",
+      operationId,
+      retryDelayMs: 5_000,
+    });
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCode: "authoritative_read_timeout" }),
+    );
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("does not apply an unresolved atomic result that settles after deadline", async () => {
+    vi.useFakeTimers();
+    const operation = leasedOperation();
+    const controlPlane = fakeControlPlane(operation);
+    const handler = vi.fn<AtomicDomainReconciliationHandler>(
+      ({ signal }) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              resolve({
+                kind: "operator_required",
+                reasonCode: "late_provider_result",
+              });
+            },
+            { once: true },
+          );
+        }),
+    );
+    const { service } = serviceForAtomic(controlPlane, handler);
+
+    const run = service.runOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(RECONCILIATION_READ_DEADLINE_MS);
+
+    await expect(run).resolves.toEqual({
+      kind: "rescheduled",
+      operationId,
+      retryDelayMs: 5_000,
+    });
+    expect(
+      controlPlane.rescheduleProviderOperationReconciliation,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCode: "authoritative_read_timeout" }),
+    );
+    expect(
+      controlPlane.holdProviderOperationForOperator,
+    ).not.toHaveBeenCalled();
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).not.toHaveBeenCalled();
   });
 
   it("reschedules a pending result once without reading again", async () => {

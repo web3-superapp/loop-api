@@ -27,9 +27,12 @@ Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
 
 The generic reconciliation loop now has a separate process entry point and
-runtime image, but its production authoritative-reader registry is empty. It
-has no provider writer, replay path, or Perp/transfer domain finalizer and is not
-deployed; process operability is not provider-integration evidence.
+runtime image. Its default-off fixed-Testnet capability can reconcile only a
+Core limit `order` through strict cloid-bound Info evidence and atomically
+finalize generic plus Perp records. Market orders and unsupported Perp actions
+are operator-held before a provider call. The worker has no provider writer,
+replay path, transfer finalizer, or deployment; read-only process operability is
+not provider-integration evidence.
 
 ## Identity model
 

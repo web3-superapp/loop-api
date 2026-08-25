@@ -7,10 +7,9 @@ import {
 } from "../../database/control-plane-repository.js";
 import {
   parseAuthoritativeReadResult,
+  type AuthoritativeReconciliationHandler,
   type AuthoritativeReaderRegistry,
-  type AuthoritativeReadInput,
   type AuthoritativeReadResult,
-  type AuthoritativeResultReader,
 } from "./authoritative-reader.js";
 
 export const RECONCILIATION_READ_DEADLINE_MS = 5_000;
@@ -103,8 +102,7 @@ function retryDelayMs(
 }
 
 async function readWithDeadline(
-  reader: AuthoritativeResultReader,
-  input: Omit<AuthoritativeReadInput, "signal">,
+  invoke: (signal: AbortSignal) => Promise<unknown>,
   externalSignal?: AbortSignal,
 ): Promise<AuthoritativeReadResult | null> {
   if (isAborted(externalSignal)) {
@@ -140,12 +138,7 @@ async function readWithDeadline(
 
   try {
     const rawResult = await Promise.race([
-      Promise.resolve().then(() =>
-        reader({
-          ...input,
-          signal,
-        }),
-      ),
+      Promise.resolve().then(() => invoke(signal)),
       aborted,
     ]);
     return parseAuthoritativeReadResult(rawResult);
@@ -153,6 +146,65 @@ async function readWithDeadline(
     if (onAbort !== undefined) {
       signal.removeEventListener("abort", onAbort);
     }
+    clearTimeout(deadlineTimer);
+  }
+}
+
+async function atomicRunWithDeadline(
+  invoke: (signal: AbortSignal) => Promise<unknown>,
+  externalSignal?: AbortSignal,
+): Promise<AuthoritativeReadResult | null> {
+  if (isAborted(externalSignal)) {
+    throw new ReconciliationRunAbortedError();
+  }
+
+  const deadlineController = new AbortController();
+  const signal =
+    externalSignal === undefined
+      ? deadlineController.signal
+      : AbortSignal.any([externalSignal, deadlineController.signal]);
+  let abortKind: "deadline" | "external" | undefined;
+  const onExternalAbort = (): void => {
+    abortKind ??= "external";
+  };
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (externalSignal?.aborted === true) {
+    onExternalAbort();
+  }
+  const deadlineTimer = setTimeout(() => {
+    abortKind ??= "deadline";
+    deadlineController.abort(new AuthoritativeReadDeadlineError());
+  }, RECONCILIATION_READ_DEADLINE_MS);
+
+  try {
+    // Unlike the generic reader, an atomic handler may already be inside its
+    // database finalizer when the timer fires. Abort its signal but always
+    // await settlement so no generic transition can race that transaction.
+    const rawResult = await Promise.resolve().then(() => invoke(signal));
+    const result = parseAuthoritativeReadResult(rawResult);
+    if (result?.kind === "resolved") {
+      return result;
+    }
+    if (abortKind === "external") {
+      throw new ReconciliationRunAbortedError();
+    }
+    if (abortKind === "deadline") {
+      throw new AuthoritativeReadDeadlineError();
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof StaleProviderOperationLeaseError) {
+      throw error;
+    }
+    if (abortKind === "external") {
+      throw new ReconciliationRunAbortedError();
+    }
+    if (abortKind === "deadline") {
+      throw new AuthoritativeReadDeadlineError();
+    }
+    throw error;
+  } finally {
+    externalSignal?.removeEventListener("abort", onExternalAbort);
     clearTimeout(deadlineTimer);
   }
 }
@@ -254,6 +306,7 @@ export function createReconciliationService(
   async function applyReadResult(
     operation: ProviderOperation,
     result: AuthoritativeReadResult | null,
+    mode: AuthoritativeReconciliationHandler["mode"],
   ): Promise<ReconciliationRunResult> {
     if (result === null) {
       return holdForOperator(
@@ -276,6 +329,10 @@ export function createReconciliationService(
 
     if (result.kind === "retry") {
       return reschedule(operation, result.reasonCode, result.retryAfterMs);
+    }
+
+    if (mode === "atomic_domain") {
+      return Object.freeze({ kind: "resolved", operationId: operation.id });
     }
 
     return discardStaleLease(
@@ -331,9 +388,9 @@ export function createReconciliationService(
         return Object.freeze({ kind: "idle" });
       }
 
-      const reader = options.readers.find(operation.domain);
+      const handler = options.readers.find(operation.domain);
 
-      if (reader === undefined) {
+      if (handler === undefined) {
         return holdForOperator(operation, reconciliationReasons.unknownDomain);
       }
 
@@ -347,22 +404,52 @@ export function createReconciliationService(
       }
 
       try {
-        const result = await readWithDeadline(
-          reader,
-          {
-            readRequestId: createUuid(),
-            subject: Object.freeze({
-              operationId: operation.id,
-              ownerUserId: operation.ownerUserId,
-              domain: operation.domain,
-              operationKind: operation.operationKind,
-              transportAttemptId: operation.transportAttemptId,
-            }),
-          },
-          signal,
-        );
-        return applyReadResult(operation, result);
+        const readRequestId = createUuid();
+        const subject = Object.freeze({
+          operationId: operation.id,
+          ownerUserId: operation.ownerUserId,
+          domain: operation.domain,
+          operationKind: operation.operationKind,
+          transportAttemptId: operation.transportAttemptId,
+        });
+        const result =
+          handler.mode === "generic_control_plane"
+            ? await readWithDeadline((readSignal) => {
+                const read = handler.read;
+                return read({
+                  readRequestId,
+                  subject,
+                  signal: readSignal,
+                });
+              }, signal)
+            : await atomicRunWithDeadline(
+                (readSignal) =>
+                  handler.run({
+                    readRequestId,
+                    finalizationRequestId: createUuid(),
+                    subject,
+                    lease: Object.freeze({
+                      workerId,
+                      fenceToken: operation.fenceToken,
+                      recordVersion: operation.recordVersion,
+                      attemptCommittedAt: operation.attemptCommittedAt,
+                    }),
+                    signal: readSignal,
+                  }),
+                signal,
+              );
+        return applyReadResult(operation, result, handler.mode);
       } catch (error) {
+        if (
+          handler.mode === "atomic_domain" &&
+          error instanceof StaleProviderOperationLeaseError
+        ) {
+          return Object.freeze({
+            kind: "stale_lease_discarded",
+            operationId: operation.id,
+          });
+        }
+
         if (error instanceof ReconciliationRunAbortedError) {
           // The combined signal stopped the read. Do not persist a provider
           // outcome; lease expiry safely returns the operation to the queue.

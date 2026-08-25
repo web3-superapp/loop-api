@@ -189,6 +189,7 @@ function harness(options: HarnessOptions = {}) {
     frontendOpenOrders: raw("[]"),
     userFillsByTime: raw("[]"),
     userFunding: raw("[]"),
+    orderStatus: raw('{"status":"unknownOid"}'),
   };
   const post = vi.fn<HyperliquidLosslessInfoTransport["post"]>(
     (request, signal) => {

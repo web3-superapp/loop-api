@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { loadReconciliationWorkerConfig } from "../src/config.js";
-import type { ReconciliationControlPlane } from "../src/features/reconciliation/reconciliation-service.js";
+import type { PerpReconciliationRepository } from "../src/features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationWorkerLogger } from "../src/reconciliation-worker-logger.js";
 import type { ReconciliationWorker } from "../src/worker.js";
 import {
@@ -17,12 +17,18 @@ interface TestSignalSource extends WorkerSignalSource {
   readonly emit: (signal: WorkerShutdownSignal) => void;
 }
 
-function workerConfig() {
+function workerConfig(reconciliationReadsEnabled = false) {
   return loadReconciliationWorkerConfig({
     NODE_ENV: "test",
     LOG_LEVEL: "silent",
     DATABASE_URL:
       "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED: reconciliationReadsEnabled
+      ? "true"
+      : "false",
+    ...(reconciliationReadsEnabled
+      ? { HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: "q".repeat(32) }
+      : {}),
   });
 }
 
@@ -61,7 +67,8 @@ function fakeSignalSource(): TestSignalSource {
 
 function fakeDatabase(events: string[]): ReconciliationWorkerDatabase {
   return {
-    controlPlane: {} as ReconciliationControlPlane,
+    controlPlane: {} as ReconciliationWorkerDatabase["controlPlane"],
+    perpReconciliation: {} as PerpReconciliationRepository,
     ping: vi.fn(() => {
       events.push("ping");
       return Promise.resolve();
@@ -112,6 +119,28 @@ describe("reconciliation worker runtime", () => {
       { workerId },
       "LOOP reconciliation worker stopped",
     );
+  });
+
+  it("passes the explicit atomic Hyperliquid registry only when enabled", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+
+    await runReconciliationWorker({
+      config: workerConfig(true),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: (options) => {
+        const handler = options.readers?.find("hyperliquid");
+        expect(handler?.mode).toBe("atomic_domain");
+        expect(
+          handler?.mode === "atomic_domain" ? typeof handler.run : "missing",
+        ).toBe("function");
+        return fakeWorker(vi.fn(() => Promise.resolve()));
+      },
+    });
+
+    expect(events).toEqual(["ping", "close"]);
   });
 
   it("handles repeated shutdown signals once and closes after abort", async () => {
