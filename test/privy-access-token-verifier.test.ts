@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   createPrivyAccessTokenVerifier,
+  createPrivyAccessTokenVerifierWithClient,
   InvalidAccessTokenError,
 } from "../src/integrations/privy/access-token-verifier.js";
+import { createPrivyServerClient } from "../src/integrations/privy/client.js";
 
 const appId = "app_test_privy";
 const keyPair = generateKeyPairSync("ec", { namedCurve: "P-256" });
@@ -98,5 +100,21 @@ describe("Privy access-token verifier", () => {
         sharedVerifier.verifyAccessToken(createToken()),
       ]),
     ).resolves.toHaveLength(2);
+  });
+
+  it("accepts the process-scoped Privy client used by other server adapters", async () => {
+    const options = {
+      appId,
+      appSecret: "synthetic-test-secret",
+      jwtVerificationKey: verificationKey,
+    };
+    const client = createPrivyServerClient(options);
+
+    await expect(
+      createPrivyAccessTokenVerifierWithClient(
+        options,
+        client,
+      ).verifyAccessToken(createToken()),
+    ).resolves.toEqual({ privyUserId: "did:privy:test-user" });
   });
 });

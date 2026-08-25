@@ -1,9 +1,10 @@
 import {
   InvalidAuthTokenError as PrivyInvalidAuthTokenError,
-  PrivyClient,
+  type PrivyClient,
 } from "@privy-io/node";
 
 import type { PrivyConfig } from "../../config.js";
+import { createPrivyServerClient } from "./client.js";
 
 const privyIssuer = "privy.io";
 const maximumPrivyUserIdLength = 255;
@@ -34,17 +35,10 @@ interface PrivyVerifierOptions extends PrivyConfig {
   readonly jwtVerificationKey?: string;
 }
 
-export function createPrivyAccessTokenVerifier(
+export function createPrivyAccessTokenVerifierWithClient(
   options: PrivyVerifierOptions,
+  client: Pick<PrivyClient, "utils">,
 ): PrivyAccessTokenVerifier {
-  const client = new PrivyClient({
-    appId: options.appId,
-    appSecret: options.appSecret,
-    ...(options.jwtVerificationKey === undefined
-      ? {}
-      : { jwtVerificationKey: options.jwtVerificationKey }),
-  });
-
   return {
     async verifyAccessToken(
       accessToken: string,
@@ -76,6 +70,13 @@ export function createPrivyAccessTokenVerifier(
       return Object.freeze({ privyUserId });
     },
   };
+}
+
+export function createPrivyAccessTokenVerifier(
+  options: PrivyVerifierOptions,
+): PrivyAccessTokenVerifier {
+  const client = createPrivyServerClient(options);
+  return createPrivyAccessTokenVerifierWithClient(options, client);
 }
 
 export function createUnavailablePrivyAccessTokenVerifier(): PrivyAccessTokenVerifier {
