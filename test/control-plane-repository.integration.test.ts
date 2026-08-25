@@ -274,7 +274,7 @@ describe("PostgreSQL control-plane repository", () => {
         recordVersion: firstLease?.recordVersion ?? "",
         requestId: randomUUID(),
         reasonCode: "provider_pending",
-        retryDelayMs: 1_000,
+        retryDelayMs: 60_000,
       });
     expect(rescheduled).toMatchObject({
       reconciliationStatus: "pending",
@@ -284,6 +284,15 @@ describe("PostgreSQL control-plane repository", () => {
       recordVersion: "4",
       fenceToken: "1",
     });
+
+    await expect(
+      database.controlPlane.leaseProviderOperationsForReconciliation({
+        workerId: randomUUID(),
+        requestId: randomUUID(),
+        limit: 1,
+        leaseDurationMs: 30_000,
+      }),
+    ).resolves.toEqual([]);
 
     await inspectionPool.query({
       text: `

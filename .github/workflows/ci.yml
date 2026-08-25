@@ -83,3 +83,6 @@ jobs:
 
       - name: Build runtime image
         run: pnpm docker:build:runtime
+
+      - name: Build reconciliation worker image
+        run: pnpm docker:build:worker

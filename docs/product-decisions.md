@@ -26,6 +26,11 @@ evidence, or private trading mutation path. Stream remains `blocked-provider`;
 Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
 
+The generic reconciliation loop now has a separate process entry point and
+runtime image, but its production authoritative-reader registry is empty. It
+has no provider writer, replay path, or Perp/transfer domain finalizer and is not
+deployed; process operability is not provider-integration evidence.
+
 ## Identity model
 
 The durable LOOP account key is a random, opaque internal user ID. Stream user

@@ -53,13 +53,14 @@ implemented as independently verified slices:
 - a durable provider-operation control plane with scope-wide idempotency,
   one-attempt write journals, versioned append-only audit events, atomic
   multi-subject issuance quotas, and stale-submission quarantine
-- a generic reconciliation worker library shell whose provider boundary supports
+- a standalone reconciliation worker process whose provider boundary supports
   authoritative reads only, with fenced leases, bounded retries, operator hold,
-  and abort-safe shutdown; it is not yet composed as a deployed worker process
+  abort-safe shutdown, and an independently buildable image; its production
+  reader registry is empty and the process is not deployed
 - a committed, deterministic OpenAPI artifact with a drift check
 - unit, contract, worker, and PostgreSQL integration gates; a high-confidence
   tracked-secret guard; linting; type checking; production compilation; and
-  separate migration/runtime image builds
+  separate migration/API-runtime/worker image builds
 
 This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
@@ -80,6 +81,9 @@ themselves prove a live provider integration. Profile/Watchlist and inactive
 alert records are local PostgreSQL capabilities, but there is no price
 evaluator or scheduler, Firebase device-token/delivery path, notification
 inbox, or social graph.
+
+The standalone worker is operational infrastructure only: it has no provider
+reader, signer, executor, replay path, or Perp/transfer domain finalizer.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -109,6 +113,8 @@ The durable Privy wallet-binding lifecycle is recorded in
 [`docs/decisions/0010-perp-wallet-binding-lifecycle.md`](docs/decisions/0010-perp-wallet-binding-lifecycle.md),
 and the lossless fixed-Testnet private reader and weighted quota are recorded in
 [`docs/decisions/0011-lossless-hyperliquid-private-reader.md`](docs/decisions/0011-lossless-hyperliquid-private-reader.md).
+The separate, empty-reader reconciliation process boundary is recorded in
+[`docs/decisions/0012-standalone-reconciliation-worker.md`](docs/decisions/0012-standalone-reconciliation-worker.md).
 
 ## Quick start
 
@@ -126,6 +132,12 @@ pnpm db:up
 pnpm db:migrate
 pnpm dev
 ```
+
+In a separate terminal, the independently runnable control-plane worker can be
+started with `pnpm worker:dev`. It reads only the database and logging values
+from `.env.local`. Because its production authoritative-reader registry is
+empty, it makes no provider request; normally it remains idle, and any due
+unknown domain is parked for an operator instead of guessed or replayed.
 
 The safe default listens on `http://127.0.0.1:3000` only.
 
@@ -183,14 +195,15 @@ pnpm test:integration
 pnpm check
 pnpm docker:build:migration
 pnpm docker:build:runtime
+pnpm docker:build:worker
 ```
 
 `pnpm secrets:check` guards the current Git-tracked snapshot against forbidden
 credential files and a small set of high-confidence token patterns. It does not
 scan Git history, infer arbitrary opaque provider secrets, or read the ignored
 local `.env.local`; that file remains the only local place for the current Privy
-credentials. The two Docker commands build distinct migration and lean runtime
-targets and do not deploy either image.
+credentials. The three Docker commands build distinct migration, lean API
+runtime, and worker targets and do not deploy any image.
 
 Route schemas are the source of truth for
 [`openapi/loop-api.v1.json`](openapi/loop-api.v1.json). Do not edit the artifact

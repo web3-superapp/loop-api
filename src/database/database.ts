@@ -1,8 +1,6 @@
-import type { FastifyBaseLogger } from "fastify";
 import pg from "pg";
 import { z } from "zod";
 
-import type { AppConfig } from "../config.js";
 import type {
   InternalUser,
   InternalUserRepository,
@@ -54,6 +52,21 @@ export interface Database {
   close(): Promise<void>;
 }
 
+export interface PostgresDatabaseConfig {
+  readonly serviceName: string;
+  readonly databaseUrl: string;
+  readonly databasePoolMax: number;
+  readonly databaseConnectionTimeoutMs: number;
+  readonly databaseStatementTimeoutMs: number;
+}
+
+export interface PostgresDatabaseLogger {
+  readonly error: (
+    fields: Readonly<{ postgresCode: string }>,
+    message: "Unexpected idle PostgreSQL client error",
+  ) => void;
+}
+
 function safePostgresErrorCode(error: unknown): string {
   if (
     typeof error === "object" &&
@@ -68,8 +81,8 @@ function safePostgresErrorCode(error: unknown): string {
 }
 
 export function createPostgresDatabase(
-  config: AppConfig,
-  logger: FastifyBaseLogger,
+  config: PostgresDatabaseConfig,
+  logger: PostgresDatabaseLogger,
 ): Database {
   const pool = new Pool({
     application_name: config.serviceName,

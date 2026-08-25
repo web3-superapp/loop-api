@@ -42,3 +42,7 @@ USER loop
 EXPOSE 3000
 
 CMD ["node", "dist/src/server.js"]
+
+FROM runtime AS worker
+
+CMD ["node", "dist/src/reconciliation-worker.js"]

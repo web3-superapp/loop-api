@@ -106,6 +106,27 @@ Flutter end-to-end evidence remain unverified.
 agent keys, APNs private keys, Firebase service accounts, and Stream server
 secrets must never be placed in tracked files or command examples.
 
+## Standalone reconciliation worker
+
+Run the worker in a second terminal after PostgreSQL migrations are current:
+
+```sh
+pnpm worker:dev
+```
+
+For the compiled local entry point, use `pnpm build` followed by
+`pnpm worker:start:local`. A deployed environment uses `pnpm worker:start` or
+the `worker` Docker target and injects its database settings externally.
+
+This process reads only `NODE_ENV`, `LOG_LEVEL`, and `DATABASE_*`. It does not
+load Privy, Stream, Hyperliquid, transfer, signing, or relay configuration. The
+production reader registry is intentionally empty, so the current process
+makes no provider call and cannot complete real Perp or transfer work. It can
+quarantine an expired submission and conservatively park an unknown due
+operation as `operator_required`; it never submits or replays provider bytes.
+With no due control-plane work, it stays idle until `SIGINT` or `SIGTERM` and
+then closes PostgreSQL cleanly.
+
 ## Physical phone on a trusted LAN
 
 The safer default binds only to the Mac. For a short-lived trusted-LAN session:

@@ -110,6 +110,23 @@ const environmentSchema = z
     }
   });
 
+const reconciliationWorkerEnvironmentSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]),
+  LOG_LEVEL: z.enum([
+    "fatal",
+    "error",
+    "warn",
+    "info",
+    "debug",
+    "trace",
+    "silent",
+  ]),
+  DATABASE_URL: z.string().trim().min(1),
+  DATABASE_POOL_MAX: positiveIntegerString(1, 50),
+  DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
+  DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+});
+
 export interface PrivyConfig {
   readonly appId: string;
   readonly appSecret: string;
@@ -159,6 +176,18 @@ export interface AppConfig {
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
   readonly serviceName: "loop-api";
+  readonly serviceVersion: string;
+}
+
+export interface ReconciliationWorkerConfig {
+  readonly nodeEnv: "development" | "test" | "production";
+  readonly logLevel:
+    "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+  readonly databaseUrl: string;
+  readonly databasePoolMax: number;
+  readonly databaseConnectionTimeoutMs: number;
+  readonly databaseStatementTimeoutMs: number;
+  readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
 
@@ -329,6 +358,47 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     perpReadCursor,
     hyperliquidPrivateReads,
     serviceName: "loop-api",
+    serviceVersion,
+  });
+}
+
+/**
+ * The reconciliation process deliberately has no HTTP or provider credential
+ * configuration. Provider readers are enabled only through reviewed code
+ * composition, never by accidentally inheriting API-process environment flags.
+ */
+export function loadReconciliationWorkerConfig(
+  environment: NodeJS.ProcessEnv,
+): ReconciliationWorkerConfig {
+  const parsed = reconciliationWorkerEnvironmentSchema.safeParse({
+    NODE_ENV: environment["NODE_ENV"] ?? "development",
+    LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    DATABASE_URL: environment["DATABASE_URL"],
+    DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
+    DATABASE_CONNECTION_TIMEOUT_MS:
+      environment["DATABASE_CONNECTION_TIMEOUT_MS"] ?? "3000",
+    DATABASE_STATEMENT_TIMEOUT_MS:
+      environment["DATABASE_STATEMENT_TIMEOUT_MS"] ?? "5000",
+  });
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map(
+      (issue) => `${issue.path.join(".") || "configuration"}: ${issue.message}`,
+    );
+    throw new ConfigurationError(issues);
+  }
+
+  const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
+  assertDatabaseUrl(databaseUrl);
+
+  return Object.freeze({
+    nodeEnv: parsed.data.NODE_ENV,
+    logLevel: parsed.data.LOG_LEVEL,
+    databaseUrl: databaseUrl.toString(),
+    databasePoolMax: parsed.data.DATABASE_POOL_MAX,
+    databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
+    databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });
 }
