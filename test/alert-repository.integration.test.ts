@@ -215,6 +215,64 @@ describe("PostgreSQL Alert repository", () => {
     ).rejects.toBeInstanceOf(AlertIdempotencyConflictError);
   });
 
+  it("replays the original create after replacement and returns the current resource", async () => {
+    const ownerUserId = await createOwner(pool, "replace-create-replay");
+    const input = createInput(ownerUserId);
+    const created = await repository.create(input);
+    const replacement = {
+      ...definition,
+      threshold_decimal: "65000",
+    } satisfies PriceAlertDefinition;
+    const updated = await repository.replaceOwned({
+      ownerUserId,
+      alertId: created.alert.id,
+      expectedVersion: 1,
+      definition: replacement,
+    });
+    expect(updated).toMatchObject({
+      ownerUserId,
+      createRequestSha256: input.requestSha256,
+      thresholdDecimal: "65000",
+      recordVersion: 2,
+    });
+
+    await expect(repository.create(input)).resolves.toEqual({
+      created: false,
+      alert: updated,
+    });
+  });
+
+  it("reports a deleted resource when replay follows replacement and deletion", async () => {
+    const ownerUserId = await createOwner(pool, "replace-delete-replay");
+    const input = createInput(ownerUserId);
+    const created = await repository.create(input);
+    const updated = await repository.replaceOwned({
+      ownerUserId,
+      alertId: created.alert.id,
+      expectedVersion: 1,
+      definition: {
+        ...definition,
+        threshold_decimal: "65000",
+      },
+    });
+    expect(updated).toMatchObject({
+      createRequestSha256: input.requestSha256,
+      recordVersion: 2,
+    });
+    if (updated === null) {
+      throw new Error("Expected the alert replacement to exist");
+    }
+    await repository.softDeleteOwned({
+      ownerUserId,
+      alertId: created.alert.id,
+      expectedVersion: updated.recordVersion,
+    });
+
+    await expect(repository.create(input)).rejects.toBeInstanceOf(
+      AlertIdempotencyResourceDeletedError,
+    );
+  });
+
   it("recomputes the create digest at the repository boundary", async () => {
     const ownerUserId = await createOwner(pool, "digest-boundary");
 

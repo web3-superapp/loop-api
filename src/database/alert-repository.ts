@@ -483,8 +483,7 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
             const alert = toAlertRecord(existingRow);
             if (
               alert.ownerUserId !== input.ownerUserId ||
-              alert.createRequestSha256 !== input.requestSha256 ||
-              !definitionsEqual(alert, input.definition)
+              alert.createRequestSha256 !== input.requestSha256
             ) {
               throw new AlertIdempotencyConflictError();
             }
