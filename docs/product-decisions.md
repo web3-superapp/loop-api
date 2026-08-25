@@ -17,11 +17,14 @@ The repository now has a local Fastify runtime, the Development
 HTTP interfaces backed by persistent issuance policy. It also has six strict
 Hyperliquid Testnet private-read HTTP interfaces with server-owned wallet
 authority, freshness, decimal-string, Core-market, and opaque-cursor checks. It
-still has no production deployment, successful real-token physical-device
-evidence, licensed Stream issuer composition, live wallet-binding lifecycle,
-private trading mutation path, or credentialed provider connection. Stream and
-Hyperliquid capabilities remain `blocked-provider`; their default adapters fail
-closed.
+also has a durable master-wallet binding lifecycle, fresh exact Privy wallet
+resolution, and a lossless fixed-Testnet private reader guarded by a global
+weighted quota. The reader is default-off. The repository still has no
+production deployment, successful real-token physical-device evidence,
+licensed Stream issuer composition, nonempty Testnet-account end-to-end
+evidence, or private trading mutation path. Stream remains `blocked-provider`;
+Hyperliquid private reads are implemented but not yet “integrated” under the
+evidence definition below.
 
 ## Identity model
 
@@ -38,6 +41,13 @@ remove an eligible wallet without replacing the internal account, social graph,
 Chat identity, preferences, or audit ownership. Client-selected wallet addresses
 must not become database primary keys, Stream user IDs, or trusted authorization
 claims.
+
+The current lifecycle supports the Privy embedded Ethereum master wallet only.
+An explicit version-checked PUT may select a sole eligible wallet or refresh the
+exact stored wallet; it never accepts authority from the client. The API exposes
+only binding state, monotonic epoch, fixed-or-null account kind, and last
+verification time. Interactive selection among multiple wallets and subaccounts
+requires a separate decision.
 
 ## Local personalization and inactive alerts
 

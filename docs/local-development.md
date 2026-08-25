@@ -31,14 +31,29 @@ present: `@stream-io/node-sdk` is deliberately not installed until its reviewed
 Stream Source Code License Agreement is explicitly accepted and a real
 Development Stream App is approved. No custom JWT implementation is used.
 
-The six `GET /v1/perp/*` private-read interfaces also require the current Bearer
-identity and bootstrap mapping. Set an independent server-only
-`PERP_READ_CURSOR_HMAC_SECRET` of at least 32 characters only when testing with
-an injected verified wallet resolver and fake provider reader. Leaving it blank
-keeps cursor-backed private reads fail closed. The normal local runtime has no
-wallet-binding database lifecycle and no Hyperliquid adapter, does not select a
-linked wallet, and never substitutes the zero address; an authenticated request
-therefore returns `wallet_binding_required` before provider work.
+The wallet-binding lifecycle and six `GET /v1/perp/*` private-read interfaces
+also require the current Bearer identity and bootstrap mapping. Binding is
+available whenever Privy credentials are configured. A PUT re-reads the current
+Privy user and may bind only the sole eligible embedded Ethereum wallet or the
+exact wallet already stored; it never accepts an address.
+
+Hyperliquid private reads are default-off. To enable the real narrow Testnet
+reader, configure all of the following in ignored `.env.local`:
+
+```text
+PRIVY_APP_ID=<development-app-id>
+PRIVY_APP_SECRET=<development-app-secret>
+PERP_READ_CURSOR_HMAC_SECRET=<independent-secret-at-least-32-characters>
+HYPERLIQUID_PRIVATE_READS_ENABLED=true
+HYPERLIQUID_INFO_QUOTA_HMAC_SECRET=<another-secret-at-least-32-characters>
+HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE=960
+```
+
+Missing any required value while the switch is true is a startup error. The
+adapter URL is compiled as `https://api.hyperliquid-testnet.xyz/info` and cannot
+be changed by environment or request input. Each real request first reserves
+its documented weight in a server-global PostgreSQL 60-second window. No signer,
+private key, Exchange action, WebSocket, Mainnet, or mutation is enabled.
 
 Validate the health and protected-route boundaries:
 
@@ -48,6 +63,7 @@ curl --fail http://127.0.0.1:3000/health/ready
 curl -i -X POST http://127.0.0.1:3000/v1/bootstrap
 curl -i -X POST http://127.0.0.1:3000/v1/chat/token
 curl -i -X POST http://127.0.0.1:3000/v1/video/token
+curl -i http://127.0.0.1:3000/v1/perp/wallet-binding
 curl -i http://127.0.0.1:3000/v1/perp/config
 curl -i http://127.0.0.1:3000/v1/perp/account
 curl -i http://127.0.0.1:3000/v1/perp/positions
@@ -56,12 +72,35 @@ curl -i http://127.0.0.1:3000/v1/perp/fills
 curl -i http://127.0.0.1:3000/v1/perp/funding
 ```
 
+After bootstrap, exercise the binding lifecycle with a current Privy access
+token. The examples deliberately contain no address or wallet ID:
+
+```sh
+curl -i \
+  -H 'Authorization: Bearer <current-privy-access-token>' \
+  http://127.0.0.1:3000/v1/perp/wallet-binding
+
+curl -i -X PUT \
+  -H 'Authorization: Bearer <current-privy-access-token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"expected_binding_version":"0"}' \
+  http://127.0.0.1:3000/v1/perp/wallet-binding
+
+curl -i -X DELETE \
+  -H 'Authorization: Bearer <current-privy-access-token>' \
+  'http://127.0.0.1:3000/v1/perp/wallet-binding?expected_binding_version=1'
+```
+
 These unauthenticated protected-route smoke checks must return a sanitized 401
 with a Bearer challenge and must not create a user row or reserve quota. With a
 valid bootstrapped identity and quota HMAC configured, both Stream routes still
 return a sanitized 503 while the real licensed issuer is unavailable.
-The Perp routes must not reveal or accept a wallet/account address; with a valid
-bootstrapped identity and the default resolver they return a sanitized 409.
+The Perp routes must not reveal or accept a wallet/account address. A valid
+bootstrapped identity without a binding receives sanitized 409
+`wallet_binding_required`; a bound identity with private reads left off receives
+503 `perp_unavailable`. With the switch and dependencies enabled, reads use the
+fixed Testnet adapter. Real phone-issued Privy, nonempty Testnet-account, and
+Flutter end-to-end evidence remain unverified.
 
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server
@@ -122,9 +161,10 @@ bin/flutter run \
 Before using a real phone token, repeat the unauthenticated smoke check against
 `https://api-dev.quant-dinger.cc/v1/bootstrap`. A successful credentialed 200 is
 not verified until the Flutter backend adapter is implemented and exercised on
-the physical device. Backend-to-Flutter, physical-device, and credentialed
-Stream integration are intentionally not being run during the current
-backend-only phase.
+the physical device. Backend-to-Flutter, physical-device, Privy wallet-binding,
+nonempty Hyperliquid Testnet-account, Firebase, and credentialed Stream
+integration are intentionally not being run during the current backend-only
+phase.
 
 Provider-specific device testing begins only after the matching server secret is
 stored outside Git and the corresponding sandbox/Testnet gate is implemented.

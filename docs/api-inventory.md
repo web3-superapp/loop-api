@@ -23,6 +23,11 @@ Interface and capability status are independent. For example, an implemented
 route backed by an unavailable adapter remains `blocked-provider`; its existence
 is not provider-integration evidence.
 
+Runtime activation and verification evidence are independent too. The
+Hyperliquid private-read capability below is implemented but default-off;
+credentialed Privy, nonempty Testnet account, physical-device, shared-egress,
+and deployed-environment evidence remain unverified.
+
 ## Common native contract
 
 - All `/v1` routes below require exactly one current Privy Bearer token, except
@@ -114,21 +119,40 @@ accepted and the Development App gate closes. These interfaces have not been
 exercised with Flutter or a physical device, do not authorize server Chat/Video
 mutations, and do not claim connected Stream state.
 
+## Perp wallet-binding lifecycle
+
+The current principal may explicitly bind only a unique eligible Privy embedded
+Ethereum wallet, or refresh the exact wallet already stored for that principal.
+The current slice supports the master account only; interactive selection among
+multiple eligible wallets and subaccounts is not approved.
+
+| Method and path                                                   | Key contract                                                                                         | Interface     | Capability    |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------- | ------------- |
+| `GET /v1/perp/wallet-binding`                                     | Non-writing state/version read                                                                       | `implemented` | `implemented` |
+| `PUT /v1/perp/wallet-binding`                                     | Bind, refresh, or rotate using only `expected_binding_version`                                       | `implemented` | `implemented` |
+| `DELETE /v1/perp/wallet-binding?expected_binding_version={epoch}` | Unbind while retaining and incrementing the monotonic authority epoch; no body or idempotency header | `implemented` | `implemented` |
+
+Responses contain only `state`, `binding_version`, fixed-or-null
+`account_kind`, and `last_verified_at`. No route accepts or returns a wallet
+address, wallet ID, Privy DID, owner ID, network, DEX, or client-selected
+authority. Every explicit PUT re-reads Privy; every private read revalidates the
+exact stored wallet into a 15-second server-only lease.
+
 ## Hyperliquid Testnet private routes
 
-Private reads use a unique eligible server-verified master/subaccount wallet
-binding, never an agent or client-supplied address. Without it they return
-`wallet_binding_required` before Hyperliquid work. All routes are Core
+Private reads use the exact server-verified master wallet binding, never an
+agent or client-supplied address. Without it they return
+`wallet_binding_required` before quota or Hyperliquid work. All routes are Core
 BTC/ETH/SOL and Testnet only.
 
-| Method and path          | Key contract                                                                                                        | Interface     | Capability         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
-| `GET /v1/perp/config`    | Network, Core allowlist, sourced/fetched/expires provider constraints, and explicit read/mutation capability states | `implemented` | `blocked-provider` |
-| `GET /v1/perp/account`   | Strict private account projection; decimal strings                                                                  | `implemented` | `blocked-provider` |
-| `GET /v1/perp/positions` | Strict position projection; bounded limit/opaque cursor where paginated                                             | `implemented` | `blocked-provider` |
-| `GET /v1/perp/orders`    | Strict current open-limit-order projection; bounded limit/opaque cursor                                             | `implemented` | `blocked-provider` |
-| `GET /v1/perp/fills`     | Strict recent fills projection with bounded coverage; bounded limit/opaque cursor                                   | `implemented` | `blocked-provider` |
-| `GET /v1/perp/funding`   | Strict recent user-funding ledger with bounded coverage; bounded limit/opaque cursor                                | `implemented` | `blocked-provider` |
+| Method and path          | Key contract                                                                                                        | Interface     | Capability                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------- |
+| `GET /v1/perp/config`    | Network, Core allowlist, sourced/fetched/expires provider constraints, and explicit read/mutation capability states | `implemented` | `implemented`; default-off, E2E unverified      |
+| `GET /v1/perp/account`   | Strict private account projection; decimal strings                                                                  | `implemented` | `implemented`; default-off, E2E unverified      |
+| `GET /v1/perp/positions` | Strict position projection; bounded limit/opaque cursor where paginated                                             | `implemented` | `implemented`; default-off, nonempty unverified |
+| `GET /v1/perp/orders`    | Strict current open-limit-order projection; bounded limit/opaque cursor                                             | `implemented` | `implemented`; default-off, nonempty unverified |
+| `GET /v1/perp/fills`     | Strict recent fills projection with bounded coverage; bounded limit/opaque cursor                                   | `implemented` | `implemented`; default-off, nonempty unverified |
+| `GET /v1/perp/funding`   | Strict recent user-funding ledger with bounded coverage; bounded limit/opaque cursor                                | `implemented` | `implemented`; default-off, nonempty unverified |
 
 Stale, malformed, non-Core, nonempty-dex, spot, HIP-3, or unknown provider data
 is unavailable rather than coerced to an empty or zero-valued success. Public
@@ -144,11 +168,14 @@ original limit. Fills and user funding report `recent_window` coverage and
 whether the provider-bounded window is truncated; they are never described as
 complete history.
 
-The default resolver never selects a first Privy wallet, and the zero address is
-not an empty-account fallback. Until a reviewed server-side wallet binding and
-real provider adapter exist, the routes return `wallet_binding_required` or
-`perp_unavailable` before network work. No Hyperliquid Node/TypeScript package
-has been installed.
+The resolver never guesses among multiple wallets, and the zero address is not
+an empty-account fallback. With no binding, the routes return
+`wallet_binding_required`; with private reads disabled or any stale/malformed
+provider fact, they return `perp_unavailable`. When explicitly enabled, a
+lossless narrow adapter posts only allowlisted requests to the compiled Testnet
+Info URL and reserves a PostgreSQL global weighted quota first. No signer-capable
+Hyperliquid Node/TypeScript SDK, configurable provider URL, Exchange action,
+WebSocket, Mainnet, or mutation path has been installed.
 
 ### Perp intent and reconciliation
 
@@ -172,13 +199,13 @@ and item identity then finalize atomically in PostgreSQL. Unfinished claims are
 bounded per owner and by a service-wide fuse, and persist their explicit
 `perp_intent_request_v1` digest version. Ordinary review facts may be at most 60
 seconds old; a market-order quote may be at most two seconds old. Wallet
-authority is resolved again after review latency. The default wallet resolver
-and reviewer remain unavailable, and every production submit is denied with
-`perp_mutation_disabled` before a wallet re-resolution, reviewer, signer, SDK,
-or provider call. Tests may inject review fixtures, but no Hyperliquid mutation
-SDK, executor, or domain lifecycle finalizer is installed. Provider timeout and
-authoritative readback behavior remain a mandatory future gate, not a currently
-implemented claim.
+authority is resolved again after review latency. The real wallet resolver is
+composed when Privy is configured, but the reviewer remains unavailable, and
+every production submit is denied with `perp_mutation_disabled` before a wallet
+re-resolution, reviewer, signer, SDK, or provider write. Tests may inject review
+fixtures, but no Hyperliquid mutation SDK, executor, or domain lifecycle
+finalizer is installed. Provider timeout and authoritative readback behavior
+remain a mandatory future gate, not a currently implemented claim.
 
 ### Testnet agent authorization
 
@@ -240,8 +267,8 @@ TP/SL, TWAP, builder fees, and public Hyperliquid market proxying.
 
 Push device registration, a notification inbox, alert activation/evaluation,
 Search, Support, public profile/social graph, following/followers/blocklist, and
-multiple-wallet selection have no approved complete runtime contract. They are
-unassigned or explicitly closed, not implied APIs; no guessed route may be
-added. Privy OTP/wallet creation, Stream messages/calls/moderation, and provider
-`/info`, `/exchange`, or `/ws` operations remain official SDK/provider surfaces
-rather than LOOP routes.
+interactive multiple-wallet selection have no approved complete runtime
+contract. They are unassigned or explicitly closed, not implied APIs; no guessed
+route may be added. Privy OTP/wallet creation, Stream messages/calls/moderation,
+and provider `/info`, `/exchange`, or `/ws` operations remain official
+SDK/provider surfaces rather than client-callable LOOP routes.

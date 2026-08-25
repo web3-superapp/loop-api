@@ -29,6 +29,11 @@ implemented as independently verified slices:
 - six authenticated Hyperliquid Testnet private-read interfaces for strict
   config, account, position, open-order, fill, and user-funding projections;
   wallet/account authority is always resolved server-side
+- an explicit `GET`/`PUT`/`DELETE /v1/perp/wallet-binding` lifecycle backed by
+  PostgreSQL, monotonic binding epochs, and fresh exact Privy wallet matching;
+  wallet IDs, addresses, and Privy DIDs never enter the mobile contract
+- a default-off, lossless fixed-Testnet Hyperliquid Info reader with strict
+  Core BTC/ETH/SOL projections and a PostgreSQL-backed global weighted quota
 - encrypted, owner/wallet/version/route-bound cursors and fail-closed validation
   for stale, numeric-decimal, non-Core, Spot, HIP-3, and malformed provider data
 - strict Perp intent preparation, owner-only status, and submit interfaces with
@@ -62,18 +67,19 @@ but a real phone-issued token has not yet passed the physical-device gate. The
 Stream HTTP interfaces and issuance policy are present, but the default issuer
 returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
 the SDK is not installed, and a real Development App key/secret pair is not
-enabled. The Hyperliquid private-read, Perp-intent, and Agent-authorization HTTP
-contracts are present, but their default wallet resolver, reader, reviewer, and
-authorization handoff remain unavailable. Every Perp submit and Agent issuance
-is denied before signer/provider work. Transfer routes publish only their
-reviewed negative contract and return a sanitized 503 after authentication;
-there is still no live private account connection, trading execution path,
-Privy transfer execution, Firebase push path, physical-device integration, or
-production deployment. Interfaces, control-plane records, and quota primitives
-do not by themselves enable any provider. Profile/Watchlist and inactive alert
-records are local PostgreSQL capabilities, but there is no price evaluator or
-scheduler, Firebase device-token/delivery path, notification inbox, or social
-graph.
+enabled. The Hyperliquid wallet-binding lifecycle, resolver, and Testnet private
+reader are implemented, but private reads are default-off and have not passed a
+real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
+reviewer, signer/executor, Agent authorization handoff, and every trading
+mutation remain unavailable or denied before provider writes. Transfer routes
+publish only their reviewed negative contract and return a sanitized 503 after
+authentication; there is still no trading execution path, Privy transfer
+execution, Firebase push path, physical-device integration, or production
+deployment. Interfaces, control-plane records, and quota primitives do not by
+themselves prove a live provider integration. Profile/Watchlist and inactive
+alert records are local PostgreSQL capabilities, but there is no price
+evaluator or scheduler, Firebase device-token/delivery path, notification
+inbox, or social graph.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -99,6 +105,10 @@ The Privy same-chain transfer default-closed interface is recorded in
 The local Profile, Watchlist, inactive alert, and notification-preference
 ownership boundary is recorded in
 [`docs/decisions/0009-personalization-alerts-api.md`](docs/decisions/0009-personalization-alerts-api.md).
+The durable Privy wallet-binding lifecycle is recorded in
+[`docs/decisions/0010-perp-wallet-binding-lifecycle.md`](docs/decisions/0010-perp-wallet-binding-lifecycle.md),
+and the lossless fixed-Testnet private reader and weighted quota are recorded in
+[`docs/decisions/0011-lossless-hyperliquid-private-reader.md`](docs/decisions/0011-lossless-hyperliquid-private-reader.md).
 
 ## Quick start
 
@@ -136,10 +146,16 @@ The safe default listens on `http://127.0.0.1:3000` only.
   `/v1/alerts/history` exposes persisted real events only, and
   `/v1/notification-preferences` stores the fixed preference set. These routes
   do not activate evaluation or imply Firebase delivery.
+- `GET /v1/perp/wallet-binding` returns only lifecycle state and version.
+  `PUT` binds, refreshes, or rotates to the only eligible current Privy
+  embedded Ethereum wallet using `expected_binding_version`; `DELETE` unbinds
+  through the same version check. No operation accepts or returns an address.
 - `GET /v1/perp/config`, `/account`, `/positions`, `/orders`, `/fills`, and
   `/funding` require the same current identity plus a unique current
-  server-verified wallet binding. The default runtime returns
-  `wallet_binding_required`; fake success tests do not make Hyperliquid live.
+  server-verified wallet binding. No binding returns
+  `wallet_binding_required`; a binding with the private-read switch off returns
+  `perp_unavailable`; enabling the complete server-only configuration activates
+  the fixed Hyperliquid Testnet Info reader. This is not Mainnet or trading.
 - `POST /v1/perp/intents`, `GET /v1/perp/intents/{intent_id}`, and
   `POST /v1/perp/intents/{intent_id}/submit` expose the durable Testnet/Core
   contract. The default runtime cannot prepare without a verified binding and
