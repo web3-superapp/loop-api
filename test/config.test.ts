@@ -27,6 +27,7 @@ describe("loadConfig", () => {
     expect(config.stream).toBeNull();
     expect(config.streamTokenQuota).toBeNull();
     expect(config.perpReadCursor).toBeNull();
+    expect(config.hyperliquidPrivateReads).toBeNull();
     expect(config.serviceName).toBe("loop-api");
   });
 
@@ -150,6 +151,52 @@ describe("loadConfig", () => {
     } catch (error) {
       expect(String(error)).not.toContain("weak-cursor-secret");
     }
+  });
+
+  it("enables Hyperliquid private reads only with every server capability", () => {
+    const environment = validEnvironment();
+    environment["PRIVY_APP_ID"] = "app_test";
+    environment["PRIVY_APP_SECRET"] = "secret_test";
+    environment["PERP_READ_CURSOR_HMAC_SECRET"] = "p".repeat(32);
+    environment["HYPERLIQUID_PRIVATE_READS_ENABLED"] = "true";
+    environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"] = "q".repeat(32);
+    environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] = "900";
+
+    const config = loadConfig(environment);
+
+    expect(config.hyperliquidPrivateReads).toEqual({
+      quotaHmacSecret: "q".repeat(32),
+      policyVersion: "hyperliquid_info_v1",
+      windowDurationSeconds: 60,
+      weightCapacity: 900,
+    });
+    expect(Object.isFrozen(config.hyperliquidPrivateReads)).toBe(true);
+  });
+
+  it.each([
+    "PRIVY_APP_ID",
+    "PERP_READ_CURSOR_HMAC_SECRET",
+    "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
+  ] as const)("rejects enabled Hyperliquid reads without %s", (missingKey) => {
+    const environment = validEnvironment();
+    environment["PRIVY_APP_ID"] = "app_test";
+    environment["PRIVY_APP_SECRET"] = "secret_test";
+    environment["PERP_READ_CURSOR_HMAC_SECRET"] = "p".repeat(32);
+    environment["HYPERLIQUID_PRIVATE_READS_ENABLED"] = "true";
+    environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"] = "q".repeat(32);
+    delete environment[missingKey];
+    if (missingKey === "PRIVY_APP_ID") {
+      delete environment["PRIVY_APP_SECRET"];
+    }
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+  });
+
+  it("rejects a Hyperliquid weight limit above the provider ceiling", () => {
+    const environment = validEnvironment();
+    environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] = "1201";
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
   });
 
   it.each([

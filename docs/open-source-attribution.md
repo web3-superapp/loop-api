@@ -18,7 +18,12 @@ are recorded in `pnpm-lock.yaml`.
 | ESLint             |  10.9.0 | Static analysis                    | MIT        |
 | Prettier           |   3.9.6 | Deterministic source formatting    | MIT        |
 | `tsx`              | 4.23.12 | Local TypeScript execution/watch   | MIT        |
+| `lossless-json`    |   4.3.1 | Lossless provider JSON numbers     | MIT        |
 
 The Privy SDK entry covers only the access-token verification boundary approved
 by Decision 0002. Other provider SDKs must be registered with their own reviewed
 integration change.
+
+Decision 0011 limits `lossless-json` to unauthenticated Hyperliquid Testnet
+Info response parsing. It introduces no provider SDK, signer, transport URL,
+credentials, or mutation capability.
