@@ -11,6 +11,7 @@ import {
   PerpIntentClaimLimitExceededError,
   PerpIntentPrepareExpiredError,
   PerpIntentRepositoryUnavailableError,
+  PerpIntentWalletBindingStaleError,
   type PreparePerpIntentInput,
 } from "../src/database/perp-intent-repository.js";
 import {
@@ -281,6 +282,49 @@ async function commitDirectIntent(
   }
 }
 
+async function seedWalletBinding(
+  pool: InstanceType<typeof Pool>,
+  ownerUserId: string,
+  boundAddress: string = accountAddress,
+): Promise<void> {
+  const result = await pool.query({
+    text: `
+      with observed as (
+        select clock_timestamp() as observed_at
+      )
+      insert into public.perp_wallet_bindings (
+        owner_user_id,
+        privy_user_id,
+        binding_state,
+        wallet_id,
+        account_address,
+        account_kind,
+        binding_version,
+        last_verified_at,
+        created_at,
+        updated_at
+      )
+      select
+        owner.id,
+        owner.privy_user_id,
+        'bound',
+        null,
+        $2,
+        'master',
+        1,
+        observed.observed_at,
+        observed.observed_at,
+        observed.observed_at
+      from public.loop_users as owner
+      cross join observed
+      where owner.id = $1
+      returning owner_user_id
+    `,
+    values: [ownerUserId, boundAddress],
+  });
+  expect(result.rows).toHaveLength(1);
+}
+
 describe("PostgreSQL Perp intent repository", () => {
   let database: Database;
   const inspectionPool = new Pool({ connectionString: databaseUrl });
@@ -304,6 +348,7 @@ describe("PostgreSQL Perp intent repository", () => {
       "did:privy:perp-intent-concurrent",
     );
     const input = prepareInput(owner.id);
+    await seedWalletBinding(inspectionPool, owner.id);
 
     const results = await Promise.all(
       Array.from({ length: 20 }, async () =>
@@ -372,6 +417,7 @@ describe("PostgreSQL Perp intent repository", () => {
       "did:privy:perp-intent-owner-two",
     );
     const input = prepareInput(firstOwner.id);
+    await seedWalletBinding(inspectionPool, firstOwner.id);
 
     await expect(
       database.perpIntents.claimPrepare({
@@ -468,6 +514,63 @@ describe("PostgreSQL Perp intent repository", () => {
     });
   });
 
+  it("rolls back finalization when the locked wallet-binding epoch changed", async () => {
+    const owner = await database.internalUsers.getOrCreateByPrivyUserId(
+      "did:privy:perp-intent-binding-race",
+    );
+    const input = prepareInput(owner.id);
+    await seedWalletBinding(inspectionPool, owner.id);
+    await expect(
+      database.perpIntents.claimPrepare({
+        ownerUserId: owner.id,
+        idempotencyKey: input.idempotencyKey,
+        requestSha256: input.requestSha256,
+      }),
+    ).resolves.toEqual({ kind: "claimed" });
+
+    await inspectionPool.query({
+      text: `
+        with observed as (
+          select clock_timestamp() as observed_at
+        )
+        update public.perp_wallet_bindings
+        set
+          account_address = $2,
+          binding_version = 2,
+          last_verified_at = observed.observed_at,
+          updated_at = observed.observed_at
+        from observed
+        where owner_user_id = $1
+      `,
+      values: [owner.id, `0x${"22".repeat(20)}`],
+    });
+
+    await expect(database.perpIntents.prepare(input)).rejects.toBeInstanceOf(
+      PerpIntentWalletBindingStaleError,
+    );
+
+    const counts = await inspectionPool.query<{
+      idempotency_count: string;
+      intent_count: string;
+      operation_count: string;
+    }>({
+      text: `
+        select
+          (select count(*)::text from public.idempotency_records)
+            as idempotency_count,
+          (select count(*)::text from public.provider_operations)
+            as operation_count,
+          (select count(*)::text from public.perp_intents)
+            as intent_count
+      `,
+    });
+    expect(counts.rows[0]).toEqual({
+      idempotency_count: "1",
+      intent_count: "0",
+      operation_count: "0",
+    });
+  });
+
   it("atomically bounds pending claims while preserving replay, conflict, and slot release", async () => {
     const owner = await database.internalUsers.getOrCreateByPrivyUserId(
       "did:privy:perp-intent-claim-budget",
@@ -483,6 +586,7 @@ describe("PostgreSQL Perp intent repository", () => {
         requestSha256: digestA,
       }),
     );
+    await seedWalletBinding(inspectionPool, owner.id);
 
     const admitted = await Promise.allSettled(
       claims.map(async (claim) => database.perpIntents.claimPrepare(claim)),
@@ -636,6 +740,7 @@ describe("PostgreSQL Perp intent repository", () => {
     const secondOwner = await database.internalUsers.getOrCreateByPrivyUserId(
       "did:privy:perp-intent-find-foreign",
     );
+    await seedWalletBinding(inspectionPool, firstOwner.id);
     const prepared = await database.perpIntents.prepare(
       prepareInput(firstOwner.id),
     );
@@ -658,6 +763,7 @@ describe("PostgreSQL Perp intent repository", () => {
     const fetchedAt = new Date(Date.now() - 60_000).toISOString();
     const expiresAt = new Date(Date.now() - 1_000).toISOString();
     const base = prepareInput(owner.id);
+    await seedWalletBinding(inspectionPool, owner.id);
     const expiredInput = prepareInput(owner.id, {
       idempotencyKey: base.idempotencyKey,
       requestSha256: base.requestSha256,
@@ -693,6 +799,7 @@ describe("PostgreSQL Perp intent repository", () => {
       "did:privy:perp-intent-expiry-projection",
     );
     const base = prepareInput(owner.id);
+    await seedWalletBinding(inspectionPool, owner.id);
     const fetchedAt = new Date(Date.now() - 1_000).toISOString();
     const expiresAt = new Date(Date.now() + 2_000).toISOString();
     const prepared = await database.perpIntents.prepare({
@@ -715,6 +822,7 @@ describe("PostgreSQL Perp intent repository", () => {
     const owner = await database.internalUsers.getOrCreateByPrivyUserId(
       "did:privy:perp-intent-schema-guards",
     );
+    await seedWalletBinding(inspectionPool, owner.id);
     const prepared = await database.perpIntents.prepare(prepareInput(owner.id));
 
     await expect(
@@ -920,6 +1028,7 @@ describe("PostgreSQL Perp intent repository", () => {
       "did:privy:perp-intent-cloid-unique",
     );
     const first = prepareInput(owner.id);
+    await seedWalletBinding(inspectionPool, owner.id);
     await database.perpIntents.prepare(first);
 
     await expect(

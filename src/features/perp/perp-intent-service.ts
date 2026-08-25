@@ -8,6 +8,7 @@ import {
   PerpIntentClaimLimitExceededError,
   PerpIntentPrepareExpiredError,
   PerpIntentRepositoryUnavailableError,
+  PerpIntentWalletBindingStaleError,
   type PerpIntentRecord,
   type PerpIntentRepository,
 } from "../../database/perp-intent-repository.js";
@@ -589,7 +590,10 @@ function mapPersistenceError(error: unknown): never {
   if (error instanceof PerpIntentClaimLimitExceededError) {
     throw new PerpIntentClaimRateLimitedError();
   }
-  if (error instanceof PerpIntentPrepareExpiredError) {
+  if (
+    error instanceof PerpIntentPrepareExpiredError ||
+    error instanceof PerpIntentWalletBindingStaleError
+  ) {
     throw new PerpIntentStaleError();
   }
   if (error instanceof PerpIntentRepositoryUnavailableError) {

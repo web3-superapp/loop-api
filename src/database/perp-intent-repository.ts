@@ -153,6 +153,15 @@ const prepareInputEnvelopeSchema = z
   })
   .strict();
 
+const currentWalletBindingRowSchema = z
+  .object({
+    binding_state: z.enum(["bound", "unbound"]),
+    account_address: addressSchema.nullable(),
+    account_kind: z.literal("master").nullable(),
+    binding_version: bindingVersionSchema,
+  })
+  .strict();
+
 const intentRowSchema = z
   .object({
     id: uuidSchema,
@@ -340,6 +349,15 @@ export class PerpIntentPrepareExpiredError extends Error {
   constructor() {
     super("The Perp intent review is already expired");
     this.name = "PerpIntentPrepareExpiredError";
+  }
+}
+
+export class PerpIntentWalletBindingStaleError extends Error {
+  readonly code = "perp_intent_stale";
+
+  constructor() {
+    super("The Perp intent wallet binding changed before finalization");
+    this.name = "PerpIntentWalletBindingStaleError";
   }
 }
 
@@ -710,11 +728,91 @@ async function readOwnedIntent(
   return row === undefined ? null : toPerpIntentRecord(row);
 }
 
+async function assertCurrentWalletBinding(
+  client: DatabaseClient,
+  input: Pick<
+    ParsedPrepareInput,
+    "ownerUserId" | "accountAddress" | "accountKind" | "bindingVersion"
+  >,
+): Promise<void> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        binding_state,
+        account_address,
+        account_kind,
+        binding_version::text as binding_version
+      from public.perp_wallet_bindings
+      where owner_user_id = $1
+      limit 1
+      for update
+    `,
+    values: [input.ownerUserId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new PerpIntentWalletBindingStaleError();
+  }
+  const parsed = currentWalletBindingRowSchema.safeParse(row);
+  if (!parsed.success || result.rows.length !== 1) {
+    throw new PerpIntentRepositoryUnavailableError();
+  }
+  if (
+    parsed.data.binding_state !== "bound" ||
+    parsed.data.account_address !== input.accountAddress ||
+    parsed.data.account_kind !== input.accountKind ||
+    parsed.data.binding_version !== input.bindingVersion
+  ) {
+    throw new PerpIntentWalletBindingStaleError();
+  }
+}
+
+async function readClaimedIntent(
+  client: DatabaseClient,
+  input: Pick<ParsedPrepareInput, "ownerUserId" | "requestSha256">,
+  idempotencyId: string,
+): Promise<PerpIntentRecord | null> {
+  const result = await client.query<{
+    id: string;
+    owner_user_id: string;
+    domain: string;
+    operation_kind: string;
+    request_sha256: string;
+  }>({
+    text: `
+      select id, owner_user_id, domain, operation_kind, request_sha256
+      from public.provider_operations
+      where idempotency_record_id = $1
+      limit 1
+    `,
+    values: [idempotencyId],
+  });
+  const existing = result.rows[0];
+  if (existing === undefined) {
+    return null;
+  }
+  if (
+    existing.owner_user_id !== input.ownerUserId ||
+    existing.domain !== "hyperliquid" ||
+    existing.operation_kind !== "perp_intent" ||
+    existing.request_sha256 !== input.requestSha256
+  ) {
+    throw new IdempotencyConflictError();
+  }
+
+  const intent = await readOwnedIntent(client, input.ownerUserId, existing.id);
+  if (intent === null) {
+    return failUnavailable();
+  }
+  return intent;
+}
+
 function translateRepositoryError(error: unknown): never {
   if (
     error instanceof IdempotencyConflictError ||
     error instanceof PerpIntentClaimLimitExceededError ||
     error instanceof PerpIntentPrepareExpiredError ||
+    error instanceof PerpIntentWalletBindingStaleError ||
     error instanceof PerpIntentRepositoryUnavailableError
   ) {
     throw error;
@@ -888,6 +986,20 @@ export function createPostgresPerpIntentRepository(
         return await withTransaction(pool, async (client) => {
           const idempotencyId = await reservePerpIntentClaim(client, input);
 
+          const existingIntent = await readClaimedIntent(
+            client,
+            input,
+            idempotencyId,
+          );
+          if (existingIntent !== null) {
+            return Object.freeze({
+              created: false,
+              intent: existingIntent,
+            });
+          }
+
+          await assertCurrentWalletBinding(client, input);
+
           const operationId = randomUUID();
           const operationResult = await client.query<{ id: string }>({
             text: `
@@ -913,41 +1025,7 @@ export function createPostgresPerpIntentRepository(
           const insertedOperationId = operationResult.rows[0]?.id;
 
           if (insertedOperationId === undefined) {
-            const existingOperation = await client.query<{
-              id: string;
-              owner_user_id: string;
-              domain: string;
-              operation_kind: string;
-              request_sha256: string;
-            }>({
-              text: `
-                select id, owner_user_id, domain, operation_kind, request_sha256
-                from public.provider_operations
-                where idempotency_record_id = $1
-                limit 1
-              `,
-              values: [idempotencyId],
-            });
-            const existing = existingOperation.rows[0];
-            if (
-              existing === undefined ||
-              existing.owner_user_id !== input.ownerUserId ||
-              existing.domain !== "hyperliquid" ||
-              existing.operation_kind !== "perp_intent" ||
-              existing.request_sha256 !== input.requestSha256
-            ) {
-              throw new IdempotencyConflictError();
-            }
-
-            const intent = await readOwnedIntent(
-              client,
-              input.ownerUserId,
-              existing.id,
-            );
-            if (intent === null) {
-              return failUnavailable();
-            }
-            return Object.freeze({ created: false, intent });
+            return failUnavailable();
           }
 
           const intentResult = await client.query<{ id: string }>({

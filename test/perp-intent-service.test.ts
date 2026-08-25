@@ -9,6 +9,7 @@ import type {
 import {
   PerpIntentClaimLimitExceededError,
   PerpIntentRepositoryUnavailableError,
+  PerpIntentWalletBindingStaleError,
 } from "../src/database/perp-intent-repository.js";
 import type { PerpIntentRequest } from "../src/features/perp/perp-intent-contract.js";
 import {
@@ -484,6 +485,19 @@ describe("Perp intent service", () => {
     );
     expect(inputs.resolve).toHaveBeenCalledTimes(2);
     expect(inputs.prepare).not.toHaveBeenCalled();
+  });
+
+  it("maps a wallet-binding race during transactional finalization to stale", async () => {
+    const inputs = harness();
+    inputs.prepare.mockRejectedValueOnce(
+      new PerpIntentWalletBindingStaleError(),
+    );
+
+    await expect(inputs.service.prepare(prepareInput())).rejects.toBeInstanceOf(
+      PerpIntentStaleError,
+    );
+    expect(inputs.review).toHaveBeenCalledOnce();
+    expect(inputs.prepare).toHaveBeenCalledOnce();
   });
 
   it("denies prepared submission before any resolver, reviewer, or state mutation", async () => {
