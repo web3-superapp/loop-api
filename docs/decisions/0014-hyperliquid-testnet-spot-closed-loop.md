@@ -117,6 +117,20 @@ uses authoritative readback after an ambiguous result. Agent authorization is
 protocol-broad, so the LOOP signer interface independently allowlists only the
 single Spot IOC order shape approved above.
 
+Hyperliquid encodes Agent expiry inside the signed Agent name rather than in a
+separate `approveAgent` field. LOOP therefore requires one canonical
+`agentName` suffix, ` valid_until <unix-milliseconds>`, and proves that the
+suffix exactly equals the separately displayed and persisted expiry before it
+returns a signing payload. Missing, malformed, seconds-based, or mismatched
+suffixes fail before nonce allocation is committed. The base name preceding
+that suffix is nonempty and at most 16 characters, matching the selected
+Hyperliquid client validator. The initial `spot_agent_v1` Testnet policy caps
+the Agent lifetime at 24 hours from the database clock; longer or stale
+validity is rejected inside the persistence transaction. This follows Privy's
+[Hyperliquid Agent expiration guidance](https://docs.privy.io/recipes/hyperliquid/agents-and-subaccounts#setting-agent-expiration)
+and the candidate client's
+[`approveAgent` validator](https://github.com/nktkas/hyperliquid/blob/main/src/api/exchange/_methods/approveAgent.ts).
+
 The authorization-creation response may contain the one-time server-generated
 public `agentAddress`, `agentName`, nonce, domain, and typed-data fields that
 Privy must sign. This is not client authority: the client cannot select, edit,

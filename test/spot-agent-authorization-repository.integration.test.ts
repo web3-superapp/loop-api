@@ -1,0 +1,1541 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import pg from "pg";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+import {
+  createPostgresSpotAgentAuthorizationRepository,
+  HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS,
+  SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS,
+  SPOT_AGENT_AUTHORIZATION_MAX_AGENT_LIFETIME_MILLISECONDS,
+  SPOT_AGENT_AUTHORIZATION_POLICY_VERSION,
+  SPOT_AGENT_AUTHORIZATION_SIGNING_TTL_MILLISECONDS,
+  SpotAgentAuthorizationAuthorityStaleError,
+  SpotAgentAuthorizationNonceUnavailableError,
+  SpotAgentAuthorizationPrepareExpiredError,
+  SpotAgentAuthorizationRepositoryUnavailableError,
+  type ComputeSpotAgentAuthorizationSigningDigest,
+  type IssueSpotAgentAuthorizationInput,
+  type MaterializeSpotAgentAuthorizationForNonce,
+  type PreflightSpotAgentAuthorizationInput,
+  type SpotAgentAuthorizationMaterializationContext,
+  type SpotAgentAuthorizationRepository,
+} from "../src/database/spot-agent-authorization-repository.js";
+
+const { Pool } = pg;
+const databaseUrl = process.env["DATABASE_URL"];
+
+if (databaseUrl === undefined || databaseUrl.trim() === "") {
+  throw new Error("DATABASE_URL is required for the integration test suite");
+}
+
+const truncateAll = `
+  truncate table
+    public.price_alert_events,
+    public.notification_preferences,
+    public.notification_preference_versions,
+    public.price_alert_definitions,
+    public.watchlist_items,
+    public.watchlist_groups,
+    public.watchlist_versions,
+    public.privacy_preferences,
+    public.user_profiles,
+    public.spot_agent_authorization_events,
+    public.spot_intent_events,
+    public.spot_agent_identity_events,
+    public.hyperliquid_signer_nonce_allocations,
+    public.hyperliquid_signer_nonce_state,
+    public.spot_agent_authorizations,
+    public.spot_intents,
+    public.spot_agent_identities,
+    public.perp_wallet_binding_events,
+    public.perp_wallet_bindings,
+    public.perp_agent_authorization_events,
+    public.perp_agent_authorizations,
+    public.perp_agent_identities,
+    public.perp_intent_events,
+    public.perp_intent_items,
+    public.perp_intents,
+    public.audit_events,
+    public.provider_operations,
+    public.idempotency_records,
+    public.issuance_rate_records,
+    public.loop_users
+`;
+
+interface AuthorityFixture {
+  readonly ownerUserId: string;
+  readonly privyUserId: string;
+  readonly walletId: string;
+  readonly accountAddress: string;
+}
+
+interface DatabaseTimes {
+  readonly verifiedAt: string;
+  readonly expiresAt: string;
+  readonly signingExpiresAt: string;
+  readonly agentValidUntil: string;
+}
+
+interface DurableCounts {
+  readonly allocation_count: string;
+  readonly audit_count: string;
+  readonly authorization_count: string;
+  readonly authorization_event_count: string;
+  readonly idempotency_count: string;
+  readonly identity_count: string;
+  readonly identity_event_count: string;
+  readonly nonce_state_count: string;
+  readonly operation_count: string;
+}
+
+function randomHex(length: number): string {
+  return Array.from({ length: Math.ceil(length / 32) }, () =>
+    randomUUID().replaceAll("-", ""),
+  )
+    .join("")
+    .slice(0, length);
+}
+
+function randomAddress(): string {
+  return `0x${randomHex(40)}`;
+}
+
+async function databaseTimes(
+  pool: InstanceType<typeof Pool>,
+  overrides: {
+    readonly verifiedOffsetMs?: number;
+    readonly authorityExpiresOffsetMs?: number;
+    readonly signingExpiresOffsetMs?: number;
+    readonly agentValidUntilOffsetMs?: number;
+  } = {},
+): Promise<DatabaseTimes> {
+  const result = await pool.query<{
+    agent_valid_until: Date;
+    expires_at: Date;
+    signing_expires_at: Date;
+    verified_at: Date;
+  }>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      )
+      select
+        database_clock.observed_at
+          + ($1::bigint * interval '1 millisecond') as verified_at,
+        database_clock.observed_at
+          + ($2::bigint * interval '1 millisecond') as expires_at,
+        database_clock.observed_at
+          + ($3::bigint * interval '1 millisecond') as signing_expires_at,
+        database_clock.observed_at
+          + ($4::bigint * interval '1 millisecond') as agent_valid_until
+      from database_clock
+    `,
+    values: [
+      overrides.verifiedOffsetMs ?? -100,
+      overrides.authorityExpiresOffsetMs ?? 14_000,
+      overrides.signingExpiresOffsetMs ?? 120_000,
+      overrides.agentValidUntilOffsetMs ?? 3_600_000,
+    ],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error("Database clock fixture failed");
+  }
+  return Object.freeze({
+    verifiedAt: row.verified_at.toISOString(),
+    expiresAt: row.expires_at.toISOString(),
+    signingExpiresAt: row.signing_expires_at.toISOString(),
+    agentValidUntil: row.agent_valid_until.toISOString(),
+  });
+}
+
+async function seedAuthority(
+  pool: InstanceType<typeof Pool>,
+  label: string,
+): Promise<AuthorityFixture> {
+  const privyUserId = `did:privy:spot-agent:${label}:${randomUUID()}`;
+  const owner = await pool.query<{ id: string }>({
+    text: `
+      insert into public.loop_users (privy_user_id)
+      values ($1)
+      returning id
+    `,
+    values: [privyUserId],
+  });
+  const ownerUserId = owner.rows[0]?.id;
+  if (ownerUserId === undefined) {
+    throw new Error("Spot Agent owner fixture failed");
+  }
+  const walletId = `wallet-${randomUUID()}`;
+  const accountAddress = randomAddress();
+  await pool.query({
+    text: `
+      insert into public.perp_wallet_bindings (
+        owner_user_id,
+        privy_user_id,
+        binding_state,
+        wallet_id,
+        account_address,
+        account_kind,
+        binding_version,
+        last_verified_at
+      )
+      values ($1, $2, 'bound', $3, $4, 'master', 1, clock_timestamp())
+    `,
+    values: [ownerUserId, privyUserId, walletId, accountAddress],
+  });
+  return Object.freeze({
+    ownerUserId,
+    privyUserId,
+    walletId,
+    accountAddress,
+  });
+}
+
+async function issueInput(
+  pool: InstanceType<typeof Pool>,
+  authority: AuthorityFixture,
+  overrides: Partial<IssueSpotAgentAuthorizationInput> = {},
+  timeOverrides: Parameters<typeof databaseTimes>[1] = {},
+): Promise<IssueSpotAgentAuthorizationInput> {
+  const times = await databaseTimes(pool, timeOverrides);
+  const agentValidUntil = overrides.agentValidUntil ?? times.agentValidUntil;
+  const agentName =
+    overrides.agentName ??
+    `Loop-${randomHex(11)} valid_until ${Date.parse(agentValidUntil)}`;
+  return Object.freeze({
+    authorizationId: randomUUID(),
+    agentIdentityId: randomUUID(),
+    ownerUserId: authority.ownerUserId,
+    privyUserId: authority.privyUserId,
+    requestId: randomUUID(),
+    walletId: authority.walletId,
+    accountAddress: authority.accountAddress,
+    accountKind: "master",
+    bindingVersion: "1",
+    verifiedAt: times.verifiedAt,
+    expiresAt: times.expiresAt,
+    agentAddress: randomAddress(),
+    agentName,
+    signerRef: `privy-server-wallet:${randomUUID()}`,
+    agentValidUntil,
+    signingExpiresAt: times.signingExpiresAt,
+    policyVersion: SPOT_AGENT_AUTHORIZATION_POLICY_VERSION,
+    ...overrides,
+  });
+}
+
+function preflightInput(
+  input: IssueSpotAgentAuthorizationInput,
+  overrides: Partial<PreflightSpotAgentAuthorizationInput> = {},
+): PreflightSpotAgentAuthorizationInput {
+  return Object.freeze({
+    ownerUserId: input.ownerUserId,
+    privyUserId: input.privyUserId,
+    requestId: input.requestId,
+    walletId: input.walletId,
+    accountAddress: input.accountAddress,
+    accountKind: input.accountKind,
+    bindingVersion: input.bindingVersion,
+    verifiedAt: input.verifiedAt,
+    expiresAt: input.expiresAt,
+    policyVersion: input.policyVersion,
+    ...overrides,
+  });
+}
+
+function typedData(
+  context: SpotAgentAuthorizationMaterializationContext,
+): Record<string, unknown> {
+  return {
+    domain: {
+      name: "HyperliquidSignTransaction",
+      version: "1",
+      chainId: 421_614,
+      verifyingContract: `0x${"0".repeat(40)}`,
+    },
+    types: {
+      "HyperliquidTransaction:ApproveAgent": [
+        { name: "hyperliquidChain", type: "string" },
+        { name: "agentAddress", type: "address" },
+        { name: "agentName", type: "string" },
+        { name: "nonce", type: "uint64" },
+      ],
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ],
+    },
+    primaryType: "HyperliquidTransaction:ApproveAgent",
+    message: {
+      type: "approveAgent",
+      agentAddress: context.agentAddress,
+      agentName: context.agentName,
+      nonce: context.authorizationNonce,
+      signatureChainId: "0x66eee",
+      hyperliquidChain: "Testnet",
+    },
+  };
+}
+
+function digestTypedData(value: unknown): string {
+  return `0x${createHash("sha256")
+    .update(JSON.stringify(value), "utf8")
+    .digest("hex")}`;
+}
+
+const computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest =
+  digestTypedData;
+
+const materializeForNonce: MaterializeSpotAgentAuthorizationForNonce = (
+  context,
+) => {
+  const value = typedData(context);
+  return Object.freeze({
+    typedData: value,
+    signingDigest: digestTypedData(value),
+  });
+};
+
+async function durableCounts(
+  pool: InstanceType<typeof Pool>,
+): Promise<DurableCounts> {
+  const result = await pool.query<DurableCounts>(`
+    select
+      (select count(*)::text from public.idempotency_records)
+        as idempotency_count,
+      (select count(*)::text from public.provider_operations)
+        as operation_count,
+      (select count(*)::text from public.spot_agent_identities)
+        as identity_count,
+      (select count(*)::text from public.spot_agent_identity_events)
+        as identity_event_count,
+      (select count(*)::text from public.spot_agent_authorizations)
+        as authorization_count,
+      (select count(*)::text from public.spot_agent_authorization_events)
+        as authorization_event_count,
+      (select count(*)::text from public.hyperliquid_signer_nonce_state)
+        as nonce_state_count,
+      (select count(*)::text from public.hyperliquid_signer_nonce_allocations)
+        as allocation_count,
+      (select count(*)::text from public.audit_events)
+        as audit_count
+  `);
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error("Spot Agent durable-count query failed");
+  }
+  return row;
+}
+
+function expectNoIssuedRows(counts: DurableCounts): void {
+  expect(counts).toEqual({
+    idempotency_count: "0",
+    operation_count: "0",
+    identity_count: "0",
+    identity_event_count: "0",
+    authorization_count: "0",
+    authorization_event_count: "0",
+    nonce_state_count: "0",
+    allocation_count: "0",
+    audit_count: "0",
+  });
+}
+
+describe("PostgreSQL Spot Agent authorization repository", () => {
+  const pool = new Pool({ connectionString: databaseUrl });
+  let repository: SpotAgentAuthorizationRepository;
+
+  beforeAll(() => {
+    repository = createPostgresSpotAgentAuthorizationRepository(pool);
+  });
+
+  beforeEach(async () => {
+    await pool.query(truncateAll);
+  });
+
+  afterAll(async () => {
+    await pool.query(truncateAll);
+    await pool.end();
+  });
+
+  it("issues once under concurrency and reserves one DB-clock nonce with no transport attempt", async () => {
+    const authority = await seedAuthority(pool, "concurrent");
+    const inputs = await Promise.all(
+      Array.from({ length: 12 }, () => issueInput(pool, authority)),
+    );
+
+    const results = await Promise.all(
+      inputs.map((input) =>
+        repository.issueOrReplayCurrent(
+          input,
+          materializeForNonce,
+          computeSigningDigest,
+        ),
+      ),
+    );
+
+    expect(results.filter((result) => result.kind === "issued")).toHaveLength(
+      1,
+    );
+    expect(results.filter((result) => result.kind === "replayed")).toHaveLength(
+      11,
+    );
+    const issued = results.find((result) => result.kind === "issued");
+    if (issued === undefined) {
+      throw new Error("Concurrent Spot Agent issuance had no winner");
+    }
+    expect(new Set(results.map((result) => result.authorization.id))).toEqual(
+      new Set([issued.authorization.id]),
+    );
+    expect(
+      new Set(
+        results.map((result) =>
+          JSON.stringify(result.signablePayload?.typed_data),
+        ),
+      ),
+    ).toHaveLength(1);
+
+    expect(await durableCounts(pool)).toEqual({
+      idempotency_count: "1",
+      operation_count: "1",
+      identity_count: "1",
+      identity_event_count: "2",
+      authorization_count: "1",
+      authorization_event_count: "1",
+      nonce_state_count: "1",
+      allocation_count: "1",
+      audit_count: "1",
+    });
+    const rows = await pool.query<{
+      attempt_count: number;
+      authorization_version: string;
+      identity_state: string;
+      identity_version: string;
+      nonce: string;
+      operation_state: string;
+      operation_version: string;
+      typed_data_json_sha256: string;
+    }>({
+      text: `
+        select
+          operation.attempt_count,
+          operation.state as operation_state,
+          operation.record_version::text as operation_version,
+          identity.lifecycle_state as identity_state,
+          identity.record_version::text as identity_version,
+          agent_auth.record_version::text as authorization_version,
+          agent_auth.typed_data_json_sha256,
+          allocation.nonce::text as nonce
+        from public.provider_operations as operation
+        join public.spot_agent_authorizations as agent_auth
+          on agent_auth.id = operation.id
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        join public.hyperliquid_signer_nonce_allocations as allocation
+          on allocation.operation_id = agent_auth.id
+        where agent_auth.id = $1
+      `,
+      values: [issued.authorization.id],
+    });
+    const row = rows.rows[0];
+    expect(row).toMatchObject({
+      attempt_count: 0,
+      operation_state: "prepared",
+      operation_version: "0",
+      identity_state: "authorization_pending",
+      identity_version: "1",
+      authorization_version: "0",
+    });
+    expect(issued.signablePayload).not.toBeNull();
+    expect(row?.typed_data_json_sha256).toBe(
+      createHash("sha256")
+        .update(JSON.stringify(issued.signablePayload.typed_data), "utf8")
+        .digest("hex"),
+    );
+    expect(row?.nonce).toBe(issued.authorization.authorizationNonce);
+  });
+
+  it("recovers a response-loss replay from the current owner/DID/binding snapshot without allocating", async () => {
+    const authority = await seedAuthority(pool, "response-loss");
+    const firstInput = await issueInput(pool, authority);
+    const first = await repository.issueOrReplayCurrent(
+      firstInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(first.kind).toBe("issued");
+    const retryInput = await issueInput(pool, authority);
+    await pool.query({
+      text: `
+        update public.hyperliquid_signer_nonce_state
+        set
+          last_allocated_nonce = last_allocated_nonce + $2::numeric,
+          updated_at = clock_timestamp()
+        where network = 'testnet' and signer_address = $1
+      `,
+      values: [
+        authority.accountAddress,
+        HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS + 1_000,
+      ],
+    });
+    const nonceBefore = await pool.query<{
+      last_allocated_nonce: string;
+      updated_at: Date;
+    }>({
+      text: `
+        select last_allocated_nonce::text as last_allocated_nonce, updated_at
+        from public.hyperliquid_signer_nonce_state
+        where network = 'testnet' and signer_address = $1
+      `,
+      values: [authority.accountAddress],
+    });
+    const replayMaterializer = vi.fn(materializeForNonce);
+    const preflight = await repository.preflightCurrent(
+      preflightInput(retryInput),
+      replayMaterializer,
+      computeSigningDigest,
+    );
+    expect(preflight.kind).toBe("replayed");
+    expect(preflight.authorization?.id).toBe(firstInput.authorizationId);
+    expect(preflight.signablePayload).toEqual(first.signablePayload);
+    expect(replayMaterializer).toHaveBeenCalledTimes(1);
+
+    const replay = await repository.issueOrReplayCurrent(
+      retryInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(replay).toMatchObject({
+      kind: "replayed",
+      created: false,
+      authorization: {
+        id: firstInput.authorizationId,
+        authorizationNonce: first.authorization.authorizationNonce,
+      },
+    });
+    expect(replay.signablePayload).toEqual(first.signablePayload);
+    expect(await durableCounts(pool)).toMatchObject({
+      idempotency_count: "1",
+      operation_count: "1",
+      authorization_count: "1",
+      allocation_count: "1",
+      nonce_state_count: "1",
+    });
+    const nonceAfter = await pool.query<{
+      last_allocated_nonce: string;
+      updated_at: Date;
+    }>({
+      text: `
+        select last_allocated_nonce::text as last_allocated_nonce, updated_at
+        from public.hyperliquid_signer_nonce_state
+        where network = 'testnet' and signer_address = $1
+      `,
+      values: [authority.accountAddress],
+    });
+    expect(nonceAfter.rows[0]).toEqual(nonceBefore.rows[0]);
+  });
+
+  it("locks the owner then rejects stale authority identity, wallet, address, and lease snapshots before allocation", async () => {
+    const authority = await seedAuthority(pool, "authority-fence");
+    const base = await issueInput(pool, authority);
+    const materializer = vi.fn(materializeForNonce);
+    const hasher = vi.fn(computeSigningDigest);
+    const futureLease = await databaseTimes(pool, {
+      verifiedOffsetMs: 1_000,
+      authorityExpiresOffsetMs: 10_000,
+    });
+    const expiredLease = await databaseTimes(pool, {
+      verifiedOffsetMs: -10_000,
+      authorityExpiresOffsetMs: -1,
+    });
+    const overlongLease = await databaseTimes(pool, {
+      verifiedOffsetMs: -100,
+      authorityExpiresOffsetMs:
+        SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS + 1_000,
+    });
+    const exactBoundaryLease = await databaseTimes(pool, {
+      verifiedOffsetMs: -100,
+      authorityExpiresOffsetMs:
+        SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS - 100,
+    });
+    const cases: readonly PreflightSpotAgentAuthorizationInput[] = [
+      preflightInput(base, { privyUserId: `did:privy:wrong:${randomUUID()}` }),
+      preflightInput(base, { ownerUserId: randomUUID() }),
+      preflightInput(base, { walletId: `wallet-${randomUUID()}` }),
+      preflightInput(base, { accountAddress: randomAddress() }),
+      preflightInput(base, {
+        verifiedAt: futureLease.verifiedAt,
+        expiresAt: futureLease.expiresAt,
+      }),
+      preflightInput(base, {
+        verifiedAt: expiredLease.verifiedAt,
+        expiresAt: expiredLease.expiresAt,
+      }),
+      preflightInput(base, {
+        verifiedAt: overlongLease.verifiedAt,
+        expiresAt: overlongLease.expiresAt,
+      }),
+    ];
+
+    for (const value of cases) {
+      await expect(
+        repository.preflightCurrent(value, materializer, hasher),
+      ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+      expectNoIssuedRows(await durableCounts(pool));
+    }
+    expect(materializer).not.toHaveBeenCalled();
+    expect(hasher).not.toHaveBeenCalled();
+
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority), {
+          verifiedAt: exactBoundaryLease.verifiedAt,
+          expiresAt: exactBoundaryLease.expiresAt,
+        }),
+        materializer,
+        hasher,
+      ),
+    ).resolves.toEqual({
+      kind: "issue_required",
+      created: false,
+      authorization: null,
+      signablePayload: null,
+    });
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("rechecks the authority lease after deferred constraints and rolls back a payload that crossed expiry", async () => {
+    const authority = await seedAuthority(pool, "lease-toctou");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        verifiedOffsetMs: -100,
+        authorityExpiresOffsetMs: 500,
+      },
+    );
+    const slowMaterializer: MaterializeSpotAgentAuthorizationForNonce = (
+      context,
+    ) => {
+      void Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+        0,
+        0,
+        650,
+      );
+      return materializeForNonce(context);
+    };
+
+    await expect(
+      repository.issueOrReplayCurrent(
+        input,
+        slowMaterializer,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("uses the DB clock to reject expired and over-five-minute signing handoffs with full rollback", async () => {
+    const authority = await seedAuthority(pool, "signing-window");
+    const expired = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: -1 },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        expired,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationPrepareExpiredError);
+    expectNoIssuedRows(await durableCounts(pool));
+
+    const overlong = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        signingExpiresOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_SIGNING_TTL_MILLISECONDS + 1_000,
+      },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        overlong,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationPrepareExpiredError);
+    expectNoIssuedRows(await durableCounts(pool));
+
+    const insideBoundary = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        signingExpiresOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_SIGNING_TTL_MILLISECONDS - 1_000,
+      },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        insideBoundary,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).resolves.toMatchObject({ kind: "issued", created: true });
+  });
+
+  it("locks policy v1 to a DB-clock-bounded 24-hour Agent lifetime", async () => {
+    const authority = await seedAuthority(pool, "agent-lifetime");
+    const overCap = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        agentValidUntilOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_MAX_AGENT_LIFETIME_MILLISECONDS + 2_000,
+      },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        overCap,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationPrepareExpiredError);
+    expectNoIssuedRows(await durableCounts(pool));
+
+    const multiYear = await issueInput(
+      pool,
+      authority,
+      {},
+      { agentValidUntilOffsetMs: 365 * 24 * 60 * 60 * 1_000 },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        multiYear,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationPrepareExpiredError);
+    expectNoIssuedRows(await durableCounts(pool));
+
+    const unknownPolicy = {
+      ...(await issueInput(pool, authority)),
+      policyVersion: "spot_agent_v2",
+    } as unknown as IssueSpotAgentAuthorizationInput;
+    await expect(
+      repository.issueOrReplayCurrent(
+        unknownPolicy,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationRepositoryUnavailableError);
+    expectNoIssuedRows(await durableCounts(pool));
+
+    const insideCap = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        agentValidUntilOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_MAX_AGENT_LIFETIME_MILLISECONDS - 1_000,
+      },
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        insideCap,
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).resolves.toMatchObject({ kind: "issued", created: true });
+  });
+
+  it("rejects missing or tampered canonical agent expiry suffixes before materialization", async () => {
+    const authority = await seedAuthority(pool, "agent-expiry-suffix");
+    const valid = await issueInput(pool, authority);
+    const validUntilMilliseconds = Date.parse(valid.agentValidUntil);
+    const cases: readonly IssueSpotAgentAuthorizationInput[] = [
+      { ...valid, authorizationId: randomUUID(), agentName: "Loop-agent" },
+      {
+        ...valid,
+        authorizationId: randomUUID(),
+        agentName: `Loop-agent valid_until ${validUntilMilliseconds + 1}`,
+      },
+      {
+        ...valid,
+        authorizationId: randomUUID(),
+        agentValidUntil: new Date(validUntilMilliseconds + 1_000).toISOString(),
+      },
+      {
+        ...valid,
+        authorizationId: randomUUID(),
+        agentName: `${"a".repeat(17)} valid_until ${validUntilMilliseconds}`,
+      },
+    ];
+    const materializer = vi.fn(materializeForNonce);
+    for (const input of cases) {
+      await expect(
+        repository.issueOrReplayCurrent(
+          input,
+          materializer,
+          computeSigningDigest,
+        ),
+      ).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
+      expectNoIssuedRows(await durableCounts(pool));
+    }
+    expect(materializer).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the nonce and every issued row for payload or independent digest mismatches", async () => {
+    const authority = await seedAuthority(pool, "payload-binding");
+    const cases: readonly MaterializeSpotAgentAuthorizationForNonce[] = [
+      (context) => {
+        const value = typedData(context);
+        const message = value["message"] as Record<string, unknown>;
+        const malformed = {
+          ...value,
+          message: { ...message, nonce: `${context.authorizationNonce}0` },
+        };
+        return {
+          typedData: malformed,
+          signingDigest: digestTypedData(malformed),
+        };
+      },
+      (context) => {
+        const value = typedData(context);
+        const message = value["message"] as Record<string, unknown>;
+        const malformed = {
+          ...value,
+          message: { ...message, agentAddress: randomAddress() },
+        };
+        return {
+          typedData: malformed,
+          signingDigest: digestTypedData(malformed),
+        };
+      },
+      (context) => {
+        const value = typedData(context);
+        const domain = value["domain"] as Record<string, unknown>;
+        const malformed = {
+          ...value,
+          domain: { ...domain, chainId: 1 },
+        };
+        return {
+          typedData: malformed,
+          signingDigest: digestTypedData(malformed),
+        };
+      },
+      (context) => ({
+        typedData: typedData(context),
+        signingDigest: `0x${"f".repeat(64)}`,
+      }),
+    ];
+
+    for (const materializer of cases) {
+      const input = await issueInput(pool, authority);
+      await expect(
+        repository.issueOrReplayCurrent(
+          input,
+          materializer,
+          computeSigningDigest,
+        ),
+      ).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
+      expectNoIssuedRows(await durableCounts(pool));
+    }
+  });
+
+  it("fast-forwards monotonically and fails closed beyond the strict future nonce window", async () => {
+    const authority = await seedAuthority(pool, "nonce-window");
+    const seed = await pool.query<{ nonce: string }>({
+      text: `
+        with database_clock as (
+          select floor(extract(epoch from clock_timestamp()) * 1000)::numeric
+            as unix_milliseconds
+        )
+        insert into public.hyperliquid_signer_nonce_state (
+          network,
+          signer_address,
+          signer_kind,
+          last_allocated_nonce
+        )
+        select 'testnet', $1, 'owner_wallet', unix_milliseconds + 5000
+        from database_clock
+        returning last_allocated_nonce::text as nonce
+      `,
+      values: [authority.accountAddress],
+    });
+    const seededNonce = seed.rows[0]?.nonce;
+    const issued = await repository.issueOrReplayCurrent(
+      await issueInput(pool, authority),
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(BigInt(issued.authorization.authorizationNonce)).toBe(
+      BigInt(seededNonce ?? "0") + 1n,
+    );
+
+    await pool.query(truncateAll);
+    const blockedAuthority = await seedAuthority(pool, "nonce-blocked");
+    const blockedSeed = await pool.query<{ nonce: string }>({
+      text: `
+        with database_clock as (
+          select floor(extract(epoch from clock_timestamp()) * 1000)::numeric
+            as unix_milliseconds
+        )
+        insert into public.hyperliquid_signer_nonce_state (
+          network,
+          signer_address,
+          signer_kind,
+          last_allocated_nonce
+        )
+        select 'testnet', $1, 'owner_wallet', unix_milliseconds + $2::numeric
+        from database_clock
+        returning last_allocated_nonce::text as nonce
+      `,
+      values: [
+        blockedAuthority.accountAddress,
+        HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS + 1_000,
+      ],
+    });
+    await expect(
+      repository.issueOrReplayCurrent(
+        await issueInput(pool, blockedAuthority),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationNonceUnavailableError);
+    const state = await pool.query<{ nonce: string }>({
+      text: `
+        select last_allocated_nonce::text as nonce
+        from public.hyperliquid_signer_nonce_state
+        where network = 'testnet' and signer_address = $1
+      `,
+      values: [blockedAuthority.accountAddress],
+    });
+    expect(state.rows[0]?.nonce).toBe(blockedSeed.rows[0]?.nonce);
+    expect(await durableCounts(pool)).toMatchObject({
+      idempotency_count: "0",
+      operation_count: "0",
+      identity_count: "0",
+      authorization_count: "0",
+      authorization_event_count: "0",
+      allocation_count: "0",
+      audit_count: "0",
+      nonce_state_count: "1",
+    });
+  });
+
+  it("commits elapsed recovery before a new materializer failure and remains recoverable", async () => {
+    const authority = await seedAuthority(pool, "elapsed-recovery");
+    const firstInput = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: 250 },
+    );
+    const first = await repository.issueOrReplayCurrent(
+      firstInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(first.kind).toBe("issued");
+    await pool.query("select pg_sleep(0.35)");
+
+    const existingIdentity = {
+      agentAddress: first.authorization.agentAddress,
+      agentName: first.authorization.agentName,
+      agentValidUntil: first.authorization.agentValidUntil,
+      signerRef: first.authorization.signerRef,
+    } as const;
+    const failedReplacement = await issueInput(
+      pool,
+      authority,
+      existingIdentity,
+    );
+    await expect(
+      repository.issueOrReplayCurrent(
+        failedReplacement,
+        () => {
+          throw new Error("injected materializer failure");
+        },
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationRepositoryUnavailableError);
+
+    const recovered = await pool.query<{
+      authorization_reason: string | null;
+      authorization_state: string;
+      authorization_version: string;
+      identity_state: string;
+      identity_version: string;
+      operation_state: string;
+      operation_version: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          agent_auth.result_reason_code as authorization_reason,
+          agent_auth.record_version::text as authorization_version,
+          identity.lifecycle_state as identity_state,
+          identity.record_version::text as identity_version,
+          operation.state as operation_state,
+          operation.record_version::text as operation_version
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        join public.provider_operations as operation
+          on operation.id = agent_auth.id
+        where agent_auth.id = $1
+      `,
+      values: [firstInput.authorizationId],
+    });
+    expect(recovered.rows[0]).toEqual({
+      authorization_state: "expired",
+      authorization_reason: "signing_expired",
+      authorization_version: "1",
+      identity_state: "reserved",
+      identity_version: "2",
+      operation_state: "prepared",
+      operation_version: "0",
+    });
+    expect(await durableCounts(pool)).toEqual({
+      idempotency_count: "1",
+      operation_count: "1",
+      identity_count: "1",
+      identity_event_count: "3",
+      authorization_count: "1",
+      authorization_event_count: "2",
+      nonce_state_count: "1",
+      allocation_count: "1",
+      audit_count: "1",
+    });
+
+    await expect(
+      repository.issueOrReplayCurrent(
+        await issueInput(pool, authority),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    expect(await durableCounts(pool)).toMatchObject({
+      idempotency_count: "1",
+      operation_count: "1",
+      identity_count: "1",
+      authorization_count: "1",
+      allocation_count: "1",
+      nonce_state_count: "1",
+    });
+
+    const replacement = await repository.issueOrReplayCurrent(
+      await issueInput(pool, authority, existingIdentity),
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(replacement.kind).toBe("issued");
+    expect(replacement.authorization.agentIdentityId).toBe(
+      first.authorization.agentIdentityId,
+    );
+    expect(
+      BigInt(replacement.authorization.authorizationNonce),
+    ).toBeGreaterThan(BigInt(first.authorization.authorizationNonce));
+    const identityEvents = await pool.query<{
+      identity_version: string;
+      to_state: string;
+    }>({
+      text: `
+        select identity_version::text as identity_version, to_state
+        from public.spot_agent_identity_events
+        where agent_identity_id = $1
+        order by identity_version
+      `,
+      values: [first.authorization.agentIdentityId],
+    });
+    expect(identityEvents.rows).toEqual([
+      { identity_version: "0", to_state: "reserved" },
+      { identity_version: "1", to_state: "authorization_pending" },
+      { identity_version: "2", to_state: "reserved" },
+      { identity_version: "3", to_state: "authorization_pending" },
+    ]);
+  });
+
+  it("commits expiry-only cleanup even when its authority lease elapses before commit", async () => {
+    const authority = await seedAuthority(pool, "expiry-cleanup-lease");
+    const issuedInput = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: 200 },
+    );
+    await repository.issueOrReplayCurrent(
+      issuedInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await pool.query("select pg_sleep(0.25)");
+
+    const shortLease = await issueInput(
+      pool,
+      authority,
+      {},
+      { verifiedOffsetMs: -100, authorityExpiresOffsetMs: 500 },
+    );
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query(
+        "lock table public.spot_agent_authorization_events in access exclusive mode",
+      );
+      const cleanup = repository.preflightCurrent(
+        preflightInput(shortLease),
+        materializeForNonce,
+        computeSigningDigest,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await blocker.query("commit");
+      await expect(cleanup).resolves.toMatchObject({
+        kind: "expired",
+        authorization: { id: issuedInput.authorizationId },
+        signablePayload: null,
+      });
+    } catch (error) {
+      await blocker.query("rollback");
+      throw error;
+    } finally {
+      blocker.release();
+    }
+
+    const state = await pool.query<{
+      authorization_state: string;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          identity.lifecycle_state as identity_state
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        where agent_auth.id = $1
+      `,
+      values: [issuedInput.authorizationId],
+    });
+    expect(state.rows[0]).toEqual({
+      authorization_state: "expired",
+      identity_state: "reserved",
+    });
+  });
+
+  it.each(["rotate", "unbind"] as const)(
+    "sweeps elapsed prepared authorization after wallet %s without another epoch POST",
+    async (transition) => {
+      const authority = await seedAuthority(pool, `sweep-${transition}`);
+      const input = await issueInput(
+        pool,
+        authority,
+        {},
+        { signingExpiresOffsetMs: 200 },
+      );
+      const issued = await repository.issueOrReplayCurrent(
+        input,
+        materializeForNonce,
+        computeSigningDigest,
+      );
+      if (transition === "rotate") {
+        await pool.query({
+          text: `
+            update public.perp_wallet_bindings
+            set
+              wallet_id = $2,
+              account_address = $3,
+              binding_version = 2,
+              last_verified_at = clock_timestamp(),
+              updated_at = clock_timestamp()
+            where owner_user_id = $1
+          `,
+          values: [
+            authority.ownerUserId,
+            `wallet-${randomUUID()}`,
+            randomAddress(),
+          ],
+        });
+      } else {
+        await pool.query({
+          text: `
+            update public.perp_wallet_bindings
+            set
+              binding_state = 'unbound',
+              wallet_id = null,
+              account_address = null,
+              account_kind = null,
+              binding_version = 2,
+              last_verified_at = null,
+              updated_at = clock_timestamp()
+            where owner_user_id = $1
+          `,
+          values: [authority.ownerUserId],
+        });
+      }
+      await pool.query("select pg_sleep(0.25)");
+
+      const sweeps = await Promise.all([
+        repository.expireElapsedPrepared({
+          requestId: randomUUID(),
+          limit: 10,
+        }),
+        repository.expireElapsedPrepared({
+          requestId: randomUUID(),
+          limit: 10,
+        }),
+      ]);
+      expect(
+        sweeps.reduce((total, result) => total + result.expiredCount, 0),
+      ).toBe(1);
+      await expect(
+        repository.expireElapsedPrepared({
+          requestId: randomUUID(),
+          limit: 10,
+        }),
+      ).resolves.toEqual({ expiredCount: 0 });
+
+      const state = await pool.query<{
+        actor_type: string;
+        authorization_state: string;
+        identity_state: string;
+        operation_state: string;
+        operation_version: string;
+      }>({
+        text: `
+          select
+            agent_auth.state as authorization_state,
+            identity.lifecycle_state as identity_state,
+            operation.state as operation_state,
+            operation.record_version::text as operation_version,
+            event.actor_type
+          from public.spot_agent_authorizations as agent_auth
+          join public.spot_agent_identities as identity
+            on identity.id = agent_auth.agent_identity_id
+          join public.provider_operations as operation
+            on operation.id = agent_auth.id
+          join public.spot_agent_authorization_events as event
+            on event.authorization_id = agent_auth.id
+           and event.authorization_version = 1
+          where agent_auth.id = $1
+        `,
+        values: [issued.authorization.id],
+      });
+      expect(state.rows[0]).toEqual({
+        authorization_state: "expired",
+        identity_state: "retired",
+        operation_state: "prepared",
+        operation_version: "0",
+        actor_type: "worker",
+      });
+      expect(await durableCounts(pool)).toEqual({
+        idempotency_count: "1",
+        operation_count: "1",
+        identity_count: "1",
+        identity_event_count: "3",
+        authorization_count: "1",
+        authorization_event_count: "2",
+        nonce_state_count: "1",
+        allocation_count: "1",
+        audit_count: "1",
+      });
+    },
+  );
+
+  it("skips a lock-blocked expiry candidate, advances later candidates, and converges next sweep", async () => {
+    const blockedAuthority = await seedAuthority(pool, "sweep-lock-blocked");
+    const laterAuthority = await seedAuthority(pool, "sweep-lock-later");
+    const blockedInput = await issueInput(
+      pool,
+      blockedAuthority,
+      {},
+      { signingExpiresOffsetMs: 200 },
+    );
+    const laterInput = await issueInput(
+      pool,
+      laterAuthority,
+      {},
+      { signingExpiresOffsetMs: 200 },
+    );
+    await repository.issueOrReplayCurrent(
+      blockedInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await repository.issueOrReplayCurrent(
+      laterInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await pool.query("select pg_sleep(0.25)");
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query({
+        text: `
+          select id
+          from public.loop_users
+          where id = $1
+          for update
+        `,
+        values: [blockedAuthority.ownerUserId],
+      });
+      await blocker.query({
+        text: `
+          update public.perp_wallet_bindings
+          set
+            wallet_id = $2,
+            account_address = $3,
+            binding_version = 2,
+            last_verified_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+          where owner_user_id = $1
+        `,
+        values: [
+          blockedAuthority.ownerUserId,
+          `wallet-${randomUUID()}`,
+          randomAddress(),
+        ],
+      });
+
+      await expect(
+        repository.expireElapsedPrepared({
+          requestId: randomUUID(),
+          limit: 10,
+        }),
+      ).resolves.toEqual({ expiredCount: 1 });
+
+      const firstPass = await pool.query<{
+        blocked_state: string;
+        later_state: string;
+      }>({
+        text: `
+          select
+            (select state from public.spot_agent_authorizations where id = $1)
+              as blocked_state,
+            (select state from public.spot_agent_authorizations where id = $2)
+              as later_state
+        `,
+        values: [blockedInput.authorizationId, laterInput.authorizationId],
+      });
+      expect(firstPass.rows[0]).toEqual({
+        blocked_state: "prepared",
+        later_state: "expired",
+      });
+
+      await blocker.query("commit");
+    } catch (error) {
+      await blocker.query("rollback");
+      throw error;
+    } finally {
+      blocker.release();
+    }
+
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toEqual({ expiredCount: 1 });
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toEqual({ expiredCount: 0 });
+
+    const converged = await pool.query<{
+      authorization_state: string;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          identity.lifecycle_state as identity_state
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        where agent_auth.id = $1
+      `,
+      values: [blockedInput.authorizationId],
+    });
+    expect(converged.rows[0]).toEqual({
+      authorization_state: "expired",
+      identity_state: "retired",
+    });
+  });
+
+  it("does not replay a one-time payload after the authorization starts submitting", async () => {
+    const authority = await seedAuthority(pool, "submitting");
+    const input = await issueInput(pool, authority);
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    const attemptId = randomUUID();
+    const transitionRequestId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query({
+        text: `
+          with database_clock as (
+            select clock_timestamp() as observed_at
+          )
+          update public.provider_operations as operation
+          set
+            state = 'submitting',
+            attempt_count = 1,
+            transport_attempt_id = $2,
+            attempt_committed_at = database_clock.observed_at,
+            attempt_deadline_at = database_clock.observed_at + interval '5 seconds',
+            record_version = 1,
+            updated_at = database_clock.observed_at
+          from database_clock
+          where operation.id = $1
+        `,
+        values: [input.authorizationId, attemptId],
+      });
+      await client.query({
+        text: `
+          update public.spot_agent_authorizations
+          set
+            state = 'submitting',
+            record_version = 1,
+            updated_at = clock_timestamp()
+          where id = $1
+        `,
+        values: [input.authorizationId],
+      });
+      await client.query({
+        text: `
+          insert into public.audit_events (
+            owner_user_id,
+            operation_id,
+            request_id,
+            actor_type,
+            event_type,
+            from_state,
+            to_state,
+            from_reconciliation_status,
+            to_reconciliation_status,
+            outcome,
+            operation_version,
+            fence_token,
+            transport_attempt_id
+          )
+          values (
+            $1, $2, $3, 'api', 'authorization_submitting',
+            'prepared', 'submitting', 'not_required', 'not_required',
+            'attempt_committed', 1, 0, $4
+          )
+        `,
+        values: [
+          authority.ownerUserId,
+          input.authorizationId,
+          transitionRequestId,
+          attemptId,
+        ],
+      });
+      await client.query({
+        text: `
+          insert into public.spot_agent_authorization_events (
+            authorization_id,
+            owner_user_id,
+            request_id,
+            actor_type,
+            event_type,
+            from_state,
+            to_state,
+            outcome,
+            authorization_version
+          )
+          values (
+            $1, $2, $3, 'api', 'authorization_submitting',
+            'prepared', 'submitting', 'attempt_committed', 1
+          )
+        `,
+        values: [
+          input.authorizationId,
+          authority.ownerUserId,
+          transitionRequestId,
+        ],
+      });
+      await client.query("set constraints all immediate");
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const replayMaterializer = vi.fn(materializeForNonce);
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority)),
+        replayMaterializer,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    expect(replayMaterializer).not.toHaveBeenCalled();
+    expect(await durableCounts(pool)).toMatchObject({
+      operation_count: "1",
+      authorization_count: "1",
+      allocation_count: "1",
+      audit_count: "2",
+    });
+  });
+
+  it("keeps status reads owner-isolated and omits signer and nonce material", async () => {
+    const authority = await seedAuthority(pool, "owner-a");
+    const foreign = await seedAuthority(pool, "owner-b");
+    const input = await issueInput(pool, authority);
+    const issued = await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+
+    const owned = await repository.findOwned(
+      authority.ownerUserId,
+      input.authorizationId,
+    );
+    await expect(
+      repository.findOwned(foreign.ownerUserId, input.authorizationId),
+    ).resolves.toBeNull();
+    expect(owned?.resource).toEqual(issued.authorization.resource);
+    expect(owned?.recordVersion).toBe("0");
+    expect(owned?.resource).not.toHaveProperty("signable_payload");
+    expect(owned?.resource).not.toHaveProperty("authorization_nonce");
+    expect(owned?.resource).not.toHaveProperty("agent_address");
+    expect(owned?.resource).not.toHaveProperty("wallet_id");
+    expect(owned?.resource).not.toHaveProperty("privy_user_id");
+  });
+});

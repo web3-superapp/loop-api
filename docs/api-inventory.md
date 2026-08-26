@@ -153,7 +153,12 @@ index/ID, pair index, Exchange asset, nonce, CLOID, provider idempotency value,
 wire action, or order signature. The one authorization-creation response may
 contain the server-generated public typed-data fields Privy must sign; the
 client cannot edit them, and the signature-submission body still contains only
-the opaque signature. The contract and official signing fixtures live under
+the opaque signature. The server-generated `agentName` must canonically end in
+` valid_until <unix-milliseconds>` matching the displayed persisted expiry,
+because Hyperliquid binds Agent expiry through that signed name; its nonempty
+base is at most 16 characters and the initial `spot_agent_v1` Testnet policy
+caps validity at 24 hours from the database clock. The contract and official
+signing fixtures live under
 `contracts/hyperliquid-spot/`. The production writer is unavailable and no
 Hyperliquid Node SDK has been installed.
 
