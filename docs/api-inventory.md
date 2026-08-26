@@ -123,8 +123,9 @@ mutations, and do not claim connected Stream state.
 
 Decision 0014 approves the following exact owner-scoped contract for one
 manually reviewed capped IOC Spot buy or sell. These routes are not yet present
-in `src/routes/` or generated OpenAPI. Approval does not claim a provider,
-signer, wallet, or execution integration.
+in generated OpenAPI or production composition; their strict default-closed
+route modules are implemented under `src/routes/spot-*.ts`. This does not claim
+a provider, signer, wallet, or execution integration.
 
 | Method and path                                                    | Key contract                                                                                                         | Interface           | Capability                                  |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------- |
