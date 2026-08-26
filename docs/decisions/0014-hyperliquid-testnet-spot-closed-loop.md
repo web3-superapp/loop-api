@@ -107,9 +107,11 @@ rotate, refresh, and unbind resolve eligible Privy embedded EVM wallets
 server-side. The first slice supports the master account only and never returns
 the selected address or wallet ID.
 
-Each LOOP owner, Testnet network, and binding epoch receives a unique Agent
-identity. The preferred implementation is a Privy-managed server wallet whose
-private key is never exported. The owner signs only one server-built,
+Each LOOP owner, Testnet network, and binding epoch has at most one current
+Agent identity, while immutable historical generations are retained under
+[Decision 0016](0016-spot-agent-generation-lifecycle.md). The preferred
+implementation is a Privy-managed server wallet whose private key is never
+exported. The owner signs only one server-built,
 short-lived Testnet `approveAgent` typed-data handoff. Signature submission
 accepts only the opaque signature, verifies the exact stored digest, signer,
 Agent, expiry, binding epoch, and unused state, journals at most one relay, and

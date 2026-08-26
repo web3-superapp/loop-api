@@ -1,4 +1,4 @@
-export const latestMigrationName = "000007_hyperliquid_spot_closed_loop";
+export const latestMigrationName = "000008_spot_agent_generations";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

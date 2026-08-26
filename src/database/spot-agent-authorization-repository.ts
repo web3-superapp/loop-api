@@ -62,6 +62,7 @@ const bindingVersionSchema = z
       return false;
     }
   });
+const agentGenerationSchema = bindingVersionSchema;
 const recordVersionSchema = z
   .string()
   .regex(/^(?:0|[1-9][0-9]{0,18})$/)
@@ -120,6 +121,7 @@ const issueInputSchema = preflightInputSchema
   .extend({
     authorizationId: uuidSchema,
     agentIdentityId: uuidSchema,
+    agentGeneration: agentGenerationSchema,
     agentAddress: addressSchema,
     agentName: agentNameSchema,
     signerRef: signerRefSchema,
@@ -191,6 +193,7 @@ const authorizationRowSchema = z
       SPOT_AGENT_AUTHORIZATION_REQUEST_DIGEST_VERSION,
     ),
     agent_identity_id: uuidSchema,
+    agent_generation: agentGenerationSchema,
     network: z.literal("testnet"),
     action: z.literal("approve_agent"),
     account_address: addressSchema,
@@ -241,6 +244,7 @@ const identityRowSchema = z
     owner_user_id: uuidSchema,
     network: z.literal("testnet"),
     binding_version: bindingVersionSchema,
+    agent_generation: agentGenerationSchema,
     agent_address: addressSchema,
     agent_name: agentNameSchema,
     signer_ref: signerRefSchema,
@@ -282,6 +286,7 @@ const authorizationReturningColumns = `
   agent_auth.request_sha256,
   agent_auth.request_digest_version,
   agent_auth.agent_identity_id,
+  identity.agent_generation::text as agent_generation,
   agent_auth.network,
   agent_auth.action,
   agent_auth.account_address,
@@ -342,6 +347,7 @@ export interface SpotAgentAuthorizationRecord {
   readonly ownerUserId: string;
   readonly requestSha256: string;
   readonly agentIdentityId: string;
+  readonly agentGeneration: string;
   readonly accountAddress: string;
   readonly bindingVersion: string;
   readonly agentAddress: string;
@@ -375,6 +381,7 @@ export interface SpotAgentAuthorizationRecord {
 export interface IssueSpotAgentAuthorizationInput {
   readonly authorizationId: string;
   readonly agentIdentityId: string;
+  readonly agentGeneration: string;
   readonly ownerUserId: string;
   readonly privyUserId: string;
   readonly requestId: string;
@@ -413,6 +420,7 @@ export interface SpotAgentAuthorizationMaterializationContext {
   readonly accountAddress: string;
   readonly bindingVersion: string;
   readonly agentIdentityId: string;
+  readonly agentGeneration: string;
   readonly agentAddress: string;
   readonly agentName: string;
   readonly authorizationNonce: string;
@@ -465,6 +473,7 @@ export type PreflightSpotAgentAuthorizationResult =
   | Readonly<{
       kind: "issue_required";
       created: false;
+      agentGeneration: string;
       authorization: null;
       signablePayload: null;
     }>;
@@ -484,6 +493,10 @@ export interface SpotAgentAuthorizationRepository {
     readonly requestId: string;
     readonly limit: number;
   }): Promise<Readonly<{ expiredCount: number }>>;
+  retireElapsedAgentIdentities(input: {
+    readonly requestId: string;
+    readonly limit: number;
+  }): Promise<Readonly<{ retiredCount: number }>>;
   findOwned(
     ownerUserId: string,
     authorizationId: string,
@@ -535,6 +548,7 @@ export function createUnavailableSpotAgentAuthorizationRepository(): SpotAgentAu
     preflightCurrent: unavailable,
     issueOrReplayCurrent: unavailable,
     expireElapsedPrepared: unavailable,
+    retireElapsedAgentIdentities: unavailable,
     findOwned: unavailable,
   });
 }
@@ -879,6 +893,7 @@ function toAuthorizationRecord(value: unknown): SpotAgentAuthorizationRecord {
       ownerUserId: row.owner_user_id,
       requestSha256: row.request_sha256,
       agentIdentityId: row.agent_identity_id,
+      agentGeneration: row.agent_generation,
       accountAddress: row.account_address,
       bindingVersion: row.binding_version,
       agentAddress: row.agent_address,
@@ -1075,6 +1090,7 @@ async function readCurrentIdentity(
         owner_user_id,
         network,
         binding_version::text as binding_version,
+        agent_generation::text as agent_generation,
         agent_address,
         agent_name,
         signer_ref,
@@ -1084,6 +1100,9 @@ async function readCurrentIdentity(
       where owner_user_id = $1
         and network = 'testnet'
         and binding_version = $2::bigint
+        and lifecycle_state in (
+          'reserved', 'authorization_pending', 'active', 'operator_hold'
+        )
       limit 1
       for update
     `,
@@ -1091,6 +1110,33 @@ async function readCurrentIdentity(
   });
   const row = result.rows[0];
   return row === undefined ? null : identityRowSchema.parse(row);
+}
+
+async function readNextAgentGeneration(
+  client: DatabaseClient,
+  ownerUserId: string,
+  bindingVersion: string,
+): Promise<string> {
+  const result = await client.query<{ agent_generation: string }>({
+    text: `
+      select (
+        coalesce(max(agent_generation), 0)::numeric + 1
+      )::text as agent_generation
+      from public.spot_agent_identities
+      where owner_user_id = $1
+        and network = 'testnet'
+        and binding_version = $2::bigint
+    `,
+    values: [ownerUserId, bindingVersion],
+  });
+  const generation = result.rows[0]?.agent_generation;
+  if (
+    generation === undefined ||
+    !agentGenerationSchema.safeParse(generation).success
+  ) {
+    return failUnavailable();
+  }
+  return generation;
 }
 
 async function readLiveAuthorizationForIdentity(
@@ -1119,11 +1165,118 @@ async function readLiveAuthorizationForIdentity(
     : readOwnedAuthorization(client, ownerUserId, authorizationId, true);
 }
 
-async function persistElapsedPreparedExpiry(
+async function readLatestAuthorizationForIdentity(
+  client: DatabaseClient,
+  ownerUserId: string,
+  agentIdentityId: string,
+): Promise<SpotAgentAuthorizationRecord | null> {
+  const result = await client.query<{ id: string }>({
+    text: `
+      select id
+      from public.spot_agent_authorizations
+      where owner_user_id = $1 and agent_identity_id = $2
+      order by agent_valid_until desc, created_at desc, id desc
+      limit 1
+      for update
+    `,
+    values: [ownerUserId, agentIdentityId],
+  });
+  const authorizationId = result.rows[0]?.id;
+  return authorizationId === undefined
+    ? null
+    : readOwnedAuthorization(client, ownerUserId, authorizationId);
+}
+
+async function hasAgentValidityElapsed(
+  client: DatabaseClient,
+  agentValidUntil: string,
+): Promise<boolean> {
+  const result = await client.query<{ elapsed: boolean }>({
+    text: `
+      select $1::timestamptz <= clock_timestamp() as elapsed
+    `,
+    values: [agentValidUntil],
+  });
+  return result.rows[0]?.elapsed === true;
+}
+
+async function persistAgentValidityRetirement(
+  client: DatabaseClient,
+  identity: z.output<typeof identityRowSchema>,
+  authorization: SpotAgentAuthorizationRecord,
+  requestId: string,
+  actorType: "api" | "worker",
+): Promise<void> {
+  if (
+    authorization.agentIdentityId !== identity.id ||
+    authorization.ownerUserId !== identity.owner_user_id ||
+    authorization.bindingVersion !== identity.binding_version ||
+    authorization.agentGeneration !== identity.agent_generation ||
+    authorization.agentAddress !== identity.agent_address ||
+    authorization.agentName !== identity.agent_name ||
+    !(await hasAgentValidityElapsed(client, authorization.agentValidUntil))
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+
+  const retired = await client.query<{ record_version: string }>({
+    text: `
+      update public.spot_agent_identities as identity
+      set
+        lifecycle_state = 'retired',
+        record_version = identity.record_version + 1,
+        updated_at = clock_timestamp()
+      where identity.id = $1
+        and identity.owner_user_id = $2
+        and identity.lifecycle_state = $3
+        and identity.record_version = $4::bigint
+      returning identity.record_version::text as record_version
+    `,
+    values: [
+      identity.id,
+      identity.owner_user_id,
+      identity.lifecycle_state,
+      identity.record_version,
+    ],
+  });
+  const recordVersion = retired.rows[0]?.record_version;
+  if (recordVersion === undefined) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+  await client.query({
+    text: `
+      insert into public.spot_agent_identity_events (
+        agent_identity_id,
+        owner_user_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        outcome,
+        reason_code,
+        identity_version
+      )
+      values (
+        $1, $2, $3, $4, 'agent_validity_elapsed', $5, 'retired',
+        'retired', 'agent_validity_elapsed', $6::bigint
+      )
+    `,
+    values: [
+      identity.id,
+      identity.owner_user_id,
+      requestId,
+      actorType,
+      identity.lifecycle_state,
+      recordVersion,
+    ],
+  });
+}
+
+async function persistElapsedPreparedAuthorizationExpiry(
   client: DatabaseClient,
   authorization: SpotAgentAuthorizationRecord,
   requestId: string,
-  identityTargetState: "reserved" | "retired",
   actorType: "api" | "worker",
 ): Promise<SpotAgentAuthorizationRecord> {
   const expired = await client.query<{
@@ -1183,6 +1336,29 @@ async function persistElapsedPreparedExpiry(
       expiredRow.record_version,
     ],
   });
+
+  const record = await readOwnedAuthorization(
+    client,
+    authorization.ownerUserId,
+    authorization.id,
+    true,
+  );
+  return record ?? failUnavailable();
+}
+
+async function persistElapsedPreparedExpiry(
+  client: DatabaseClient,
+  authorization: SpotAgentAuthorizationRecord,
+  requestId: string,
+  identityTargetState: "reserved" | "retired",
+  actorType: "api" | "worker",
+): Promise<SpotAgentAuthorizationRecord> {
+  await persistElapsedPreparedAuthorizationExpiry(
+    client,
+    authorization,
+    requestId,
+    actorType,
+  );
 
   const released = await client.query<{
     id: string;
@@ -1316,6 +1492,7 @@ function contextFromRecord(
     accountAddress: record.accountAddress,
     bindingVersion: record.bindingVersion,
     agentIdentityId: record.agentIdentityId,
+    agentGeneration: record.agentGeneration,
     agentAddress: record.agentAddress,
     agentName: record.agentName,
     authorizationNonce: record.authorizationNonce,
@@ -1373,16 +1550,18 @@ async function insertNewIdentity(
         id,
         owner_user_id,
         binding_version,
+        agent_generation,
         agent_address,
         agent_name,
         signer_ref
       )
-      values ($1, $2, $3::bigint, $4, $5, $6)
+      values ($1, $2, $3::bigint, $4::bigint, $5, $6, $7)
       returning
         id,
         owner_user_id,
         network,
         binding_version::text as binding_version,
+        agent_generation::text as agent_generation,
         agent_address,
         agent_name,
         signer_ref,
@@ -1393,6 +1572,7 @@ async function insertNewIdentity(
       input.agentIdentityId,
       input.ownerUserId,
       input.bindingVersion,
+      input.agentGeneration,
       input.agentAddress,
       input.agentName,
       input.signerRef,
@@ -1674,6 +1854,7 @@ interface ElapsedPreparedCandidate {
   readonly agent_identity_id: string;
   readonly binding_version: string;
   readonly owner_user_id: string;
+  readonly signing_expires_at: Date;
 }
 
 const elapsedPreparedCandidateSchema = z
@@ -1682,6 +1863,7 @@ const elapsedPreparedCandidateSchema = z
     agent_identity_id: uuidSchema,
     binding_version: bindingVersionSchema,
     owner_user_id: uuidSchema,
+    signing_expires_at: validDateSchema,
   })
   .strict();
 
@@ -1696,6 +1878,7 @@ const sweptBindingRowSchema = z
 async function listElapsedPreparedCandidates(
   pool: Pool,
   limit: number,
+  after: ElapsedPreparedCandidate | null,
 ): Promise<readonly ElapsedPreparedCandidate[]> {
   const result = await pool.query<ElapsedPreparedCandidate>({
     text: `
@@ -1703,14 +1886,24 @@ async function listElapsedPreparedCandidates(
         agent_auth.id as authorization_id,
         agent_auth.agent_identity_id,
         agent_auth.binding_version::text as binding_version,
-        agent_auth.owner_user_id
+        agent_auth.owner_user_id,
+        agent_auth.signing_expires_at
       from public.spot_agent_authorizations as agent_auth
       where agent_auth.state = 'prepared'
         and agent_auth.signing_expires_at <= clock_timestamp()
+        and (
+          $2::timestamptz is null
+          or (agent_auth.signing_expires_at, agent_auth.id)
+            > ($2::timestamptz, $3::uuid)
+        )
       order by agent_auth.signing_expires_at, agent_auth.id
       limit $1
     `,
-    values: [limit],
+    values: [
+      limit,
+      after?.signing_expires_at ?? null,
+      after?.authorization_id ?? null,
+    ],
   });
   try {
     return result.rows.map((row) => elapsedPreparedCandidateSchema.parse(row));
@@ -1777,6 +1970,7 @@ async function expireElapsedPreparedCandidate(
           owner_user_id,
           network,
           binding_version::text as binding_version,
+          agent_generation::text as agent_generation,
           agent_address,
           agent_name,
           signer_ref,
@@ -1804,10 +1998,19 @@ async function expireElapsedPreparedCandidate(
       authorization === null ||
       authorization.agentIdentityId !== candidate.agent_identity_id ||
       authorization.storedState !== "prepared" ||
-      authorization.resource.state !== "expired" ||
-      identity.data.lifecycle_state !== "authorization_pending"
+      authorization.resource.state !== "expired"
     ) {
       return false;
+    }
+
+    if (identity.data.lifecycle_state !== "authorization_pending") {
+      await persistElapsedPreparedAuthorizationExpiry(
+        client,
+        authorization,
+        requestId,
+        "worker",
+      );
+      return true;
     }
 
     const identityTargetState =
@@ -1821,6 +2024,191 @@ async function expireElapsedPreparedCandidate(
       authorization,
       requestId,
       identityTargetState,
+      "worker",
+    );
+    return true;
+  });
+}
+
+interface ElapsedAgentIdentityCandidate {
+  readonly agent_identity_id: string;
+  readonly agent_valid_until: Date;
+  readonly binding_version: string;
+  readonly owner_user_id: string;
+}
+
+const elapsedAgentIdentityCandidateSchema = z
+  .object({
+    agent_identity_id: uuidSchema,
+    agent_valid_until: validDateSchema,
+    binding_version: bindingVersionSchema,
+    owner_user_id: uuidSchema,
+  })
+  .strict();
+
+async function listElapsedAgentIdentityCandidates(
+  pool: Pool,
+  limit: number,
+  after: ElapsedAgentIdentityCandidate | null,
+): Promise<readonly ElapsedAgentIdentityCandidate[]> {
+  const result = await pool.query<ElapsedAgentIdentityCandidate>({
+    text: `
+      select
+        identity.id as agent_identity_id,
+        latest.agent_valid_until,
+        identity.binding_version::text as binding_version,
+        identity.owner_user_id
+      from public.spot_agent_identities as identity
+      cross join lateral (
+        select agent_auth.agent_valid_until
+        from public.spot_agent_authorizations as agent_auth
+        where agent_auth.agent_identity_id = identity.id
+          and agent_auth.owner_user_id = identity.owner_user_id
+        order by
+          agent_auth.agent_valid_until desc,
+          agent_auth.created_at desc,
+          agent_auth.id desc
+        limit 1
+      ) as latest
+      where identity.lifecycle_state in (
+        'reserved', 'authorization_pending', 'active', 'operator_hold'
+      )
+        and latest.agent_valid_until <= clock_timestamp()
+        and (
+          $2::timestamptz is null
+          or (latest.agent_valid_until, identity.id)
+            > ($2::timestamptz, $3::uuid)
+        )
+      order by latest.agent_valid_until, identity.id
+      limit $1
+    `,
+    values: [
+      limit,
+      after?.agent_valid_until ?? null,
+      after?.agent_identity_id ?? null,
+    ],
+  });
+  try {
+    return result.rows.map((row) =>
+      elapsedAgentIdentityCandidateSchema.parse(row),
+    );
+  } catch {
+    return failUnavailable();
+  }
+}
+
+async function retireElapsedAgentIdentityCandidate(
+  pool: Pool,
+  candidate: ElapsedAgentIdentityCandidate,
+  requestId: string,
+): Promise<boolean> {
+  return withTransaction(pool, async (client) => {
+    const advisory = await client.query<{ locked: boolean }>({
+      text: "select pg_try_advisory_xact_lock(hashtext($1)) as locked",
+      values: [
+        `${issueLockDomain}:${candidate.owner_user_id}:${candidate.binding_version}`,
+      ],
+    });
+    if (advisory.rows[0]?.locked !== true) {
+      return false;
+    }
+    await client.query(
+      `set local lock_timeout = '${SPOT_AGENT_AUTHORIZATION_EXPIRY_SWEEP_LOCK_TIMEOUT_MILLISECONDS}ms'`,
+    );
+
+    const owner = await client.query<{ id: string }>({
+      text: `
+        select id
+        from public.loop_users
+        where id = $1
+        limit 1
+        for update
+      `,
+      values: [candidate.owner_user_id],
+    });
+    if (owner.rows[0]?.id !== candidate.owner_user_id) {
+      return failUnavailable();
+    }
+
+    const bindingResult = await client.query<Record<string, unknown>>({
+      text: `
+        select
+          binding_state,
+          account_address,
+          binding_version::text as binding_version
+        from public.perp_wallet_bindings
+        where owner_user_id = $1
+        limit 1
+        for update
+      `,
+      values: [candidate.owner_user_id],
+    });
+    if (!sweptBindingRowSchema.safeParse(bindingResult.rows[0]).success) {
+      return failUnavailable();
+    }
+
+    const identityResult = await client.query<Record<string, unknown>>({
+      text: `
+        select
+          id,
+          owner_user_id,
+          network,
+          binding_version::text as binding_version,
+          agent_generation::text as agent_generation,
+          agent_address,
+          agent_name,
+          signer_ref,
+          lifecycle_state,
+          record_version::text as record_version
+        from public.spot_agent_identities
+        where id = $1 and owner_user_id = $2
+        limit 1
+        for update
+      `,
+      values: [candidate.agent_identity_id, candidate.owner_user_id],
+    });
+    const identity = identityRowSchema.safeParse(identityResult.rows[0]);
+    if (!identity.success) {
+      return failUnavailable();
+    }
+    if (
+      ![
+        "reserved",
+        "authorization_pending",
+        "active",
+        "operator_hold",
+      ].includes(identity.data.lifecycle_state)
+    ) {
+      return false;
+    }
+
+    const latest = await readLatestAuthorizationForIdentity(
+      client,
+      candidate.owner_user_id,
+      candidate.agent_identity_id,
+    );
+    if (
+      latest === null ||
+      !(await hasAgentValidityElapsed(client, latest.agentValidUntil))
+    ) {
+      return false;
+    }
+    const preparedHandoffExpired =
+      latest.storedState === "prepared" && latest.resource.state === "expired";
+    let retirementAuthorization = latest;
+    if (preparedHandoffExpired) {
+      retirementAuthorization = await persistElapsedPreparedAuthorizationExpiry(
+        client,
+        latest,
+        requestId,
+        "worker",
+      );
+    }
+    await persistAgentValidityRetirement(
+      client,
+      identity.data,
+      retirementAuthorization,
+      requestId,
       "worker",
     );
     return true;
@@ -1858,6 +2246,7 @@ type InspectedCurrentAuthorization =
   | Readonly<{
       kind: "issue_required";
       identity: CurrentIdentity | null;
+      agentGeneration: string;
     }>;
 
 async function inspectCurrentAuthorization(
@@ -1878,7 +2267,67 @@ async function inspectCurrentAuthorization(
     input.bindingVersion,
   );
   if (identity === null) {
-    return Object.freeze({ kind: "issue_required" as const, identity: null });
+    return Object.freeze({
+      kind: "issue_required" as const,
+      identity: null,
+      agentGeneration: await readNextAgentGeneration(
+        client,
+        input.ownerUserId,
+        input.bindingVersion,
+      ),
+    });
+  }
+
+  const latest = await readLatestAuthorizationForIdentity(
+    client,
+    input.ownerUserId,
+    identity.id,
+  );
+  if (
+    latest !== null &&
+    (await hasAgentValidityElapsed(client, latest.agentValidUntil))
+  ) {
+    const preparedHandoffExpired =
+      latest.storedState === "prepared" && latest.resource.state === "expired";
+    let retirementAuthorization = latest;
+    if (preparedHandoffExpired) {
+      retirementAuthorization = await persistElapsedPreparedAuthorizationExpiry(
+        client,
+        latest,
+        input.requestId,
+        "api",
+      );
+    }
+    await persistAgentValidityRetirement(
+      client,
+      identity,
+      retirementAuthorization,
+      input.requestId,
+      "api",
+    );
+    if (preparedHandoffExpired) {
+      const retiredAuthorization = await readOwnedAuthorization(
+        client,
+        input.ownerUserId,
+        retirementAuthorization.id,
+        true,
+      );
+      return Object.freeze({
+        kind: "expired" as const,
+        created: false as const,
+        authorization: retiredAuthorization ?? failUnavailable(),
+        signablePayload: null,
+      });
+    }
+    return Object.freeze({
+      kind: "issue_required" as const,
+      identity: null,
+      agentGeneration: await readNextAgentGeneration(
+        client,
+        input.ownerUserId,
+        input.bindingVersion,
+      ),
+    });
   }
 
   const live = await readLiveAuthorizationForIdentity(
@@ -1927,7 +2376,11 @@ async function inspectCurrentAuthorization(
   if (identity.lifecycle_state !== "reserved" || live !== null) {
     throw new SpotAgentAuthorizationAuthorityStaleError();
   }
-  return Object.freeze({ kind: "issue_required" as const, identity });
+  return Object.freeze({
+    kind: "issue_required" as const,
+    identity,
+    agentGeneration: identity.agent_generation,
+  });
 }
 
 async function issueAtomicPass(
@@ -1948,6 +2401,9 @@ async function issueAtomicPass(
       if (inspected.kind !== "issue_required") {
         return inspected;
       }
+      if (input.agentGeneration !== inspected.agentGeneration) {
+        throw new SpotAgentAuthorizationAuthorityStaleError();
+      }
 
       let identity = inspected.identity;
       if (identity === null) {
@@ -1955,7 +2411,8 @@ async function issueAtomicPass(
       } else if (
         identity.agent_address !== input.agentAddress ||
         identity.agent_name !== input.agentName ||
-        identity.signer_ref !== input.signerRef
+        identity.signer_ref !== input.signerRef ||
+        identity.agent_generation !== input.agentGeneration
       ) {
         throw new SpotAgentAuthorizationAuthorityStaleError();
       }
@@ -1993,6 +2450,7 @@ async function issueAtomicPass(
         accountAddress: input.accountAddress,
         bindingVersion: input.bindingVersion,
         agentIdentityId: identity.id,
+        agentGeneration: identity.agent_generation,
         agentAddress: identity.agent_address,
         agentName: identity.agent_name,
         authorizationNonce,
@@ -2031,6 +2489,9 @@ async function issueAtomicPass(
 export function createPostgresSpotAgentAuthorizationRepository(
   pool: Pool,
 ): SpotAgentAuthorizationRepository {
+  let elapsedPreparedCursor: ElapsedPreparedCandidate | null = null;
+  let elapsedAgentIdentityCursor: ElapsedAgentIdentityCandidate | null = null;
+
   return Object.freeze({
     async preflightCurrent(
       rawInput: PreflightSpotAgentAuthorizationInput,
@@ -2058,6 +2519,7 @@ export function createPostgresSpotAgentAuthorizationRepository(
           return Object.freeze({
             kind: "issue_required" as const,
             created: false as const,
+            agentGeneration: inspected.agentGeneration,
             authorization: null,
             signablePayload: null,
           });
@@ -2104,7 +2566,10 @@ export function createPostgresSpotAgentAuthorizationRepository(
         const candidates = await listElapsedPreparedCandidates(
           pool,
           input.limit,
+          elapsedPreparedCursor,
         );
+        elapsedPreparedCursor =
+          candidates.length < input.limit ? null : (candidates.at(-1) ?? null);
         let expiredCount = 0;
         for (const candidate of candidates) {
           try {
@@ -2125,6 +2590,44 @@ export function createPostgresSpotAgentAuthorizationRepository(
           }
         }
         return Object.freeze({ expiredCount });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async retireElapsedAgentIdentities(rawInput: {
+      readonly requestId: string;
+      readonly limit: number;
+    }): Promise<Readonly<{ retiredCount: number }>> {
+      try {
+        const input = expireElapsedPreparedInputSchema.parse(rawInput);
+        const candidates = await listElapsedAgentIdentityCandidates(
+          pool,
+          input.limit,
+          elapsedAgentIdentityCursor,
+        );
+        elapsedAgentIdentityCursor =
+          candidates.length < input.limit ? null : (candidates.at(-1) ?? null);
+        let retiredCount = 0;
+        for (const candidate of candidates) {
+          try {
+            if (
+              await retireElapsedAgentIdentityCandidate(
+                pool,
+                candidate,
+                input.requestId,
+              )
+            ) {
+              retiredCount += 1;
+            }
+          } catch (error) {
+            if (isPostgresLockUnavailable(error)) {
+              continue;
+            }
+            throw error;
+          }
+        }
+        return Object.freeze({ retiredCount });
       } catch (error) {
         return translateRepositoryError(error);
       }

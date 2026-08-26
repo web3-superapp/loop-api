@@ -118,9 +118,15 @@ For the compiled local entry point, use `pnpm build` followed by
 `pnpm worker:start:local`. A deployed environment uses `pnpm worker:start` or
 the `worker` Docker target and injects its database settings externally.
 
-By default this process reads its database and logging settings and makes no
-provider call. To enable the narrow Testnet order reader, add all three values
-to ignored `.env.local`:
+By default this process makes no provider call. It immediately runs one bounded
+database-only Spot Agent lifecycle pass, then repeats every 60 seconds. Each
+pass first expires elapsed signing handoffs and then retires identities whose
+persisted Agent validity has elapsed. It uses fresh request UUIDs, never loads a
+signer or provider credential, and can be temporarily disabled with
+`SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false`.
+
+To enable the separate narrow Testnet order reader, add all three values to
+ignored `.env.local`:
 
 ```text
 HYPERLIQUID_RECONCILIATION_READS_ENABLED=true
@@ -141,9 +147,10 @@ isolated-margin, unknown domains, and ambiguous evidence are parked as
 Exchange adapter, transfer executor, or relay, and it never submits or replays
 provider bytes.
 
-With no due control-plane work, it stays idle until `SIGINT` or `SIGTERM` and
-then closes PostgreSQL cleanly. A real nonempty Testnet account and deployed
-worker remain unverified.
+With no due work, the process only performs its bounded polling cycles until
+`SIGINT` or `SIGTERM`, then waits for any in-flight database call and closes
+PostgreSQL cleanly. A real nonempty Testnet account and deployed worker remain
+unverified.
 
 ## Physical phone on a trusted LAN
 

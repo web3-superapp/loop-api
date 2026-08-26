@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadReconciliationWorkerConfig } from "../src/config.js";
 import type { PerpReconciliationRepository } from "../src/features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationWorkerLogger } from "../src/reconciliation-worker-logger.js";
+import type { SpotAgentLifecycleWorker } from "../src/spot-agent-lifecycle-worker.js";
 import type { ReconciliationWorker } from "../src/worker.js";
 import {
   runReconciliationWorker,
@@ -17,7 +18,10 @@ interface TestSignalSource extends WorkerSignalSource {
   readonly emit: (signal: WorkerShutdownSignal) => void;
 }
 
-function workerConfig(reconciliationReadsEnabled = false) {
+function workerConfig(
+  reconciliationReadsEnabled = false,
+  spotAgentLifecycleMaintenanceEnabled = false,
+) {
   return loadReconciliationWorkerConfig({
     NODE_ENV: "test",
     LOG_LEVEL: "silent",
@@ -26,6 +30,8 @@ function workerConfig(reconciliationReadsEnabled = false) {
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: reconciliationReadsEnabled
       ? "true"
       : "false",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
+      spotAgentLifecycleMaintenanceEnabled ? "true" : "false",
     ...(reconciliationReadsEnabled
       ? { HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: "q".repeat(32) }
       : {}),
@@ -69,6 +75,12 @@ function fakeDatabase(events: string[]): ReconciliationWorkerDatabase {
   return {
     controlPlane: {} as ReconciliationWorkerDatabase["controlPlane"],
     perpReconciliation: {} as PerpReconciliationRepository,
+    spotAgentAuthorizations: {
+      expireElapsedPrepared: vi.fn(() => Promise.resolve({ expiredCount: 0 })),
+      retireElapsedAgentIdentities: vi.fn(() =>
+        Promise.resolve({ retiredCount: 0 }),
+      ),
+    },
     ping: vi.fn(() => {
       events.push("ping");
       return Promise.resolve();
@@ -84,6 +96,21 @@ function fakeWorker(run: ReconciliationWorker["run"]): ReconciliationWorker {
   return {
     workerId,
     runOnce: vi.fn(() => Promise.resolve({ kind: "idle" as const })),
+    run,
+  };
+}
+
+function fakeLifecycleWorker(
+  run: SpotAgentLifecycleWorker["run"],
+): SpotAgentLifecycleWorker {
+  return {
+    runOnce: vi.fn(() =>
+      Promise.resolve({
+        kind: "completed" as const,
+        expiredPreparedCount: 0,
+        retiredAgentIdentityCount: 0,
+      }),
+    ),
     run,
   };
 }
@@ -140,6 +167,78 @@ describe("reconciliation worker runtime", () => {
       },
     });
 
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("runs the database-only Spot Agent lifecycle loop only when enabled", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const logger = fakeLogger();
+    const lifecycleRun = vi.fn(() => {
+      events.push("run-lifecycle");
+      return Promise.resolve();
+    });
+
+    await runReconciliationWorker({
+      config: workerConfig(false, true),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () =>
+        fakeWorker(
+          vi.fn(() => {
+            events.push("run-reconciliation");
+            return Promise.resolve();
+          }),
+        ),
+      createLifecycleWorker: (options) => {
+        expect(options.maintenance).toBe(database.spotAgentAuthorizations);
+        options.onInfrastructureBackoff?.({
+          reasonCode: "spot_agent_identity_retirement_unavailable",
+          consecutiveFailureCount: 2,
+          retryDelayMs: 2_000,
+        });
+        return fakeLifecycleWorker(lifecycleRun);
+      },
+    });
+
+    expect(events).toEqual([
+      "ping",
+      "run-reconciliation",
+      "run-lifecycle",
+      "close",
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        reasonCode: "spot_agent_identity_retirement_unavailable",
+        consecutiveFailureCount: 2,
+        retryDelayMs: 2_000,
+      },
+      "LOOP reconciliation worker infrastructure retry scheduled",
+    );
+  });
+
+  it("does not construct or access Spot Agent lifecycle maintenance when disabled", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    Object.defineProperty(database, "spotAgentAuthorizations", {
+      configurable: true,
+      get: () => {
+        throw new Error("disabled lifecycle port must not be accessed");
+      },
+    });
+    const createLifecycleWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: workerConfig(false, false),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLifecycleWorker,
+    });
+
+    expect(createLifecycleWorker).not.toHaveBeenCalled();
     expect(events).toEqual(["ping", "close"]);
   });
 
@@ -206,6 +305,42 @@ describe("reconciliation worker runtime", () => {
       }),
     ).rejects.toBe(failure);
 
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
+  it("aborts and awaits the sibling loop before closing after a lifecycle failure", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const lifecycleFailure = new Error(
+      "private lifecycle database detail must not be logged",
+    );
+    const reconciliationRun = vi.fn(
+      (signal: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              events.push("reconciliation-aborted");
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    await expect(
+      runReconciliationWorker({
+        config: workerConfig(false, true),
+        logger: fakeLogger(),
+        signalSource: fakeSignalSource(),
+        createDatabase: () => database,
+        createWorker: () => fakeWorker(reconciliationRun),
+        createLifecycleWorker: () =>
+          fakeLifecycleWorker(vi.fn(() => Promise.reject(lifecycleFailure))),
+      }),
+    ).rejects.toBe(lifecycleFailure);
+
+    expect(events).toEqual(["ping", "reconciliation-aborted", "close"]);
     expect(database.close).toHaveBeenCalledOnce();
   });
 

@@ -44,6 +44,9 @@ implemented as independently verified slices:
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
   absent
+- immutable, monotonic Spot Agent generations plus bounded database-only
+  expiry/retirement maintenance, so a 24-hour Agent can be replaced without
+  rotating the user's wallet-binding epoch
 - six authenticated Privy same-chain transfer route boundaries with strict
   top-level variants, positive decimal-string amounts, server-owned authority,
   and no 2xx/provider/replay path while nested DTO and credential gates remain
@@ -55,9 +58,10 @@ implemented as independently verified slices:
   multi-subject issuance quotas, and stale-submission quarantine
 - a standalone reconciliation worker process whose provider boundary supports
   authoritative reads only, with fenced leases, bounded retries, operator hold,
-  abort-safe shutdown, and an independently buildable image; a default-off
-  fixed-Testnet limit-order reader can atomically finalize generic and Perp
-  state, while market orders and every other Perp action remain operator-held
+  abort-safe shutdown, and an independently buildable image; it also runs
+  default-on database-only Spot Agent expiry/retirement maintenance. A
+  default-off fixed-Testnet limit-order reader can atomically finalize generic
+  and Perp state, while every unsupported action remains operator-held
 - a committed, deterministic OpenAPI artifact with a drift check
 - unit, contract, worker, and PostgreSQL integration gates; a high-confidence
   tracked-secret guard; linting; type checking; production compilation; and
@@ -83,12 +87,13 @@ alert records are local PostgreSQL capabilities, but there is no price
 evaluator or scheduler, Firebase device-token/delivery path, notification
 inbox, or social graph.
 
-The standalone worker remains read-only operational infrastructure. Its
-Hyperliquid limit-order reconciliation capability is default-off and has not
-passed a nonempty Testnet-account conformance or deployment gate. It has no
-signer, executor, replay path, transfer finalizer, or mutation capability;
-market orders, modify, batch-modify, cancel, leverage, and isolated-margin
-reconciliation remain operator-held.
+The standalone worker makes bounded lifecycle updates in PostgreSQL, but its
+provider boundary remains read-only. Its Hyperliquid limit-order reconciliation
+capability is default-off and has not passed a nonempty Testnet-account
+conformance or deployment gate. It has no signer, executor, replay path,
+transfer finalizer, or provider-mutation capability; market orders, modify,
+batch-modify, cancel, leverage, and isolated-margin reconciliation remain
+operator-held.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -123,6 +128,11 @@ The separate, empty-reader reconciliation process boundary is recorded in
 The default-off, limit-order-only Testnet authoritative reader and atomic Perp
 finalizer are recorded in
 [`docs/decisions/0013-testnet-perp-order-authoritative-reconciliation.md`](docs/decisions/0013-testnet-perp-order-authoritative-reconciliation.md).
+The Spot-only Testnet contract, Mainnet isolation, and renewable Agent lifecycle
+are recorded in Decisions
+[`0014`](docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md),
+[`0015`](docs/decisions/0015-mainnet-separate-release-gate.md), and
+[`0016`](docs/decisions/0016-spot-agent-generation-lifecycle.md).
 
 ## Quick start
 
@@ -143,11 +153,14 @@ pnpm dev
 
 In a separate terminal, the independently runnable control-plane worker can be
 started with `pnpm worker:dev`. With its default configuration it makes no
-provider request; normally it remains idle, and any due unsupported domain or
-action is parked for an operator instead of guessed or replayed. Explicitly
-setting `HYPERLIQUID_RECONCILIATION_READS_ENABLED=true` plus the independent
-quota secret enables only the fixed-Testnet, read-only limit-order evidence
-path. No setting enables submission or replay.
+provider request. It immediately runs bounded database-only maintenance, then
+every 60 seconds expires elapsed Spot signing handoffs and retires elapsed Agent
+generations. `SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false` temporarily
+disables that maintenance. Any due unsupported provider domain or action is
+parked for an operator instead of guessed or replayed. Explicitly setting
+`HYPERLIQUID_RECONCILIATION_READS_ENABLED=true` plus the independent quota
+secret enables only the fixed-Testnet, read-only limit-order evidence path. No
+setting enables submission or replay.
 
 The safe default listens on `http://127.0.0.1:3000` only.
 

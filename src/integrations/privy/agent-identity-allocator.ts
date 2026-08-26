@@ -5,10 +5,12 @@ export interface AllocatePrivyAgentIdentityInput {
   readonly privyUserId: string;
   readonly network: "testnet";
   /**
-   * Remote allocation must be idempotent for owner + network + binding epoch.
-   * Retries and concurrent callers must resolve the same custodial wallet.
+   * Remote allocation must be idempotent for owner + network + binding epoch
+   * + Agent generation. Retries and concurrent callers must resolve the same
+   * custodial wallet, while a later generation must resolve a new wallet.
    */
   readonly bindingVersion: string;
+  readonly agentGeneration: string;
   readonly signal: AbortSignal;
 }
 
@@ -17,7 +19,8 @@ export interface AllocatePrivyAgentIdentityInput {
  * credential, and negative-revocation evidence is reviewed. Implementations
  * must never return a private key, recovery material, or signing credential.
  * They must use a domain-separated stable remote idempotency/external key
- * derived from owner + network + binding epoch, never from requestId.
+ * derived from owner + network + binding epoch + Agent generation, never from
+ * requestId.
  */
 export interface PrivyAgentIdentityAllocator {
   allocate(input: AllocatePrivyAgentIdentityInput): Promise<unknown>;

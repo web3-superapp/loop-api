@@ -141,11 +141,12 @@ async function seedAuthority(
         id,
         owner_user_id,
         binding_version,
+        agent_generation,
         agent_address,
         agent_name,
         signer_ref
       )
-      values ($1, $2, 1, $3, $4, $5)
+      values ($1, $2, 1, 1, $3, $4, $5)
     `,
     values: [
       agentIdentityId,

@@ -1,15 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createPostgresSpotAgentAuthorizationRepository,
@@ -215,6 +207,7 @@ async function issueInput(
   return Object.freeze({
     authorizationId: randomUUID(),
     agentIdentityId: randomUUID(),
+    agentGeneration: "1",
     ownerUserId: authority.ownerUserId,
     privyUserId: authority.privyUserId,
     requestId: randomUUID(),
@@ -353,16 +346,165 @@ function expectNoIssuedRows(counts: DurableCounts): void {
   });
 }
 
+async function activateAuthorization(
+  pool: InstanceType<typeof Pool>,
+  input: IssueSpotAgentAuthorizationInput,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const attemptId = randomUUID();
+    await client.query({
+      text: `
+        with database_clock as (
+          select clock_timestamp() as observed_at
+        )
+        update public.provider_operations as operation
+        set
+          state = 'submitting',
+          attempt_count = 1,
+          transport_attempt_id = $2,
+          attempt_committed_at = database_clock.observed_at,
+          attempt_deadline_at = database_clock.observed_at + interval '5 seconds',
+          record_version = 1,
+          updated_at = database_clock.observed_at
+        from database_clock
+        where operation.id = $1
+      `,
+      values: [input.authorizationId, attemptId],
+    });
+    await client.query({
+      text: `
+        update public.spot_agent_authorizations
+        set
+          state = 'submitting',
+          record_version = 1,
+          updated_at = clock_timestamp()
+        where id = $1
+      `,
+      values: [input.authorizationId],
+    });
+    await client.query("set constraints all immediate");
+    await client.query("commit");
+
+    await client.query("begin");
+    await client.query({
+      text: `
+        update public.provider_operations
+        set
+          state = 'succeeded',
+          record_version = 2,
+          updated_at = clock_timestamp()
+        where id = $1 and state = 'submitting'
+      `,
+      values: [input.authorizationId],
+    });
+    await client.query({
+      text: `
+        update public.spot_agent_authorizations
+        set
+          state = 'active',
+          result_observed_at = clock_timestamp(),
+          result_reason_code = null,
+          record_version = 2,
+          updated_at = clock_timestamp()
+        where id = $1 and state = 'submitting'
+      `,
+      values: [input.authorizationId],
+    });
+    await client.query({
+      text: `
+        update public.spot_agent_identities
+        set
+          lifecycle_state = 'active',
+          record_version = 2,
+          updated_at = clock_timestamp()
+        where id = $1 and lifecycle_state = 'authorization_pending'
+      `,
+      values: [input.agentIdentityId],
+    });
+    await client.query({
+      text: `
+        insert into public.spot_agent_authorization_events (
+          authorization_id,
+          owner_user_id,
+          request_id,
+          actor_type,
+          event_type,
+          from_state,
+          to_state,
+          outcome,
+          authorization_version
+        )
+        values
+          ($1, $2, $3, 'api', 'authorization_submitting', 'prepared',
+           'submitting', 'attempt_committed', 1),
+          ($1, $2, $4, 'worker', 'authorization_activated', 'submitting',
+           'active', 'active', 2)
+      `,
+      values: [
+        input.authorizationId,
+        input.ownerUserId,
+        randomUUID(),
+        randomUUID(),
+      ],
+    });
+    await client.query({
+      text: `
+        insert into public.spot_agent_identity_events (
+          agent_identity_id,
+          owner_user_id,
+          request_id,
+          actor_type,
+          event_type,
+          from_state,
+          to_state,
+          outcome,
+          identity_version
+        )
+        values (
+          $1, $2, $3, 'worker', 'authorization_activated',
+          'authorization_pending', 'active', 'active', 2
+        )
+      `,
+      values: [input.agentIdentityId, input.ownerUserId, randomUUID()],
+    });
+    await client.query("set constraints all immediate");
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function transitionPreparedIdentity(
+  pool: InstanceType<typeof Pool>,
+  agentIdentityId: string,
+  targetState: "operator_hold" | "revoked",
+): Promise<void> {
+  const result = await pool.query({
+    text: `
+      update public.spot_agent_identities
+      set
+        lifecycle_state = $2,
+        record_version = record_version + 1,
+        updated_at = clock_timestamp()
+      where id = $1 and lifecycle_state = 'authorization_pending'
+    `,
+    values: [agentIdentityId, targetState],
+  });
+  expect(result.rowCount).toBe(1);
+}
+
 describe("PostgreSQL Spot Agent authorization repository", () => {
   const pool = new Pool({ connectionString: databaseUrl });
   let repository: SpotAgentAuthorizationRepository;
 
-  beforeAll(() => {
-    repository = createPostgresSpotAgentAuthorizationRepository(pool);
-  });
-
   beforeEach(async () => {
     await pool.query(truncateAll);
+    repository = createPostgresSpotAgentAuthorizationRepository(pool);
   });
 
   afterAll(async () => {
@@ -610,10 +752,90 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     ).resolves.toEqual({
       kind: "issue_required",
       created: false,
+      agentGeneration: "1",
       authorization: null,
       signablePayload: null,
     });
     expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("rejects a skipped Agent generation before identity or nonce persistence", async () => {
+    const authority = await seedAuthority(pool, "generation-skip");
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority)),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).resolves.toMatchObject({
+      kind: "issue_required",
+      agentGeneration: "1",
+    });
+
+    await expect(
+      repository.issueOrReplayCurrent(
+        await issueInput(pool, authority, { agentGeneration: "2" }),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("fails closed before allocation when the Agent generation bigint is exhausted", async () => {
+    const authority = await seedAuthority(pool, "generation-overflow");
+    const exhaustedIdentityId = randomUUID();
+    await pool.query({
+      text: `
+        insert into public.spot_agent_identities (
+          id,
+          owner_user_id,
+          binding_version,
+          agent_generation,
+          agent_address,
+          agent_name,
+          signer_ref
+        )
+        values ($1, $2, 1, 9223372036854775807, $3, $4, $5)
+      `,
+      values: [
+        exhaustedIdentityId,
+        authority.ownerUserId,
+        randomAddress(),
+        `Loop-${randomHex(8)}`,
+        `privy-server-wallet:${randomUUID()}`,
+      ],
+    });
+    await pool.query({
+      text: `
+        update public.spot_agent_identities
+        set
+          lifecycle_state = 'retired',
+          record_version = 1,
+          updated_at = clock_timestamp()
+        where id = $1
+      `,
+      values: [exhaustedIdentityId],
+    });
+
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority)),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationRepositoryUnavailableError);
+    expect(await durableCounts(pool)).toEqual({
+      idempotency_count: "0",
+      operation_count: "0",
+      identity_count: "1",
+      identity_event_count: "0",
+      authorization_count: "0",
+      authorization_event_count: "0",
+      nonce_state_count: "0",
+      allocation_count: "0",
+      audit_count: "0",
+    });
   });
 
   it("rechecks the authority lease after deferred constraints and rolls back a payload that crossed expiry", async () => {
@@ -1273,13 +1495,13 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       pool,
       blockedAuthority,
       {},
-      { signingExpiresOffsetMs: 200 },
+      { signingExpiresOffsetMs: 150 },
     );
     const laterInput = await issueInput(
       pool,
       laterAuthority,
       {},
-      { signingExpiresOffsetMs: 200 },
+      { signingExpiresOffsetMs: 300 },
     );
     await repository.issueOrReplayCurrent(
       blockedInput,
@@ -1291,7 +1513,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       materializeForNonce,
       computeSigningDigest,
     );
-    await pool.query("select pg_sleep(0.25)");
+    await pool.query("select pg_sleep(0.4)");
 
     const blocker = await pool.connect();
     try {
@@ -1326,7 +1548,13 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       await expect(
         repository.expireElapsedPrepared({
           requestId: randomUUID(),
-          limit: 10,
+          limit: 1,
+        }),
+      ).resolves.toEqual({ expiredCount: 0 });
+      await expect(
+        repository.expireElapsedPrepared({
+          requestId: randomUUID(),
+          limit: 1,
         }),
       ).resolves.toEqual({ expiredCount: 1 });
 
@@ -1359,13 +1587,19 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     await expect(
       repository.expireElapsedPrepared({
         requestId: randomUUID(),
-        limit: 10,
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 0 });
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
       }),
     ).resolves.toEqual({ expiredCount: 1 });
     await expect(
       repository.expireElapsedPrepared({
         requestId: randomUUID(),
-        limit: 10,
+        limit: 1,
       }),
     ).resolves.toEqual({ expiredCount: 0 });
 
@@ -1387,6 +1621,214 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     expect(converged.rows[0]).toEqual({
       authorization_state: "expired",
       identity_state: "retired",
+    });
+  });
+
+  it("materializes an operator-held prepared expiry so a bounded sweep advances", async () => {
+    const heldAuthority = await seedAuthority(pool, "held-expiry-first");
+    const laterAuthority = await seedAuthority(pool, "held-expiry-later");
+    const heldInput = await issueInput(
+      pool,
+      heldAuthority,
+      {},
+      {
+        signingExpiresOffsetMs: 150,
+        agentValidUntilOffsetMs: 1_200,
+      },
+    );
+    const laterInput = await issueInput(
+      pool,
+      laterAuthority,
+      {},
+      { signingExpiresOffsetMs: 250 },
+    );
+    await repository.issueOrReplayCurrent(
+      heldInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await repository.issueOrReplayCurrent(
+      laterInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await transitionPreparedIdentity(
+      pool,
+      heldInput.agentIdentityId,
+      "operator_hold",
+    );
+    await pool.query("select pg_sleep(0.35)");
+
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 1 });
+    const firstPass = await pool.query<{
+      held_authorization_state: string;
+      held_identity_state: string;
+      later_authorization_state: string;
+    }>({
+      text: `
+        select
+          (select state from public.spot_agent_authorizations where id = $1)
+            as held_authorization_state,
+          (select lifecycle_state from public.spot_agent_identities where id = $2)
+            as held_identity_state,
+          (select state from public.spot_agent_authorizations where id = $3)
+            as later_authorization_state
+      `,
+      values: [
+        heldInput.authorizationId,
+        heldInput.agentIdentityId,
+        laterInput.authorizationId,
+      ],
+    });
+    expect(firstPass.rows[0]).toEqual({
+      held_authorization_state: "expired",
+      held_identity_state: "operator_hold",
+      later_authorization_state: "prepared",
+    });
+
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 1 });
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 0 });
+    const laterState = await pool.query<{
+      authorization_state: string;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          identity.lifecycle_state as identity_state
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        where agent_auth.id = $1
+      `,
+      values: [laterInput.authorizationId],
+    });
+    expect(laterState.rows[0]).toEqual({
+      authorization_state: "expired",
+      identity_state: "reserved",
+    });
+  });
+
+  it("physically expires a prepared authorization after its identity is revoked", async () => {
+    const authority = await seedAuthority(pool, "revoked-prepared-expiry");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: 150 },
+    );
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await transitionPreparedIdentity(pool, input.agentIdentityId, "revoked");
+    await pool.query("select pg_sleep(0.2)");
+
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 1 });
+    const state = await pool.query<{
+      authorization_state: string;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          identity.lifecycle_state as identity_state
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        where agent_auth.id = $1
+      `,
+      values: [input.authorizationId],
+    });
+    expect(state.rows[0]).toEqual({
+      authorization_state: "expired",
+      identity_state: "revoked",
+    });
+    await expect(
+      repository.expireElapsedPrepared({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ expiredCount: 0 });
+  });
+
+  it("atomically expires a prepared handoff when its held Agent validity elapses", async () => {
+    const authority = await seedAuthority(pool, "held-validity-elapsed");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        signingExpiresOffsetMs: 300,
+        agentValidUntilOffsetMs: 600,
+      },
+    );
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await transitionPreparedIdentity(
+      pool,
+      input.agentIdentityId,
+      "operator_hold",
+    );
+    await pool.query("select pg_sleep(0.7)");
+
+    await expect(
+      repository.retireElapsedAgentIdentities({
+        requestId: randomUUID(),
+        limit: 100,
+      }),
+    ).resolves.toEqual({ retiredCount: 1 });
+    const state = await pool.query<{
+      authorization_reason: string | null;
+      authorization_state: string;
+      identity_reason: string | null;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          agent_auth.result_reason_code as authorization_reason,
+          identity.lifecycle_state as identity_state,
+          identity_event.reason_code as identity_reason
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        join public.spot_agent_identity_events as identity_event
+          on identity_event.agent_identity_id = identity.id
+         and identity_event.event_type = 'agent_validity_elapsed'
+        where agent_auth.id = $1
+      `,
+      values: [input.authorizationId],
+    });
+    expect(state.rows[0]).toEqual({
+      authorization_state: "expired",
+      authorization_reason: "signing_expired",
+      identity_state: "retired",
+      identity_reason: "agent_validity_elapsed",
     });
   });
 
@@ -1510,6 +1952,266 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       authorization_count: "1",
       allocation_count: "1",
       audit_count: "2",
+    });
+  });
+
+  it("advances elapsed active-Agent retirement past a lock-blocked candidate", async () => {
+    const blockedAuthority = await seedAuthority(pool, "retire-lock-blocked");
+    const laterAuthority = await seedAuthority(pool, "retire-lock-later");
+    const blockedInput = await issueInput(
+      pool,
+      blockedAuthority,
+      {},
+      {
+        signingExpiresOffsetMs: 500,
+        agentValidUntilOffsetMs: 800,
+      },
+    );
+    const laterInput = await issueInput(
+      pool,
+      laterAuthority,
+      {},
+      {
+        signingExpiresOffsetMs: 600,
+        agentValidUntilOffsetMs: 1_000,
+      },
+    );
+    await repository.issueOrReplayCurrent(
+      blockedInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await repository.issueOrReplayCurrent(
+      laterInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, blockedInput);
+    await activateAuthorization(pool, laterInput);
+    await pool.query("select pg_sleep(1.1)");
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query({
+        text: `
+          select id
+          from public.loop_users
+          where id = $1
+          for update
+        `,
+        values: [blockedAuthority.ownerUserId],
+      });
+
+      await expect(
+        repository.retireElapsedAgentIdentities({
+          requestId: randomUUID(),
+          limit: 1,
+        }),
+      ).resolves.toEqual({ retiredCount: 0 });
+      await expect(
+        repository.retireElapsedAgentIdentities({
+          requestId: randomUUID(),
+          limit: 1,
+        }),
+      ).resolves.toEqual({ retiredCount: 1 });
+      await blocker.query("commit");
+    } catch (error) {
+      await blocker.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      blocker.release();
+    }
+
+    await expect(
+      repository.retireElapsedAgentIdentities({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ retiredCount: 0 });
+    await expect(
+      repository.retireElapsedAgentIdentities({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ retiredCount: 1 });
+    await expect(
+      repository.retireElapsedAgentIdentities({
+        requestId: randomUUID(),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ retiredCount: 0 });
+    const states = await pool.query<{
+      authorization_state: string;
+      identity_state: string;
+    }>({
+      text: `
+        select
+          agent_auth.state as authorization_state,
+          identity.lifecycle_state as identity_state
+        from public.spot_agent_authorizations as agent_auth
+        join public.spot_agent_identities as identity
+          on identity.id = agent_auth.agent_identity_id
+        where agent_auth.id = any($1::uuid[])
+        order by agent_auth.id
+      `,
+      values: [[blockedInput.authorizationId, laterInput.authorizationId]],
+    });
+    expect(states.rows).toEqual([
+      { authorization_state: "active", identity_state: "retired" },
+      { authorization_state: "active", identity_state: "retired" },
+    ]);
+  });
+
+  it("retires an elapsed active Agent and admits exactly one next generation", async () => {
+    const authority = await seedAuthority(pool, "generation-renewal");
+    const generationOneInput = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: 300, agentValidUntilOffsetMs: 700 },
+    );
+    const generationOne = await repository.issueOrReplayCurrent(
+      generationOneInput,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(generationOne.authorization.agentGeneration).toBe("1");
+    await activateAuthorization(pool, generationOneInput);
+    await pool.query("select pg_sleep(0.8)");
+
+    await expect(
+      repository.retireElapsedAgentIdentities({
+        requestId: randomUUID(),
+        limit: 100,
+      }),
+    ).resolves.toEqual({ retiredCount: 1 });
+    const retired = await pool.query<{
+      authorization_state: string;
+      event_reason: string | null;
+      from_state: string | null;
+      identity_state: string;
+      to_state: string;
+    }>({
+      text: `
+        select
+          identity.lifecycle_state as identity_state,
+          agent_auth.state as authorization_state,
+          event.from_state,
+          event.to_state,
+          event.reason_code as event_reason
+        from public.spot_agent_identities as identity
+        join public.spot_agent_authorizations as agent_auth
+          on agent_auth.agent_identity_id = identity.id
+        join public.spot_agent_identity_events as event
+          on event.agent_identity_id = identity.id
+         and event.event_type = 'agent_validity_elapsed'
+        where identity.id = $1
+      `,
+      values: [generationOneInput.agentIdentityId],
+    });
+    expect(retired.rows[0]).toEqual({
+      identity_state: "retired",
+      authorization_state: "active",
+      from_state: "active",
+      to_state: "retired",
+      event_reason: "agent_validity_elapsed",
+    });
+    expect(
+      (
+        await repository.findOwned(
+          authority.ownerUserId,
+          generationOneInput.authorizationId,
+        )
+      )?.resource.state,
+    ).toBe("active");
+
+    const preflight = await repository.preflightCurrent(
+      preflightInput(await issueInput(pool, authority)),
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(preflight).toEqual({
+      kind: "issue_required",
+      created: false,
+      agentGeneration: "2",
+      authorization: null,
+      signablePayload: null,
+    });
+
+    const generationTwoInput = await issueInput(pool, authority, {
+      agentGeneration: "2",
+    });
+    const concurrent = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        repository.issueOrReplayCurrent(
+          generationTwoInput,
+          materializeForNonce,
+          computeSigningDigest,
+        ),
+      ),
+    );
+    expect(concurrent.filter(({ kind }) => kind === "issued")).toHaveLength(1);
+    expect(
+      concurrent.every(
+        ({ authorization }) => authorization.agentGeneration === "2",
+      ),
+    ).toBe(true);
+    expect(
+      new Set(
+        concurrent.map(({ authorization }) => authorization.agentIdentityId),
+      ),
+    ).toEqual(new Set([generationTwoInput.agentIdentityId]));
+    expect(await durableCounts(pool)).toMatchObject({
+      identity_count: "2",
+      authorization_count: "2",
+      nonce_state_count: "1",
+      allocation_count: "2",
+    });
+  });
+
+  it("performs the same elapsed-Agent retirement opportunistically during preflight", async () => {
+    const authority = await seedAuthority(pool, "generation-preflight");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      { signingExpiresOffsetMs: 250, agentValidUntilOffsetMs: 600 },
+    );
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+    await pool.query("select pg_sleep(0.7)");
+
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority)),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).resolves.toMatchObject({
+      kind: "issue_required",
+      agentGeneration: "2",
+    });
+    const identity = await pool.query<{
+      agent_generation: string;
+      lifecycle_state: string;
+    }>({
+      text: `
+        select
+          agent_generation::text as agent_generation,
+          lifecycle_state
+        from public.spot_agent_identities
+        where id = $1
+      `,
+      values: [input.agentIdentityId],
+    });
+    expect(identity.rows[0]).toEqual({
+      agent_generation: "1",
+      lifecycle_state: "retired",
     });
   });
 

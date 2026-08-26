@@ -32,6 +32,7 @@ describe("loadReconciliationWorkerConfig", () => {
       databaseConnectionTimeoutMs: 3_000,
       databaseStatementTimeoutMs: 5_000,
       hyperliquidReconciliationReads: null,
+      spotAgentLifecycleMaintenanceEnabled: true,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });
@@ -72,6 +73,20 @@ describe("loadReconciliationWorkerConfig", () => {
     const environment = validEnvironment();
     environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] = "malformed";
 
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
+      ConfigurationError,
+    );
+  });
+
+  it("allows the database-only Agent lifecycle maintenance to be disabled", () => {
+    const environment = validEnvironment();
+    environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] = "false";
+
+    expect(loadReconciliationWorkerConfig(environment)).toMatchObject({
+      spotAgentLifecycleMaintenanceEnabled: false,
+    });
+
+    environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] = "malformed";
     expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
       ConfigurationError,
     );

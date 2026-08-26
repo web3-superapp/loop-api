@@ -123,6 +123,7 @@ const reconciliationWorkerEnvironmentSchema = z
       "silent",
     ]),
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: booleanString,
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
     DATABASE_URL: z.string().trim().min(1),
@@ -205,6 +206,7 @@ export interface ReconciliationWorkerConfig {
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
   readonly hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null;
+  readonly spotAgentLifecycleMaintenanceEnabled: boolean;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -393,6 +395,8 @@ export function loadReconciliationWorkerConfig(
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
     HYPERLIQUID_RECONCILIATION_READS_ENABLED:
       environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
+      environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
       environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
@@ -439,6 +443,8 @@ export function loadReconciliationWorkerConfig(
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
     hyperliquidReconciliationReads,
+    spotAgentLifecycleMaintenanceEnabled:
+      parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

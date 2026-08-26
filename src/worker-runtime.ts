@@ -5,6 +5,7 @@ import {
   type PostgresDatabaseLogger,
 } from "./database/database.js";
 import type { ControlPlaneRepository } from "./database/control-plane-repository.js";
+import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
 import { createReconciliationWorkerReaders } from "./reconciliation-worker-readers.js";
@@ -12,6 +13,11 @@ import type {
   ReconciliationWorkerLogFields,
   ReconciliationWorkerLogger,
 } from "./reconciliation-worker-logger.js";
+import {
+  createSpotAgentLifecycleWorker,
+  type CreateSpotAgentLifecycleWorkerOptions,
+  type SpotAgentLifecycleWorker,
+} from "./spot-agent-lifecycle-worker.js";
 import {
   createReconciliationWorker,
   type CreateReconciliationWorkerOptions,
@@ -29,6 +35,10 @@ export interface ReconciliationWorkerDatabase {
   readonly controlPlane: ReconciliationControlPlane &
     Pick<ControlPlaneRepository, "consumeIssuanceQuota">;
   readonly perpReconciliation: PerpReconciliationRepository;
+  readonly spotAgentAuthorizations: Pick<
+    SpotAgentAuthorizationRepository,
+    "expireElapsedPrepared" | "retireElapsedAgentIdentities"
+  >;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -42,12 +52,17 @@ export type ReconciliationWorkerFactory = (
   options: CreateReconciliationWorkerOptions,
 ) => ReconciliationWorker;
 
+export type SpotAgentLifecycleWorkerFactory = (
+  options: CreateSpotAgentLifecycleWorkerOptions,
+) => SpotAgentLifecycleWorker;
+
 export interface RunReconciliationWorkerOptions {
   readonly config: ReconciliationWorkerConfig;
   readonly logger: ReconciliationWorkerLogger;
   readonly signalSource?: WorkerSignalSource;
   readonly createDatabase?: ReconciliationWorkerDatabaseFactory;
   readonly createWorker?: ReconciliationWorkerFactory;
+  readonly createLifecycleWorker?: SpotAgentLifecycleWorkerFactory;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -73,6 +88,8 @@ export async function runReconciliationWorker(
   const signalSource = options.signalSource ?? processWorkerSignalSource;
   const databaseFactory = options.createDatabase ?? createPostgresDatabase;
   const workerFactory = options.createWorker ?? createReconciliationWorker;
+  const lifecycleWorkerFactory =
+    options.createLifecycleWorker ?? createSpotAgentLifecycleWorker;
   const controller = new AbortController();
   let database: ReconciliationWorkerDatabase | undefined;
   let workerId: string | undefined;
@@ -121,12 +138,40 @@ export async function runReconciliationWorker(
         );
       },
     });
+    const lifecycleWorker = options.config.spotAgentLifecycleMaintenanceEnabled
+      ? lifecycleWorkerFactory({
+          maintenance: database.spotAgentAuthorizations,
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        })
+      : null;
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
       "LOOP reconciliation worker started",
     );
-    await worker.run(controller.signal);
+    const loops = [
+      Promise.resolve().then(() => worker.run(controller.signal)),
+      ...(lifecycleWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              lifecycleWorker.run(controller.signal),
+            ),
+          ]),
+    ];
+
+    try {
+      await Promise.all(loops);
+    } catch (error) {
+      controller.abort();
+      await Promise.allSettled(loops);
+      throw error;
+    }
   } finally {
     for (const signal of registeredSignals) {
       const handler = shutdownHandlers.get(signal);

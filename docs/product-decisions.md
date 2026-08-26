@@ -42,9 +42,11 @@ The generic reconciliation loop now has a separate process entry point and
 runtime image. Its default-off fixed-Testnet capability can reconcile only a
 Core limit `order` through strict cloid-bound Info evidence and atomically
 finalize generic plus Perp records. Market orders and unsupported Perp actions
-are operator-held before a provider call. The worker has no provider writer,
-replay path, transfer finalizer, or deployment; read-only process operability is
-not provider-integration evidence.
+are operator-held before a provider call. Decision 0016 also enables bounded,
+database-only expiry and retirement maintenance for renewable Spot Agent
+generations by default. The worker has no provider writer, replay path, transfer
+finalizer, or deployment; provider-read and local lifecycle operability are not
+provider-integration evidence.
 
 ## Identity model
 

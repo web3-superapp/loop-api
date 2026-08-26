@@ -157,8 +157,14 @@ the opaque signature. The server-generated `agentName` must canonically end in
 ` valid_until <unix-milliseconds>` matching the displayed persisted expiry,
 because Hyperliquid binds Agent expiry through that signed name; its nonempty
 base is at most 16 characters and the initial `spot_agent_v1` Testnet policy
-caps validity at 24 hours from the database clock. The contract and official
-signing fixtures live under
+caps validity at 24 hours from the database clock. Agent identities use
+monotonic generations inside one wallet-binding epoch; an elapsed current
+identity is retired before the next generation is allocated. Authorization
+status records the historical provider-operation result and is not, by itself,
+proof that an Agent remains current. The standalone worker enables this
+database-only expiry/retirement maintenance by default; it uses no Privy,
+signer, relay, Exchange, or provider-read capability for that path. The contract
+and official signing fixtures live under
 `contracts/hyperliquid-spot/`. The production writer is unavailable and no
 Hyperliquid Node SDK has been installed.
 

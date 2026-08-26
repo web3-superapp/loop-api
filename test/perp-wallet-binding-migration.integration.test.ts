@@ -49,6 +49,35 @@ async function migrate(
   });
 }
 
+async function migrateDownTo(
+  targetDatabaseUrl: string,
+  targetMigration: string,
+): Promise<void> {
+  const client = new Client({ connectionString: targetDatabaseUrl });
+  await client.connect();
+  try {
+    for (;;) {
+      const result = await client.query<{ name: string }>({
+        text: `
+          select name
+          from public.pgmigrations
+          order by run_on desc, id desc
+          limit 1
+        `,
+      });
+      if (result.rows[0]?.name === targetMigration) {
+        return;
+      }
+      if (result.rows[0] === undefined) {
+        throw new Error(`Migration ${targetMigration} was not found`);
+      }
+      await migrate(targetDatabaseUrl, "down", 1);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
 async function dropTemporaryDatabase(databaseName: string): Promise<void> {
   const admin = new Client({
     connectionString: databaseConnectionUrl(databaseUrl, "postgres"),
@@ -76,7 +105,7 @@ async function createTemporaryDatabase(): Promise<TemporaryDatabase> {
   const targetDatabaseUrl = databaseConnectionUrl(databaseUrl, databaseName);
   try {
     await migrate(targetDatabaseUrl, "up");
-    await migrate(targetDatabaseUrl, "down", 1);
+    await migrateDownTo(targetDatabaseUrl, "000006_perp_wallet_bindings");
     return {
       databaseName,
       databaseUrl: targetDatabaseUrl,

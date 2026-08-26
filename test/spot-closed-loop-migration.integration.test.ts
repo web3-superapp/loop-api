@@ -120,10 +120,24 @@ async function createTemporaryDatabase(): Promise<TemporaryDatabase> {
   const targetDatabaseUrl = databaseConnectionUrl(databaseUrl, databaseName);
   try {
     await migrate(targetDatabaseUrl, "up");
+    const pool = new Pool({ connectionString: targetDatabaseUrl });
+    for (;;) {
+      const latest = await latestMigration(pool);
+      if (latest === "000007_hyperliquid_spot_closed_loop") {
+        break;
+      }
+      if (latest === undefined) {
+        await pool.end();
+        throw new Error(
+          "Migration 000007_hyperliquid_spot_closed_loop was not found",
+        );
+      }
+      await migrate(targetDatabaseUrl, "down", 1);
+    }
     return {
       databaseName,
       databaseUrl: targetDatabaseUrl,
-      pool: new Pool({ connectionString: targetDatabaseUrl }),
+      pool,
     };
   } catch (error) {
     await dropTemporaryDatabase(databaseName);
