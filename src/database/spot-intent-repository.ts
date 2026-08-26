@@ -55,6 +55,12 @@ const metadataVersionSchema = z
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/);
 const policyVersionSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+const agentNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine((value) => value === value.trim())
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/);
 const bindingVersionSchema = z
   .string()
   .regex(/^[1-9][0-9]{0,18}$/)
@@ -159,14 +165,38 @@ const currentWalletBindingRowSchema = z
   })
   .strict();
 
+const currentOwnerRowSchema = z.object({ id: uuidSchema }).strict();
+
 const activeAgentIdentityRowSchema = z
   .object({
     id: uuidSchema,
     owner_user_id: uuidSchema,
     network: z.literal("testnet"),
     binding_version: bindingVersionSchema,
+    agent_address: addressSchema,
+    agent_name: agentNameSchema,
     lifecycle_state: z.literal("active"),
   })
+  .strict();
+
+const activeAgentAuthorizationRowSchema = z
+  .object({
+    id: uuidSchema,
+    owner_user_id: uuidSchema,
+    agent_identity_id: uuidSchema,
+    network: z.literal("testnet"),
+    action: z.literal("approve_agent"),
+    account_address: addressSchema,
+    account_kind: z.literal("master"),
+    binding_version: bindingVersionSchema,
+    agent_address: addressSchema,
+    agent_name: agentNameSchema,
+    state: z.literal("active"),
+  })
+  .strict();
+
+const currentAgentValidityRowSchema = z
+  .object({ is_current: z.literal(true) })
   .strict();
 
 const intentRowSchema = z
@@ -969,6 +999,21 @@ async function assertCurrentAuthority(
     "ownerUserId" | "accountAddress" | "bindingVersion" | "agentIdentityId"
   >,
 ): Promise<void> {
+  const ownerResult = await client.query<Record<string, unknown>>({
+    text: `
+      select id
+      from public.loop_users
+      where id = $1
+      limit 1
+      for update
+    `,
+    values: [input.ownerUserId],
+  });
+  const owner = currentOwnerRowSchema.safeParse(ownerResult.rows[0]);
+  if (!owner.success || owner.data.id !== input.ownerUserId) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+
   const walletResult = await client.query<Record<string, unknown>>({
     text: `
       select
@@ -999,6 +1044,8 @@ async function assertCurrentAuthority(
         owner_user_id,
         network,
         binding_version::text as binding_version,
+        agent_address,
+        agent_name,
         lifecycle_state
       from public.spot_agent_identities
       where id = $1 and owner_user_id = $2
@@ -1011,7 +1058,63 @@ async function assertCurrentAuthority(
   if (
     !agent.success ||
     agent.data.id !== input.agentIdentityId ||
+    agent.data.owner_user_id !== input.ownerUserId ||
     agent.data.binding_version !== input.bindingVersion
+  ) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+
+  const authorizationResult = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        id,
+        owner_user_id,
+        agent_identity_id,
+        network,
+        action,
+        account_address,
+        account_kind,
+        binding_version::text as binding_version,
+        agent_address,
+        agent_name,
+        state
+      from public.spot_agent_authorizations
+      where owner_user_id = $1
+        and agent_identity_id = $2
+        and state = 'active'
+      order by agent_valid_until desc, created_at desc, id desc
+      limit 1
+      for update
+    `,
+    values: [input.ownerUserId, input.agentIdentityId],
+  });
+  const authorization = activeAgentAuthorizationRowSchema.safeParse(
+    authorizationResult.rows[0],
+  );
+  if (
+    !authorization.success ||
+    authorization.data.owner_user_id !== input.ownerUserId ||
+    authorization.data.agent_identity_id !== input.agentIdentityId ||
+    authorization.data.account_address !== input.accountAddress ||
+    authorization.data.binding_version !== input.bindingVersion ||
+    authorization.data.agent_address !== agent.data.agent_address ||
+    authorization.data.agent_name !== agent.data.agent_name
+  ) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+
+  const validityResult = await client.query<Record<string, unknown>>({
+    text: `
+      select clock_timestamp() < agent_valid_until as is_current
+      from public.spot_agent_authorizations
+      where id = $1
+        and owner_user_id = $2
+        and state = 'active'
+    `,
+    values: [authorization.data.id, input.ownerUserId],
+  });
+  if (
+    !currentAgentValidityRowSchema.safeParse(validityResult.rows[0]).success
   ) {
     throw new SpotIntentAuthorityStaleError();
   }
