@@ -22,7 +22,7 @@ function jsonResponse(body = "{}"): Response {
 }
 
 describe("Hyperliquid Spot Info transport", () => {
-  it("serializes only the three exact Spot requests with canonical bytes", async () => {
+  it("serializes only the four exact Spot requests with canonical bytes", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() =>
       Promise.resolve(jsonResponse('{"time":18446744073709551615}')),
     );
@@ -56,10 +56,16 @@ describe("Hyperliquid Spot Info transport", () => {
         signal,
         callId,
       ),
+      transport.post(
+        { type: "userFees", user: accountAddress },
+        signal,
+        callId,
+      ),
     ]);
 
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(5);
     expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
@@ -70,6 +76,7 @@ describe("Hyperliquid Spot Info transport", () => {
       '{"type":"l2Book","coin":"PURR/USDC","nSigFigs":5,"mantissa":null}',
       '{"type":"l2Book","coin":"@1","nSigFigs":5,"mantissa":null}',
       `{"type":"spotClearinghouseState","user":"${accountAddress}"}`,
+      `{"type":"userFees","user":"${accountAddress}"}`,
     ]);
     expect(
       responses.every(
@@ -110,6 +117,15 @@ describe("Hyperliquid Spot Info transport", () => {
       "zero account",
       { type: "spotClearinghouseState", user: `0x${"0".repeat(40)}` },
     ],
+    [
+      "fees extra wallet authority",
+      { type: "userFees", user: accountAddress, wallet: accountAddress },
+    ],
+    [
+      "fees uppercase account",
+      { type: "userFees", user: `0x${"AB".repeat(20)}` },
+    ],
+    ["fees zero account", { type: "userFees", user: `0x${"0".repeat(40)}` }],
   ])("rejects %s before HTTP", async (_label, request) => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const transport = createHyperliquidSpotInfoTransport({ fetch });

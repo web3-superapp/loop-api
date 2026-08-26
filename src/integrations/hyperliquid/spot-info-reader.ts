@@ -25,6 +25,7 @@ import {
   type HyperliquidSpotMarketMetadata,
   type HyperliquidSpotMetadataSnapshot,
   type HyperliquidSpotTokenMetadata,
+  type HyperliquidSpotUserFeesSnapshot,
 } from "./spot-info-contract.js";
 
 const metadataVersionDomain = "loop.hyperliquid.spot.metadata.v1\0";
@@ -150,6 +151,22 @@ const balancesResponseSchema = z
   })
   .strict();
 
+const userFeesAllowedTopLevelKeys: ReadonlySet<string> = new Set([
+  "dailyUserVlm",
+  "feeSchedule",
+  "userCrossRate",
+  "userAddRate",
+  "userSpotCrossRate",
+  "userSpotAddRate",
+  "activeReferralDiscount",
+  "trial",
+  "feeTrialReward",
+  "feeTrialEscrow",
+  "nextTrialAvailableTimestamp",
+  "stakingLink",
+  "activeStakingDiscount",
+]);
+
 interface NormalizedAllowlistEntry {
   readonly marketId: string;
   readonly baseTokenId: string;
@@ -209,6 +226,24 @@ function hasExactDataProperties(
     }
   }
   return expectedKeys.every((key) => Object.hasOwn(value, key));
+}
+
+function hasAllowedDataProperties(
+  value: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+  requiredKeys: readonly string[],
+): boolean {
+  const keys = Reflect.ownKeys(value);
+  for (const key of keys) {
+    if (typeof key !== "string" || !allowedKeys.has(key)) {
+      return false;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      return false;
+    }
+  }
+  return requiredKeys.every((key) => Object.hasOwn(value, key));
 }
 
 function normalizeAllowlist(
@@ -820,6 +855,49 @@ function mapBalances(
   });
 }
 
+function mapUserFees(
+  raw: unknown,
+  fetchedAtMilliseconds: number,
+): HyperliquidSpotUserFeesSnapshot {
+  if (
+    !isPlainDataRecord(raw) ||
+    !hasAllowedDataProperties(raw, userFeesAllowedTopLevelKeys, [
+      "userSpotAddRate",
+      "userSpotCrossRate",
+    ])
+  ) {
+    return unavailable();
+  }
+  const makerRate = raw["userSpotAddRate"];
+  const takerRate = raw["userSpotCrossRate"];
+  if (
+    typeof makerRate !== "string" ||
+    makerRate.length > 128 ||
+    !signedDecimalPattern.test(makerRate) ||
+    typeof takerRate !== "string" ||
+    takerRate.length > 128 ||
+    !nonnegativeDecimalPattern.test(takerRate)
+  ) {
+    return unavailable();
+  }
+  const expiresAtMilliseconds =
+    fetchedAtMilliseconds + HYPERLIQUID_SPOT_PRIVATE_SOURCE_TTL_MILLISECONDS;
+  if (expiresAtMilliseconds > maximumDateMilliseconds) {
+    return unavailable();
+  }
+  return deepFreeze({
+    accountSpotMakerRate: makerRate,
+    accountSpotTakerRate: takerRate,
+    source: {
+      provider: "hyperliquid" as const,
+      network: "testnet" as const,
+      dataset: "userFees" as const,
+      fetchedAt: isoTimestamp(fetchedAtMilliseconds),
+      expiresAt: isoTimestamp(expiresAtMilliseconds),
+    },
+  });
+}
+
 function ensureSignal(value: unknown): AbortSignal {
   if (!(value instanceof AbortSignal)) {
     return unavailable();
@@ -985,6 +1063,36 @@ export function createHyperliquidSpotInfoReader(
         const fetchedAt = readNow(now);
         ensureMetadataFresh(metadata, fetchedAt);
         return mapBalances(raw, metadata, fetchedAt);
+      } catch (error) {
+        return sanitizeFailure(error, checkedSignal);
+      }
+    },
+
+    async readUserFees(requestInput: {
+      readonly accountAddress: string;
+      readonly signal: AbortSignal;
+    }) {
+      const raw: unknown = requestInput;
+      if (
+        !isPlainDataRecord(raw) ||
+        !hasExactDataProperties(raw, ["accountAddress", "signal"]) ||
+        typeof raw["accountAddress"] !== "string" ||
+        !addressPattern.test(raw["accountAddress"]) ||
+        raw["accountAddress"] === zeroAddress
+      ) {
+        return unavailable();
+      }
+      const checkedSignal = ensureSignal(raw["signal"]);
+      try {
+        const response = await reserveAndPost(
+          input.quota,
+          input.transport,
+          HYPERLIQUID_SPOT_INFO_WEIGHT.userFees,
+          { type: "userFees", user: raw["accountAddress"] },
+          checkedSignal,
+        );
+        checkedSignal.throwIfAborted();
+        return mapUserFees(response, readNow(now));
       } catch (error) {
         return sanitizeFailure(error, checkedSignal);
       }

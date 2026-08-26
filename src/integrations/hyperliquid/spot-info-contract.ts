@@ -2,6 +2,7 @@ export const HYPERLIQUID_SPOT_INFO_WEIGHT = Object.freeze({
   spotMetaAndAssetCtxs: 20,
   l2Book: 2,
   spotClearinghouseState: 2,
+  userFees: 20,
 } as const);
 
 export const HYPERLIQUID_SPOT_METADATA_TTL_MILLISECONDS = 60_000;
@@ -58,10 +59,16 @@ export interface HyperliquidSpotClearinghouseStateRequest {
   readonly user: string;
 }
 
+export interface HyperliquidSpotUserFeesRequest {
+  readonly type: "userFees";
+  readonly user: string;
+}
+
 export type HyperliquidSpotInfoRequest =
   | HyperliquidSpotMetaAndAssetContextsRequest
   | HyperliquidSpotBookRequest
-  | HyperliquidSpotClearinghouseStateRequest;
+  | HyperliquidSpotClearinghouseStateRequest
+  | HyperliquidSpotUserFeesRequest;
 
 export interface HyperliquidSpotInfoTransport {
   post(
@@ -169,6 +176,24 @@ export interface HyperliquidSpotBalancesSnapshot {
   readonly source: HyperliquidSpotBalancesSource;
 }
 
+export interface HyperliquidSpotUserFeesSource {
+  readonly provider: "hyperliquid";
+  readonly network: "testnet";
+  readonly dataset: "userFees";
+  readonly fetchedAt: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Account-scoped Spot rates returned directly by Hyperliquid `userFees`.
+ * They are not a pair-adjusted or independently derived final fee schedule.
+ */
+export interface HyperliquidSpotUserFeesSnapshot {
+  readonly accountSpotMakerRate: string;
+  readonly accountSpotTakerRate: string;
+  readonly source: HyperliquidSpotUserFeesSource;
+}
+
 export interface HyperliquidSpotInfoReader {
   readMetadata(input: {
     readonly signal: AbortSignal;
@@ -181,4 +206,8 @@ export interface HyperliquidSpotInfoReader {
     readonly accountAddress: string;
     readonly signal: AbortSignal;
   }): Promise<HyperliquidSpotBalancesSnapshot>;
+  readUserFees(input: {
+    readonly accountAddress: string;
+    readonly signal: AbortSignal;
+  }): Promise<HyperliquidSpotUserFeesSnapshot>;
 }

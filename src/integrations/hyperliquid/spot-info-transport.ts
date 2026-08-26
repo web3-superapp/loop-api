@@ -128,6 +128,17 @@ function serializeRequest(request: HyperliquidSpotInfoRequest): string {
         type: "spotClearinghouseState",
         user: raw["user"],
       });
+    case "userFees":
+      if (
+        !hasExactDataProperties(raw, ["type", "user"]) ||
+        !isAccountAddress(raw["user"])
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "userFees",
+        user: raw["user"],
+      });
     default:
       return unavailable();
   }

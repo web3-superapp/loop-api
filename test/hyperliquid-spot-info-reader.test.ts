@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HyperliquidInfoQuota } from "../src/integrations/hyperliquid/info-quota.js";
 import {
   HYPERLIQUID_SPOT_INFO_WEIGHT,
+  HYPERLIQUID_SPOT_PRIVATE_SOURCE_TTL_MILLISECONDS,
   HYPERLIQUID_TESTNET_USDC_TOKEN_ID,
   HyperliquidSpotInfoUnavailableError,
   type HyperliquidSpotInfoRequest,
@@ -76,11 +77,29 @@ function balancesResponse(): unknown {
   }`);
 }
 
+function feesResponse(): unknown {
+  return parse(`{
+    "dailyUserVlm":[],
+    "feeSchedule":{},
+    "userCrossRate":"0.00045",
+    "userAddRate":"0.00015",
+    "userSpotCrossRate":"0.000700",
+    "userSpotAddRate":"-0.000010",
+    "activeReferralDiscount":"0.0",
+    "trial":null,
+    "feeTrialEscrow":"0.0",
+    "nextTrialAvailableTimestamp":null,
+    "stakingLink":null,
+    "activeStakingDiscount":{"bpsOfMaxSupply":"0.0","discount":"0.0"}
+  }`);
+}
+
 interface HarnessOptions {
   readonly markets?: readonly HyperliquidSpotMarketAllowlistEntry[];
   readonly metadata?: unknown;
   readonly book?: unknown;
   readonly balances?: unknown;
+  readonly fees?: unknown;
   readonly reserveWeight?: HyperliquidInfoQuota["reserveWeight"];
   readonly post?: HyperliquidSpotInfoTransport["post"];
 }
@@ -92,6 +111,7 @@ function harness(options: HarnessOptions = {}) {
     spotMetaAndAssetCtxs: options.metadata ?? metadataResponse(),
     l2Book: options.book ?? bookResponse(),
     spotClearinghouseState: options.balances ?? balancesResponse(),
+    userFees: options.fees ?? feesResponse(),
   };
   const reserveWeight = vi.fn<HyperliquidInfoQuota["reserveWeight"]>(
     options.reserveWeight ??
@@ -638,6 +658,102 @@ describe("Hyperliquid Spot Info reader", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toBeInstanceOf(HyperliquidSpotInfoUnavailableError);
+  });
+
+  it("maps only exact account Spot rates with private freshness, shared quota, and fresh call UUIDs", async () => {
+    const testHarness = harness();
+    const signal = new AbortController().signal;
+
+    const first = await testHarness.reader.readUserFees({
+      accountAddress,
+      signal,
+    });
+    testHarness.setNow(bookProviderTime + 101);
+    const second = await testHarness.reader.readUserFees({
+      accountAddress,
+      signal,
+    });
+
+    expect(first).toEqual({
+      accountSpotMakerRate: "-0.000010",
+      accountSpotTakerRate: "0.000700",
+      source: {
+        provider: "hyperliquid",
+        network: "testnet",
+        dataset: "userFees",
+        fetchedAt: new Date(bookProviderTime + 100).toISOString(),
+        expiresAt: new Date(
+          bookProviderTime +
+            100 +
+            HYPERLIQUID_SPOT_PRIVATE_SOURCE_TTL_MILLISECONDS,
+        ).toISOString(),
+      },
+    });
+    expect(first).not.toHaveProperty("accountAddress");
+    expect(first).not.toHaveProperty("feeSchedule");
+    expect(first).not.toHaveProperty("activeReferralDiscount");
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.source)).toBe(true);
+    expect(second.source.fetchedAt).not.toBe(first.source.fetchedAt);
+    expect(testHarness.reserveWeight.mock.calls.map((call) => call[0])).toEqual(
+      [
+        HYPERLIQUID_SPOT_INFO_WEIGHT.userFees,
+        HYPERLIQUID_SPOT_INFO_WEIGHT.userFees,
+      ],
+    );
+    expect(testHarness.post.mock.calls.map((call) => call[0])).toEqual([
+      { type: "userFees", user: accountAddress },
+      { type: "userFees", user: accountAddress },
+    ]);
+    const callIds = testHarness.post.mock.calls.map((call) => call[2]);
+    expect(callIds.every((value) => uuidPattern.test(value))).toBe(true);
+    expect(new Set(callIds).size).toBe(2);
+  });
+
+  it.each([
+    [
+      "numeric maker rate",
+      `{"userSpotAddRate":0.0004,"userSpotCrossRate":"0.0007"}`,
+    ],
+    [
+      "scientific taker rate",
+      `{"userSpotAddRate":"0.0004","userSpotCrossRate":"7e-4"}`,
+    ],
+    ["missing maker rate", `{"userSpotCrossRate":"0.0007"}`],
+    [
+      "negative taker rate",
+      `{"userSpotAddRate":"0.0004","userSpotCrossRate":"-0.0007"}`,
+    ],
+    [
+      "extra wallet authority",
+      `{"userSpotAddRate":"0.0004","userSpotCrossRate":"0.0007","wallet":"authority"}`,
+    ],
+  ])("rejects malformed user fees: %s", async (_label, body) => {
+    const testHarness = harness({ fees: parse(body) });
+
+    await expect(
+      testHarness.reader.readUserFees({
+        accountAddress,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toBeInstanceOf(HyperliquidSpotInfoUnavailableError);
+  });
+
+  it("rejects caller-supplied fee authority before quota or transport", async () => {
+    const testHarness = harness();
+    const input = {
+      accountAddress,
+      signal: new AbortController().signal,
+      wallet: accountAddress,
+    };
+
+    await expect(
+      testHarness.reader.readUserFees(
+        input as Parameters<typeof testHarness.reader.readUserFees>[0],
+      ),
+    ).rejects.toBeInstanceOf(HyperliquidSpotInfoUnavailableError);
+    expect(testHarness.reserveWeight).not.toHaveBeenCalled();
+    expect(testHarness.post).not.toHaveBeenCalled();
   });
 
   it("never returns stale metadata when a refresh fails", async () => {
