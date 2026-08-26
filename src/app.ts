@@ -45,11 +45,11 @@ import {
   createWatchlistService,
   type WatchlistService,
 } from "./features/watchlist/watchlist-service.js";
+import { createPerpWalletBindingResolver } from "./features/perp/wallet-binding-resolver.js";
 import {
-  createPerpWalletBindingResolver,
-  createUnavailablePerpWalletBindingResolver,
-  type PerpWalletBindingResolver,
-} from "./features/perp/wallet-binding-resolver.js";
+  createUnavailableWalletBindingResolver,
+  type WalletBindingResolver,
+} from "./features/wallet/wallet-binding-resolver.js";
 import { createHyperliquidInfoPrivateReader } from "./integrations/hyperliquid/info-private-reader.js";
 import { createPostgresHyperliquidInfoQuota } from "./integrations/hyperliquid/info-quota.js";
 import { createLosslessHyperliquidInfoTransport } from "./integrations/hyperliquid/lossless-info-transport.js";
@@ -96,7 +96,7 @@ export interface BuildAppOptions {
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
-  readonly perpWalletBindingResolver?: PerpWalletBindingResolver;
+  readonly perpWalletBindingResolver?: WalletBindingResolver;
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
   readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
   readonly perpMutationGate?: PerpMutationGate;
@@ -367,10 +367,10 @@ export async function buildApp(
             },
           },
         });
-  const perpWalletBindingResolver =
+  const walletBindingResolver =
     options.perpWalletBindingResolver ??
     (config.privy === null
-      ? createUnavailablePerpWalletBindingResolver()
+      ? createUnavailableWalletBindingResolver()
       : createPerpWalletBindingResolver({
           repository: database.perpWalletBindings,
           userReader: privyUserReader,
@@ -401,13 +401,13 @@ export async function buildApp(
           ttlSeconds: config.perpReadCursor.ttlSeconds,
         });
   const perpPrivateReadService = createPerpPrivateReadService({
-    bindingResolver: perpWalletBindingResolver,
+    bindingResolver: walletBindingResolver,
     cursorCodec: perpPrivateReadCursorCodec,
     reader: hyperliquidPrivateReader,
   });
   const perpIntentService = createPerpIntentService({
     repository: database.perpIntents,
-    bindingResolver: perpWalletBindingResolver,
+    bindingResolver: walletBindingResolver,
     reviewer:
       options.hyperliquidPerpIntentReviewer ??
       createUnavailableHyperliquidPerpIntentReviewer(),

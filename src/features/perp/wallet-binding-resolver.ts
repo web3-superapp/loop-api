@@ -7,6 +7,17 @@ import {
   parsePrivyEmbeddedEthereumWallets,
 } from "./privy-wallet-catalog.js";
 import { parsePerpWalletBindingRecord } from "./wallet-binding-record.js";
+import {
+  createUnavailableWalletBindingResolver,
+  WalletBindingRequiredError,
+  WalletBindingResolutionUnavailableError,
+  type ResolveWalletBindingInput,
+  type VerifiedWalletBinding,
+  type WalletAccountKind,
+  type WalletBindingResolver,
+} from "../wallet/wallet-binding-resolver.js";
+
+export { WalletBindingRequiredError, WalletBindingResolutionUnavailableError };
 
 const canonicalUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -24,59 +35,13 @@ const resolverInputSchema = z
 
 const verifiedLeaseMilliseconds = 15_000;
 
-export type PerpWalletAccountKind = "master" | "subaccount";
-
-/**
- * The service layer must parse and revalidate resolver output before using it.
- * The resolver deliberately returns `unknown` so a provider/database adapter
- * cannot silently widen this security boundary.
- */
-export interface VerifiedPerpWalletBinding {
-  readonly ownerUserId: string;
-  readonly privyUserId: string;
-  readonly accountAddress: string;
-  readonly accountKind: PerpWalletAccountKind;
-  readonly bindingVersion: string;
-  readonly verifiedAt: string;
-  readonly expiresAt: string;
-}
-
-export interface ResolvePerpWalletBindingInput {
-  readonly ownerUserId: string;
-  readonly privyUserId: string;
-  readonly signal: AbortSignal;
-}
-
-export interface PerpWalletBindingResolver {
-  resolve(input: ResolvePerpWalletBindingInput): Promise<unknown>;
-}
-
-export class WalletBindingRequiredError extends Error {
-  readonly code = "wallet_binding_required";
-
-  constructor() {
-    super("A verified wallet binding is required");
-    this.name = "WalletBindingRequiredError";
-  }
-}
-
-export class WalletBindingResolutionUnavailableError extends Error {
-  readonly code = "wallet_binding_resolution_unavailable";
-
-  constructor() {
-    super("Wallet binding resolution is unavailable");
-    this.name = "WalletBindingResolutionUnavailableError";
-  }
-}
-
-function unavailable(): Promise<never> {
-  // The default adapter has no evidence of an eligible wallet. It must not
-  // guess an address or downgrade absence of evidence into a usable binding.
-  return Promise.reject(new WalletBindingRequiredError());
-}
+export type PerpWalletAccountKind = WalletAccountKind;
+export type VerifiedPerpWalletBinding = VerifiedWalletBinding;
+export type ResolvePerpWalletBindingInput = ResolveWalletBindingInput;
+export type PerpWalletBindingResolver = WalletBindingResolver;
 
 export function createUnavailablePerpWalletBindingResolver(): PerpWalletBindingResolver {
-  return Object.freeze({ resolve: unavailable });
+  return createUnavailableWalletBindingResolver();
 }
 
 export function createPerpWalletBindingResolver(options: {

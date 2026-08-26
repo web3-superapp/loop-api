@@ -14,7 +14,7 @@ import type {
   PerpReconciliationSubject,
 } from "../../features/perp/perp-reconciliation-contract.js";
 import { parsePerpIntentRequest } from "../../features/perp/perp-intent-contract.js";
-import type { HyperliquidInfoQuota } from "./info-private-reader.js";
+import type { HyperliquidInfoQuota } from "./info-quota.js";
 import type {
   HyperliquidInfoRequest,
   HyperliquidLosslessInfoTransport,

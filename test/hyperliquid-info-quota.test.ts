@@ -3,9 +3,11 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneRepository } from "../src/database/control-plane-repository.js";
+import type { HyperliquidInfoQuota as LegacyHyperliquidInfoQuota } from "../src/integrations/hyperliquid/info-private-reader.js";
 import {
   createPostgresHyperliquidInfoQuota,
   HYPERLIQUID_INFO_QUOTA_CAPABILITY,
+  type HyperliquidInfoQuota,
   type HyperliquidInfoQuotaPolicy,
 } from "../src/integrations/hyperliquid/info-quota.js";
 
@@ -33,6 +35,14 @@ function dependencies() {
 }
 
 describe("PostgreSQL-backed Hyperliquid Info quota", () => {
+  it("keeps the former private-reader type path compatible with the canonical port", () => {
+    const { quota } = dependencies();
+    const throughLegacyPath: LegacyHyperliquidInfoQuota = quota;
+    const throughCanonicalPath: HyperliquidInfoQuota = throughLegacyPath;
+
+    expect(throughCanonicalPath).toBe(quota);
+  });
+
   it("reserves the exact request weight in one domain-separated global bucket", async () => {
     const inputs = dependencies();
 

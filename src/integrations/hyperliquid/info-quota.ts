@@ -1,13 +1,20 @@
 import { createHmac, createSecretKey } from "node:crypto";
 
 import type { ControlPlaneRepository } from "../../database/control-plane-repository.js";
-import type { HyperliquidInfoQuota } from "./info-private-reader.js";
 
 const hmacDomain = "loop.hyperliquid.info.quota.v1\0global";
 const minimumHmacSecretBytes = 32;
 const maximumHmacSecretBytes = 4_096;
 
 export const HYPERLIQUID_INFO_QUOTA_CAPABILITY = "hyperliquid_info";
+
+/**
+ * Hyperliquid Info weight is one provider-global budget shared by API reads
+ * and reconciliation workers across product domains.
+ */
+export interface HyperliquidInfoQuota {
+  reserveWeight(cost: number, signal: AbortSignal): Promise<void>;
+}
 
 export type HyperliquidInfoQuotaRepository = Pick<
   ControlPlaneRepository,

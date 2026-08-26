@@ -12,6 +12,7 @@ import {
   HyperliquidPrivateReaderUnavailableError,
   RetryableHyperliquidReadError,
 } from "./private-reader.js";
+import type { HyperliquidInfoQuota } from "./info-quota.js";
 import type {
   HyperliquidInfoRequest,
   HyperliquidLosslessInfoTransport,
@@ -392,9 +393,7 @@ interface MappedFunding {
   readonly settledAtMilliseconds: number;
 }
 
-export interface HyperliquidInfoQuota {
-  reserveWeight(cost: number, signal: AbortSignal): Promise<void>;
-}
+export type { HyperliquidInfoQuota } from "./info-quota.js";
 
 export interface CreateHyperliquidInfoPrivateReaderInput {
   readonly transport: HyperliquidLosslessInfoTransport;

@@ -1,4 +1,4 @@
-import type { PerpWalletAccountKind } from "../../features/perp/wallet-binding-resolver.js";
+import type { WalletAccountKind } from "../../features/wallet/wallet-binding-resolver.js";
 
 export interface IssueHyperliquidAgentAuthorizationInput {
   readonly authorizationId: string;
@@ -14,7 +14,7 @@ export interface SubmitHyperliquidAgentAuthorizationSignatureInput {
   readonly ownerUserId: string;
   readonly requestId: string;
   readonly accountAddress: string;
-  readonly accountKind: PerpWalletAccountKind;
+  readonly accountKind: WalletAccountKind;
   readonly signerWalletAddress: string;
   readonly agentAddress: string;
   readonly agentName: string;

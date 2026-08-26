@@ -1,15 +1,18 @@
-import { parse } from "lossless-json";
-
+import {
+  createLosslessHyperliquidInfoHttpKernel,
+  HyperliquidInfoTransportUnavailableError,
+  RetryableHyperliquidInfoTransportError,
+} from "./lossless-info-http-kernel.js";
 import {
   HyperliquidPrivateReaderUnavailableError,
   RetryableHyperliquidReadError,
 } from "./private-reader.js";
 
-export const HYPERLIQUID_TESTNET_INFO_URL =
-  "https://api.hyperliquid-testnet.xyz/info";
-export const HYPERLIQUID_INFO_DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+export {
+  HYPERLIQUID_INFO_DEFAULT_MAX_RESPONSE_BYTES,
+  HYPERLIQUID_TESTNET_INFO_URL,
+} from "./lossless-info-http-kernel.js";
 
-const maximumConfiguredResponseBytes = 8 * 1024 * 1024;
 const addressPattern = /^0x[0-9a-f]{40}$/;
 const zeroAddress = `0x${"0".repeat(40)}`;
 const clientOrderIdPattern = /^0x[0-9a-f]{32}$/;
@@ -52,17 +55,6 @@ interface OrderStatusByClientOrderIdRequest {
   readonly type: "orderStatus";
   readonly user: string;
   readonly oid: string;
-}
-
-interface BodyReadResult {
-  readonly done: boolean;
-  readonly value?: Uint8Array;
-}
-
-interface BodyReader {
-  read(): Promise<BodyReadResult>;
-  cancel(): Promise<void>;
-  releaseLock(): void;
 }
 
 export type HyperliquidInfoRequest =
@@ -231,99 +223,10 @@ function serializeRequest(value: HyperliquidInfoRequest): string {
   }
 }
 
-function validateContentLength(response: Response, maximumBytes: number): void {
-  const header = response.headers.get("content-length");
-  if (header === null) {
-    return;
-  }
-  if (!/^(?:0|[1-9][0-9]*)$/.test(header)) {
-    unavailable();
-  }
-  const length = Number(header);
-  if (!Number.isSafeInteger(length) || length > maximumBytes) {
-    unavailable();
-  }
-}
-
-function validateContentType(response: Response): void {
-  const header = response.headers.get("content-type");
-  const mediaType = header?.split(";", 1)[0]?.trim().toLowerCase();
-  if (mediaType !== "application/json") {
-    unavailable();
-  }
-}
-
-async function readBoundedUtf8(
-  response: Response,
-  maximumBytes: number,
-  signal: AbortSignal,
-): Promise<string> {
-  validateContentLength(response, maximumBytes);
-  if (response.body === null) {
-    return unavailable();
-  }
-
-  const reader = response.body.getReader() as unknown as BodyReader;
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const parts: string[] = [];
-  let bytesRead = 0;
-
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (part.done) {
-        break;
-      }
-      const chunk = part.value;
-      if (!(chunk instanceof Uint8Array)) {
-        return unavailable();
-      }
-      bytesRead += chunk.byteLength;
-      if (bytesRead > maximumBytes) {
-        await reader.cancel().catch(() => undefined);
-        return unavailable();
-      }
-      parts.push(decoder.decode(chunk, { stream: true }));
-    }
-    parts.push(decoder.decode());
-    return parts.join("");
-  } catch {
-    signal.throwIfAborted();
-    return unavailable();
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function parseLosslessly(text: string): unknown {
-  try {
-    return parse(text);
-  } catch {
-    return unavailable();
-  }
-}
-
-function configuredMaximum(value: number | undefined): number {
-  const resolved = value ?? HYPERLIQUID_INFO_DEFAULT_MAX_RESPONSE_BYTES;
-  if (
-    !Number.isInteger(resolved) ||
-    resolved < 1 ||
-    resolved > maximumConfiguredResponseBytes
-  ) {
-    throw new TypeError("Hyperliquid response byte limit is invalid");
-  }
-  return resolved;
-}
-
-async function cancelResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
-}
-
 export function createLosslessHyperliquidInfoTransport(
   input: CreateHyperliquidLosslessInfoTransportInput = {},
 ): HyperliquidLosslessInfoTransport {
-  const fetchImplementation = input.fetch ?? fetch;
-  const maximumBytes = configuredMaximum(input.maxResponseBytes);
+  const kernel = createLosslessHyperliquidInfoHttpKernel(input);
 
   return Object.freeze({
     async post(
@@ -340,52 +243,15 @@ export function createLosslessHyperliquidInfoTransport(
       }
       const body = serializeRequest(request);
 
-      let response: Response;
       try {
-        response = await fetchImplementation(HYPERLIQUID_TESTNET_INFO_URL, {
-          method: "POST",
-          headers: Object.freeze({
-            accept: "application/json",
-            "content-type": "application/json",
-          }),
-          body,
-          signal,
-          redirect: "error",
-          cache: "no-store",
-          credentials: "omit",
-        });
-      } catch {
-        signal.throwIfAborted();
-        throw new RetryableHyperliquidReadError("pre_response_transport");
-      }
-
-      try {
-        signal.throwIfAborted();
-        if (!(response instanceof Response)) {
-          return unavailable();
-        }
-        if (response.status >= 500 && response.status <= 599) {
-          await cancelResponseBody(response);
-          signal.throwIfAborted();
-          throw new RetryableHyperliquidReadError("provider_5xx");
-        }
-        if (!response.ok) {
-          await cancelResponseBody(response);
-          signal.throwIfAborted();
-          return unavailable();
-        }
-
-        validateContentType(response);
-        const text = await readBoundedUtf8(response, maximumBytes, signal);
-        signal.throwIfAborted();
-        return parseLosslessly(text);
+        return await kernel.postSerialized(body, signal, callId);
       } catch (error) {
         signal.throwIfAborted();
-        if (
-          error instanceof RetryableHyperliquidReadError ||
-          error instanceof HyperliquidPrivateReaderUnavailableError
-        ) {
-          throw error;
+        if (error instanceof RetryableHyperliquidInfoTransportError) {
+          throw new RetryableHyperliquidReadError(error.reason);
+        }
+        if (error instanceof HyperliquidInfoTransportUnavailableError) {
+          return unavailable();
         }
         return unavailable();
       }

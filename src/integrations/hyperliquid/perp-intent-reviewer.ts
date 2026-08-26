@@ -1,5 +1,5 @@
 import type { PerpIntentRequest } from "../../features/perp/perp-intent-contract.js";
-import type { PerpWalletAccountKind } from "../../features/perp/wallet-binding-resolver.js";
+import type { WalletAccountKind } from "../../features/wallet/wallet-binding-resolver.js";
 
 export interface PerpIntentReviewItem {
   readonly index: number;
@@ -13,7 +13,7 @@ export interface PerpIntentReviewItem {
 export interface ReviewPerpIntentInput {
   readonly ownerUserId: string;
   readonly accountAddress: string;
-  readonly accountKind: PerpWalletAccountKind;
+  readonly accountKind: WalletAccountKind;
   readonly bindingVersion: string;
   readonly network: "testnet";
   readonly market: "core_perps";
