@@ -672,7 +672,9 @@ export function up(pgm: MigrationBuilder): void {
       constraint spot_agent_authorizations_review_sha256_check
         check (review_sha256 ~ '^[0-9a-f]{64}$'),
       constraint spot_agent_authorizations_primary_type_check
-        check (typed_data_primary_type ~ '^[A-Za-z][A-Za-z0-9_]{0,127}$'),
+        check (
+          typed_data_primary_type = 'HyperliquidTransaction:ApproveAgent'
+        ),
       constraint spot_agent_authorizations_signing_digest_check
         check (signing_digest ~ '^0x[0-9a-f]{64}$'),
       constraint spot_agent_authorizations_typed_data_json_sha256_check

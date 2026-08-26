@@ -486,7 +486,7 @@ async function insertPreparedAuthorization(
         agent_valid_until,
         '{}'::jsonb,
         $8,
-        'HyperliquidTransactionApproveAgent',
+        'HyperliquidTransaction:ApproveAgent',
         $9,
         $10,
         signing_expires_at

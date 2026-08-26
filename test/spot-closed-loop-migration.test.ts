@@ -111,6 +111,9 @@ describe("000007 Hyperliquid Spot closed-loop migration contract", () => {
     expect(statement).toContain(
       "create unique index spot_agent_authorizations_live_identity_unique",
     );
+    expect(statement).toContain(
+      "typed_data_primary_type = 'HyperliquidTransaction:ApproveAgent'",
+    );
     expect(statement).toContain("'reserved', 'active', 'revoked'");
   });
 
