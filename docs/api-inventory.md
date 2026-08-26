@@ -119,6 +119,43 @@ accepted and the Development App gate closes. These interfaces have not been
 exercised with Flutter or a physical device, do not authorize server Chat/Video
 mutations, and do not claim connected Stream state.
 
+## Approved Hyperliquid native Spot Testnet contract
+
+Decision 0014 approves the following exact owner-scoped contract for one
+manually reviewed capped IOC Spot buy or sell. These routes are not yet present
+in `src/routes/` or generated OpenAPI. Approval does not claim a provider,
+signer, wallet, or execution integration.
+
+| Method and path                                                    | Key contract                                                                                                         | Interface           | Capability                                  |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------- |
+| `GET /v1/spot/config`                                              | Fixed Testnet policy, opaque allowlisted markets, review policy, and explicit capability state                       | `approved-contract` | `blocked-provider`                          |
+| `GET /v1/spot/markets/{market_id}/facts`                           | One bounded metadata/book fact set; no raw provider identifier                                                       | `approved-contract` | `blocked-provider`                          |
+| `GET /v1/spot/balances`                                            | Current bound master-account Spot holdings                                                                           | `approved-contract` | `blocked-provider`                          |
+| `POST /v1/spot/intents`                                            | UUID `Idempotency-Key`; business intent only; durable executable quote plus immutable F11 review                     | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/intents/{intent_id}`                                 | Owner-scoped reviewed execution/reconciliation resource                                                              | `approved-contract` | `blocked-provider`                          |
+| `POST /v1/spot/intents/{intent_id}/submit`                         | No body; fresh authority and review validation; one durable provider write attempt at most                           | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/wallet-binding`                                      | Provider-neutral binding state and monotonic epoch; no address or wallet ID                                          | `approved-contract` | `blocked-provider`                          |
+| `PUT /v1/spot/wallet-binding`                                      | Bind, exact refresh, or rotate using only `expected_binding_version`                                                 | `approved-contract` | `blocked-provider`                          |
+| `DELETE /v1/spot/wallet-binding?expected_binding_version={epoch}`  | Compare-and-swap unbind while retaining the monotonic epoch                                                          | `approved-contract` | `blocked-provider`                          |
+| `POST /v1/spot/agent-authorizations`                               | No body/query/client key; issue one server-owned expiring Testnet `approveAgent` handoff                             | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/agent-authorizations/{authorization_id}`             | Owner-scoped sanitized authorization state                                                                           | `approved-contract` | `blocked-provider`                          |
+| `POST /v1/spot/agent-authorizations/{authorization_id}/signatures` | Exact `{signature}` body; verify current owner/digest/Agent/epoch/expiry, journal one relay, then authoritative read | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
+
+`POST /v1/spot/intents` is the quote/review resource; no separate
+`/quotes` route is approved. General order/fill lists, resting orders,
+cancel/modify, triggers, TP/SL, TWAP, batch, transfers, withdrawals, bridges,
+builder fees, automation, Perp extension, and Mainnet are outside this
+contract.
+
+The client can never choose or submit network, account, wallet, Agent, token
+index/ID, pair index, Exchange asset, nonce, CLOID, provider idempotency value,
+wire action, or order signature. The one authorization-creation response may
+contain the server-generated public typed-data fields Privy must sign; the
+client cannot edit them, and the signature-submission body still contains only
+the opaque signature. The contract and official signing fixtures live under
+`contracts/hyperliquid-spot/`. The production writer is unavailable and no
+Hyperliquid Node SDK has been installed.
+
 ## Perp wallet-binding lifecycle
 
 The current principal may explicitly bind only a unique eligible Privy embedded

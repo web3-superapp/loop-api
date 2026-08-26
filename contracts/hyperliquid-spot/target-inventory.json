@@ -1,0 +1,81 @@
+{
+  "schema_version": "loop.hyperliquid-spot.target-inventory/v1",
+  "authority": "machine_readable_spot_implementation_surface",
+  "decision_refs": [
+    "docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md",
+    "docs/decisions/0015-mainnet-spot-release-boundary.md"
+  ],
+  "owner_order": [
+    "contracts/hyperliquid-spot/**",
+    "src/features/spot/**",
+    "src/routes/spot-*.ts",
+    "src/integrations/hyperliquid/**",
+    "src/database/spot-*.ts",
+    "migrations/000007_hyperliquid_spot_closed_loop.ts",
+    "test/spot-*.test.ts",
+    "test/hyperliquid-spot-*.test.ts"
+  ],
+  "current_contract_targets": [
+    "contracts/hyperliquid-spot/README.md",
+    "contracts/hyperliquid-spot/contract.json",
+    "contracts/hyperliquid-spot/oss-lock.json",
+    "contracts/hyperliquid-spot/sources.md",
+    "contracts/hyperliquid-spot/target-inventory.json",
+    "contracts/hyperliquid-spot/fixtures/provider-l2-book-purr-testnet.json",
+    "contracts/hyperliquid-spot/fixtures/provider-spot-meta-purr-testnet.json",
+    "contracts/hyperliquid-spot/fixtures/provenance.json",
+    "contracts/hyperliquid-spot/fixtures/signing-conformance-v1.json",
+    "scripts/verify-hyperliquid-spot-signing-oracle.py",
+    "test/hyperliquid-spot-signing-contract.test.ts"
+  ],
+  "planned_runtime_targets": [
+    {
+      "surface": "src/features/spot/**",
+      "role": "strict intent, review, binding, authorization, execution, and reconciliation domain"
+    },
+    {
+      "surface": "src/routes/spot-*.ts",
+      "role": "the twelve exact no-store authenticated Spot routes"
+    },
+    {
+      "surface": "src/integrations/hyperliquid/**",
+      "role": "provider-generic quota/transport plus strict Testnet Spot readers and future gated writer"
+    },
+    {
+      "surface": "src/database/spot-*.ts",
+      "role": "atomic Spot repositories, events, authorization, nonce, and reconciliation persistence"
+    },
+    {
+      "surface": "migrations/000007_hyperliquid_spot_closed_loop.ts",
+      "role": "append-only Spot schema and neutral wallet-binding compatibility"
+    },
+    {
+      "surface": "src/features/reconciliation/**",
+      "role": "provider domain plus operation-kind dispatch without Spot-to-Perp crossover"
+    },
+    {
+      "surface": "src/app.ts",
+      "role": "default-closed composition and route registration"
+    },
+    {
+      "surface": "src/worker.ts",
+      "role": "read-only Spot reconciliation registration; no signer or replay"
+    },
+    {
+      "surface": "scripts/generate-openapi.ts",
+      "role": "generated OpenAPI after all route contracts stabilize"
+    },
+    {
+      "surface": "test/**",
+      "role": "contract, authority, decimal, persistence, provider, worker, OpenAPI, and credentialed gates"
+    }
+  ],
+  "forbidden_owners": [
+    "src/features/perp/** as Spot authority",
+    "src/routes/perp-*.ts as Spot HTTP contract",
+    "src/database/perp-*.ts imported directly by Spot",
+    "mobile or client signing/nonce implementation",
+    "runtime fixture fallback",
+    "Mainnet configuration or network selector"
+  ]
+}

@@ -7,7 +7,9 @@ prototype research in `contracts/integration-catalog/` and
 ## Provider boundaries
 
 - Privy is the identity credential, wallet, authorization, and signing provider.
-- Hyperliquid is the Core-whitelist perpetual market provider.
+- Hyperliquid native Spot on Testnet is the current approved trading target.
+  Retained Core-whitelist Perp routes remain compatibility behavior only; no
+  new Perp product work is approved.
 - Stream Chat + Stream Video/Audio Rooms is the current Chat and voice provider.
 - LOOP implements thin adapters, policy mapping, orchestration, and projections;
   it does not implement replacement wallet, matching, Chat, RTC, or SFU cores.
@@ -25,6 +27,16 @@ licensed Stream issuer composition, nonempty Testnet-account end-to-end
 evidence, or private trading mutation path. Stream remains `blocked-provider`;
 Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
+
+Decision 0014 approves a separate twelve-route Hyperliquid native Spot Testnet
+contract for one reviewed capped IOC buy or sell, one shared master-wallet
+binding authority, a per-owner/binding-epoch Agent handoff, persistent nonce
+allocation, one provider write attempt, and read-only reconciliation. Those
+Spot routes, repositories, readers, signer, and executor are not implemented by
+the decision itself. The writer remains unavailable until an exact Node adapter
+passes the official-Python byte-conformance and credentialed Testnet gates.
+Decision 0015 keeps Mainnet absent as a separate future release project rather
+than a URL or runtime flag.
 
 The generic reconciliation loop now has a separate process entry point and
 runtime image. Its default-off fixed-Testnet capability can reconcile only a

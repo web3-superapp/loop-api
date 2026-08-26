@@ -1,0 +1,368 @@
+{
+  "schema_version": "loop.hyperliquid-spot.signing-conformance/v1",
+  "classification": "public_nonsecret_test_vectors",
+  "network": "testnet",
+  "network_requests": 0,
+  "credentials": "omitted",
+  "runtime_fallback": false,
+  "runtime_adapter": {
+    "status": "not_selected",
+    "conformance": "not_run",
+    "production_mutation": "disabled"
+  },
+  "fixture_signer": {
+    "classification": "public_test_vector_only",
+    "credential": false,
+    "key_material": "omitted",
+    "expected_address": "0x14791697260e4c9a71f18484c9f997b308e59325",
+    "source": "official hyperliquid-python-sdk tests/signing_test.py public fixture identity"
+  },
+  "oracle": {
+    "package": "hyperliquid-python-sdk",
+    "version": "0.24.0",
+    "commit": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "signing_py_sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
+    "signing_test_py_sha256": "ea0d7b2e9e2a224b55e05b6d1abbcc727ce1f38e72572e607a4a7045bc01a042",
+    "generation": "offline official SDK functions with the public SDK test identity supplied from an untracked environment; key material omitted from output",
+    "generated_at": "2026-08-26T06:40:00Z"
+  },
+  "vectors": [
+    {
+      "id": "spot_buy_ioc_master_with_expiry",
+      "kind": "l1_spot_order",
+      "semantic_input": {
+        "network": "testnet",
+        "pair_index": 0,
+        "derived_order_asset": 10000,
+        "side": "buy",
+        "price": "12.345",
+        "size": "0.007",
+        "time_in_force": "Ioc",
+        "reduce_only": false,
+        "cloid": "0x00000000000000000000000000000001",
+        "nonce": "1760000000123",
+        "vault_address": null,
+        "expires_after": "1760000015123"
+      },
+      "wire": {
+        "action": {
+          "type": "order",
+          "orders": [
+            {
+              "a": 10000,
+              "b": true,
+              "p": "12.345",
+              "s": "0.007",
+              "r": false,
+              "t": {
+                "limit": {
+                  "tif": "Ioc"
+                }
+              },
+              "c": "0x00000000000000000000000000000001"
+            }
+          ],
+          "grouping": "na"
+        },
+        "key_order": {
+          "action": ["type", "orders", "grouping"],
+          "order": ["a", "b", "p", "s", "r", "t", "c"],
+          "limit": ["tif"]
+        },
+        "msgpack_hex": "0x83a474797065a56f72646572a66f72646572739187a161cd2710a162c3a170a631322e333435a173a5302e303037a172c2a17481a56c696d697481a3746966a3496f63a163d92230783030303030303030303030303030303030303030303030303030303030303031a867726f7570696e67a26e61",
+        "nonce_big_endian_u64_hex": "0x00000199c82cc07b",
+        "vault_suffix_hex": "0x00",
+        "expires_suffix_hex": "0x0000000199c82cfb13",
+        "action_hash_preimage_hex": "0x83a474797065a56f72646572a66f72646572739187a161cd2710a162c3a170a631322e333435a173a5302e303037a172c2a17481a56c696d697481a3746966a3496f63a163d92230783030303030303030303030303030303030303030303030303030303030303031a867726f7570696e67a26e6100000199c82cc07b000000000199c82cfb13",
+        "action_hash_keccak256_hex": "0x3f3019e4f5112e14f970773b7c850fd605b253ead63ec61248f33e5e63937cf2"
+      },
+      "phantom_agent": {
+        "source": "b",
+        "connectionId": "0x3f3019e4f5112e14f970773b7c850fd605b253ead63ec61248f33e5e63937cf2"
+      },
+      "eip712": {
+        "full_message": {
+          "domain": {
+            "chainId": 1337,
+            "name": "Exchange",
+            "verifyingContract": "0x0000000000000000000000000000000000000000",
+            "version": "1"
+          },
+          "types": {
+            "Agent": [
+              { "name": "source", "type": "string" },
+              { "name": "connectionId", "type": "bytes32" }
+            ],
+            "EIP712Domain": [
+              { "name": "name", "type": "string" },
+              { "name": "version", "type": "string" },
+              { "name": "chainId", "type": "uint256" },
+              { "name": "verifyingContract", "type": "address" }
+            ]
+          },
+          "primaryType": "Agent",
+          "message": {
+            "source": "b",
+            "connectionId": "0x3f3019e4f5112e14f970773b7c850fd605b253ead63ec61248f33e5e63937cf2"
+          }
+        },
+        "domain_separator_hex": "0xd79297fcdf2ffcd4ae223d01edaa2ba214ff8f401d7c9300d995d17c82aa4040",
+        "struct_hash_hex": "0x3b179605867bdce4904690319127b0e6790b9e58679e777a444245196fd12268",
+        "eip191_digest_hex": "0xd20934b7a7047e5923fa1a698683bd76e5a26ed6673e944c7b02d8a1f99ae5a1"
+      },
+      "signature": {
+        "official_json": {
+          "r": "0x9758671fe51d54fb0ffe1b2d901609d8a6c61052a8491235ad7c30bb69a4233e",
+          "s": "0x2b3c60089c98b19a289e516f66c271466a6a5603f51707cd0f5582e3f3cb6722",
+          "v": 28
+        },
+        "r32_hex": "0x9758671fe51d54fb0ffe1b2d901609d8a6c61052a8491235ad7c30bb69a4233e",
+        "s32_hex": "0x2b3c60089c98b19a289e516f66c271466a6a5603f51707cd0f5582e3f3cb6722",
+        "signature65_hex": "0x9758671fe51d54fb0ffe1b2d901609d8a6c61052a8491235ad7c30bb69a4233e2b3c60089c98b19a289e516f66c271466a6a5603f51707cd0f5582e3f3cb672201",
+        "expected_recovered_address": "0x14791697260e4c9a71f18484c9f997b308e59325"
+      },
+      "exchange_payload": {
+        "action": {
+          "type": "order",
+          "orders": [
+            {
+              "a": 10000,
+              "b": true,
+              "p": "12.345",
+              "s": "0.007",
+              "r": false,
+              "t": { "limit": { "tif": "Ioc" } },
+              "c": "0x00000000000000000000000000000001"
+            }
+          ],
+          "grouping": "na"
+        },
+        "nonce": 1760000000123,
+        "signature": {
+          "r": "0x9758671fe51d54fb0ffe1b2d901609d8a6c61052a8491235ad7c30bb69a4233e",
+          "s": "0x2b3c60089c98b19a289e516f66c271466a6a5603f51707cd0f5582e3f3cb6722",
+          "v": 28
+        },
+        "vaultAddress": null,
+        "expiresAfter": 1760000015123
+      }
+    },
+    {
+      "id": "spot_sell_ioc_subaccount_no_expiry",
+      "kind": "l1_spot_order",
+      "semantic_input": {
+        "network": "testnet",
+        "pair_index": 17,
+        "derived_order_asset": 10017,
+        "side": "sell",
+        "price": "0.125",
+        "size": "1.25",
+        "time_in_force": "Ioc",
+        "reduce_only": false,
+        "cloid": "0x00000000000000000000000000000002",
+        "nonce": "1760000000456",
+        "vault_address": "0x1111111111111111111111111111111111111111",
+        "expires_after": null
+      },
+      "fixture_scope_note": "Subaccount/vault signing is a conformance mutation vector only; Decision 0014 runtime supports the master account only.",
+      "wire": {
+        "action": {
+          "type": "order",
+          "orders": [
+            {
+              "a": 10017,
+              "b": false,
+              "p": "0.125",
+              "s": "1.25",
+              "r": false,
+              "t": {
+                "limit": {
+                  "tif": "Ioc"
+                }
+              },
+              "c": "0x00000000000000000000000000000002"
+            }
+          ],
+          "grouping": "na"
+        },
+        "key_order": {
+          "action": ["type", "orders", "grouping"],
+          "order": ["a", "b", "p", "s", "r", "t", "c"],
+          "limit": ["tif"]
+        },
+        "msgpack_hex": "0x83a474797065a56f72646572a66f72646572739187a161cd2721a162c2a170a5302e313235a173a4312e3235a172c2a17481a56c696d697481a3746966a3496f63a163d92230783030303030303030303030303030303030303030303030303030303030303032a867726f7570696e67a26e61",
+        "nonce_big_endian_u64_hex": "0x00000199c82cc1c8",
+        "vault_suffix_hex": "0x011111111111111111111111111111111111111111",
+        "expires_suffix_hex": "0x",
+        "action_hash_preimage_hex": "0x83a474797065a56f72646572a66f72646572739187a161cd2721a162c2a170a5302e313235a173a4312e3235a172c2a17481a56c696d697481a3746966a3496f63a163d92230783030303030303030303030303030303030303030303030303030303030303032a867726f7570696e67a26e6100000199c82cc1c8011111111111111111111111111111111111111111",
+        "action_hash_keccak256_hex": "0x4bf47d6870a53802127cbba060f000c2ade21debf79e755b9cf1a7de25d5c9cf"
+      },
+      "phantom_agent": {
+        "source": "b",
+        "connectionId": "0x4bf47d6870a53802127cbba060f000c2ade21debf79e755b9cf1a7de25d5c9cf"
+      },
+      "eip712": {
+        "full_message": {
+          "domain": {
+            "chainId": 1337,
+            "name": "Exchange",
+            "verifyingContract": "0x0000000000000000000000000000000000000000",
+            "version": "1"
+          },
+          "types": {
+            "Agent": [
+              { "name": "source", "type": "string" },
+              { "name": "connectionId", "type": "bytes32" }
+            ],
+            "EIP712Domain": [
+              { "name": "name", "type": "string" },
+              { "name": "version", "type": "string" },
+              { "name": "chainId", "type": "uint256" },
+              { "name": "verifyingContract", "type": "address" }
+            ]
+          },
+          "primaryType": "Agent",
+          "message": {
+            "source": "b",
+            "connectionId": "0x4bf47d6870a53802127cbba060f000c2ade21debf79e755b9cf1a7de25d5c9cf"
+          }
+        },
+        "domain_separator_hex": "0xd79297fcdf2ffcd4ae223d01edaa2ba214ff8f401d7c9300d995d17c82aa4040",
+        "struct_hash_hex": "0xadc77b8af2dfa3e27aaa7b19b924e2c107f85e7fb4055b265d3664f1f5dd4f2c",
+        "eip191_digest_hex": "0xd5541a2510d4575c78f806c1613a4c9d2f5436969fa45361dcfaf47a7f26b442"
+      },
+      "signature": {
+        "official_json": {
+          "r": "0x253942a64b326c1b7750efda31232bbdaf575f3b0a6b8d0235a7dbcf2923a6d9",
+          "s": "0x6cf05cbeea52ce02ac397c6e150485a75d8fa6494e6bb336c9917a0f66d579aa",
+          "v": 27
+        },
+        "r32_hex": "0x253942a64b326c1b7750efda31232bbdaf575f3b0a6b8d0235a7dbcf2923a6d9",
+        "s32_hex": "0x6cf05cbeea52ce02ac397c6e150485a75d8fa6494e6bb336c9917a0f66d579aa",
+        "signature65_hex": "0x253942a64b326c1b7750efda31232bbdaf575f3b0a6b8d0235a7dbcf2923a6d96cf05cbeea52ce02ac397c6e150485a75d8fa6494e6bb336c9917a0f66d579aa00",
+        "expected_recovered_address": "0x14791697260e4c9a71f18484c9f997b308e59325"
+      },
+      "exchange_payload": {
+        "action": {
+          "type": "order",
+          "orders": [
+            {
+              "a": 10017,
+              "b": false,
+              "p": "0.125",
+              "s": "1.25",
+              "r": false,
+              "t": { "limit": { "tif": "Ioc" } },
+              "c": "0x00000000000000000000000000000002"
+            }
+          ],
+          "grouping": "na"
+        },
+        "nonce": 1760000000456,
+        "signature": {
+          "r": "0x253942a64b326c1b7750efda31232bbdaf575f3b0a6b8d0235a7dbcf2923a6d9",
+          "s": "0x6cf05cbeea52ce02ac397c6e150485a75d8fa6494e6bb336c9917a0f66d579aa",
+          "v": 27
+        },
+        "vaultAddress": "0x1111111111111111111111111111111111111111",
+        "expiresAfter": null
+      }
+    },
+    {
+      "id": "approve_agent_testnet",
+      "kind": "user_signed_approve_agent",
+      "semantic_input": {
+        "network": "testnet",
+        "agent_address": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+        "agent_name": "loop-spot-test-fixture-v1",
+        "nonce": "1760000000789"
+      },
+      "wire": {
+        "action": {
+          "type": "approveAgent",
+          "agentAddress": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+          "agentName": "loop-spot-test-fixture-v1",
+          "nonce": 1760000000789,
+          "signatureChainId": "0x66eee",
+          "hyperliquidChain": "Testnet"
+        },
+        "key_order": {
+          "initial_action": ["type", "agentAddress", "agentName", "nonce"],
+          "formatted_action": [
+            "type",
+            "agentAddress",
+            "agentName",
+            "nonce",
+            "signatureChainId",
+            "hyperliquidChain"
+          ]
+        }
+      },
+      "eip712": {
+        "full_message": {
+          "domain": {
+            "name": "HyperliquidSignTransaction",
+            "version": "1",
+            "chainId": 421614,
+            "verifyingContract": "0x0000000000000000000000000000000000000000"
+          },
+          "types": {
+            "HyperliquidTransaction:ApproveAgent": [
+              { "name": "hyperliquidChain", "type": "string" },
+              { "name": "agentAddress", "type": "address" },
+              { "name": "agentName", "type": "string" },
+              { "name": "nonce", "type": "uint64" }
+            ],
+            "EIP712Domain": [
+              { "name": "name", "type": "string" },
+              { "name": "version", "type": "string" },
+              { "name": "chainId", "type": "uint256" },
+              { "name": "verifyingContract", "type": "address" }
+            ]
+          },
+          "primaryType": "HyperliquidTransaction:ApproveAgent",
+          "message": {
+            "type": "approveAgent",
+            "agentAddress": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+            "agentName": "loop-spot-test-fixture-v1",
+            "nonce": 1760000000789,
+            "signatureChainId": "0x66eee",
+            "hyperliquidChain": "Testnet"
+          }
+        },
+        "domain_separator_hex": "0xfeb1393ca4412a4ca577bd51d04f0a77033514c602f4d0a11490fb95f7428df6",
+        "struct_hash_hex": "0xb3aec945211dbc48c212e0c51fa7c58da1dd1b77a0fbf4f0ebeb6a7d75a8f387",
+        "eip191_digest_hex": "0x0b616f5dd040d8263d41d627da358f9b2a408c029ab0375367921e0f19c8a2dd"
+      },
+      "signature": {
+        "official_json": {
+          "r": "0x1b5ecd7c371e8152963bb534fe703fe3e6602b3cbef6f238cfa00ec263df958f",
+          "s": "0x4e085149631fa248c85289492e04cceebe49df5404da8b175b1293e300ec4da2",
+          "v": 28
+        },
+        "r32_hex": "0x1b5ecd7c371e8152963bb534fe703fe3e6602b3cbef6f238cfa00ec263df958f",
+        "s32_hex": "0x4e085149631fa248c85289492e04cceebe49df5404da8b175b1293e300ec4da2",
+        "signature65_hex": "0x1b5ecd7c371e8152963bb534fe703fe3e6602b3cbef6f238cfa00ec263df958f4e085149631fa248c85289492e04cceebe49df5404da8b175b1293e300ec4da201",
+        "expected_recovered_address": "0x14791697260e4c9a71f18484c9f997b308e59325"
+      },
+      "exchange_payload": {
+        "action": {
+          "type": "approveAgent",
+          "agentAddress": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+          "agentName": "loop-spot-test-fixture-v1",
+          "nonce": 1760000000789,
+          "signatureChainId": "0x66eee",
+          "hyperliquidChain": "Testnet"
+        },
+        "nonce": 1760000000789,
+        "signature": {
+          "r": "0x1b5ecd7c371e8152963bb534fe703fe3e6602b3cbef6f238cfa00ec263df958f",
+          "s": "0x4e085149631fa248c85289492e04cceebe49df5404da8b175b1293e300ec4da2",
+          "v": 28
+        },
+        "vaultAddress": null,
+        "expiresAfter": null
+      }
+    }
+  ]
+}

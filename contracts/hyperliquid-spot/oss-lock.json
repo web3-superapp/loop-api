@@ -1,0 +1,93 @@
+{
+  "schema_version": "loop.hyperliquid-spot.oss-lock/v1",
+  "checked_at": "2026-08-26",
+  "production_writer": {
+    "enabled": false,
+    "runtime_adapter": null,
+    "status": "unselected_default_closed",
+    "fallback": "forbidden"
+  },
+  "official_reference_sdk": {
+    "package": "hyperliquid-python-sdk",
+    "version": "0.24.0",
+    "repository": "https://github.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "commit": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "license": "MIT",
+    "release_archive_sha256": "18e489f3432da8357a6bd0aa9ccfd057fbc1674a027c0a82e75c79ae67bf5381",
+    "license_sha256": "ea5593116c0da7de3e5845941c8ce7f2c0692ee4671f7b3e3aa98a88726b913c",
+    "signing_py_sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
+    "exchange_py_sha256": "0bd885c5b64fd77893db58d4982b0d24e92b5be5036d0e9d6d05c40a1812d432",
+    "info_py_sha256": "fc36d225a2b865d474e5682ad4f095d9917e84ef5dba9c80de3d4600467f4882",
+    "websocket_manager_py_sha256": "1382a63068488932a1b9e4995e3a9807f3bf0e68ac71c7cd022edb3fea126b87",
+    "signing_test_py_sha256": "ea0d7b2e9e2a224b55e05b6d1abbcc727ce1f38e72572e607a4a7045bc01a042",
+    "poetry_lock_sha256": "1580d7eb44762dfd6598e32009319a7eb6da45070a4040b237526f21a1af7b6b",
+    "fixture_generation_environment": {
+      "python": "3.12.13",
+      "eth_account": "0.13.5",
+      "eth_utils": "5.2.0",
+      "msgpack": "1.1.0"
+    },
+    "role": "offline_signing_conformance_oracle_only",
+    "runtime_installed": false
+  },
+  "typescript_spike_candidate": {
+    "package": "@nktkas/hyperliquid",
+    "version": "0.33.3",
+    "repository": "https://github.com/nktkas/hyperliquid",
+    "commit": "bb82eba38b177d3938c59fa1fb992e6c0bb0aa6b",
+    "license": "MIT",
+    "node": ">=22.12.0",
+    "npm_integrity": "sha512-fvnEw/2ejN14ZZVXA+nFQ9YgfFNjCI1yLliYyUboC6hr3Gwd/RwC4Ox90K4e8tkKWqkVpOcLRQ30p0nTeK4NBQ==",
+    "npm_tarball_sha256": "b25840425c78eb2e1c8a89e4d54ac923eaee2631d5114f9dda58ba55c84ea230",
+    "npm_provenance": "https://registry.npmjs.org/-/npm/v1/attestations/@nktkas%2fhyperliquid@0.33.3",
+    "lifecycle_scripts": [],
+    "declared_runtime_dependencies": {
+      "@nktkas/rews": "^4.1.0",
+      "@noble/hashes": "^2.2.0",
+      "decimal.js": "^10.6.0",
+      "valibot": "^1.4.2"
+    },
+    "vendored_sources_requiring_attribution": {
+      "@std/bytes": "1.0.6",
+      "@std/msgpack": "1.0.3"
+    },
+    "status": "research_only_not_installed_dependency_graph_and_sbom_pending",
+    "allowed_spike_surface": [
+      "canonicalize",
+      "createL1ActionHash",
+      "signL1Action",
+      "AbstractWallet"
+    ],
+    "forbidden_authority": [
+      "process_local_nonce_as_cross_process_authority",
+      "high_level_build_sign_send_around_loop_journal",
+      "runtime_fallback_to_another_sdk",
+      "handwritten_production_signer"
+    ]
+  },
+  "existing_read_only_dependency": {
+    "package": "lossless-json",
+    "version": "4.3.1",
+    "role": "bounded_lossless_testnet_info_response_parsing",
+    "writer_capability": false
+  },
+  "dependency_graph": {
+    "candidate_installed": false,
+    "runtime_graph_locked": false,
+    "sbom_complete": false,
+    "licenses_complete": false,
+    "status": "pending"
+  },
+  "selection_gate": [
+    "complete exact transitive lock, integrity, provenance, SBOM, and license register",
+    "match official MessagePack bytes and action-hash preimages byte-for-byte",
+    "match Testnet and Mainnet-domain negative vectors without enabling Mainnet",
+    "match EIP-712 domain, struct, and final digests",
+    "match Spot asset derivation, address case, decimal lexical form, CLOID, vault, and expiresAfter",
+    "recover the expected signer for local and Privy remote-signing probes",
+    "prove persistent per-signer nonce ownership and one-attempt journaling",
+    "parse top-level and per-item Exchange outcomes strictly",
+    "pass credentialed Testnet IOC, timeout, crash, and read-only reconciliation evidence"
+  ],
+  "upgrade_gate": "repeat source, dependency, license, conformance, mutation, Privy, nonce, and credentialed Testnet review; any gap keeps the writer disabled"
+}

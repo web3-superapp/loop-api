@@ -4,21 +4,22 @@ This register covers the direct runtime and verification dependencies introduced
 by the Node backend foundation. The exact transitive graph and integrity hashes
 are recorded in `pnpm-lock.yaml`.
 
-| Package            | Version | Purpose                            | License    |
-| ------------------ | ------: | ---------------------------------- | ---------- |
-| Fastify            |  5.12.1 | HTTP server and route lifecycle    | MIT        |
-| `@fastify/swagger` |   9.8.1 | OpenAPI 3.1 generation             | MIT        |
-| `@fastify/helmet`  |  13.1.1 | HTTP security headers              | MIT        |
-| `@privy-io/node`   |  0.29.0 | Privy token and user/wallet reads  | Apache-2.0 |
-| `pg`               |  8.23.0 | PostgreSQL driver and pooling      | MIT        |
-| Zod                |   4.4.3 | Fail-closed environment validation | MIT        |
-| `node-pg-migrate`  |   9.0.0 | PostgreSQL schema migrations       | MIT        |
-| Vitest             |  4.1.11 | Behavior and contract tests        | MIT        |
-| TypeScript         |   6.0.3 | Static typing and compilation      | Apache-2.0 |
-| ESLint             |  10.9.0 | Static analysis                    | MIT        |
-| Prettier           |   3.9.6 | Deterministic source formatting    | MIT        |
-| `tsx`              | 4.23.12 | Local TypeScript execution/watch   | MIT        |
-| `lossless-json`    |   4.3.1 | Lossless provider JSON numbers     | MIT        |
+| Package                | Version | Purpose                                 | License    |
+| ---------------------- | ------: | --------------------------------------- | ---------- |
+| Fastify                |  5.12.1 | HTTP server and route lifecycle         | MIT        |
+| `@fastify/swagger`     |   9.8.1 | OpenAPI 3.1 generation                  | MIT        |
+| `@fastify/helmet`      |  13.1.1 | HTTP security headers                   | MIT        |
+| `@privy-io/node`       |  0.29.0 | Privy token and user/wallet reads       | Apache-2.0 |
+| `pg`                   |  8.23.0 | PostgreSQL driver and pooling           | MIT        |
+| Zod                    |   4.4.3 | Fail-closed environment validation      | MIT        |
+| `node-pg-migrate`      |   9.0.0 | PostgreSQL schema migrations            | MIT        |
+| Vitest                 |  4.1.11 | Behavior and contract tests             | MIT        |
+| TypeScript             |   6.0.3 | Static typing and compilation           | Apache-2.0 |
+| ESLint                 |  10.9.0 | Static analysis                         | MIT        |
+| Prettier               |   3.9.6 | Deterministic source formatting         | MIT        |
+| `tsx`                  | 4.23.12 | Local TypeScript execution/watch        | MIT        |
+| `lossless-json`        |   4.3.1 | Lossless provider JSON numbers          | MIT        |
+| Hyperliquid Python SDK |  0.24.0 | Offline signing-conformance oracle only | MIT        |
 
 The Privy SDK entry covers the access-token verification boundary approved by
 Decision 0002 and the verified current-user/wallet lookup approved by Decision 0010. It provides no backend signing or wallet execution path. Other provider
@@ -29,3 +30,14 @@ Testnet Info response parsing for private projections and order reconciliation.
 The narrow adapters compile one Testnet URL; the package introduces no
 configurable provider URL, provider SDK, signer, credentials, replay, or
 mutation capability.
+
+The Hyperliquid Python SDK is not a Node runtime dependency. Verification
+fixtures under `contracts/hyperliquid-spot/` were generated offline from exact
+commit `2fdb18f9517675ea03695a0962bd19eece9c83f0`; source, license, lockfile, and
+fixture-oracle hashes are recorded in that contract's `oss-lock.json`. No
+Python SDK code, credential, or private key is distributed with LOOP.
+
+`@nktkas/hyperliquid@0.33.3` is recorded only as an isolated research candidate.
+It is not installed, imported, selected, or attributed as a shipped dependency.
+Its full transitive SBOM, integrity, license, signing, nonce, and credentialed
+Testnet gates remain pending, so the Spot writer remains unavailable.

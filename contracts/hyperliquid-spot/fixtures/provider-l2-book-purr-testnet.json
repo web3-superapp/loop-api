@@ -1,0 +1,66 @@
+{
+  "schema_version": "loop.hyperliquid-spot.provider-fixture/v1",
+  "classification": "public_testnet_provider_capture",
+  "runtime_fallback": false,
+  "network": "testnet",
+  "provider": "hyperliquid",
+  "capture_window_ended_at": "2026-08-26T06:46:05Z",
+  "request": {
+    "method": "POST",
+    "path": "/info",
+    "body": {
+      "type": "l2Book",
+      "coin": "PURR/USDC",
+      "nSigFigs": 5,
+      "mantissa": null
+    }
+  },
+  "projection": "The first three levels on each side are retained. Provider field names, ordering, JSON types, timestamp, and exact decimal strings are preserved.",
+  "response": {
+    "coin": "PURR/USDC",
+    "time": 1787726758664,
+    "levels": [
+      [
+        {
+          "px": "4.5795",
+          "sz": "100000.0",
+          "n": 1
+        },
+        {
+          "px": "4.5788",
+          "sz": "4.0",
+          "n": 1
+        },
+        {
+          "px": "4.5763",
+          "sz": "3.0",
+          "n": 1
+        }
+      ],
+      [
+        {
+          "px": "4.6252",
+          "sz": "69170.0",
+          "n": 1
+        },
+        {
+          "px": "4.6256",
+          "sz": "13.0",
+          "n": 1
+        },
+        {
+          "px": "4.6311",
+          "sz": "13.0",
+          "n": 1
+        }
+      ]
+    ]
+  },
+  "book_expectation": {
+    "level_zero_side": "bids",
+    "level_one_side": "asks",
+    "best_bid": "4.5795",
+    "best_ask": "4.6252",
+    "crossed": false
+  }
+}

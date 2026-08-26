@@ -1,0 +1,457 @@
+{
+  "schema_version": "loop.hyperliquid-spot.contract/v1",
+  "status": "approved_contract_writer_unavailable",
+  "decision_refs": [
+    "docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md",
+    "docs/decisions/0015-mainnet-spot-release-boundary.md"
+  ],
+  "implementation_inventory": {
+    "path": "contracts/hyperliquid-spot/target-inventory.json",
+    "schema_version": "loop.hyperliquid-spot.target-inventory/v1"
+  },
+  "authority": {
+    "provider": "hyperliquid",
+    "spot_source_of_truth": "Hyperliquid",
+    "identity_wallet_and_remote_signing_source_of_truth": "Privy",
+    "loop_role": [
+      "authentication",
+      "product_policy",
+      "opaque_market_registry",
+      "exact_decimal_review",
+      "risk_limits",
+      "durable_idempotency",
+      "persistent_nonce_allocation",
+      "one_attempt_journal",
+      "authoritative_reconciliation"
+    ],
+    "forbidden_reimplementations": [
+      "matching_engine",
+      "provider_market_data",
+      "provider_balance_ledger",
+      "provider_settlement_ledger",
+      "private_key_store",
+      "general_eip712_encoder",
+      "alternate_hyperliquid_protocol"
+    ]
+  },
+  "network": {
+    "value": "testnet",
+    "server_fixed": true,
+    "client_selectable": false,
+    "provider_origin": "https://api.hyperliquid-testnet.xyz",
+    "fallback": "forbidden",
+    "mainnet_runtime_present": false
+  },
+  "runtime": {
+    "reads": "planned_default_off_until_composed",
+    "writer": "unavailable",
+    "signer_adapter": null,
+    "fixture_fallback": "forbidden",
+    "credentialed_testnet_evidence": "pending"
+  },
+  "loop_api": {
+    "common": {
+      "cache": "no-store",
+      "authentication": "fresh Privy Bearer verification",
+      "principal": "existing LOOP bootstrap required",
+      "ownership": "owner_scoped",
+      "body_and_query": "strict_no_unknown_fields"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/v1/spot/config",
+        "purpose": "server policy, allowlisted opaque markets, capability and review policy"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/spot/markets/{market_id}/facts",
+        "purpose": "one bounded executable token, metadata, and book fact set"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/spot/balances",
+        "purpose": "current bound master-account Spot balances"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/spot/intents",
+        "purpose": "durable quote and immutable F11 review",
+        "required_header": "Idempotency-Key: one canonical lowercase UUID"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/spot/intents/{intent_id}",
+        "purpose": "owner-scoped review, execution, and reconciliation resource"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/spot/intents/{intent_id}/submit",
+        "purpose": "freshly revalidated one-attempt reviewed submit"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/spot/wallet-binding",
+        "purpose": "binding state and epoch without address or wallet authority"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/spot/wallet-binding",
+        "purpose": "explicit bind, exact refresh, or rotate from current Privy wallet catalog",
+        "body": {
+          "required_exact_fields": ["expected_binding_version"]
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/spot/wallet-binding",
+        "purpose": "explicit compare-and-swap unbind",
+        "query": {
+          "required_exact_fields": ["expected_binding_version"]
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/v1/spot/agent-authorizations",
+        "purpose": "create one server-owned expiring approveAgent handoff",
+        "body": "forbidden"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/spot/agent-authorizations/{authorization_id}",
+        "purpose": "owner-scoped sanitized authorization status"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/spot/agent-authorizations/{authorization_id}/signatures",
+        "purpose": "verify and relay only the expected owner signature",
+        "body": {
+          "required_exact_fields": ["signature"]
+        }
+      }
+    ],
+    "first_slice_absent_resources": [
+      "/quotes",
+      "/orders",
+      "/fills"
+    ]
+  },
+  "market_identity": {
+    "public_identifier": "server-issued opaque network-scoped market_id",
+    "provider_binding_fields": [
+      "base_token_index",
+      "base_token_id",
+      "quote_token_index",
+      "quote_token_id",
+      "spot_pair_index",
+      "exchange_order_asset"
+    ],
+    "exchange_order_asset_derivation": "10000 + spot_pair_index",
+    "mapping_source": "one immutable bounded spotMeta or spotMetaAndAssetCtxs snapshot",
+    "allowlist_identity": "stable token and pair identifiers, never ticker alone",
+    "testnet_mainnet_cache_sharing": "forbidden",
+    "reject": [
+      "duplicate_identifier",
+      "missing_identifier",
+      "inconsistent_symbol",
+      "unsupported_quote_token",
+      "delisted_pair",
+      "unknown_pair",
+      "outcome_asset",
+      "outcomeMeta",
+      "hash_prefixed_asset",
+      "plus_prefixed_asset",
+      "shape_drift",
+      "stale_metadata"
+    ]
+  },
+  "info_operations": {
+    "market_registry": ["spotMeta", "spotMetaAndAssetCtxs"],
+    "executable_book": ["l2Book"],
+    "balances": ["spotClearinghouseState"],
+    "fees": ["userFees"],
+    "reconciliation": [
+      "frontendOpenOrders",
+      "orderStatus",
+      "userFillsByTime",
+      "historicalOrders"
+    ],
+    "global_quota": "one shared hyperliquid_info capability and PostgreSQL control plane across API and worker",
+    "request_correlation": "fresh server UUID for every real provider read",
+    "provider_number_handling": "lossless strings or lossless JSON tokens; no Number coercion"
+  },
+  "intent": {
+    "idempotency_scope": "spot_intent_prepare",
+    "request_digest_domain": "spot_intent_request_v1",
+    "provider_domain": "hyperliquid",
+    "operation_kind": "spot_intent",
+    "request_exact_fields": [
+      "market_id",
+      "side",
+      "amount",
+      "max_slippage_bps?"
+    ],
+    "side": ["buy", "sell"],
+    "amount": {
+      "shape": {
+        "mode": ["quote", "base"],
+        "value": "canonical positive decimal string"
+      },
+      "first_slice_pairings": ["buy+quote", "sell+base"],
+      "other_pairings": "unavailable_without_contract_revision"
+    },
+    "max_slippage_bps": "optional nonnegative integer no greater than the server product cap",
+    "first_response": 201,
+    "exact_replay": "same resource with no provider reread or requote",
+    "changed_digest": 409,
+    "review_ttl": "server-owned, initially 10-15 seconds and finalized by credentialed device latency evidence",
+    "expiry": "new intent, new idempotency key, and visible re-review required",
+    "client_forbidden_fields": [
+      "provider",
+      "provider_url",
+      "network",
+      "account",
+      "account_address",
+      "wallet",
+      "wallet_id",
+      "agent",
+      "agent_address",
+      "base_token_index",
+      "base_token_id",
+      "quote_token_index",
+      "quote_token_id",
+      "pair_index",
+      "asset",
+      "nonce",
+      "cloid",
+      "provider_idempotency",
+      "wire_action",
+      "order_signature",
+      "builder"
+    ]
+  },
+  "review": {
+    "digest_domain": "spot_review_v1",
+    "immutable_fields": [
+      "provider",
+      "network",
+      "market_id",
+      "base_display_identity",
+      "quote_display_identity",
+      "side",
+      "amount_mode",
+      "amount_value",
+      "computed_base_size",
+      "reference_price",
+      "reference_source_time",
+      "worst_ioc_limit_price",
+      "maximum_spend_or_minimum_receive",
+      "fee_rate",
+      "fee_estimate",
+      "fee_source",
+      "metadata_version",
+      "policy_version",
+      "binding_epoch",
+      "expires_at"
+    ],
+    "submit_rule": "use exact persisted base size and worst price; never silently refetch or recalculate",
+    "material_change": "new intent and visible review required"
+  },
+  "decimal_policy": {
+    "financial_transport": "canonical decimal strings",
+    "arithmetic": "exact Decimal or BigInt scale only",
+    "json_number": "forbidden",
+    "exponent": "forbidden",
+    "silent_rounding": "forbidden",
+    "price": {
+      "max_significant_figures": 5,
+      "max_decimal_places": "8 - base_token.szDecimals",
+      "wire_trailing_zeros": "strip"
+    },
+    "size": {
+      "max_decimal_places": "base_token.szDecimals",
+      "wire_trailing_zeros": "strip"
+    },
+    "post_round_checks": [
+      "crosses reviewed book in the intended direction",
+      "within reviewed slippage cap",
+      "size positive",
+      "minimum size satisfied",
+      "minimum notional satisfied",
+      "reviewed maximum spend or minimum receive preserved"
+    ]
+  },
+  "wallet_binding": {
+    "authority": "one provider-neutral Hyperliquid owner binding and monotonic epoch",
+    "account_kind": "master",
+    "wallet_source": "eligible Privy embedded EVM wallet resolved server-side",
+    "address_in_public_resource": false,
+    "wallet_id_in_public_resource": false,
+    "mutations": {
+      "bind_rotate_unbind": "increment epoch",
+      "exact_refresh": "preserve epoch",
+      "compare_and_swap": "expected_binding_version canonical signed-bigint string"
+    },
+    "fresh_verification": ["balance", "prepare", "authorization", "submit"],
+    "perp_compatibility": "preserve existing routes behind the same authority; no parallel mutable source"
+  },
+  "agent_authorization": {
+    "identity_scope": ["owner", "testnet", "binding_epoch"],
+    "identity_reuse": "forbidden after expiry, revocation, retirement, or operator hold",
+    "preferred_key_custody": "Privy server wallet with no private-key export",
+    "action": "approveAgent",
+    "operation_kind": "spot_agent_authorization",
+    "signable_payload_exception": "the creation response may contain the one-time server-generated public agentAddress, agentName, nonce, domain, and typed-data fields required by Privy; the client cannot select or edit them",
+    "status_resource_forbidden_fields": [
+      "typed_data",
+      "nonce",
+      "signature",
+      "private_key",
+      "wallet_id",
+      "raw_provider_response"
+    ],
+    "signature_submission": {
+      "request_exact_fields": ["signature"],
+      "signature_role": "opaque Privy owner-wallet result",
+      "verify": [
+        "current owner",
+        "current bound owner wallet",
+        "stored digest and domain",
+        "stored action and Agent",
+        "unexpired handoff",
+        "current binding epoch",
+        "unused state",
+        "canonical recoverable signature"
+      ],
+      "relay_attempts_max": 1,
+      "ambiguous_result": "authoritative readback; never automatic replay"
+    },
+    "loop_signer_allowlist": ["single_spot_ioc_order"],
+    "protocol_broad_authorization_warning": true
+  },
+  "nonce_policy": {
+    "authority": "persistent atomic server allocator",
+    "key": ["network", "signer_identity"],
+    "allocation_transaction": "same transaction as submitting state and unique transport-attempt journal",
+    "sdk_or_process_clock_authority": false,
+    "provider_window": "unused nonce among retained highest 100 and inside provider time bounds",
+    "address_reuse": "forbidden after Agent deregistration or expiry",
+    "client_visibility": false
+  },
+  "l1_order_wire": {
+    "action_type": "order",
+    "action_keys_in_order": ["type", "orders", "grouping"],
+    "orders_length": 1,
+    "grouping": "na",
+    "order_keys_in_order": ["a", "b", "p", "s", "r", "t", "c"],
+    "asset": "10000 + persisted Spot pair index",
+    "side": "persisted reviewed buy/sell",
+    "price": "persisted reviewed worst IOC price",
+    "size": "persisted reviewed base size",
+    "reduce_only": false,
+    "order_type": {
+      "limit": {
+        "tif": "Ioc"
+      }
+    },
+    "cloid": "one unique server-generated lowercase 0x-prefixed 16-byte value",
+    "builder": "forbidden",
+    "extra_fields": "forbidden"
+  },
+  "provider_write": {
+    "attempts_max": 1,
+    "journal_before_bytes": true,
+    "transport_attempt_id": "fresh server UUID",
+    "top_level_ok_is_terminal_success": false,
+    "required_item_status_count": 1,
+    "allowed_immediate_item_shapes": ["filled", "error"],
+    "unexpected_resting_for_ioc": "unknown_operator_required",
+    "ambiguous_transport": [
+      "timeout",
+      "disconnect",
+      "abort_after_send",
+      "post_send_429",
+      "post_send_5xx",
+      "process_crash_before_result_commit"
+    ],
+    "ambiguous_state": "unknown_or_reconciling",
+    "blind_retry": "forbidden"
+  },
+  "reconciliation": {
+    "dispatch_key": ["domain", "operation_kind"],
+    "spot_key": ["hyperliquid", "spot_intent"],
+    "perp_key_preserved": ["hyperliquid", "perp_intent"],
+    "worker_capability": "read_and_atomic_finalize_only",
+    "writer_or_replay_in_worker": "forbidden",
+    "authoritative_identity": "persisted server CLOID plus immutable reviewed fields",
+    "evidence": [
+      "orderStatus",
+      "frontendOpenOrders",
+      "userFillsByTime",
+      "historicalOrders",
+      "spotClearinghouseState when required"
+    ],
+    "absence_from_bounded_list_proves_no_submission": false,
+    "quarantine": [
+      "unknownOid",
+      "unknown_status",
+      "malformed_evidence",
+      "truncated_evidence",
+      "conflicting_evidence",
+      "identity_mismatch",
+      "unsupported_status",
+      "stale_lease"
+    ],
+    "atomic_finalization": "generic provider operation, Spot projection, items, and both append-only audit streams in one fenced PostgreSQL transaction"
+  },
+  "capability_gates": {
+    "writer_default": "unavailable",
+    "all_required": [
+      "current product and eligibility policy",
+      "current Privy principal and wallet binding",
+      "active exact Agent authorization",
+      "fresh metadata and reviewed book",
+      "current shared Info quota",
+      "selected fully locked and licensed Node adapter",
+      "official-Python byte conformance",
+      "healthy persistent nonce allocator",
+      "healthy single-attempt journal",
+      "healthy read-only reconciliation",
+      "kill switch open for this exact Testnet Spot action",
+      "credentialed Testnet evidence"
+    ],
+    "missing_unknown_stale_malformed_or_denied": "fail_before_signer_sdk_or_exchange_io"
+  },
+  "forbidden_features": [
+    "perp_extension",
+    "resting_order",
+    "cancel",
+    "cancelByCloid",
+    "modify",
+    "batchModify",
+    "trigger_order",
+    "TP_SL",
+    "TWAP",
+    "scheduleCancel",
+    "builder_fee",
+    "vault",
+    "subaccount_runtime",
+    "transfer",
+    "withdrawal",
+    "bridge",
+    "deposit_workflow",
+    "copy_trading",
+    "automated_trading",
+    "client_network_selector",
+    "configurable_provider_url",
+    "mainnet"
+  ],
+  "mainnet_boundary": {
+    "activation_approved": false,
+    "runtime_code_or_configuration_present": false,
+    "requires_future_numbered_activation_adr": true,
+    "separate_release_artifacts_and_deployment": true,
+    "testnet_fallback": "forbidden",
+    "remote_flag_may_grant_authority": false
+  }
+}
