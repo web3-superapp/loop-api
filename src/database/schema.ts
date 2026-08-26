@@ -1,4 +1,4 @@
-export const latestMigrationName = "000006_perp_wallet_bindings";
+export const latestMigrationName = "000007_hyperliquid_spot_closed_loop";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -11,6 +11,14 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.perp_intent_events",
   "public.perp_wallet_bindings",
   "public.perp_wallet_binding_events",
+  "public.spot_agent_identities",
+  "public.spot_agent_identity_events",
+  "public.spot_intents",
+  "public.spot_intent_events",
+  "public.spot_agent_authorizations",
+  "public.spot_agent_authorization_events",
+  "public.hyperliquid_signer_nonce_state",
+  "public.hyperliquid_signer_nonce_allocations",
   "public.perp_agent_identities",
   "public.perp_agent_authorizations",
   "public.perp_agent_authorization_events",
