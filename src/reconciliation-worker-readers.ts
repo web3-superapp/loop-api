@@ -47,6 +47,6 @@ export function createReconciliationWorkerReaders(
   });
 
   return createAuthoritativeReaderRegistry([
-    ["hyperliquid", { mode: "atomic_domain", run: handler }],
+    ["hyperliquid", "perp_intent", { mode: "atomic_domain", run: handler }],
   ]);
 }

@@ -131,7 +131,7 @@ describe("reconciliation worker runtime", () => {
       signalSource: fakeSignalSource(),
       createDatabase: () => database,
       createWorker: (options) => {
-        const handler = options.readers?.find("hyperliquid");
+        const handler = options.readers?.find("hyperliquid", "perp_intent");
         expect(handler?.mode).toBe("atomic_domain");
         expect(
           handler?.mode === "atomic_domain" ? typeof handler.run : "missing",

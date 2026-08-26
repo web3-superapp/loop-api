@@ -33,7 +33,7 @@ const reconciliationReasons = Object.freeze({
   authoritativeReadPending: "authoritative_result_pending",
   authoritativeReadTimedOut: "authoritative_read_timeout",
   invalidAuthoritativeResult: "invalid_authoritative_read_result",
-  unknownDomain: "unknown_reconciliation_domain",
+  unknownRegistration: "unknown_reconciliation_domain",
 });
 
 export type ReconciliationRunResult =
@@ -388,10 +388,16 @@ export function createReconciliationService(
         return Object.freeze({ kind: "idle" });
       }
 
-      const handler = options.readers.find(operation.domain);
+      const handler = options.readers.find(
+        operation.domain,
+        operation.operationKind,
+      );
 
       if (handler === undefined) {
-        return holdForOperator(operation, reconciliationReasons.unknownDomain);
+        return holdForOperator(
+          operation,
+          reconciliationReasons.unknownRegistration,
+        );
       }
 
       if (

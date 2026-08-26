@@ -102,27 +102,48 @@ export type AuthoritativeReconciliationHandler =
 export type AuthoritativeReaderRegistryEntry =
   AuthoritativeResultReader | AuthoritativeReconciliationHandler;
 
+export type AuthoritativeReaderRegistryRegistration = readonly [
+  domain: string,
+  operationKind: string,
+  entry: AuthoritativeReaderRegistryEntry,
+];
+
 export interface AuthoritativeReaderRegistry {
-  find(domain: string): AuthoritativeReconciliationHandler | undefined;
+  find(
+    domain: string,
+    operationKind: string,
+  ): AuthoritativeReconciliationHandler | undefined;
+}
+
+const registrySegmentPattern = /^[a-z][a-z0-9_]{0,63}$/;
+
+function registryKey(domain: string, operationKind: string): string {
+  // The validated segments cannot contain a colon, so this encoding cannot
+  // alias two different provider-domain/operation-kind registrations.
+  return `${domain}:${operationKind}`;
 }
 
 export function createAuthoritativeReaderRegistry(
-  entries: ReadonlyArray<readonly [string, AuthoritativeReaderRegistryEntry]>,
+  entries: ReadonlyArray<AuthoritativeReaderRegistryRegistration>,
 ): AuthoritativeReaderRegistry {
   const handlers = new Map<string, AuthoritativeReconciliationHandler>();
 
-  for (const [domain, entry] of entries) {
-    if (!/^[a-z][a-z0-9_]{0,63}$/.test(domain)) {
+  for (const [domain, operationKind, entry] of entries) {
+    if (!registrySegmentPattern.test(domain)) {
       throw new Error("Authoritative reader domain is invalid");
     }
-    if (handlers.has(domain)) {
-      throw new Error("Authoritative reader domain is duplicated");
+    if (!registrySegmentPattern.test(operationKind)) {
+      throw new Error("Authoritative reader operation kind is invalid");
+    }
+    const key = registryKey(domain, operationKind);
+    if (handlers.has(key)) {
+      throw new Error("Authoritative reader registration is duplicated");
     }
 
     const rawEntry: unknown = entry;
     if (typeof rawEntry === "function") {
       handlers.set(
-        domain,
+        key,
         Object.freeze({
           mode: "generic_control_plane",
           read: rawEntry as AuthoritativeResultReader,
@@ -145,7 +166,7 @@ export function createAuthoritativeReaderRegistry(
       typeof handler["read"] === "function"
     ) {
       handlers.set(
-        domain,
+        key,
         Object.freeze({
           mode: "generic_control_plane",
           read: handler["read"] as AuthoritativeResultReader,
@@ -159,7 +180,7 @@ export function createAuthoritativeReaderRegistry(
       typeof handler["run"] === "function"
     ) {
       handlers.set(
-        domain,
+        key,
         Object.freeze({
           mode: "atomic_domain",
           run: handler["run"] as AtomicDomainReconciliationHandler,
@@ -172,8 +193,11 @@ export function createAuthoritativeReaderRegistry(
   }
 
   return Object.freeze({
-    find(domain: string): AuthoritativeReconciliationHandler | undefined {
-      return handlers.get(domain);
+    find(
+      domain: string,
+      operationKind: string,
+    ): AuthoritativeReconciliationHandler | undefined {
+      return handlers.get(registryKey(domain, operationKind));
     },
   });
 }

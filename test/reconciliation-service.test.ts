@@ -116,7 +116,7 @@ function serviceFor(
   const service = createReconciliationService({
     controlPlane,
     readers: createAuthoritativeReaderRegistry(
-      reader === undefined ? [] : [["perp", reader]],
+      reader === undefined ? [] : [["perp", "order", reader]],
     ),
     workerId,
     createUuid: () => uuids.createUuid(),
@@ -132,7 +132,7 @@ function serviceForAtomic(
   const service = createReconciliationService({
     controlPlane,
     readers: createAuthoritativeReaderRegistry([
-      ["perp", { mode: "atomic_domain", run: handler }],
+      ["perp", "order", { mode: "atomic_domain", run: handler }],
     ]),
     workerId,
     createUuid: () => uuids.createUuid(),
@@ -172,7 +172,7 @@ describe("authoritative reconciliation service", () => {
     const uuids = uuidSequence();
     const service = createReconciliationService({
       controlPlane,
-      readers: createAuthoritativeReaderRegistry([["perp", reader]]),
+      readers: createAuthoritativeReaderRegistry([["perp", "order", reader]]),
       workerId,
       createUuid: () => uuids.createUuid(),
     });
@@ -193,6 +193,67 @@ describe("authoritative reconciliation service", () => {
         reasonCode: "unknown_reconciliation_domain",
       }),
     );
+  });
+
+  it("dispatches two operations from one provider domain by operation kind", async () => {
+    const operation = leasedOperation({
+      domain: "hyperliquid",
+      operationKind: "spot_intent",
+    });
+    const controlPlane = fakeControlPlane(operation);
+    const perpReader = vi.fn<AuthoritativeResultReader>(() =>
+      Promise.resolve({ kind: "resolved", state: "failed" }),
+    );
+    const spotReader = vi.fn<AuthoritativeResultReader>(() =>
+      Promise.resolve({ kind: "resolved", state: "succeeded" }),
+    );
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["hyperliquid", "perp_intent", perpReader],
+        ["hyperliquid", "spot_intent", spotReader],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    await expect(service.runOnce()).resolves.toEqual({
+      kind: "resolved",
+      operationId,
+    });
+    expect(spotReader).toHaveBeenCalledOnce();
+    expect(perpReader).not.toHaveBeenCalled();
+    expect(
+      controlPlane.completeProviderOperationReconciliation,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "succeeded", operationId }),
+    );
+  });
+
+  it("holds an unregistered operation kind without calling another handler", async () => {
+    const operation = leasedOperation({
+      domain: "hyperliquid",
+      operationKind: "spot_intent",
+    });
+    const controlPlane = fakeControlPlane(operation);
+    const perpReader = vi.fn<AuthoritativeResultReader>();
+    const uuids = uuidSequence();
+    const service = createReconciliationService({
+      controlPlane,
+      readers: createAuthoritativeReaderRegistry([
+        ["hyperliquid", "perp_intent", perpReader],
+      ]),
+      workerId,
+      createUuid: () => uuids.createUuid(),
+    });
+
+    await expect(service.runOnce()).resolves.toEqual({
+      kind: "operator_required",
+      operationId,
+      reasonCode: "unknown_reconciliation_domain",
+    });
+    expect(perpReader).not.toHaveBeenCalled();
   });
 
   it("performs one read with a new UUID and completes an authoritative result", async () => {
@@ -266,7 +327,7 @@ describe("authoritative reconciliation service", () => {
     const service = createReconciliationService({
       controlPlane,
       readers: createAuthoritativeReaderRegistry([
-        ["perp", { mode: "atomic_domain", run: handler }],
+        ["perp", "order", { mode: "atomic_domain", run: handler }],
       ]),
       workerId,
       createUuid: () => uuids.createUuid(),
@@ -319,7 +380,7 @@ describe("authoritative reconciliation service", () => {
     const service = createReconciliationService({
       controlPlane,
       readers: createAuthoritativeReaderRegistry([
-        ["perp", { mode: "atomic_domain", run: handler }],
+        ["perp", "order", { mode: "atomic_domain", run: handler }],
       ]),
       workerId,
       createUuid: () => uuids.createUuid(),
@@ -354,7 +415,7 @@ describe("authoritative reconciliation service", () => {
     const service = createReconciliationService({
       controlPlane,
       readers: createAuthoritativeReaderRegistry([
-        ["perp", { mode: "atomic_domain", run: handler }],
+        ["perp", "order", { mode: "atomic_domain", run: handler }],
       ]),
       workerId,
       createUuid: () => uuids.createUuid(),
@@ -396,7 +457,7 @@ describe("authoritative reconciliation service", () => {
     const service = createReconciliationService({
       controlPlane,
       readers: createAuthoritativeReaderRegistry([
-        ["perp", { mode: "atomic_domain", run: handler }],
+        ["perp", "order", { mode: "atomic_domain", run: handler }],
       ]),
       workerId,
       createUuid: () => uuids.createUuid(),

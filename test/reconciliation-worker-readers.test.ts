@@ -40,7 +40,7 @@ describe("reconciliation worker authoritative-reader composition", () => {
       database: inaccessibleDatabase as never,
     });
 
-    expect(registry.find("hyperliquid")).toBeUndefined();
+    expect(registry.find("hyperliquid", "perp_intent")).toBeUndefined();
   });
 
   it("registers only the reviewed atomic Hyperliquid handler when enabled", () => {
@@ -56,11 +56,14 @@ describe("reconciliation worker authoritative-reader composition", () => {
       },
     });
 
-    const handler = registry.find("hyperliquid");
+    const handler = registry.find("hyperliquid", "perp_intent");
     expect(handler?.mode).toBe("atomic_domain");
     expect(
       handler?.mode === "atomic_domain" ? typeof handler.run : "missing",
     ).toBe("function");
-    expect(registry.find("future_provider")).toBeUndefined();
+    expect(registry.find("hyperliquid", "spot_intent")).toBeUndefined();
+    expect(
+      registry.find("future_provider", "future_operation"),
+    ).toBeUndefined();
   });
 });

@@ -86,8 +86,12 @@ afterEach(() => {
 
 describe("reconciliation worker shell", () => {
   it("keeps the production reader registry empty until provider gates close", () => {
-    expect(productionAuthoritativeReaders.find("perp")).toBeUndefined();
-    expect(productionAuthoritativeReaders.find("transfer")).toBeUndefined();
+    expect(
+      productionAuthoritativeReaders.find("perp", "order"),
+    ).toBeUndefined();
+    expect(
+      productionAuthoritativeReaders.find("transfer", "transfer_intent"),
+    ).toBeUndefined();
   });
 
   it("uses the empty production registry and holds unknown work", async () => {
@@ -200,7 +204,7 @@ describe("reconciliation worker shell", () => {
     });
     const worker = createReconciliationWorker({
       controlPlane,
-      readers: createAuthoritativeReaderRegistry([["perp", reader]]),
+      readers: createAuthoritativeReaderRegistry([["perp", "order", reader]]),
       workerId,
       createUuid: uuidFactory(),
     });
