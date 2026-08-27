@@ -165,8 +165,13 @@ proof that an Agent remains current. The standalone worker enables this
 database-only expiry/retirement maintenance by default; it uses no Privy,
 signer, relay, Exchange, or provider-read capability for that path. The contract
 and official signing fixtures live under
-`contracts/hyperliquid-spot/`. The production writer is unavailable and no
-Hyperliquid Node SDK has been installed.
+`contracts/hyperliquid-spot/`. A dormant repository-only submission primitive
+now atomically binds fresh server-only wallet, market, policy, legal,
+kill-switch, signer, and reconciliation evidence to exactly one transport
+attempt and one persisted Agent nonce. It is not composed into a workflow or
+route, and only its first transaction winner receives the internal execution
+material. The production writer remains unavailable and no Hyperliquid Node
+SDK has been installed.
 
 ## Perp wallet-binding lifecycle
 

@@ -14,15 +14,27 @@ import {
   type SpotReview,
 } from "../features/spot/spot-intent-contract.js";
 import { IdempotencyConflictError } from "./control-plane-repository.js";
+import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "./hyperliquid-signer-nonce.js";
 
 export const SPOT_INTENT_PENDING_CLAIM_LIMIT_PER_OWNER = 32;
 export const SPOT_INTENT_PENDING_CLAIM_GLOBAL_FUSE = 10_000;
 export const SPOT_INTENT_PENDING_CLAIM_LEASE_MILLISECONDS = 30_000;
+export const SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS = 10_000;
+export const SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS = 15_000;
+export const SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS = 60_000;
 
 const claimBudgetLockName = "loop.spot_intent.claim_budget.v1";
 const maximumPostgresBigint = 9_223_372_036_854_775_807n;
 const maximumPostgresInteger = 2_147_483_647;
+const maximumUint64 = 18_446_744_073_709_551_615n;
 const zeroAddress = `0x${"0".repeat(40)}`;
+
+function hasNoAsciiControlCharacters(value: string): boolean {
+  return Array.from(value).every((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && codePoint >= 32 && codePoint !== 127;
+  });
+}
 
 const uuidSchema = z.string().uuid();
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -55,6 +67,18 @@ const metadataVersionSchema = z
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/);
 const policyVersionSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+const opaqueProviderIdSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((value) => value === value.trim())
+  .refine(hasNoAsciiControlCharacters);
+const signerRefSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((value) => value === value.trim())
+  .refine(hasNoAsciiControlCharacters);
 const agentNameSchema = z
   .string()
   .min(1)
@@ -66,6 +90,10 @@ const bindingVersionSchema = z
   .regex(/^[1-9][0-9]{0,18}$/)
   .refine((value) => BigInt(value) <= maximumPostgresBigint);
 const clientOrderIdSchema = z.string().regex(/^0x[0-9a-f]{32}$/);
+const nonceSchema = z
+  .string()
+  .regex(/^(0|[1-9][0-9]{0,19})$/)
+  .refine((value) => BigInt(value) <= maximumUint64);
 const nonnegativeIntegerSchema = z
   .number()
   .int()
@@ -117,6 +145,70 @@ const claimPrepareInputSchema = z
   })
   .strict();
 
+const submissionWalletEvidenceSchema = z
+  .object({
+    ownerUserId: uuidSchema,
+    privyUserId: opaqueProviderIdSchema,
+    walletId: opaqueProviderIdSchema,
+    accountAddress: addressSchema,
+    accountKind: z.literal("master"),
+    bindingVersion: bindingVersionSchema,
+    verifiedAt: rfc3339Schema,
+    expiresAt: rfc3339Schema,
+  })
+  .strict();
+
+const submissionMarketEvidenceSchema = z
+  .object({
+    provider: z.literal("hyperliquid"),
+    network: z.literal("testnet"),
+    dataset: z.literal("spotMetaAndAssetCtxs"),
+    marketId: uuidSchema,
+    providerCoin: providerCoinSchema,
+    baseTokenIndex: nonnegativeIntegerSchema,
+    baseTokenId: tokenIdSchema,
+    quoteTokenIndex: nonnegativeIntegerSchema,
+    quoteTokenId: tokenIdSchema,
+    spotPairIndex: nonnegativeIntegerSchema,
+    exchangeOrderAsset: nonnegativeIntegerSchema,
+    metadataVersion: metadataVersionSchema,
+    metadataSha256: sha256Schema,
+    fetchedAt: rfc3339Schema,
+    expiresAt: rfc3339Schema,
+  })
+  .strict();
+
+const submissionPolicyEvidenceSchema = z
+  .object({
+    ownerUserId: uuidSchema,
+    intentId: uuidSchema,
+    network: z.literal("testnet"),
+    action: z.literal("spot_ioc_order"),
+    decision: z.literal("allow"),
+    policyVersion: policyVersionSchema,
+    productEnabled: z.literal(true),
+    legalEligible: z.literal(true),
+    sanctionsEligible: z.literal(true),
+    killSwitchOpen: z.literal(true),
+    signerReady: z.literal(true),
+    reconciliationReady: z.literal(true),
+    checkedAt: rfc3339Schema,
+    expiresAt: rfc3339Schema,
+  })
+  .strict();
+
+const beginSubmissionInputSchema = z
+  .object({
+    ownerUserId: uuidSchema,
+    intentId: uuidSchema,
+    requestId: uuidSchema,
+    expectedReviewSha256: sha256Schema,
+    walletEvidence: submissionWalletEvidenceSchema,
+    marketEvidence: submissionMarketEvidenceSchema,
+    policyEvidence: submissionPolicyEvidenceSchema,
+  })
+  .strict();
+
 const prepareInputEnvelopeSchema = z
   .object({
     ownerUserId: uuidSchema,
@@ -158,14 +250,18 @@ const prepareInputEnvelopeSchema = z
 
 const currentWalletBindingRowSchema = z
   .object({
+    privy_user_id: opaqueProviderIdSchema,
     binding_state: z.literal("bound"),
+    wallet_id: opaqueProviderIdSchema,
     account_address: addressSchema,
     account_kind: z.literal("master"),
     binding_version: bindingVersionSchema,
   })
   .strict();
 
-const currentOwnerRowSchema = z.object({ id: uuidSchema }).strict();
+const currentOwnerRowSchema = z
+  .object({ id: uuidSchema, privy_user_id: opaqueProviderIdSchema })
+  .strict();
 
 const activeAgentIdentityRowSchema = z
   .object({
@@ -175,6 +271,7 @@ const activeAgentIdentityRowSchema = z
     binding_version: bindingVersionSchema,
     agent_address: addressSchema,
     agent_name: agentNameSchema,
+    signer_ref: signerRefSchema,
     lifecycle_state: z.literal("active"),
   })
   .strict();
@@ -191,12 +288,72 @@ const activeAgentAuthorizationRowSchema = z
     binding_version: bindingVersionSchema,
     agent_address: addressSchema,
     agent_name: agentNameSchema,
+    agent_valid_until: validDateSchema,
     state: z.literal("active"),
   })
   .strict();
 
 const currentAgentValidityRowSchema = z
   .object({ is_current: z.literal(true) })
+  .strict();
+
+const submissionOperationStateSchema = z.enum([
+  "prepared",
+  "submitting",
+  "accepted",
+  "succeeded",
+  "rejected",
+  "failed",
+  "unknown",
+]);
+const submissionOperationRowSchema = z
+  .object({
+    id: uuidSchema,
+    owner_user_id: uuidSchema,
+    domain: z.literal("hyperliquid"),
+    operation_kind: z.literal("spot_intent"),
+    request_sha256: sha256Schema,
+    state: submissionOperationStateSchema,
+    attempt_count: z.number().int().min(0).max(1),
+    transport_attempt_id: uuidSchema.nullable(),
+    attempt_committed_at: validDateSchema.nullable(),
+    attempt_deadline_at: validDateSchema.nullable(),
+    reconciliation_status: z.enum([
+      "not_required",
+      "pending",
+      "leased",
+      "operator_required",
+      "complete",
+    ]),
+    record_version: z.string().regex(/^(0|[1-9][0-9]*)$/),
+  })
+  .strict();
+
+const submissionJournalRowSchema = z
+  .object({
+    attempt_committed_at: validDateSchema,
+    attempt_deadline_at: validDateSchema,
+    record_version: z.string().regex(/^[1-9][0-9]*$/),
+  })
+  .strict();
+
+const submissionValidityRowSchema = z
+  .object({
+    review_current: z.boolean(),
+    review_covers_attempt: z.boolean(),
+    agent_current: z.boolean(),
+    agent_covers_attempt: z.boolean(),
+    wallet_evidence_current: z.boolean(),
+    wallet_evidence_bounded: z.boolean(),
+    wallet_evidence_covers_attempt: z.boolean(),
+    market_evidence_current: z.boolean(),
+    market_evidence_bounded: z.boolean(),
+    market_evidence_covers_attempt: z.boolean(),
+    policy_evidence_current: z.boolean(),
+    policy_evidence_bounded: z.boolean(),
+    policy_evidence_covers_attempt: z.boolean(),
+    attempt_current: z.boolean(),
+  })
   .strict();
 
 const intentRowSchema = z
@@ -419,6 +576,91 @@ export interface PrepareSpotIntentInput {
   readonly expiresAt: string;
 }
 
+export interface BeginSpotIntentSubmissionInput {
+  readonly ownerUserId: string;
+  readonly intentId: string;
+  readonly requestId: string;
+  readonly expectedReviewSha256: string;
+  /** Server-resolved authority. This object must never be built from route input. */
+  readonly walletEvidence: Readonly<{
+    ownerUserId: string;
+    privyUserId: string;
+    walletId: string;
+    accountAddress: string;
+    accountKind: "master";
+    bindingVersion: string;
+    /** Current resolver observation time, not the binding row update time. */
+    verifiedAt: string;
+    expiresAt: string;
+  }>;
+  /** Fresh server-side Hyperliquid metadata evidence, never client authority. */
+  readonly marketEvidence: Readonly<{
+    provider: "hyperliquid";
+    network: "testnet";
+    dataset: "spotMetaAndAssetCtxs";
+    marketId: string;
+    providerCoin: string;
+    baseTokenIndex: number;
+    baseTokenId: string;
+    quoteTokenIndex: number;
+    quoteTokenId: string;
+    spotPairIndex: number;
+    exchangeOrderAsset: number;
+    metadataVersion: string;
+    metadataSha256: string;
+    fetchedAt: string;
+    expiresAt: string;
+  }>;
+  /**
+   * Short-lived, server-generated aggregate mutation gate. Every positive
+   * field is literal so missing or unknown product, legal, signer, kill-switch,
+   * or reconciliation evidence fails before nonce allocation.
+   */
+  readonly policyEvidence: Readonly<{
+    ownerUserId: string;
+    intentId: string;
+    network: "testnet";
+    action: "spot_ioc_order";
+    decision: "allow";
+    policyVersion: string;
+    productEnabled: true;
+    legalEligible: true;
+    sanctionsEligible: true;
+    killSwitchOpen: true;
+    signerReady: true;
+    reconciliationReady: true;
+    checkedAt: string;
+    expiresAt: string;
+  }>;
+}
+
+export interface SpotIntentSubmissionAttempt {
+  readonly intentId: string;
+  readonly network: "testnet";
+  readonly transportAttemptId: string;
+  readonly attemptCommittedAt: string;
+  readonly attemptDeadlineAt: string;
+  readonly nonce: string;
+  readonly agentAddress: string;
+  readonly signerRef: string;
+  readonly canonicalAction: SpotCanonicalAction;
+  readonly vaultAddress: null;
+  /** Exact reviewed expiry in Unix milliseconds; the signer must not derive it. */
+  readonly expiresAfter: string;
+}
+
+export type BeginSpotIntentSubmissionResult =
+  | Readonly<{
+      kind: "started";
+      intent: SpotIntentRecord;
+      attempt: SpotIntentSubmissionAttempt;
+    }>
+  | Readonly<{
+      kind: "already_attempted";
+      intent: SpotIntentRecord;
+    }>
+  | Readonly<{ kind: "not_found" }>;
+
 export interface SpotIntentRepository {
   claimPrepare(
     input: ClaimSpotIntentPrepareInput,
@@ -427,6 +669,9 @@ export interface SpotIntentRepository {
     readonly created: boolean;
     readonly intent: SpotIntentRecord;
   }>;
+  beginSubmission(
+    input: BeginSpotIntentSubmissionInput,
+  ): Promise<BeginSpotIntentSubmissionResult>;
   findOwned(
     ownerUserId: string,
     intentId: string,
@@ -484,6 +729,26 @@ interface ParsedPrepareInput extends Omit<
 > {
   readonly canonicalAction: SpotCanonicalAction;
   readonly publicReview: SpotReview;
+}
+
+type ParsedBeginSpotIntentSubmissionInput = z.output<
+  typeof beginSubmissionInputSchema
+>;
+
+interface CurrentSpotAuthority {
+  readonly authorizationId: string;
+  readonly agentAddress: string;
+  readonly signerRef: string;
+}
+
+interface SpotAuthorityCoordinates {
+  readonly ownerUserId: string;
+  readonly privyUserId?: string;
+  readonly walletId?: string;
+  readonly accountAddress: string;
+  readonly accountKind: "master";
+  readonly bindingVersion: string;
+  readonly agentIdentityId: string;
 }
 
 type DatabaseClient = Pick<PoolClient, "query">;
@@ -793,6 +1058,361 @@ async function readOwnedIntent(
   return row === undefined ? null : toSpotIntentRecord(row);
 }
 
+async function lockOwnedIntent(
+  client: DatabaseClient,
+  ownerUserId: string,
+  intentId: string,
+): Promise<Readonly<{
+  row: z.output<typeof intentRowSchema>;
+  record: SpotIntentRecord;
+}> | null> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select ${intentReturningColumns}
+      from public.spot_intents as intent
+      where intent.owner_user_id = $1 and intent.id = $2
+      limit 1
+      for update
+    `,
+    values: [ownerUserId, intentId],
+  });
+  const value = result.rows[0];
+  if (value === undefined) {
+    return null;
+  }
+  const row = intentRowSchema.safeParse(value);
+  if (!row.success) {
+    return failUnavailable();
+  }
+  return Object.freeze({ row: row.data, record: toSpotIntentRecord(value) });
+}
+
+async function lockSubmissionOperation(
+  client: DatabaseClient,
+  ownerUserId: string,
+  intentId: string,
+): Promise<z.output<typeof submissionOperationRowSchema> | null> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        id,
+        owner_user_id,
+        domain,
+        operation_kind,
+        request_sha256,
+        state,
+        attempt_count,
+        transport_attempt_id,
+        attempt_committed_at,
+        attempt_deadline_at,
+        reconciliation_status,
+        record_version::text as record_version
+      from public.provider_operations
+      where owner_user_id = $1 and id = $2
+      limit 1
+      for update
+    `,
+    values: [ownerUserId, intentId],
+  });
+  const value = result.rows[0];
+  if (value === undefined) {
+    return null;
+  }
+  const parsed = submissionOperationRowSchema.safeParse(value);
+  return parsed.success ? parsed.data : failUnavailable();
+}
+
+function immutableIntentAuthorityMatches(
+  first: SpotIntentRecord,
+  second: SpotIntentRecord,
+): boolean {
+  return (
+    first.id === second.id &&
+    first.ownerUserId === second.ownerUserId &&
+    first.requestSha256 === second.requestSha256 &&
+    first.marketId === second.marketId &&
+    first.providerCoin === second.providerCoin &&
+    first.baseTokenIndex === second.baseTokenIndex &&
+    first.baseTokenId === second.baseTokenId &&
+    first.quoteTokenIndex === second.quoteTokenIndex &&
+    first.quoteTokenId === second.quoteTokenId &&
+    first.spotPairIndex === second.spotPairIndex &&
+    first.exchangeOrderAsset === second.exchangeOrderAsset &&
+    first.metadataVersion === second.metadataVersion &&
+    first.metadataSha256 === second.metadataSha256 &&
+    first.policyVersion === second.policyVersion &&
+    first.accountAddress === second.accountAddress &&
+    first.bindingVersion === second.bindingVersion &&
+    first.agentIdentityId === second.agentIdentityId &&
+    first.clientOrderId === second.clientOrderId &&
+    first.reviewSha256 === second.reviewSha256 &&
+    first.factsObservedAt === second.factsObservedAt &&
+    first.referenceSourceTime === second.referenceSourceTime &&
+    first.createdAt === second.createdAt &&
+    JSON.stringify(first.canonicalAction) ===
+      JSON.stringify(second.canonicalAction) &&
+    JSON.stringify(first.publicReview) === JSON.stringify(second.publicReview)
+  );
+}
+
+function expectedSubmissionAuthorityMatches(
+  input: ParsedBeginSpotIntentSubmissionInput,
+  intent: SpotIntentRecord,
+): boolean {
+  const wallet = input.walletEvidence;
+  const market = input.marketEvidence;
+  const policy = input.policyEvidence;
+  return (
+    input.ownerUserId === wallet.ownerUserId &&
+    input.ownerUserId === policy.ownerUserId &&
+    input.intentId === policy.intentId &&
+    input.expectedReviewSha256 === intent.reviewSha256 &&
+    wallet.accountAddress === intent.accountAddress &&
+    wallet.bindingVersion === intent.bindingVersion &&
+    market.marketId === intent.marketId &&
+    market.providerCoin === intent.providerCoin &&
+    market.baseTokenIndex === intent.baseTokenIndex &&
+    market.baseTokenId === intent.baseTokenId &&
+    market.quoteTokenIndex === intent.quoteTokenIndex &&
+    market.quoteTokenId === intent.quoteTokenId &&
+    market.spotPairIndex === intent.spotPairIndex &&
+    market.exchangeOrderAsset === intent.exchangeOrderAsset &&
+    market.exchangeOrderAsset === 10_000 + market.spotPairIndex &&
+    market.metadataVersion === intent.metadataVersion &&
+    market.metadataSha256 === intent.metadataSha256 &&
+    policy.policyVersion === intent.policyVersion
+  );
+}
+
+function expectedGenericState(
+  spotState: z.output<typeof stateSchema>,
+): z.output<typeof submissionOperationStateSchema> | null {
+  switch (spotState) {
+    case "prepared":
+    case "expired":
+      return "prepared";
+    case "submitting":
+      return "submitting";
+    case "accepted":
+      return "accepted";
+    case "partially_filled":
+    case "filled":
+    case "not_filled":
+      return "succeeded";
+    case "rejected":
+      return "rejected";
+    case "unknown":
+    case "reconciling":
+    case "operator_required":
+      return "unknown";
+  }
+}
+
+function assertSubmissionProjection(
+  operation: z.output<typeof submissionOperationRowSchema>,
+  intent: z.output<typeof intentRowSchema>,
+): void {
+  if (
+    operation.id !== intent.id ||
+    operation.owner_user_id !== intent.owner_user_id ||
+    operation.request_sha256 !== intent.request_sha256 ||
+    operation.state !== expectedGenericState(intent.stored_state)
+  ) {
+    return failUnavailable();
+  }
+  if (operation.state === "prepared") {
+    if (
+      operation.attempt_count !== 0 ||
+      operation.transport_attempt_id !== null ||
+      operation.attempt_committed_at !== null ||
+      operation.attempt_deadline_at !== null ||
+      operation.reconciliation_status !== "not_required" ||
+      operation.record_version !== "0"
+    ) {
+      return failUnavailable();
+    }
+    return;
+  }
+  if (
+    operation.attempt_count !== 1 ||
+    operation.transport_attempt_id === null ||
+    operation.attempt_committed_at === null ||
+    operation.attempt_deadline_at === null ||
+    operation.attempt_deadline_at <= operation.attempt_committed_at ||
+    operation.record_version !== intent.record_version
+  ) {
+    return failUnavailable();
+  }
+}
+
+function assertSubmissionValidity(value: unknown, finalCheck: boolean): void {
+  const parsed = submissionValidityRowSchema.safeParse(value);
+  if (!parsed.success) {
+    return failUnavailable();
+  }
+  const validity = parsed.data;
+  if (!validity.review_current || !validity.review_covers_attempt) {
+    throw new SpotIntentPrepareExpiredError();
+  }
+  if (
+    !validity.agent_current ||
+    !validity.agent_covers_attempt ||
+    !validity.wallet_evidence_current ||
+    !validity.wallet_evidence_bounded ||
+    !validity.wallet_evidence_covers_attempt ||
+    !validity.market_evidence_current ||
+    !validity.market_evidence_bounded ||
+    !validity.market_evidence_covers_attempt ||
+    !validity.policy_evidence_current ||
+    !validity.policy_evidence_bounded ||
+    !validity.policy_evidence_covers_attempt ||
+    (finalCheck && !validity.attempt_current)
+  ) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+}
+
+async function validateSubmissionWindow(
+  client: DatabaseClient,
+  input: ParsedBeginSpotIntentSubmissionInput,
+  authorizationId: string,
+  attemptDeadlineAt: string | null,
+): Promise<void> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      ), submission_window as (
+        select
+          database_clock.observed_at,
+          coalesce(
+            $4::timestamptz,
+            database_clock.observed_at
+              + ($5::integer * interval '1 millisecond')
+          ) as attempt_deadline_at
+        from database_clock
+      )
+      select
+        submission_window.observed_at < intent.expires_at
+          as review_current,
+        submission_window.attempt_deadline_at < intent.expires_at
+          as review_covers_attempt,
+        submission_window.observed_at < agent_authorization.agent_valid_until
+          as agent_current,
+        submission_window.attempt_deadline_at
+          < agent_authorization.agent_valid_until as agent_covers_attempt,
+        $6::timestamptz <= submission_window.observed_at
+          and submission_window.observed_at < $7::timestamptz
+          as wallet_evidence_current,
+        $6::timestamptz < $7::timestamptz
+          and $7::timestamptz <= $6::timestamptz
+            + ($8::integer * interval '1 millisecond')
+          as wallet_evidence_bounded,
+        submission_window.attempt_deadline_at < $7::timestamptz
+          as wallet_evidence_covers_attempt,
+        $9::timestamptz <= submission_window.observed_at
+          and submission_window.observed_at < $10::timestamptz
+          as market_evidence_current,
+        $9::timestamptz < $10::timestamptz
+          and $10::timestamptz <= $9::timestamptz
+            + ($11::integer * interval '1 millisecond')
+          as market_evidence_bounded,
+        submission_window.attempt_deadline_at < $10::timestamptz
+          as market_evidence_covers_attempt,
+        $12::timestamptz <= submission_window.observed_at
+          and submission_window.observed_at < $13::timestamptz
+          as policy_evidence_current,
+        $12::timestamptz < $13::timestamptz
+          and $13::timestamptz <= $12::timestamptz
+            + ($8::integer * interval '1 millisecond')
+          as policy_evidence_bounded,
+        submission_window.attempt_deadline_at < $13::timestamptz
+          as policy_evidence_covers_attempt,
+        submission_window.observed_at
+          < submission_window.attempt_deadline_at as attempt_current
+      from public.spot_intents as intent
+      join public.spot_agent_authorizations as agent_authorization
+        on agent_authorization.id = $3
+        and agent_authorization.owner_user_id = intent.owner_user_id
+        and agent_authorization.agent_identity_id = intent.agent_identity_id
+        and agent_authorization.state = 'active'
+      cross join submission_window
+      where intent.id = $1
+        and intent.owner_user_id = $2
+      limit 1
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      authorizationId,
+      attemptDeadlineAt,
+      SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS,
+      input.walletEvidence.verifiedAt,
+      input.walletEvidence.expiresAt,
+      SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS,
+      input.marketEvidence.fetchedAt,
+      input.marketEvidence.expiresAt,
+      SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS,
+      input.policyEvidence.checkedAt,
+      input.policyEvidence.expiresAt,
+    ],
+  });
+  assertSubmissionValidity(result.rows[0], attemptDeadlineAt !== null);
+}
+
+async function allocateSpotAgentNonce(
+  client: DatabaseClient,
+  agentAddress: string,
+): Promise<string> {
+  const result = await client.query<{ nonce: string }>({
+    text: `
+      with database_clock as (
+        select
+          clock_timestamp() as observed_at,
+          floor(extract(epoch from clock_timestamp()) * 1000)::numeric
+            as unix_milliseconds
+      )
+      insert into public.hyperliquid_signer_nonce_state (
+        network,
+        signer_address,
+        signer_kind,
+        last_allocated_nonce,
+        created_at,
+        updated_at
+      )
+      select
+        'testnet',
+        $1,
+        'spot_agent',
+        database_clock.unix_milliseconds,
+        database_clock.observed_at,
+        database_clock.observed_at
+      from database_clock
+      on conflict (network, signer_address)
+      do update set
+        last_allocated_nonce = greatest(
+          hyperliquid_signer_nonce_state.last_allocated_nonce + 1,
+          excluded.last_allocated_nonce
+        ),
+        updated_at = greatest(
+          hyperliquid_signer_nonce_state.updated_at,
+          excluded.updated_at
+        )
+      where hyperliquid_signer_nonce_state.signer_kind = excluded.signer_kind
+        and greatest(
+          hyperliquid_signer_nonce_state.last_allocated_nonce + 1,
+          excluded.last_allocated_nonce
+        ) < excluded.last_allocated_nonce + $2::numeric
+      returning last_allocated_nonce::text as nonce
+    `,
+    values: [agentAddress, HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS],
+  });
+  const nonce = result.rows[0]?.nonce;
+  return nonce !== undefined && nonceSchema.safeParse(nonce).success
+    ? nonce
+    : failUnavailable();
+}
+
 async function lockClaim(
   client: DatabaseClient,
   input: ClaimSpotIntentPrepareInput,
@@ -994,14 +1614,11 @@ async function readClaimedIntent(
 
 async function assertCurrentAuthority(
   client: DatabaseClient,
-  input: Pick<
-    ParsedPrepareInput,
-    "ownerUserId" | "accountAddress" | "bindingVersion" | "agentIdentityId"
-  >,
-): Promise<void> {
+  input: SpotAuthorityCoordinates,
+): Promise<CurrentSpotAuthority> {
   const ownerResult = await client.query<Record<string, unknown>>({
     text: `
-      select id
+      select id, privy_user_id
       from public.loop_users
       where id = $1
       limit 1
@@ -1010,14 +1627,21 @@ async function assertCurrentAuthority(
     values: [input.ownerUserId],
   });
   const owner = currentOwnerRowSchema.safeParse(ownerResult.rows[0]);
-  if (!owner.success || owner.data.id !== input.ownerUserId) {
+  if (
+    !owner.success ||
+    owner.data.id !== input.ownerUserId ||
+    (input.privyUserId !== undefined &&
+      owner.data.privy_user_id !== input.privyUserId)
+  ) {
     throw new SpotIntentAuthorityStaleError();
   }
 
   const walletResult = await client.query<Record<string, unknown>>({
     text: `
       select
+        privy_user_id,
         binding_state,
+        wallet_id,
         account_address,
         account_kind,
         binding_version::text as binding_version
@@ -1031,6 +1655,10 @@ async function assertCurrentAuthority(
   const wallet = currentWalletBindingRowSchema.safeParse(walletResult.rows[0]);
   if (
     !wallet.success ||
+    (input.privyUserId !== undefined &&
+      wallet.data.privy_user_id !== input.privyUserId) ||
+    (input.walletId !== undefined &&
+      wallet.data.wallet_id !== input.walletId) ||
     wallet.data.account_address !== input.accountAddress ||
     wallet.data.binding_version !== input.bindingVersion
   ) {
@@ -1046,6 +1674,7 @@ async function assertCurrentAuthority(
         binding_version::text as binding_version,
         agent_address,
         agent_name,
+        signer_ref,
         lifecycle_state
       from public.spot_agent_identities
       where id = $1 and owner_user_id = $2
@@ -1077,6 +1706,7 @@ async function assertCurrentAuthority(
         binding_version::text as binding_version,
         agent_address,
         agent_name,
+        agent_valid_until,
         state
       from public.spot_agent_authorizations
       where owner_user_id = $1
@@ -1118,6 +1748,261 @@ async function assertCurrentAuthority(
   ) {
     throw new SpotIntentAuthorityStaleError();
   }
+  return Object.freeze({
+    authorizationId: authorization.data.id,
+    agentAddress: agent.data.agent_address,
+    signerRef: agent.data.signer_ref,
+  });
+}
+
+async function beginSubmissionTransaction(
+  client: PoolClient,
+  input: ParsedBeginSpotIntentSubmissionInput,
+): Promise<BeginSpotIntentSubmissionResult> {
+  const discovered = await readOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (discovered === null) {
+    return Object.freeze({ kind: "not_found" as const });
+  }
+  if (discovered.state === "expired") {
+    throw new SpotIntentPrepareExpiredError();
+  }
+  if (discovered.state !== "prepared") {
+    return Object.freeze({
+      kind: "already_attempted" as const,
+      intent: discovered,
+    });
+  }
+  if (!expectedSubmissionAuthorityMatches(input, discovered)) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+
+  const authority = await assertCurrentAuthority(client, {
+    ownerUserId: input.ownerUserId,
+    privyUserId: input.walletEvidence.privyUserId,
+    walletId: input.walletEvidence.walletId,
+    accountAddress: discovered.accountAddress,
+    accountKind: "master",
+    bindingVersion: discovered.bindingVersion,
+    agentIdentityId: discovered.agentIdentityId,
+  });
+  const operation = await lockSubmissionOperation(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  const locked = await lockOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (operation === null || locked === null) {
+    return failUnavailable();
+  }
+  if (!immutableIntentAuthorityMatches(discovered, locked.record)) {
+    return failUnavailable();
+  }
+  assertSubmissionProjection(operation, locked.row);
+  if (locked.record.state === "expired") {
+    throw new SpotIntentPrepareExpiredError();
+  }
+  if (operation.state !== "prepared") {
+    return Object.freeze({
+      kind: "already_attempted" as const,
+      intent: locked.record,
+    });
+  }
+  if (
+    locked.row.stored_state !== "prepared" ||
+    !expectedSubmissionAuthorityMatches(input, locked.record)
+  ) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+
+  await validateSubmissionWindow(
+    client,
+    input,
+    authority.authorizationId,
+    null,
+  );
+
+  const transportAttemptId = randomUUID();
+  const journalResult = await client.query<Record<string, unknown>>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      )
+      update public.provider_operations as operation
+      set
+        state = 'submitting',
+        attempt_count = 1,
+        transport_attempt_id = $3,
+        attempt_committed_at = database_clock.observed_at,
+        attempt_deadline_at = database_clock.observed_at
+          + ($4::integer * interval '1 millisecond'),
+        record_version = operation.record_version + 1,
+        updated_at = database_clock.observed_at
+      from database_clock
+      where operation.id = $1
+        and operation.owner_user_id = $2
+        and operation.domain = 'hyperliquid'
+        and operation.operation_kind = 'spot_intent'
+        and operation.state = 'prepared'
+        and operation.attempt_count = 0
+        and operation.transport_attempt_id is null
+        and operation.attempt_committed_at is null
+        and operation.attempt_deadline_at is null
+        and operation.reconciliation_status = 'not_required'
+        and operation.record_version = 0
+      returning
+        operation.attempt_committed_at,
+        operation.attempt_deadline_at,
+        operation.record_version::text as record_version
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      transportAttemptId,
+      SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS,
+    ],
+  });
+  const journal = submissionJournalRowSchema.safeParse(journalResult.rows[0]);
+  if (!journal.success || journal.data.record_version !== "1") {
+    return failUnavailable();
+  }
+
+  const projectionResult = await client.query<{ record_version: string }>({
+    text: `
+      update public.spot_intents as intent
+      set
+        state = 'submitting',
+        record_version = intent.record_version + 1,
+        updated_at = clock_timestamp()
+      where intent.id = $1
+        and intent.owner_user_id = $2
+        and intent.state = 'prepared'
+        and intent.record_version = 0
+      returning intent.record_version::text as record_version
+    `,
+    values: [input.intentId, input.ownerUserId],
+  });
+  if (projectionResult.rows[0]?.record_version !== "1") {
+    return failUnavailable();
+  }
+
+  const nonce = await allocateSpotAgentNonce(client, authority.agentAddress);
+  await client.query({
+    text: `
+      insert into public.hyperliquid_signer_nonce_allocations (
+        operation_id,
+        owner_user_id,
+        network,
+        signer_address,
+        signer_kind,
+        purpose,
+        nonce
+      )
+      values (
+        $1, $2, 'testnet', $3, 'spot_agent', 'spot_ioc_order', $4::numeric
+      )
+    `,
+    values: [input.intentId, input.ownerUserId, authority.agentAddress, nonce],
+  });
+  await client.query({
+    text: `
+      insert into public.audit_events (
+        owner_user_id,
+        operation_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        from_reconciliation_status,
+        to_reconciliation_status,
+        outcome,
+        operation_version,
+        fence_token,
+        transport_attempt_id
+      )
+      values (
+        $1, $2, $3, 'api', 'provider_submission_started',
+        'prepared', 'submitting', 'not_required', 'not_required',
+        'submission_started', 1, 0, $4
+      )
+    `,
+    values: [
+      input.ownerUserId,
+      input.intentId,
+      input.requestId,
+      transportAttemptId,
+    ],
+  });
+  await client.query({
+    text: `
+      insert into public.spot_intent_events (
+        intent_id,
+        owner_user_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        outcome,
+        intent_version
+      )
+      values (
+        $1, $2, $3, 'api', 'intent_submission_started',
+        'prepared', 'submitting', 'submission_started', 1
+      )
+    `,
+    values: [input.intentId, input.ownerUserId, input.requestId],
+  });
+
+  // Force every deferred cross-projection/nonce invariant before the final
+  // DB-clock check. If trigger evaluation waits, the subsequent check observes
+  // that delay and rolls back the entire journal and nonce high-water advance.
+  await client.query("set constraints all immediate");
+  await validateSubmissionWindow(
+    client,
+    input,
+    authority.authorizationId,
+    journal.data.attempt_deadline_at.toISOString(),
+  );
+
+  const intent = await readOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (
+    intent === null ||
+    intent.state !== "submitting" ||
+    intent.recordVersion !== "1" ||
+    !immutableIntentAuthorityMatches(locked.record, intent)
+  ) {
+    return failUnavailable();
+  }
+  return Object.freeze({
+    kind: "started" as const,
+    intent,
+    attempt: Object.freeze({
+      intentId: intent.id,
+      network: "testnet" as const,
+      transportAttemptId,
+      attemptCommittedAt: journal.data.attempt_committed_at.toISOString(),
+      attemptDeadlineAt: journal.data.attempt_deadline_at.toISOString(),
+      nonce,
+      agentAddress: authority.agentAddress,
+      signerRef: authority.signerRef,
+      canonicalAction: intent.canonicalAction,
+      vaultAddress: null,
+      expiresAfter: locked.row.expires_at.getTime().toString(),
+    }),
+  });
 }
 
 function translateRepositoryError(error: unknown): never {
@@ -1363,6 +2248,19 @@ export function createPostgresSpotIntentRepository(
           }
           return Object.freeze({ created: true, intent });
         });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async beginSubmission(
+      rawInput: BeginSpotIntentSubmissionInput,
+    ): Promise<BeginSpotIntentSubmissionResult> {
+      try {
+        const input = beginSubmissionInputSchema.parse(rawInput);
+        return await withTransaction(pool, async (client) =>
+          beginSubmissionTransaction(client, input),
+        );
       } catch (error) {
         return translateRepositoryError(error);
       }

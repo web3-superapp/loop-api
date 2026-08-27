@@ -9,6 +9,9 @@ import {
   type SpotAgentAuthorizationCreationResource,
   type SpotAgentAuthorizationResource,
 } from "../features/spot/spot-agent-authorization-contract.js";
+import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "./hyperliquid-signer-nonce.js";
+
+export { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "./hyperliquid-signer-nonce.js";
 
 export const SPOT_AGENT_AUTHORIZATION_IDEMPOTENCY_SCOPE =
   "spot_agent_authorization_issue";
@@ -23,7 +26,6 @@ export const SPOT_AGENT_AUTHORIZATION_POLICY_VERSION = "spot_agent_v1";
 export const SPOT_AGENT_AUTHORIZATION_SIGNING_TTL_MILLISECONDS = 300_000;
 export const SPOT_AGENT_AUTHORIZATION_EXPIRY_SWEEP_MAX_ITEMS = 100;
 export const SPOT_AGENT_AUTHORIZATION_EXPIRY_SWEEP_LOCK_TIMEOUT_MILLISECONDS = 50;
-export const HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS = 86_400_000;
 
 const requestDigestDomain = "loop.spot.agent-authorization.issue.v1\0";
 const reviewDigestDomain = "loop.spot.agent-authorization.review.v1\0";

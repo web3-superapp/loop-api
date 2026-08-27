@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { IdempotencyConflictError } from "../src/database/control-plane-repository.js";
+import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "../src/database/hyperliquid-signer-nonce.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
   SPOT_AGENT_AUTHORIZATION_POLICY_VERSION,
@@ -16,12 +17,17 @@ import {
   createPostgresSpotIntentRepository,
   SPOT_INTENT_PENDING_CLAIM_LEASE_MILLISECONDS,
   SPOT_INTENT_PENDING_CLAIM_LIMIT_PER_OWNER,
+  SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS,
+  SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS,
+  SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS,
   SpotIntentAuthorityStaleError,
   SpotIntentClaimLimitExceededError,
   SpotIntentPrepareClaimRequiredError,
   SpotIntentPrepareExpiredError,
   SpotIntentRepositoryUnavailableError,
+  type BeginSpotIntentSubmissionInput,
   type PrepareSpotIntentInput,
+  type SpotIntentRecord,
   type SpotIntentRepository,
 } from "../src/database/spot-intent-repository.js";
 import {
@@ -56,6 +62,7 @@ interface OwnerFixture {
 interface AuthorityFixture extends OwnerFixture {
   readonly agentIdentityId: string;
   readonly authorizationId: string;
+  readonly walletId: string;
 }
 
 interface AuthorityTimes {
@@ -422,6 +429,7 @@ async function seedAuthority(
     ...owner,
     agentIdentityId,
     authorizationId,
+    walletId,
   });
   if (options.activate === false) {
     await pool.query({
@@ -533,6 +541,165 @@ function prepareInput(
     expiresAt: times.expiresAt,
     ...overrides,
   };
+}
+
+async function submissionInput(
+  pool: InstanceType<typeof Pool>,
+  authority: AuthorityFixture,
+  intent: SpotIntentRecord,
+): Promise<BeginSpotIntentSubmissionInput> {
+  const windowResult = await pool.query<{
+    observed_at: Date;
+    expires_at: Date;
+  }>(`
+    select
+      clock_timestamp() - interval '100 milliseconds' as observed_at,
+      clock_timestamp() + interval '14 seconds' as expires_at
+  `);
+  const window = windowResult.rows[0];
+  if (window === undefined) {
+    throw new Error("Spot intent submission evidence clock fixture failed");
+  }
+  const observedAt = window.observed_at.toISOString();
+  const expiresAt = window.expires_at.toISOString();
+  return Object.freeze({
+    ownerUserId: authority.ownerUserId,
+    intentId: intent.id,
+    requestId: randomUUID(),
+    expectedReviewSha256: intent.reviewSha256,
+    walletEvidence: Object.freeze({
+      ownerUserId: authority.ownerUserId,
+      privyUserId: authority.privyUserId,
+      walletId: authority.walletId,
+      accountAddress: intent.accountAddress,
+      accountKind: "master" as const,
+      bindingVersion: intent.bindingVersion,
+      verifiedAt: observedAt,
+      expiresAt,
+    }),
+    marketEvidence: Object.freeze({
+      provider: "hyperliquid" as const,
+      network: "testnet" as const,
+      dataset: "spotMetaAndAssetCtxs" as const,
+      marketId: intent.marketId,
+      providerCoin: intent.providerCoin,
+      baseTokenIndex: intent.baseTokenIndex,
+      baseTokenId: intent.baseTokenId,
+      quoteTokenIndex: intent.quoteTokenIndex,
+      quoteTokenId: intent.quoteTokenId,
+      spotPairIndex: intent.spotPairIndex,
+      exchangeOrderAsset: intent.exchangeOrderAsset,
+      metadataVersion: intent.metadataVersion,
+      metadataSha256: intent.metadataSha256,
+      fetchedAt: observedAt,
+      expiresAt,
+    }),
+    policyEvidence: Object.freeze({
+      ownerUserId: authority.ownerUserId,
+      intentId: intent.id,
+      network: "testnet" as const,
+      action: "spot_ioc_order" as const,
+      decision: "allow" as const,
+      policyVersion: intent.policyVersion,
+      productEnabled: true as const,
+      legalEligible: true as const,
+      sanctionsEligible: true as const,
+      killSwitchOpen: true as const,
+      signerReady: true as const,
+      reconciliationReady: true as const,
+      checkedAt: observedAt,
+      expiresAt,
+    }),
+  });
+}
+
+async function prepareStoredIntent(
+  repository: SpotIntentRepository,
+  authority: AuthorityFixture,
+  overrides: Partial<PrepareSpotIntentInput> = {},
+): Promise<SpotIntentRecord> {
+  const provisional = prepareInput(authority, randomUUID(), overrides);
+  const claimId = await claim(repository, provisional);
+  const prepared = await repository.prepare({ ...provisional, claimId });
+  return prepared.intent;
+}
+
+async function spotAttemptSnapshot(
+  pool: InstanceType<typeof Pool>,
+  intentId: string,
+): Promise<{
+  readonly operation_state: string;
+  readonly attempt_count: number;
+  readonly transport_attempt_id: string | null;
+  readonly attempt_committed_at: Date | null;
+  readonly attempt_deadline_at: Date | null;
+  readonly operation_version: string;
+  readonly intent_state: string;
+  readonly intent_version: string;
+  readonly allocation_count: string;
+  readonly allocation_nonce: string | null;
+  readonly signer_kind: string | null;
+  readonly purpose: string | null;
+  readonly audit_count: string;
+  readonly event_count: string;
+}> {
+  const result = await pool.query<{
+    operation_state: string;
+    attempt_count: number;
+    transport_attempt_id: string | null;
+    attempt_committed_at: Date | null;
+    attempt_deadline_at: Date | null;
+    operation_version: string;
+    intent_state: string;
+    intent_version: string;
+    allocation_count: string;
+    allocation_nonce: string | null;
+    signer_kind: string | null;
+    purpose: string | null;
+    audit_count: string;
+    event_count: string;
+  }>({
+    text: `
+      select
+        operation.state as operation_state,
+        operation.attempt_count,
+        operation.transport_attempt_id,
+        operation.attempt_committed_at,
+        operation.attempt_deadline_at,
+        operation.record_version::text as operation_version,
+        intent.state as intent_state,
+        intent.record_version::text as intent_version,
+        (
+          select count(*)::text
+          from public.hyperliquid_signer_nonce_allocations as allocation
+          where allocation.operation_id = operation.id
+        ) as allocation_count,
+        allocation.nonce::text as allocation_nonce,
+        allocation.signer_kind,
+        allocation.purpose,
+        (
+          select count(*)::text
+          from public.audit_events as audit
+          where audit.operation_id = operation.id
+        ) as audit_count,
+        (
+          select count(*)::text
+          from public.spot_intent_events as event
+          where event.intent_id = operation.id
+        ) as event_count
+      from public.provider_operations as operation
+      join public.spot_intents as intent on intent.id = operation.id
+      left join public.hyperliquid_signer_nonce_allocations as allocation
+        on allocation.operation_id = operation.id
+      where operation.id = $1
+    `,
+    values: [intentId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error("Spot intent attempt snapshot failed");
+  }
+  return row;
 }
 
 async function claim(
@@ -658,6 +825,69 @@ async function waitForRowLockWait(
     await pool.query("select pg_sleep(0.01)");
   }
   throw new Error(`Spot intent prepare did not wait at ${queryFragment}`);
+}
+
+async function waitForDatabaseLockWait(
+  pool: InstanceType<typeof Pool>,
+  queryFragment: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await pool.query<{ waiting: boolean }>({
+      text: `
+        select exists (
+          select 1
+          from pg_catalog.pg_stat_activity
+          where datname = current_database()
+            and pid <> pg_backend_pid()
+            and wait_event_type = 'Lock'
+            and position($1 in query) > 0
+        ) as waiting
+      `,
+      values: [queryFragment],
+    });
+    if (result.rows[0]?.waiting === true) {
+      return;
+    }
+    await pool.query("select pg_sleep(0.01)");
+  }
+  throw new Error(`Spot intent submission did not wait at ${queryFragment}`);
+}
+
+async function submissionOutcomeAfterOperationLockWait(
+  pool: InstanceType<typeof Pool>,
+  repository: SpotIntentRepository,
+  input: BeginSpotIntentSubmissionInput,
+  waitSeconds: number,
+): Promise<unknown> {
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("begin");
+    await blocker.query({
+      text: `
+        select id
+        from public.provider_operations
+        where id = $1 and owner_user_id = $2
+        for update
+      `,
+      values: [input.intentId, input.ownerUserId],
+    });
+    const outcome = repository.beginSubmission(input).then(
+      (result) => result,
+      (error: unknown) => error,
+    );
+    await waitForRowLockWait(pool, "from public.provider_operations");
+    await blocker.query({
+      text: "select pg_sleep($1)",
+      values: [waitSeconds],
+    });
+    await blocker.query("commit");
+    return await outcome;
+  } catch (error) {
+    await blocker.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    blocker.release();
+  }
 }
 
 describe("PostgreSQL Spot intent repository", () => {
@@ -867,6 +1097,793 @@ describe("PostgreSQL Spot intent repository", () => {
       repository.findOwned(authority.ownerUserId, randomUUID()),
     ).resolves.toBeNull();
   });
+
+  it("atomically begins one Spot submission without leaking execution material through the resource", async () => {
+    const authority = await seedAuthority(pool, "submit-happy");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+
+    const result = await repository.beginSubmission(input);
+    expect(result).toMatchObject({
+      kind: "started",
+      intent: {
+        id: prepared.id,
+        state: "submitting",
+        recordVersion: "1",
+        resource: {
+          intent_id: prepared.id,
+          state: "submitting",
+          submission: { state: "attempted" },
+        },
+      },
+      attempt: {
+        intentId: prepared.id,
+        network: "testnet",
+        vaultAddress: null,
+        expiresAfter: String(Date.parse(prepared.resource.expires_at)),
+        canonicalAction: prepared.canonicalAction,
+      },
+    });
+    if (result.kind !== "started") {
+      throw new Error("Expected the first Spot submission to start");
+    }
+    expect(
+      Date.parse(result.attempt.attemptDeadlineAt) -
+        Date.parse(result.attempt.attemptCommittedAt),
+    ).toBe(SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS);
+
+    const publicResource = JSON.stringify(result.intent.resource);
+    expect(publicResource).not.toContain(result.attempt.nonce);
+    expect(publicResource).not.toContain(result.attempt.agentAddress);
+    expect(publicResource).not.toContain(result.attempt.signerRef);
+
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "submitting",
+      attempt_count: 1,
+      transport_attempt_id: result.attempt.transportAttemptId,
+      operation_version: "1",
+      intent_state: "submitting",
+      intent_version: "1",
+      allocation_count: "1",
+      allocation_nonce: result.attempt.nonce,
+      signer_kind: "spot_agent",
+      purpose: "spot_ioc_order",
+      audit_count: "2",
+      event_count: "2",
+    });
+    expect(snapshot.attempt_committed_at?.toISOString()).toBe(
+      result.attempt.attemptCommittedAt,
+    );
+    expect(snapshot.attempt_deadline_at?.toISOString()).toBe(
+      result.attempt.attemptDeadlineAt,
+    );
+    await expect(
+      pool.query({
+        text: `
+          select event_type, operation_version::text, transport_attempt_id
+          from public.audit_events
+          where operation_id = $1 and operation_version = 1
+        `,
+        values: [prepared.id],
+      }),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          event_type: "provider_submission_started",
+          operation_version: "1",
+          transport_attempt_id: result.attempt.transportAttemptId,
+        },
+      ],
+    });
+
+    const replay = await repository.beginSubmission({
+      ...input,
+      requestId: randomUUID(),
+    });
+    expect(replay).toMatchObject({
+      kind: "already_attempted",
+      intent: { id: prepared.id, state: "submitting" },
+    });
+    expect("attempt" in replay).toBe(false);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+  });
+
+  it("admits exactly one execution-material winner under concurrent submission", async () => {
+    const authority = await seedAuthority(pool, "submit-concurrent");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, async () =>
+        repository.beginSubmission({ ...input, requestId: randomUUID() }),
+      ),
+    );
+    const started = results.filter((result) => result.kind === "started");
+    const alreadyAttempted = results.filter(
+      (result) => result.kind === "already_attempted",
+    );
+    expect(started).toHaveLength(1);
+    expect(alreadyAttempted).toHaveLength(19);
+    expect(
+      results.every(
+        (result) => result.kind === "started" || !("attempt" in result),
+      ),
+    ).toBe(true);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "submitting",
+      attempt_count: 1,
+      intent_state: "submitting",
+      allocation_count: "1",
+      audit_count: "2",
+      event_count: "2",
+    });
+  });
+
+  it("requires exact fresh wallet, market, policy, and review evidence before journaling", async () => {
+    const authority = await seedAuthority(pool, "submit-evidence");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+    const shortExpiry = new Date(Date.now() + 5_000).toISOString();
+    const futureObservedAt = new Date(Date.now() + 1_000).toISOString();
+    const futureExpiresAt = new Date(Date.now() + 14_000).toISOString();
+    const overlongWalletExpiry = new Date(
+      Date.parse(input.walletEvidence.verifiedAt) +
+        SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS +
+        1,
+    ).toISOString();
+    const overlongPolicyExpiry = new Date(
+      Date.parse(input.policyEvidence.checkedAt) +
+        SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS +
+        1,
+    ).toISOString();
+    const overlongMarketExpiry = new Date(
+      Date.parse(input.marketEvidence.fetchedAt) +
+        SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS +
+        1,
+    ).toISOString();
+    const staleInputs: readonly BeginSpotIntentSubmissionInput[] = [
+      { ...input, expectedReviewSha256: digestB },
+      {
+        ...input,
+        walletEvidence: {
+          ...input.walletEvidence,
+          privyUserId: `${authority.privyUserId}:changed`,
+        },
+      },
+      {
+        ...input,
+        walletEvidence: {
+          ...input.walletEvidence,
+          walletId: `wallet-${randomUUID()}`,
+        },
+      },
+      {
+        ...input,
+        marketEvidence: {
+          ...input.marketEvidence,
+          metadataSha256: digestB,
+        },
+      },
+      {
+        ...input,
+        policyEvidence: {
+          ...input.policyEvidence,
+          policyVersion: "spot_ioc_v2",
+        },
+      },
+      {
+        ...input,
+        walletEvidence: {
+          ...input.walletEvidence,
+          expiresAt: shortExpiry,
+        },
+        marketEvidence: {
+          ...input.marketEvidence,
+          expiresAt: shortExpiry,
+        },
+        policyEvidence: {
+          ...input.policyEvidence,
+          expiresAt: shortExpiry,
+        },
+      },
+      {
+        ...input,
+        walletEvidence: {
+          ...input.walletEvidence,
+          verifiedAt: futureObservedAt,
+          expiresAt: futureExpiresAt,
+        },
+      },
+      {
+        ...input,
+        marketEvidence: {
+          ...input.marketEvidence,
+          fetchedAt: futureObservedAt,
+          expiresAt: futureExpiresAt,
+        },
+      },
+      {
+        ...input,
+        policyEvidence: {
+          ...input.policyEvidence,
+          checkedAt: futureObservedAt,
+          expiresAt: futureExpiresAt,
+        },
+      },
+      {
+        ...input,
+        walletEvidence: {
+          ...input.walletEvidence,
+          expiresAt: overlongWalletExpiry,
+        },
+      },
+      {
+        ...input,
+        marketEvidence: {
+          ...input.marketEvidence,
+          expiresAt: overlongMarketExpiry,
+        },
+      },
+      {
+        ...input,
+        policyEvidence: {
+          ...input.policyEvidence,
+          expiresAt: overlongPolicyExpiry,
+        },
+      },
+    ];
+    for (const stale of staleInputs) {
+      await expect(repository.beginSubmission(stale)).rejects.toBeInstanceOf(
+        SpotIntentAuthorityStaleError,
+      );
+    }
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      transport_attempt_id: null,
+      operation_version: "0",
+      intent_state: "prepared",
+      intent_version: "0",
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+  });
+
+  it("rechecks the current wallet epoch and active Agent generation at submission", async () => {
+    const walletAuthority = await seedAuthority(pool, "submit-wallet-stale");
+    const walletIntent = await prepareStoredIntent(repository, walletAuthority);
+    const walletInput = await submissionInput(
+      pool,
+      walletAuthority,
+      walletIntent,
+    );
+    const walletRotator = await pool.connect();
+    try {
+      await walletRotator.query("begin");
+      await walletRotator.query({
+        text: `
+          select id
+          from public.loop_users
+          where id = $1
+          for update
+        `,
+        values: [walletAuthority.ownerUserId],
+      });
+      await walletRotator.query({
+        text: `
+          update public.perp_wallet_bindings
+          set
+            account_address = $2,
+            binding_version = 2,
+            last_verified_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+          where owner_user_id = $1
+        `,
+        values: [walletAuthority.ownerUserId, rotatedAccountAddress],
+      });
+      const outcome = repository.beginSubmission(walletInput).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await waitForRowLockWait(pool, "from public.loop_users");
+      await walletRotator.query("commit");
+      expect(await outcome).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    } catch (error) {
+      await walletRotator.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      walletRotator.release();
+    }
+    expect(await spotAttemptSnapshot(pool, walletIntent.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+
+    await pool.query("truncate table public.loop_users cascade");
+    const agentAuthority = await seedAuthority(pool, "submit-agent-stale");
+    const agentIntent = await prepareStoredIntent(repository, agentAuthority);
+    const agentInput = await submissionInput(pool, agentAuthority, agentIntent);
+    const agentRetirer = await pool.connect();
+    try {
+      await agentRetirer.query("begin");
+      await agentRetirer.query({
+        text: `
+          select id
+          from public.spot_agent_identities
+          where id = $1 and owner_user_id = $2
+          for update
+        `,
+        values: [agentAuthority.agentIdentityId, agentAuthority.ownerUserId],
+      });
+      await agentRetirer.query({
+        text: `
+          update public.spot_agent_identities
+          set
+            lifecycle_state = 'retired',
+            record_version = record_version + 1,
+            updated_at = clock_timestamp()
+          where id = $1 and lifecycle_state = 'active'
+        `,
+        values: [agentAuthority.agentIdentityId],
+      });
+      const outcome = repository.beginSubmission(agentInput).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await waitForRowLockWait(pool, "from public.spot_agent_identities");
+      await agentRetirer.query("commit");
+      expect(await outcome).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    } catch (error) {
+      await agentRetirer.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      agentRetirer.release();
+    }
+    expect(await spotAttemptSnapshot(pool, agentIntent.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+  });
+
+  it("recomputes review and Agent attempt coverage after an operation-lock wait", async () => {
+    const reviewAuthority = await seedAuthority(pool, "submit-review-window");
+    const provisional = prepareInput(reviewAuthority, randomUUID());
+    const shortWindow = timestampWindow({ expiresOffsetMs: 12_000 });
+    const { review_digest: _reviewDigest, ...baseReview } = parseSpotReview(
+      provisional.publicReview,
+    );
+    void _reviewDigest;
+    const shortReview = createSpotReview({
+      ...baseReview,
+      reference_source_time: shortWindow.referenceSourceTime,
+      fee_source: {
+        dataset: "user_fees",
+        observed_at: shortWindow.feeObservedAt,
+      },
+      expires_at: shortWindow.expiresAt,
+    });
+    const reviewClaimId = await claim(repository, provisional);
+    const reviewPrepared = await repository.prepare({
+      ...provisional,
+      claimId: reviewClaimId,
+      publicReview: shortReview,
+      reviewSha256: shortReview.review_digest,
+      factsObservedAt: shortWindow.factsObservedAt,
+      referenceSourceTime: shortWindow.referenceSourceTime,
+      expiresAt: shortWindow.expiresAt,
+    });
+    const reviewInput = await submissionInput(
+      pool,
+      reviewAuthority,
+      reviewPrepared.intent,
+    );
+    expect(
+      await submissionOutcomeAfterOperationLockWait(
+        pool,
+        repository,
+        reviewInput,
+        2.2,
+      ),
+    ).toBeInstanceOf(SpotIntentPrepareExpiredError);
+    expect(
+      await spotAttemptSnapshot(pool, reviewPrepared.intent.id),
+    ).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+    });
+
+    await pool.query("truncate table public.loop_users cascade");
+    const agentAuthority = await seedAuthority(pool, "submit-agent-window", {
+      signingExpiresOffsetMs: 4_000,
+      agentValidUntilOffsetMs: 12_000,
+    });
+    const agentIntent = await prepareStoredIntent(repository, agentAuthority);
+    const agentInput = await submissionInput(pool, agentAuthority, agentIntent);
+    expect(
+      await submissionOutcomeAfterOperationLockWait(
+        pool,
+        repository,
+        agentInput,
+        2.2,
+      ),
+    ).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    expect(await spotAttemptSnapshot(pool, agentIntent.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+    });
+
+    await pool.query("truncate table public.loop_users cascade");
+    const evidenceAuthority = await seedAuthority(
+      pool,
+      "submit-evidence-window",
+    );
+    const evidenceIntent = await prepareStoredIntent(
+      repository,
+      evidenceAuthority,
+    );
+    const evidenceInput = await submissionInput(
+      pool,
+      evidenceAuthority,
+      evidenceIntent,
+    );
+    const waitingEvidenceInput: BeginSpotIntentSubmissionInput = {
+      ...evidenceInput,
+      walletEvidence: {
+        ...evidenceInput.walletEvidence,
+        expiresAt: new Date(Date.now() + 12_000).toISOString(),
+      },
+    };
+    expect(
+      await submissionOutcomeAfterOperationLockWait(
+        pool,
+        repository,
+        waitingEvidenceInput,
+        2.2,
+      ),
+    ).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    expect(await spotAttemptSnapshot(pool, evidenceIntent.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+    });
+  }, 15_000);
+
+  it("keeps foreign and missing submission targets indistinguishable and unchanged", async () => {
+    const authority = await seedAuthority(pool, "submit-owned");
+    const foreign = await insertOwner(pool, "submit-owned-foreign");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+
+    await expect(
+      repository.beginSubmission({
+        ...input,
+        ownerUserId: foreign.ownerUserId,
+        walletEvidence: {
+          ...input.walletEvidence,
+          ownerUserId: foreign.ownerUserId,
+          privyUserId: foreign.privyUserId,
+        },
+        policyEvidence: {
+          ...input.policyEvidence,
+          ownerUserId: foreign.ownerUserId,
+        },
+      }),
+    ).resolves.toEqual({ kind: "not_found" });
+    const missingIntentId = randomUUID();
+    await expect(
+      repository.beginSubmission({
+        ...input,
+        intentId: missingIntentId,
+        policyEvidence: {
+          ...input.policyEvidence,
+          intentId: missingIntentId,
+        },
+      }),
+    ).resolves.toEqual({ kind: "not_found" });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+  });
+
+  it("rolls the journal and Agent nonce high-water back when a deferred submission event fails", async () => {
+    const authority = await seedAuthority(pool, "submit-rollback");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+    const identity = await pool.query<{ agent_address: string }>({
+      text: `
+        select agent_address
+        from public.spot_agent_identities
+        where id = $1
+      `,
+      values: [authority.agentIdentityId],
+    });
+    const agentAddress = identity.rows[0]?.agent_address;
+    if (agentAddress === undefined) {
+      throw new Error("Spot Agent address fixture failed");
+    }
+    await pool.query(`
+      create sequence public.spot_submission_fault_marker_for_test;
+
+      create function public.fail_spot_submission_event_for_test()
+      returns trigger
+      language plpgsql
+      as $function$
+      begin
+        perform nextval('public.spot_submission_fault_marker_for_test');
+        raise exception 'forced deferred Spot submission event failure'
+          using errcode = '23514';
+      end;
+      $function$;
+
+      create constraint trigger fail_spot_submission_event_for_test
+        after insert on public.spot_intent_events
+        deferrable initially deferred
+        for each row
+        execute function public.fail_spot_submission_event_for_test();
+    `);
+    try {
+      await expect(repository.beginSubmission(input)).rejects.toBeInstanceOf(
+        SpotIntentRepositoryUnavailableError,
+      );
+      expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+        operation_state: "prepared",
+        attempt_count: 0,
+        transport_attempt_id: null,
+        operation_version: "0",
+        intent_state: "prepared",
+        intent_version: "0",
+        allocation_count: "0",
+        audit_count: "1",
+        event_count: "1",
+      });
+      await expect(
+        pool.query<{ count: string }>({
+          text: `
+            select count(*)::text as count
+            from public.hyperliquid_signer_nonce_state
+            where network = 'testnet'
+              and signer_address = $1
+              and signer_kind = 'spot_agent'
+          `,
+          values: [agentAddress],
+        }),
+      ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+      await expect(
+        pool.query<{ last_value: string; is_called: boolean }>(`
+          select last_value::text as last_value, is_called
+          from public.spot_submission_fault_marker_for_test
+        `),
+      ).resolves.toMatchObject({
+        rows: [{ last_value: "1", is_called: true }],
+      });
+    } finally {
+      await pool.query(`
+        drop trigger if exists fail_spot_submission_event_for_test
+          on public.spot_intent_events;
+        drop function if exists public.fail_spot_submission_event_for_test();
+        drop sequence if exists public.spot_submission_fault_marker_for_test;
+      `);
+    }
+    const retry = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    expect(retry).toMatchObject({
+      kind: "started",
+      intent: { id: prepared.id, state: "submitting" },
+    });
+  });
+
+  it("allocates unique monotonic nonces across concurrent intents for one Agent", async () => {
+    const authority = await seedAuthority(pool, "submit-nonce-sequence");
+    const firstIntent = await prepareStoredIntent(repository, authority);
+    const secondIntent = await prepareStoredIntent(repository, authority);
+    const [firstInput, secondInput] = await Promise.all([
+      submissionInput(pool, authority, firstIntent),
+      submissionInput(pool, authority, secondIntent),
+    ]);
+
+    const results = await Promise.all([
+      repository.beginSubmission(firstInput),
+      repository.beginSubmission(secondInput),
+    ]);
+    expect(results.every((result) => result.kind === "started")).toBe(true);
+    const nonces = results.map((result) => {
+      if (result.kind !== "started") {
+        throw new Error("Expected both independent Spot intents to start");
+      }
+      return BigInt(result.attempt.nonce);
+    });
+    expect(new Set(nonces.map(String)).size).toBe(2);
+
+    const allocations = await pool.query<{ nonce: string }>({
+      text: `
+        select allocation.nonce::text as nonce
+        from public.hyperliquid_signer_nonce_allocations as allocation
+        where allocation.operation_id = any($1::uuid[])
+        order by allocation.nonce
+      `,
+      values: [[firstIntent.id, secondIntent.id]],
+    });
+    expect(allocations.rows).toHaveLength(2);
+    expect(BigInt(allocations.rows[0]?.nonce ?? "0")).toBeLessThan(
+      BigInt(allocations.rows[1]?.nonce ?? "0"),
+    );
+    expect(await spotAttemptSnapshot(pool, firstIntent.id)).toMatchObject({
+      operation_state: "submitting",
+      allocation_count: "1",
+    });
+    expect(await spotAttemptSnapshot(pool, secondIntent.id)).toMatchObject({
+      operation_state: "submitting",
+      allocation_count: "1",
+    });
+  });
+
+  it("fails closed without a journal when the persisted Agent nonce is too far ahead", async () => {
+    const authority = await seedAuthority(pool, "submit-nonce-window");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+    const identity = await pool.query<{ agent_address: string }>({
+      text: `
+        select agent_address
+        from public.spot_agent_identities
+        where id = $1
+      `,
+      values: [authority.agentIdentityId],
+    });
+    const agentAddress = identity.rows[0]?.agent_address;
+    if (agentAddress === undefined) {
+      throw new Error("Spot Agent nonce-window fixture failed");
+    }
+    const seeded = await pool.query<{ nonce: string }>({
+      text: `
+        insert into public.hyperliquid_signer_nonce_state (
+          network,
+          signer_address,
+          signer_kind,
+          last_allocated_nonce
+        )
+        values (
+          'testnet', $1, 'spot_agent',
+          floor(extract(epoch from clock_timestamp()) * 1000)::numeric
+            + $2::numeric + 1000
+        )
+        returning last_allocated_nonce::text as nonce
+      `,
+      values: [
+        agentAddress,
+        HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS,
+      ],
+    });
+    const highWater = seeded.rows[0]?.nonce;
+    if (highWater === undefined) {
+      throw new Error("Spot Agent future nonce fixture failed");
+    }
+
+    await expect(repository.beginSubmission(input)).rejects.toBeInstanceOf(
+      SpotIntentRepositoryUnavailableError,
+    );
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      transport_attempt_id: null,
+      operation_version: "0",
+      intent_state: "prepared",
+      intent_version: "0",
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+    await expect(
+      pool.query<{ nonce: string }>({
+        text: `
+          select last_allocated_nonce::text as nonce
+          from public.hyperliquid_signer_nonce_state
+          where network = 'testnet' and signer_address = $1
+        `,
+        values: [agentAddress],
+      }),
+    ).resolves.toMatchObject({ rows: [{ nonce: highWater }] });
+  });
+
+  it("rolls back a journal whose deferred constraints wait past its fixed attempt deadline", async () => {
+    const authority = await seedAuthority(pool, "submit-deadline-wait");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const input = await submissionInput(pool, authority, prepared);
+    const identity = await pool.query<{ agent_address: string }>({
+      text: `
+        select agent_address
+        from public.spot_agent_identities
+        where id = $1
+      `,
+      values: [authority.agentIdentityId],
+    });
+    const agentAddress = identity.rows[0]?.agent_address;
+    if (agentAddress === undefined) {
+      throw new Error("Spot Agent deadline fixture failed");
+    }
+    const advisoryLockKey = 824_026_001;
+    await pool.query(`
+      create function public.wait_spot_submission_constraint_for_test()
+      returns trigger
+      language plpgsql
+      as $function$
+      begin
+        perform pg_advisory_xact_lock(${advisoryLockKey});
+        return null;
+      end;
+      $function$;
+
+      create constraint trigger wait_spot_submission_constraint_for_test
+        after insert on public.spot_intent_events
+        deferrable initially deferred
+        for each row
+        execute function public.wait_spot_submission_constraint_for_test();
+    `);
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query({
+        text: "select pg_advisory_xact_lock($1)",
+        values: [advisoryLockKey],
+      });
+      const outcome = repository.beginSubmission(input).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await waitForDatabaseLockWait(pool, "set constraints all immediate");
+      await blocker.query("select pg_sleep(10.2)");
+      await blocker.query("commit");
+      expect(await outcome).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    } catch (error) {
+      await blocker.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      blocker.release();
+      await pool.query(`
+        drop trigger if exists wait_spot_submission_constraint_for_test
+          on public.spot_intent_events;
+        drop function if exists public.wait_spot_submission_constraint_for_test();
+      `);
+    }
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      transport_attempt_id: null,
+      operation_version: "0",
+      intent_state: "prepared",
+      intent_version: "0",
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+    await expect(
+      pool.query<{ count: string }>({
+        text: `
+          select count(*)::text as count
+          from public.hyperliquid_signer_nonce_state
+          where network = 'testnet'
+            and signer_address = $1
+            and signer_kind = 'spot_agent'
+        `,
+        values: [agentAddress],
+      }),
+    ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+  }, 20_000);
 
   it("rolls back preparation when the wallet or active Agent epoch changed", async () => {
     const walletAuthority = await seedAuthority(pool, "wallet-stale");
