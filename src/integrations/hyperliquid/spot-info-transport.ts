@@ -19,6 +19,7 @@ export {
 const addressPattern = /^0x[0-9a-f]{40}$/;
 const zeroAddress = `0x${"0".repeat(40)}`;
 const indexedSpotCoinPattern = /^@(0|[1-9][0-9]{0,9})$/;
+const clientOrderIdPattern = /^0x[0-9a-f]{32}$/;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -74,6 +75,17 @@ function isAccountAddress(value: unknown): value is string {
     typeof value === "string" &&
     addressPattern.test(value) &&
     value !== zeroAddress
+  );
+}
+
+function isValidWindow(startTime: unknown, endTime: unknown): boolean {
+  return (
+    typeof startTime === "number" &&
+    typeof endTime === "number" &&
+    Number.isSafeInteger(startTime) &&
+    Number.isSafeInteger(endTime) &&
+    startTime >= 0 &&
+    startTime <= endTime
   );
 }
 
@@ -137,6 +149,66 @@ function serializeRequest(request: HyperliquidSpotInfoRequest): string {
       }
       return JSON.stringify({
         type: "userFees",
+        user: raw["user"],
+      });
+    case "orderStatus":
+      if (
+        !hasExactDataProperties(raw, ["type", "user", "oid"]) ||
+        !isAccountAddress(raw["user"]) ||
+        typeof raw["oid"] !== "string" ||
+        !clientOrderIdPattern.test(raw["oid"])
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "orderStatus",
+        user: raw["user"],
+        oid: raw["oid"],
+      });
+    case "frontendOpenOrders":
+      if (
+        !hasExactDataProperties(raw, ["type", "user", "dex"]) ||
+        !isAccountAddress(raw["user"]) ||
+        raw["dex"] !== ""
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "frontendOpenOrders",
+        user: raw["user"],
+        dex: "",
+      });
+    case "userFillsByTime":
+      if (
+        !hasExactDataProperties(raw, [
+          "type",
+          "user",
+          "startTime",
+          "endTime",
+          "aggregateByTime",
+        ]) ||
+        !isAccountAddress(raw["user"]) ||
+        !isValidWindow(raw["startTime"], raw["endTime"]) ||
+        raw["aggregateByTime"] !== false
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "userFillsByTime",
+        user: raw["user"],
+        startTime: raw["startTime"],
+        endTime: raw["endTime"],
+        aggregateByTime: false,
+      });
+    case "historicalOrders":
+      if (
+        !hasExactDataProperties(raw, ["type", "user"]) ||
+        !isAccountAddress(raw["user"])
+      ) {
+        return unavailable();
+      }
+      return JSON.stringify({
+        type: "historicalOrders",
         user: raw["user"],
       });
     default:

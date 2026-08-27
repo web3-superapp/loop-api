@@ -64,11 +64,41 @@ export interface HyperliquidSpotUserFeesRequest {
   readonly user: string;
 }
 
+export interface HyperliquidSpotOrderStatusRequest {
+  readonly type: "orderStatus";
+  readonly user: string;
+  readonly oid: string;
+}
+
+export interface HyperliquidSpotFrontendOpenOrdersRequest {
+  readonly type: "frontendOpenOrders";
+  readonly user: string;
+  /** The empty first Perp DEX selector is also the documented Spot scope. */
+  readonly dex: "";
+}
+
+export interface HyperliquidSpotUserFillsByTimeRequest {
+  readonly type: "userFillsByTime";
+  readonly user: string;
+  readonly startTime: number;
+  readonly endTime: number;
+  readonly aggregateByTime: false;
+}
+
+export interface HyperliquidSpotHistoricalOrdersRequest {
+  readonly type: "historicalOrders";
+  readonly user: string;
+}
+
 export type HyperliquidSpotInfoRequest =
   | HyperliquidSpotMetaAndAssetContextsRequest
   | HyperliquidSpotBookRequest
   | HyperliquidSpotClearinghouseStateRequest
-  | HyperliquidSpotUserFeesRequest;
+  | HyperliquidSpotUserFeesRequest
+  | HyperliquidSpotOrderStatusRequest
+  | HyperliquidSpotFrontendOpenOrdersRequest
+  | HyperliquidSpotUserFillsByTimeRequest
+  | HyperliquidSpotHistoricalOrdersRequest;
 
 export interface HyperliquidSpotInfoTransport {
   post(

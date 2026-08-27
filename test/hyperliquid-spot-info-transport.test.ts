@@ -13,6 +13,7 @@ import {
 
 const callId = "12345678-1234-4234-8234-123456789abc";
 const accountAddress = `0x${"12".repeat(20)}`;
+const clientOrderId = `0x${"ab".repeat(16)}`;
 
 function jsonResponse(body = "{}"): Response {
   return new Response(body, {
@@ -22,7 +23,7 @@ function jsonResponse(body = "{}"): Response {
 }
 
 describe("Hyperliquid Spot Info transport", () => {
-  it("serializes only the four exact Spot requests with canonical bytes", async () => {
+  it("serializes only the reviewed Spot requests with canonical bytes", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() =>
       Promise.resolve(jsonResponse('{"time":18446744073709551615}')),
     );
@@ -61,10 +62,44 @@ describe("Hyperliquid Spot Info transport", () => {
         signal,
         callId,
       ),
+      transport.post(
+        {
+          type: "orderStatus",
+          user: accountAddress,
+          oid: clientOrderId,
+        },
+        signal,
+        callId,
+      ),
+      transport.post(
+        { type: "frontendOpenOrders", user: accountAddress, dex: "" },
+        signal,
+        callId,
+      ),
+      transport.post(
+        {
+          type: "userFillsByTime",
+          user: accountAddress,
+          startTime: 1,
+          endTime: 2,
+          aggregateByTime: false,
+        },
+        signal,
+        callId,
+      ),
+      transport.post(
+        { type: "historicalOrders", user: accountAddress },
+        signal,
+        callId,
+      ),
     ]);
 
-    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(fetch).toHaveBeenCalledTimes(9);
     expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      HYPERLIQUID_TESTNET_INFO_URL,
+      HYPERLIQUID_TESTNET_INFO_URL,
+      HYPERLIQUID_TESTNET_INFO_URL,
+      HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
       HYPERLIQUID_TESTNET_INFO_URL,
@@ -77,6 +112,10 @@ describe("Hyperliquid Spot Info transport", () => {
       '{"type":"l2Book","coin":"@1","nSigFigs":5,"mantissa":null}',
       `{"type":"spotClearinghouseState","user":"${accountAddress}"}`,
       `{"type":"userFees","user":"${accountAddress}"}`,
+      `{"type":"orderStatus","user":"${accountAddress}","oid":"${clientOrderId}"}`,
+      `{"type":"frontendOpenOrders","user":"${accountAddress}","dex":""}`,
+      `{"type":"userFillsByTime","user":"${accountAddress}","startTime":1,"endTime":2,"aggregateByTime":false}`,
+      `{"type":"historicalOrders","user":"${accountAddress}"}`,
     ]);
     expect(
       responses.every(
@@ -126,6 +165,50 @@ describe("Hyperliquid Spot Info transport", () => {
       { type: "userFees", user: `0x${"AB".repeat(20)}` },
     ],
     ["fees zero account", { type: "userFees", user: `0x${"0".repeat(40)}` }],
+    [
+      "numeric reconciliation OID",
+      { type: "orderStatus", user: accountAddress, oid: 1 },
+    ],
+    [
+      "uppercase reconciliation CLOID",
+      {
+        type: "orderStatus",
+        user: accountAddress,
+        oid: `0x${"AB".repeat(16)}`,
+      },
+    ],
+    [
+      "non-Spot open-order selector",
+      { type: "frontendOpenOrders", user: accountAddress, dex: "other" },
+    ],
+    [
+      "reversed fill window",
+      {
+        type: "userFillsByTime",
+        user: accountAddress,
+        startTime: 2,
+        endTime: 1,
+        aggregateByTime: false,
+      },
+    ],
+    [
+      "aggregated reconciliation fills",
+      {
+        type: "userFillsByTime",
+        user: accountAddress,
+        startTime: 1,
+        endTime: 2,
+        aggregateByTime: true,
+      },
+    ],
+    [
+      "history extra authority",
+      {
+        type: "historicalOrders",
+        user: accountAddress,
+        dex: "",
+      },
+    ],
   ])("rejects %s before HTTP", async (_label, request) => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const transport = createHyperliquidSpotInfoTransport({ fetch });

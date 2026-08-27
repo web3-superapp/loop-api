@@ -107,7 +107,9 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
   let nowMilliseconds = bookProviderTime + 100;
   const events: string[] = [];
-  const responses: Record<HyperliquidSpotInfoRequest["type"], unknown> = {
+  const responses: Partial<
+    Record<HyperliquidSpotInfoRequest["type"], unknown>
+  > = {
     spotMetaAndAssetCtxs: options.metadata ?? metadataResponse(),
     l2Book: options.book ?? bookResponse(),
     spotClearinghouseState: options.balances ?? balancesResponse(),

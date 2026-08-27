@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addExactUnsignedDecimals,
   compareExactUnsignedDecimalProduct,
   compareExactUnsignedDecimals,
+  divideExactUnsignedDecimals,
   exactUnsignedDecimalSumEquals,
   exactUnsignedDecimalsEqual,
+  multiplyExactUnsignedDecimals,
 } from "../src/features/spot/spot-exact-decimal.js";
 
 describe("Spot exact unsigned decimal arithmetic", () => {
@@ -26,5 +29,14 @@ describe("Spot exact unsigned decimal arithmetic", () => {
     expect(
       compareExactUnsignedDecimalProduct("0.200000000000000001", "50", "10"),
     ).toBe(1);
+    expect(addExactUnsignedDecimals(["0.1", "0.020", "0.003"])).toBe("0.123");
+    expect(multiplyExactUnsignedDecimals("0.2", "50.10")).toBe("10.02");
+  });
+
+  it("returns only finite, bounded exact quotients", () => {
+    expect(divideExactUnsignedDecimals("10.02", "0.2")).toBe("50.1");
+    expect(divideExactUnsignedDecimals("1", "8")).toBe("0.125");
+    expect(divideExactUnsignedDecimals("1", "3")).toBeNull();
+    expect(divideExactUnsignedDecimals("1", "0")).toBeNull();
   });
 });

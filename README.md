@@ -132,7 +132,10 @@ The Spot-only Testnet contract, Mainnet isolation, and renewable Agent lifecycle
 are recorded in Decisions
 [`0014`](docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md),
 [`0015`](docs/decisions/0015-mainnet-separate-release-gate.md), and
-[`0016`](docs/decisions/0016-spot-agent-generation-lifecycle.md).
+[`0016`](docs/decisions/0016-spot-agent-generation-lifecycle.md). Spot projection
+isolation, fenced finalization, and the default-unregistered authoritative read
+boundary are recorded in
+[`0017`](docs/decisions/0017-spot-reconciliation-projection-isolation.md).
 
 ## Quick start
 

@@ -101,6 +101,19 @@ logic or gaining any provider-write capability.
 
 This decision does not enable the Spot worker registration, Hyperliquid
 Exchange writes, signing, Mainnet, cancellation, withdrawals, transfers, or
-automation. The repository finalizer is present, but the authoritative reader,
-runtime validator/handler, and production registration remain separate
-default-closed gates and must preserve the evidence rules in Decision 0014.
+automation. The repository finalizer, strict read-only Hyperliquid Info reader,
+and runtime-validating atomic handler are present. Production registry
+composition remains a separate default-closed gate and must preserve the
+evidence rules in Decision 0014.
+
+The first reader reserves one provider-global Info quota budget before making
+five sequential, individually identified Testnet reads: CLOID order status,
+Spot-scoped open orders, non-aggregated fills in the bounded attempt window,
+recent order history, and Spot balances. It parses OID and trade IDs losslessly,
+requires exact frozen order identity and corroborating history, and derives a
+full fill only from exact decimal fill aggregation. `unknownOid` and temporarily
+missing history remain pending; partial/open/cancelled/unknown statuses,
+truncated or conflicting evidence, negative or ambiguous fees, ancillary fill
+fields, and non-terminating average prices require an operator. The handler
+reparses every reader result and matches terminal authority again before it can
+enter the fenced repository finalizer.

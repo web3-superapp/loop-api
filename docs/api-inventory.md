@@ -194,9 +194,12 @@ grammar as the frozen Spot review rather than an uppercase-only database
 subset. A negative fee/maker rebate, non-terminating
 average-price quotient, partial/open/cancelled result, unknown or incompatible
 status, unbounded evidence, or fee-token ambiguity is not automatically
-finalized. The lane is not connected to the production worker because the
-strict Spot provider reader, runtime result validator/handler, and registry
-composition are not yet present. Spot Agent
+finalized. A strict read-only Spot provider reader and runtime-validating atomic
+handler are present. They use five bounded Testnet Info observations, lossless
+OID/trade-ID parsing, exact decimal fill aggregation, and a second terminal
+authority check before the finalizer. The lane is not connected to the
+production worker because registry composition and nonempty Testnet conformance
+remain separate default-closed gates. Spot Agent
 authorization submission recovery is a separate future lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped
