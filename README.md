@@ -44,6 +44,10 @@ implemented as independently verified slices:
   registered in the main Fastify runtime and generated OpenAPI; their default
   services return a sanitized 503 before any claim, nonce, signer, or provider
   work
+- an uncomposed fake-only Spot submission coordinator verifies coordinator
+  ordering, one journal/nonce winner, the exact fields passed to fake
+  signer/writer ports, DB-deadline admission, and durable
+  unknown/reconciliation handoff without an SDK or network implementation
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is

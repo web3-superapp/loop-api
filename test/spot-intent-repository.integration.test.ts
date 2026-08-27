@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   createPostgresControlPlaneRepository,
@@ -38,10 +46,17 @@ import {
 } from "../src/database/spot-intent-repository.js";
 import {
   createSpotReview,
+  parseSpotIntentResource,
   parseSpotReview,
   SPOT_INTENT_IDEMPOTENCY_SCOPE,
   SPOT_INTENT_REQUEST_DIGEST_VERSION,
 } from "../src/features/spot/spot-intent-contract.js";
+import type {
+  SpotIntentSubmissionPreflight,
+  SpotIocExchangeWriter,
+  SpotIocSigner,
+} from "../src/features/spot/spot-intent-submission.js";
+import { createSpotIntentSubmissionWorkflow } from "../src/features/spot/spot-intent-submission-workflow.js";
 
 const { Pool } = pg;
 const databaseUrl = process.env["DATABASE_URL"];
@@ -1299,6 +1314,76 @@ describe("PostgreSQL Spot intent repository", () => {
       audit_count: "2",
       event_count: "2",
     });
+  });
+
+  it("orchestrates concurrent fake submits through one signer, writer, and nonce", async () => {
+    const authority = await seedAuthority(pool, "workflow-concurrent-submit");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const evidence = await submissionInput(pool, authority, prepared);
+    const preflight = {
+      prepare: vi.fn<SpotIntentSubmissionPreflight["prepare"]>(() =>
+        Promise.resolve({
+          walletEvidence: evidence.walletEvidence,
+          marketEvidence: evidence.marketEvidence,
+          policyEvidence: evidence.policyEvidence,
+        }),
+      ),
+    } satisfies SpotIntentSubmissionPreflight;
+    const signer = {
+      sign: vi.fn<SpotIocSigner["sign"]>(() =>
+        Promise.resolve({
+          r: `0x${"4".repeat(64)}`,
+          s: `0x${"5".repeat(64)}`,
+          v: 27,
+        }),
+      ),
+    } satisfies SpotIocSigner;
+    const writer = {
+      submit: vi.fn<SpotIocExchangeWriter["submit"]>(() => Promise.resolve()),
+    } satisfies SpotIocExchangeWriter;
+    const workflow = createSpotIntentSubmissionWorkflow({
+      repository,
+      preflight,
+      signer,
+      writer,
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, async () =>
+        workflow.submit({
+          ownerUserId: authority.ownerUserId,
+          privyUserId: authority.privyUserId,
+          intentId: prepared.id,
+          requestId: randomUUID(),
+          signal: new AbortController().signal,
+        }),
+      ),
+    );
+
+    expect(
+      results.every((result) => {
+        const state = parseSpotIntentResource(result).state;
+        return state === "submitting" || state === "unknown";
+      }),
+    ).toBe(true);
+    expect(signer.sign).toHaveBeenCalledOnce();
+    expect(writer.submit).toHaveBeenCalledOnce();
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "unknown",
+      attempt_count: 1,
+      reconciliation_status: "pending",
+      operation_version: "2",
+      intent_state: "unknown",
+      intent_version: "2",
+      result_reason_code: "submission_response_unclassified",
+      allocation_count: "1",
+      audit_count: "3",
+      event_count: "3",
+    });
+    expect(snapshot.transport_attempt_id).not.toBeNull();
+    expect(snapshot.allocation_nonce).not.toBeNull();
+    expect(snapshot.reconcile_after).not.toBeNull();
   });
 
   it("atomically records one ambiguous Spot submission and replays it without a second attempt", async () => {

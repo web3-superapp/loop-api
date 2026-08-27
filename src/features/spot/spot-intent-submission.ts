@@ -1,0 +1,82 @@
+import type {
+  BeginSpotIntentSubmissionInput,
+  SpotCanonicalAction,
+  SpotIntentRepository,
+  SpotIntentSubmissionRecoveryRepository,
+} from "../../database/spot-intent-repository.js";
+
+export type SpotIntentSubmissionRepository = Pick<
+  SpotIntentRepository,
+  "findOwned" | "beginSubmission"
+> &
+  Pick<SpotIntentSubmissionRecoveryRepository, "recordSubmissionUnknown">;
+
+export interface SpotIntentSubmissionEvidence {
+  readonly walletEvidence: BeginSpotIntentSubmissionInput["walletEvidence"];
+  readonly marketEvidence: BeginSpotIntentSubmissionInput["marketEvidence"];
+  readonly policyEvidence: BeginSpotIntentSubmissionInput["policyEvidence"];
+}
+
+/**
+ * Resolves fresh server-side authority before the durable transport attempt is
+ * opened. Implementations must be read-only and must never sign or send here.
+ */
+export interface SpotIntentSubmissionPreflight {
+  prepare(input: {
+    readonly ownerUserId: string;
+    readonly privyUserId: string;
+    readonly intentId: string;
+    readonly marketId: string;
+    readonly network: "testnet";
+    readonly action: "spot_ioc_order";
+    readonly expectedReviewSha256: string;
+    readonly requestId: string;
+    readonly signal: AbortSignal;
+  }): Promise<SpotIntentSubmissionEvidence>;
+}
+
+export interface SpotIocSignature {
+  readonly r: string;
+  readonly s: string;
+  readonly v: 27 | 28;
+}
+
+/**
+ * Signs only the exact Testnet IOC action returned by the durable submission
+ * journal. It cannot choose an action, network, nonce, or signer identity.
+ */
+export interface SpotIocSigner {
+  sign(input: {
+    readonly signingRequestId: string;
+    readonly network: "testnet";
+    readonly signerRef: string;
+    readonly expectedSignerAddress: string;
+    readonly action: SpotCanonicalAction;
+    readonly nonce: string;
+    readonly vaultAddress: null;
+    readonly expiresAfter: string;
+    /** Persisted DB deadline; implementations must refuse late signing. */
+    readonly attemptDeadlineAt: string;
+    readonly signal: AbortSignal;
+  }): Promise<SpotIocSignature>;
+}
+
+/**
+ * Sends one already-signed Testnet IOC attempt. Resolve means that the adapter
+ * discarded an unclassified response; reject means transport ambiguity. The
+ * coordinator never retries either outcome. This slice provides fakes only.
+ */
+export interface SpotIocExchangeWriter {
+  submit(input: {
+    readonly transportAttemptId: string;
+    readonly network: "testnet";
+    readonly action: SpotCanonicalAction;
+    readonly nonce: string;
+    readonly signature: SpotIocSignature;
+    readonly vaultAddress: null;
+    readonly expiresAfter: string;
+    /** Persisted DB deadline; implementations must refuse a late send. */
+    readonly attemptDeadlineAt: string;
+    readonly signal: AbortSignal;
+  }): Promise<void>;
+}

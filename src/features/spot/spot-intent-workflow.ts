@@ -18,11 +18,11 @@ function unavailable(): never {
   throw new SpotUnavailableError();
 }
 
-function publicResource(
+export function parseOwnedSpotIntentResource(
   record: SpotIntentRecord,
   ownerUserId: string,
   intentId: string,
-) {
+): ReturnType<typeof parseSpotIntentResource> {
   try {
     const resource = parseSpotIntentResource(record.resource);
     if (
@@ -60,7 +60,7 @@ export function createDefaultClosedSpotIntentWorkflow(
     if (record === null) {
       throw new SpotIntentNotFoundError();
     }
-    return publicResource(record, ownerUserId, intentId);
+    return parseOwnedSpotIntentResource(record, ownerUserId, intentId);
   }
 
   return Object.freeze({

@@ -212,6 +212,14 @@ repository-backed default-closed workflow may return an existing owner-scoped
 public intent resource, but it is not selected by the main HTTP runtime yet;
 the registered routes use unavailable services and stop before any claim,
 submission journal, nonce, signer, or provider work.
+An additional uncomposed fake-only submission coordinator now verifies the
+ordering and fields across preflight -> atomic journal/nonce -> minimal fake
+signer -> single fake writer -> normalized unknown handoff. A conservative
+DB-clock budget and the persisted absolute attempt deadline stop writer
+admission after a slow signer. These are ports and orchestration tests only:
+they do not prove a real resolver, signature conformance, or provider adapter,
+and there is no runtime implementation, SDK, network call, raw provider
+response, or main-app composition.
 Production terminal outcomes, provider writes, and a production signer remain
 unavailable, and no Hyperliquid Node SDK has been installed.
 

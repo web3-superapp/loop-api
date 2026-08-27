@@ -26,6 +26,11 @@ encoder, or alternate Hyperliquid protocol implementation.
 - Result: immediate strict parsing plus read-only reconciliation after any
   ambiguous outcome.
 - Writer: **unavailable**. No Node signing package is installed or composed.
+- Orchestration: an uncomposed fake-only coordinator verifies one call through
+  the minimal signer and writer ports plus unknown/reconciliation handoff after
+  the durable journal wins. The persisted DB deadline bounds fake signing and
+  writer admission. It does not prove signing conformance and is not a provider
+  implementation or runtime capability.
 - Mainnet: absent. Decision 0015 is a boundary, not an activation.
 
 The first public contract is exactly the twelve routes in `contract.json`.

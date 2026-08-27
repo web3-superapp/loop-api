@@ -383,6 +383,11 @@ const submissionValidityRowSchema = z
     policy_evidence_bounded: z.boolean(),
     policy_evidence_covers_attempt: z.boolean(),
     attempt_current: z.boolean(),
+    attempt_remaining_milliseconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS),
   })
   .strict();
 
@@ -671,6 +676,8 @@ export interface SpotIntentSubmissionAttempt {
   readonly operationRecordVersion: string;
   readonly attemptCommittedAt: string;
   readonly attemptDeadlineAt: string;
+  /** DB-clock budget observed before commit; callers must only shorten it. */
+  readonly writeStartBudgetMilliseconds: number;
   readonly nonce: string;
   readonly agentAddress: string;
   readonly signerRef: string;
@@ -1328,7 +1335,7 @@ function assertSubmissionProjection(
   }
 }
 
-function assertSubmissionValidity(value: unknown, finalCheck: boolean): void {
+function assertSubmissionValidity(value: unknown, finalCheck: boolean): number {
   const parsed = submissionValidityRowSchema.safeParse(value);
   if (!parsed.success) {
     return failUnavailable();
@@ -1353,6 +1360,7 @@ function assertSubmissionValidity(value: unknown, finalCheck: boolean): void {
   ) {
     throw new SpotIntentAuthorityStaleError();
   }
+  return validity.attempt_remaining_milliseconds;
 }
 
 async function validateSubmissionWindow(
@@ -1360,7 +1368,7 @@ async function validateSubmissionWindow(
   input: ParsedBeginSpotIntentSubmissionInput,
   authorizationId: string,
   attemptDeadlineAt: string | null,
-): Promise<void> {
+): Promise<number> {
   const result = await client.query<Record<string, unknown>>({
     text: `
       with database_clock as (
@@ -1412,7 +1420,18 @@ async function validateSubmissionWindow(
         submission_window.attempt_deadline_at < $13::timestamptz
           as policy_evidence_covers_attempt,
         submission_window.observed_at
-          < submission_window.attempt_deadline_at as attempt_current
+          < submission_window.attempt_deadline_at as attempt_current,
+        greatest(
+          0,
+          floor(
+            extract(
+              epoch from (
+                submission_window.attempt_deadline_at
+                - submission_window.observed_at
+              )
+            ) * 1000
+          )
+        )::integer as attempt_remaining_milliseconds
       from public.spot_intents as intent
       join public.spot_agent_authorizations as agent_authorization
         on agent_authorization.id = $3
@@ -1440,7 +1459,7 @@ async function validateSubmissionWindow(
       input.policyEvidence.expiresAt,
     ],
   });
-  assertSubmissionValidity(result.rows[0], attemptDeadlineAt !== null);
+  return assertSubmissionValidity(result.rows[0], attemptDeadlineAt !== null);
 }
 
 async function allocateSpotAgentNonce(
@@ -2049,7 +2068,7 @@ async function beginSubmissionTransaction(
   // DB-clock check. If trigger evaluation waits, the subsequent check observes
   // that delay and rolls back the entire journal and nonce high-water advance.
   await client.query("set constraints all immediate");
-  await validateSubmissionWindow(
+  const writeStartBudgetMilliseconds = await validateSubmissionWindow(
     client,
     input,
     authority.authorizationId,
@@ -2079,6 +2098,7 @@ async function beginSubmissionTransaction(
       operationRecordVersion: journal.data.record_version,
       attemptCommittedAt: journal.data.attempt_committed_at.toISOString(),
       attemptDeadlineAt: journal.data.attempt_deadline_at.toISOString(),
+      writeStartBudgetMilliseconds,
       nonce,
       agentAddress: authority.agentAddress,
       signerRef: authority.signerRef,

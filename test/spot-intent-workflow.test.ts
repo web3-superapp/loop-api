@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   SpotIntentRecord,
   SpotIntentRepository,
+  SpotIntentSubmissionAttempt,
+} from "../src/database/spot-intent-repository.js";
+import {
+  SpotIntentAuthorityStaleError,
+  SpotIntentPrepareExpiredError,
 } from "../src/database/spot-intent-repository.js";
 import {
   createSpotReview,
@@ -12,9 +17,22 @@ import {
 import {
   SpotIntentExpiredError,
   SpotIntentNotFoundError,
+  SpotIntentStaleError,
 } from "../src/features/spot/spot-intent-service.js";
+import type {
+  SpotIntentSubmissionEvidence,
+  SpotIntentSubmissionPreflight,
+  SpotIntentSubmissionRepository,
+  SpotIocExchangeWriter,
+  SpotIocSignature,
+  SpotIocSigner,
+} from "../src/features/spot/spot-intent-submission.js";
+import { createSpotIntentSubmissionWorkflow } from "../src/features/spot/spot-intent-submission-workflow.js";
 import { createDefaultClosedSpotIntentWorkflow } from "../src/features/spot/spot-intent-workflow.js";
-import { SpotUnavailableError } from "../src/features/spot/spot-errors.js";
+import {
+  SpotUnavailableError,
+  SpotWalletBindingRequiredError,
+} from "../src/features/spot/spot-errors.js";
 
 const ownerUserId = "11111111-1111-4111-8111-111111111111";
 const foreignOwnerUserId = "22222222-2222-4222-8222-222222222222";
@@ -192,6 +210,162 @@ function recordFor(resource: SpotIntentResource): SpotIntentRecord {
   });
 }
 
+function unknownResource(
+  reasonCode:
+    "submission_transport_ambiguous" | "submission_response_unclassified",
+): SpotIntentResource {
+  return parseSpotIntentResource({
+    intent_id: intentId,
+    state: "unknown",
+    review: review(),
+    submission: { state: "attempted" },
+    result: {
+      state: "unknown",
+      order_id: null,
+      filled_base_size: null,
+      average_fill_price: null,
+      quote_amount: null,
+      fee: null,
+      fee_asset_display_identity: null,
+      observed_at: observedAt,
+      reason_code: reasonCode,
+    },
+    expires_at: expiresAt,
+    created_at: createdAt,
+    updated_at: observedAt,
+  });
+}
+
+function submissionEvidence(): SpotIntentSubmissionEvidence {
+  return Object.freeze({
+    walletEvidence: Object.freeze({
+      ownerUserId,
+      privyUserId: "did:privy:spot-workflow",
+      walletId: "privy-wallet-ref",
+      accountAddress: `0x${"33".repeat(20)}`,
+      accountKind: "master",
+      bindingVersion: "7",
+      verifiedAt: createdAt,
+      expiresAt,
+    }),
+    marketEvidence: Object.freeze({
+      provider: "hyperliquid",
+      network: "testnet",
+      dataset: "spotMetaAndAssetCtxs",
+      marketId,
+      providerCoin: "PURR/USDC",
+      baseTokenIndex: 1,
+      baseTokenId: `0x${"11".repeat(16)}`,
+      quoteTokenIndex: 0,
+      quoteTokenId: `0x${"22".repeat(16)}`,
+      spotPairIndex: 0,
+      exchangeOrderAsset: 10_000,
+      metadataVersion: "meta-v1",
+      metadataSha256: "b".repeat(64),
+      fetchedAt: createdAt,
+      expiresAt,
+    }),
+    policyEvidence: Object.freeze({
+      ownerUserId,
+      intentId,
+      network: "testnet",
+      action: "spot_ioc_order",
+      decision: "allow",
+      policyVersion: "policy-v1",
+      productEnabled: true,
+      legalEligible: true,
+      sanctionsEligible: true,
+      killSwitchOpen: true,
+      signerReady: true,
+      reconciliationReady: true,
+      checkedAt: createdAt,
+      expiresAt,
+    }),
+  });
+}
+
+function submissionAttempt(
+  submitting: SpotIntentRecord,
+): SpotIntentSubmissionAttempt {
+  const attemptCommittedAt = new Date().toISOString();
+  const attemptDeadlineAt = new Date(Date.now() + 10_000).toISOString();
+  return Object.freeze({
+    intentId,
+    network: "testnet",
+    transportAttemptId: "88888888-8888-4888-8888-888888888888",
+    operationRecordVersion: "1",
+    attemptCommittedAt,
+    attemptDeadlineAt,
+    writeStartBudgetMilliseconds: 10_000,
+    nonce: "1760000000123",
+    agentAddress: `0x${"44".repeat(20)}`,
+    signerRef: "privy-server-wallet-ref",
+    canonicalAction: submitting.canonicalAction,
+    vaultAddress: null,
+    expiresAfter: "1787702415000",
+  });
+}
+
+function fakeSubmissionDependencies() {
+  const prepared = recordFor(resourceFor("prepared"));
+  const submitting = recordFor(resourceFor("submitting"));
+  const unclassified = Object.freeze({
+    ...recordFor(unknownResource("submission_response_unclassified")),
+    recordVersion: "2",
+  });
+  const transportAmbiguous = Object.freeze({
+    ...recordFor(unknownResource("submission_transport_ambiguous")),
+    recordVersion: "2",
+  });
+  const attempt = submissionAttempt(submitting);
+  const repository = {
+    findOwned: vi.fn<SpotIntentSubmissionRepository["findOwned"]>(() =>
+      Promise.resolve(prepared),
+    ),
+    beginSubmission: vi.fn<SpotIntentSubmissionRepository["beginSubmission"]>(
+      () => Promise.resolve({ kind: "started", intent: submitting, attempt }),
+    ),
+    recordSubmissionUnknown: vi.fn<
+      SpotIntentSubmissionRepository["recordSubmissionUnknown"]
+    >(() => Promise.resolve({ kind: "recorded", intent: unclassified })),
+  } satisfies SpotIntentSubmissionRepository;
+  const preflight = {
+    prepare: vi.fn<SpotIntentSubmissionPreflight["prepare"]>(() =>
+      Promise.resolve(submissionEvidence()),
+    ),
+  } satisfies SpotIntentSubmissionPreflight;
+  const signature = Object.freeze({
+    r: `0x${"55".repeat(32)}`,
+    s: `0x${"66".repeat(32)}`,
+    v: 27,
+  }) satisfies SpotIocSignature;
+  const signer = {
+    sign: vi.fn<SpotIocSigner["sign"]>(() => Promise.resolve(signature)),
+  } satisfies SpotIocSigner;
+  const writer = {
+    submit: vi.fn<SpotIocExchangeWriter["submit"]>(() => Promise.resolve()),
+  } satisfies SpotIocExchangeWriter;
+  const workflow = createSpotIntentSubmissionWorkflow({
+    repository,
+    preflight,
+    signer,
+    writer,
+  });
+  return {
+    attempt,
+    preflight,
+    prepared,
+    repository,
+    signature,
+    signer,
+    submitting,
+    transportAmbiguous,
+    unclassified,
+    workflow,
+    writer,
+  };
+}
+
 function repositoryWith(
   findOwnedImplementation: SpotIntentRepository["findOwned"],
 ) {
@@ -242,6 +416,8 @@ describe("default-closed Spot intent workflow", () => {
       "signer_ref",
       "transportAttemptId",
       "transport_attempt_id",
+      "writeStartBudgetMilliseconds",
+      "write_start_budget_milliseconds",
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
@@ -362,5 +538,463 @@ describe("default-closed Spot intent workflow", () => {
       SpotIntentExpiredError,
     );
     expect(repository.beginSubmission).not.toHaveBeenCalled();
+  });
+});
+
+describe("fake-only Spot intent submission workflow", () => {
+  it("opens one attempt, signs exact fields, writes once, and hands off as unknown", async () => {
+    const input = fakeSubmissionDependencies();
+    const calls: string[] = [];
+    input.repository.findOwned.mockImplementation(() => {
+      calls.push("find_owned");
+      return Promise.resolve(input.prepared);
+    });
+    input.preflight.prepare.mockImplementation(() => {
+      calls.push("preflight");
+      return Promise.resolve(submissionEvidence());
+    });
+    input.repository.beginSubmission.mockImplementation(() => {
+      calls.push("begin_submission");
+      return Promise.resolve({
+        kind: "started",
+        intent: input.submitting,
+        attempt: input.attempt,
+      });
+    });
+    input.signer.sign.mockImplementation(() => {
+      calls.push("sign");
+      return Promise.resolve(input.signature);
+    });
+    input.writer.submit.mockImplementation(() => {
+      calls.push("write");
+      return Promise.resolve();
+    });
+    input.repository.recordSubmissionUnknown.mockImplementation(() => {
+      calls.push("record_unknown");
+      return Promise.resolve({ kind: "recorded", intent: input.unclassified });
+    });
+
+    const workflowSubmitInput = submitInput();
+    const resource = await input.workflow.submit(workflowSubmitInput);
+
+    expect(resource).toEqual(input.unclassified.resource);
+    expect(calls).toEqual([
+      "find_owned",
+      "preflight",
+      "begin_submission",
+      "sign",
+      "write",
+      "record_unknown",
+    ]);
+    expect(input.preflight.prepare).toHaveBeenCalledWith({
+      ownerUserId,
+      privyUserId: "did:privy:spot-workflow",
+      intentId,
+      marketId,
+      network: "testnet",
+      action: "spot_ioc_order",
+      expectedReviewSha256: input.prepared.reviewSha256,
+      requestId,
+      signal: workflowSubmitInput.signal,
+    });
+    expect(input.repository.beginSubmission).toHaveBeenCalledWith({
+      ownerUserId,
+      intentId,
+      requestId,
+      expectedReviewSha256: input.prepared.reviewSha256,
+      ...submissionEvidence(),
+    });
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    const signingInput = input.signer.sign.mock.calls[0]?.[0];
+    expect(Object.keys(signingInput ?? {}).sort()).toEqual([
+      "action",
+      "attemptDeadlineAt",
+      "expectedSignerAddress",
+      "expiresAfter",
+      "network",
+      "nonce",
+      "signal",
+      "signerRef",
+      "signingRequestId",
+      "vaultAddress",
+    ]);
+    expect(signingInput).toMatchObject({
+      network: "testnet",
+      signerRef: input.attempt.signerRef,
+      expectedSignerAddress: input.attempt.agentAddress,
+      action: input.attempt.canonicalAction,
+      nonce: input.attempt.nonce,
+      vaultAddress: null,
+      expiresAfter: input.attempt.expiresAfter,
+      attemptDeadlineAt: input.attempt.attemptDeadlineAt,
+    });
+    expect(signingInput?.signingRequestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(signingInput?.signingRequestId).not.toBe(requestId);
+    const writerInput = input.writer.submit.mock.calls[0]?.[0];
+    expect(Object.keys(writerInput ?? {}).sort()).toEqual([
+      "action",
+      "attemptDeadlineAt",
+      "expiresAfter",
+      "network",
+      "nonce",
+      "signal",
+      "signature",
+      "transportAttemptId",
+      "vaultAddress",
+    ]);
+    expect(input.writer.submit).toHaveBeenCalledWith({
+      transportAttemptId: input.attempt.transportAttemptId,
+      network: "testnet",
+      action: input.attempt.canonicalAction,
+      nonce: input.attempt.nonce,
+      signature: input.signature,
+      vaultAddress: null,
+      expiresAfter: input.attempt.expiresAfter,
+      attemptDeadlineAt: input.attempt.attemptDeadlineAt,
+      signal: signingInput?.signal,
+    });
+    expect(signingInput?.signal).toBeInstanceOf(AbortSignal);
+    expect(signingInput?.signal).not.toBe(workflowSubmitInput.signal);
+    const recoveryInput =
+      input.repository.recordSubmissionUnknown.mock.calls[0]?.[0];
+    expect(recoveryInput).toMatchObject({
+      ownerUserId,
+      intentId,
+      transportAttemptId: input.attempt.transportAttemptId,
+      expectedOperationRecordVersion: input.attempt.operationRecordVersion,
+      expectedIntentRecordVersion: input.submitting.recordVersion,
+      outcome: {
+        state: "unknown",
+        providerOrderId: null,
+        reasonCode: "submission_response_unclassified",
+      },
+    });
+    expect(recoveryInput?.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(recoveryInput?.requestId).not.toBe(requestId);
+    expect(recoveryInput?.requestId).not.toBe(signingInput?.signingRequestId);
+    expect(JSON.stringify(recoveryInput)).not.toContain(input.signature.r);
+    expect(JSON.stringify(recoveryInput)).not.toContain(input.attempt.nonce);
+    const serialized = JSON.stringify(resource);
+    for (const forbidden of [
+      input.attempt.nonce,
+      input.attempt.agentAddress,
+      input.attempt.signerRef,
+      input.attempt.transportAttemptId,
+      "canonicalAction",
+      "writeStartBudgetMilliseconds",
+      input.signature.r,
+      input.signature.s,
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("records every writer rejection as transport ambiguity without retrying", async () => {
+    const input = fakeSubmissionDependencies();
+    input.writer.submit.mockRejectedValueOnce(
+      new Error("secret provider response after bytes were sent"),
+    );
+    input.repository.recordSubmissionUnknown.mockResolvedValueOnce({
+      kind: "recorded",
+      intent: input.transportAmbiguous,
+    });
+
+    await expect(input.workflow.submit(submitInput())).resolves.toEqual(
+      input.transportAmbiguous.resource,
+    );
+
+    expect(input.writer.submit).toHaveBeenCalledOnce();
+    expect(input.repository.recordSubmissionUnknown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: {
+          state: "unknown",
+          providerOrderId: null,
+          reasonCode: "submission_transport_ambiguous",
+        },
+      }),
+    );
+    expect(
+      JSON.stringify(input.repository.recordSubmissionUnknown.mock.calls),
+    ).not.toContain("secret provider response");
+  });
+
+  it("never signs or writes when a concurrent winner already opened the attempt", async () => {
+    const input = fakeSubmissionDependencies();
+    input.repository.beginSubmission.mockResolvedValueOnce({
+      kind: "already_attempted",
+      intent: input.submitting,
+    });
+
+    await expect(input.workflow.submit(submitInput())).resolves.toEqual(
+      input.submitting.resource,
+    );
+
+    expect(input.preflight.prepare).toHaveBeenCalledOnce();
+    expect(input.repository.beginSubmission).toHaveBeenCalledOnce();
+    expect(input.signer.sign).not.toHaveBeenCalled();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("stops an aborted request before preflight, journal, or nonce allocation", async () => {
+    const input = fakeSubmissionDependencies();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      input.workflow.submit(submitInput(controller.signal)),
+    ).rejects.toBeInstanceOf(SpotUnavailableError);
+
+    expect(input.preflight.prepare).not.toHaveBeenCalled();
+    expect(input.repository.beginSubmission).not.toHaveBeenCalled();
+    expect(input.signer.sign).not.toHaveBeenCalled();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("admits only one fake writer under concurrent submissions", async () => {
+    const input = fakeSubmissionDependencies();
+    let winnerSelected = false;
+    input.repository.beginSubmission.mockImplementation(() => {
+      if (!winnerSelected) {
+        winnerSelected = true;
+        return Promise.resolve({
+          kind: "started",
+          intent: input.submitting,
+          attempt: input.attempt,
+        });
+      }
+      return Promise.resolve({
+        kind: "already_attempted",
+        intent: input.submitting,
+      });
+    });
+
+    const results = await Promise.all([
+      input.workflow.submit(submitInput()),
+      input.workflow.submit(submitInput()),
+    ]);
+
+    expect(
+      results.map((resource) => parseSpotIntentResource(resource).state).sort(),
+    ).toEqual(["submitting", "unknown"]);
+    expect(input.repository.beginSubmission).toHaveBeenCalledTimes(2);
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).toHaveBeenCalledOnce();
+    expect(input.repository.recordSubmissionUnknown).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a journaled attempt for quarantine when signing cannot finish", async () => {
+    const input = fakeSubmissionDependencies();
+    input.signer.sign.mockRejectedValueOnce(
+      new Error("secret remote signer failure"),
+    );
+    input.repository.findOwned
+      .mockResolvedValueOnce(input.prepared)
+      .mockResolvedValueOnce(input.submitting);
+
+    await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+    await expect(input.workflow.submit(submitInput())).resolves.toEqual(
+      input.submitting.resource,
+    );
+
+    expect(input.repository.beginSubmission).toHaveBeenCalledOnce();
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("never invokes the writer after a slow signer crosses the persisted deadline", async () => {
+    const input = fakeSubmissionDependencies();
+    const deadline = Date.parse(input.attempt.attemptDeadlineAt);
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(deadline - 5_000)
+      .mockReturnValueOnce(deadline - 4_999)
+      .mockReturnValue(deadline + 1);
+
+    try {
+      await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+        SpotUnavailableError,
+      );
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(input.repository.beginSubmission).toHaveBeenCalledOnce();
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("refuses a DB budget that cannot preserve the writer safety margin", async () => {
+    const input = fakeSubmissionDependencies();
+    input.repository.beginSubmission.mockResolvedValueOnce({
+      kind: "started",
+      intent: input.submitting,
+      attempt: Object.freeze({
+        ...input.attempt,
+        writeStartBudgetMilliseconds: 500,
+      }),
+    });
+
+    await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+
+    expect(input.repository.beginSubmission).toHaveBeenCalledOnce();
+    expect(input.signer.sign).not.toHaveBeenCalled();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("aborts a pending signer before the persisted writer window", async () => {
+    const input = fakeSubmissionDependencies();
+    input.repository.beginSubmission.mockResolvedValueOnce({
+      kind: "started",
+      intent: input.submitting,
+      attempt: Object.freeze({
+        ...input.attempt,
+        writeStartBudgetMilliseconds: 1_100,
+      }),
+    });
+    input.signer.sign.mockImplementation(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          const rejectDeadline = () => {
+            reject(new Error("fake signer deadline elapsed"));
+          };
+
+          if (signal.aborted) {
+            rejectDeadline();
+            return;
+          }
+          signal.addEventListener("abort", rejectDeadline, { once: true });
+        }),
+    );
+
+    await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("preserves only safe preflight errors and sanitizes unknown failures", async () => {
+    const cases = [
+      [new SpotIntentExpiredError(), SpotIntentExpiredError],
+      [new SpotIntentStaleError(), SpotIntentStaleError],
+      [new SpotWalletBindingRequiredError(), SpotWalletBindingRequiredError],
+      [new SpotUnavailableError(), SpotUnavailableError],
+      [new Error("secret preflight detail"), SpotUnavailableError],
+    ] as const;
+
+    for (const [failure, expected] of cases) {
+      const input = fakeSubmissionDependencies();
+      input.preflight.prepare.mockRejectedValueOnce(failure);
+
+      await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+        expected,
+      );
+      expect(input.repository.beginSubmission).not.toHaveBeenCalled();
+      expect(input.signer.sign).not.toHaveBeenCalled();
+      expect(input.writer.submit).not.toHaveBeenCalled();
+    }
+  });
+
+  it("maps repository expiry, stale authority, and missing races before signing", async () => {
+    const failures = [
+      [new SpotIntentPrepareExpiredError(), SpotIntentExpiredError],
+      [new SpotIntentAuthorityStaleError(), SpotIntentStaleError],
+    ] as const;
+
+    for (const [failure, expected] of failures) {
+      const input = fakeSubmissionDependencies();
+      input.repository.beginSubmission.mockRejectedValueOnce(failure);
+
+      await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+        expected,
+      );
+      expect(input.signer.sign).not.toHaveBeenCalled();
+      expect(input.writer.submit).not.toHaveBeenCalled();
+    }
+
+    const missing = fakeSubmissionDependencies();
+    missing.repository.beginSubmission.mockResolvedValueOnce({
+      kind: "not_found",
+    });
+    await expect(missing.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotIntentNotFoundError,
+    );
+    expect(missing.signer.sign).not.toHaveBeenCalled();
+    expect(missing.writer.submit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed fake signature before the writer boundary", async () => {
+    const input = fakeSubmissionDependencies();
+    input.signer.sign.mockResolvedValueOnce({
+      r: "0xshort",
+      s: input.signature.s,
+      v: 27,
+    });
+
+    await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).not.toHaveBeenCalled();
+    expect(input.repository.recordSubmissionUnknown).not.toHaveBeenCalled();
+  });
+
+  it("accepts an exact recovery replay and sanitizes a missing recovery row", async () => {
+    const replay = fakeSubmissionDependencies();
+    replay.repository.recordSubmissionUnknown.mockResolvedValueOnce({
+      kind: "already_recorded",
+      intent: replay.unclassified,
+    });
+    await expect(replay.workflow.submit(submitInput())).resolves.toEqual(
+      replay.unclassified.resource,
+    );
+    expect(replay.writer.submit).toHaveBeenCalledOnce();
+
+    const missing = fakeSubmissionDependencies();
+    missing.repository.recordSubmissionUnknown.mockResolvedValueOnce({
+      kind: "not_found",
+    });
+    await expect(missing.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+    expect(missing.writer.submit).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a writer when unknown persistence fails", async () => {
+    const input = fakeSubmissionDependencies();
+    input.repository.recordSubmissionUnknown.mockRejectedValueOnce(
+      new Error("secret persistence failure"),
+    );
+    input.repository.findOwned
+      .mockResolvedValueOnce(input.prepared)
+      .mockResolvedValueOnce(input.submitting);
+
+    await expect(input.workflow.submit(submitInput())).rejects.toBeInstanceOf(
+      SpotUnavailableError,
+    );
+    await expect(input.workflow.submit(submitInput())).resolves.toEqual(
+      input.submitting.resource,
+    );
+
+    expect(input.repository.beginSubmission).toHaveBeenCalledOnce();
+    expect(input.signer.sign).toHaveBeenCalledOnce();
+    expect(input.writer.submit).toHaveBeenCalledOnce();
+    expect(input.repository.recordSubmissionUnknown).toHaveBeenCalledOnce();
   });
 });
