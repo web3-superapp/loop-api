@@ -197,9 +197,13 @@ status, unbounded evidence, or fee-token ambiguity is not automatically
 finalized. A strict read-only Spot provider reader and runtime-validating atomic
 handler are present. They use five bounded Testnet Info observations, lossless
 OID/trade-ID parsing, exact decimal fill aggregation, and a second terminal
-authority check before the finalizer. The lane is not connected to the
-production worker because registry composition and nonempty Testnet conformance
-remain separate default-closed gates. Spot Agent
+authority check before the finalizer. Production composition exposes the lane
+only behind the independent default-false
+`HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED` worker gate. It uses the Spot
+repository as its lease/control plane and shares the process identity, abort
+lifecycle, and provider-global quota with the generic worker without enabling
+the retained Perp reader. The flag remains off until nonempty Testnet
+conformance. Spot Agent
 authorization submission recovery is a separate future lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped

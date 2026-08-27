@@ -39,6 +39,8 @@ describe("standalone reconciliation worker process", () => {
           NODE_ENV: "test",
           LOG_LEVEL: "info",
           DATABASE_URL: databaseUrl,
+          HYPERLIQUID_RECONCILIATION_READS_ENABLED: "false",
+          HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: "false",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },

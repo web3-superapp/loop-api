@@ -32,6 +32,7 @@ describe("loadReconciliationWorkerConfig", () => {
       databaseConnectionTimeoutMs: 3_000,
       databaseStatementTimeoutMs: 5_000,
       hyperliquidReconciliationReads: null,
+      hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
@@ -52,6 +53,45 @@ describe("loadReconciliationWorkerConfig", () => {
         windowDurationSeconds: 60,
         weightCapacity: 720,
       },
+      hyperliquidSpotReconciliationReads: null,
+    });
+  });
+
+  it("keeps the independent Perp capability off when only Spot reads are enabled", () => {
+    const environment = validEnvironment();
+    environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] = "true";
+    environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"] = "s".repeat(32);
+    environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] = "840";
+
+    expect(loadReconciliationWorkerConfig(environment)).toMatchObject({
+      hyperliquidReconciliationReads: null,
+      hyperliquidSpotReconciliationReads: {
+        quotaHmacSecret: "s".repeat(32),
+        policyVersion: "hyperliquid_info_v1",
+        windowDurationSeconds: 60,
+        weightCapacity: 840,
+      },
+    });
+  });
+
+  it("binds enabled Perp and Spot readers to the same quota capability", () => {
+    const environment = validEnvironment();
+    environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] = "true";
+    environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] = "true";
+    environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"] = "b".repeat(32);
+    environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] = "900";
+
+    const config = loadReconciliationWorkerConfig(environment);
+
+    expect(config.hyperliquidReconciliationReads).not.toBeNull();
+    expect(config.hyperliquidSpotReconciliationReads).toBe(
+      config.hyperliquidReconciliationReads,
+    );
+    expect(config.hyperliquidSpotReconciliationReads).toEqual({
+      quotaHmacSecret: "b".repeat(32),
+      policyVersion: "hyperliquid_info_v1",
+      windowDurationSeconds: 60,
+      weightCapacity: 900,
     });
   });
 
@@ -69,9 +109,33 @@ describe("loadReconciliationWorkerConfig", () => {
     );
   });
 
+  it("fails closed when Spot reconciliation reads lack a strong quota secret", () => {
+    const environment = validEnvironment();
+    environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] = "true";
+
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
+      /Hyperliquid Spot reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET/,
+    );
+
+    environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"] = "too-short";
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
+      /HYPERLIQUID_INFO_QUOTA_HMAC_SECRET/,
+    );
+  });
+
   it("rejects a malformed reconciliation switch independently of the API flag", () => {
     const environment = validEnvironment();
     environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] = "malformed";
+
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
+      ConfigurationError,
+    );
+  });
+
+  it("rejects a malformed Spot reconciliation switch independently of the Perp switch", () => {
+    const environment = validEnvironment();
+    environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] = "false";
+    environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] = "malformed";
 
     expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
       ConfigurationError,

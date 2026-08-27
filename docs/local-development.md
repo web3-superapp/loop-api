@@ -125,24 +125,32 @@ persisted Agent validity has elapsed. It uses fresh request UUIDs, never loads a
 signer or provider credential, and can be temporarily disabled with
 `SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false`.
 
-To enable the separate narrow Testnet order reader, add all three values to
-ignored `.env.local`:
+To enable one of the separate narrow Testnet order readers, configure the
+shared quota and only the intended product gate in ignored `.env.local`:
 
 ```text
-HYPERLIQUID_RECONCILIATION_READS_ENABLED=true
+# Retained Perp limit-order reader; leave false for Spot-only work.
+HYPERLIQUID_RECONCILIATION_READS_ENABLED=false
+# Dedicated Spot IOC reader.
+HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED=true
 HYPERLIQUID_INFO_QUOTA_HMAC_SECRET=<independent-secret-at-least-32-characters>
 HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE=960
 ```
 
 The switch is independent from the HTTP process's
 `HYPERLIQUID_PRIVATE_READS_ENABLED`. An enabled worker with a missing or weak
-quota secret fails at startup. When API and worker share an outbound IP, every
+quota secret fails at startup. The two worker gates are independent and can be
+enabled separately; Spot-only operation does not activate Perp reads. When API
+and worker share an outbound IP, every
 replica must share this quota secret, capacity, policy, and PostgreSQL database
 so the 960-weight global budget remains one bucket. The adapter is fixed to
 Hyperliquid Testnet and may only read `orderStatus`, open orders, bounded fills,
-and clearinghouse state. It can atomically finalize a strictly matching Core
-limit `order`; market orders, modify, batch-modify, cancel, leverage,
-isolated-margin, unknown domains, and ambiguous evidence are parked as
+recent order history, and clearinghouse state. The retained reader can
+atomically finalize a strictly matching Core limit `order`. The dedicated Spot
+lane can finalize only a complete reviewed IOC fill, exact documented IOC
+no-fill, or allowlisted rejection. Partial/open/cancelled/unknown statuses,
+truncated or conflicting evidence, market orders, modify, batch-modify, cancel,
+leverage, isolated-margin, and unknown domains are parked as
 `operator_required`. It never loads a Privy credential, wallet key, signer,
 Exchange adapter, transfer executor, or relay, and it never submits or replays
 provider bytes.

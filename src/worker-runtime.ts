@@ -8,6 +8,7 @@ import type { ControlPlaneRepository } from "./database/control-plane-repository
 import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
+import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
 import { createReconciliationWorkerReaders } from "./reconciliation-worker-readers.js";
 import type {
   ReconciliationWorkerLogFields,
@@ -35,6 +36,7 @@ export interface ReconciliationWorkerDatabase {
   readonly controlPlane: ReconciliationControlPlane &
     Pick<ControlPlaneRepository, "consumeIssuanceQuota">;
   readonly perpReconciliation: PerpReconciliationRepository;
+  readonly spotReconciliation: SpotReconciliationRepository;
   readonly spotAgentAuthorizations: Pick<
     SpotAgentAuthorizationRepository,
     "expireElapsedPrepared" | "retireElapsedAgentIdentities"
@@ -125,19 +127,35 @@ export async function runReconciliationWorker(
       return;
     }
 
+    const readers = createReconciliationWorkerReaders({
+      config: options.config,
+      database,
+    });
+    const onInfrastructureBackoff: NonNullable<
+      CreateReconciliationWorkerOptions["onInfrastructureBackoff"]
+    > = (event) => {
+      options.logger.warn(
+        { ...logFields(), ...event },
+        "LOOP reconciliation worker infrastructure retry scheduled",
+      );
+    };
     const worker = workerFactory({
       controlPlane: database.controlPlane,
-      readers: createReconciliationWorkerReaders({
-        config: options.config,
-        database,
-      }),
-      onInfrastructureBackoff: (event) => {
-        options.logger.warn(
-          { ...logFields(), ...event },
-          "LOOP reconciliation worker infrastructure retry scheduled",
-        );
-      },
+      readers,
+      onInfrastructureBackoff,
     });
+    const spotWorker =
+      options.config.hyperliquidSpotReconciliationReads === null
+        ? null
+        : workerFactory({
+            controlPlane: database.spotReconciliation,
+            readers,
+            workerId: worker.workerId,
+            onInfrastructureBackoff,
+          });
+    if (spotWorker !== null && spotWorker.workerId !== worker.workerId) {
+      throw new Error("Spot reconciliation worker identity mismatch");
+    }
     const lifecycleWorker = options.config.spotAgentLifecycleMaintenanceEnabled
       ? lifecycleWorkerFactory({
           maintenance: database.spotAgentAuthorizations,
@@ -156,6 +174,9 @@ export async function runReconciliationWorker(
     );
     const loops = [
       Promise.resolve().then(() => worker.run(controller.signal)),
+      ...(spotWorker === null
+        ? []
+        : [Promise.resolve().then(() => spotWorker.run(controller.signal))]),
       ...(lifecycleWorker === null
         ? []
         : [

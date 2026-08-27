@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { loadReconciliationWorkerConfig } from "../src/config.js";
 import type { PerpReconciliationRepository } from "../src/features/perp/perp-reconciliation-contract.js";
+import type { SpotReconciliationRepository } from "../src/features/spot/spot-reconciliation-contract.js";
 import type { ReconciliationWorkerLogger } from "../src/reconciliation-worker-logger.js";
 import type { SpotAgentLifecycleWorker } from "../src/spot-agent-lifecycle-worker.js";
-import type { ReconciliationWorker } from "../src/worker.js";
+import type {
+  CreateReconciliationWorkerOptions,
+  ReconciliationWorker,
+} from "../src/worker.js";
 import {
   runReconciliationWorker,
   type ReconciliationWorkerDatabase,
@@ -21,6 +25,7 @@ interface TestSignalSource extends WorkerSignalSource {
 function workerConfig(
   reconciliationReadsEnabled = false,
   spotAgentLifecycleMaintenanceEnabled = false,
+  spotReconciliationReadsEnabled = false,
 ) {
   return loadReconciliationWorkerConfig({
     NODE_ENV: "test",
@@ -30,9 +35,11 @@ function workerConfig(
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: reconciliationReadsEnabled
       ? "true"
       : "false",
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED:
+      spotReconciliationReadsEnabled ? "true" : "false",
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
       spotAgentLifecycleMaintenanceEnabled ? "true" : "false",
-    ...(reconciliationReadsEnabled
+    ...(reconciliationReadsEnabled || spotReconciliationReadsEnabled
       ? { HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: "q".repeat(32) }
       : {}),
   });
@@ -75,6 +82,7 @@ function fakeDatabase(events: string[]): ReconciliationWorkerDatabase {
   return {
     controlPlane: {} as ReconciliationWorkerDatabase["controlPlane"],
     perpReconciliation: {} as PerpReconciliationRepository,
+    spotReconciliation: {} as SpotReconciliationRepository,
     spotAgentAuthorizations: {
       expireElapsedPrepared: vi.fn(() => Promise.resolve({ expiredCount: 0 })),
       retireElapsedAgentIdentities: vi.fn(() =>
@@ -168,6 +176,117 @@ describe("reconciliation worker runtime", () => {
     });
 
     expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("keeps the independent Spot reconciliation worker default-closed", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    Object.defineProperty(database, "spotReconciliation", {
+      configurable: true,
+      get: () => {
+        throw new Error("disabled Spot repository must not be accessed");
+      },
+    });
+    const createWorker = vi.fn<
+      (options: CreateReconciliationWorkerOptions) => ReconciliationWorker
+    >(() => fakeWorker(vi.fn(() => Promise.resolve())));
+
+    await runReconciliationWorker({
+      config: workerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker,
+    });
+
+    expect(createWorker).toHaveBeenCalledOnce();
+    const genericOptions = createWorker.mock.calls[0]?.[0];
+    expect(genericOptions?.controlPlane).toBe(database.controlPlane);
+    expect(
+      genericOptions?.readers?.find("hyperliquid", "spot_intent"),
+    ).toBeUndefined();
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("creates a fenced Spot worker with the generic worker identity and shared registry", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const createdOptions: CreateReconciliationWorkerOptions[] = [];
+    const runSignals: AbortSignal[] = [];
+
+    await runReconciliationWorker({
+      config: workerConfig(false, false, true),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: (options) => {
+        const index = createdOptions.push(options) - 1;
+        return fakeWorker(
+          vi.fn((signal: AbortSignal) => {
+            runSignals.push(signal);
+            events.push(index === 0 ? "run-generic" : "run-spot");
+            return Promise.resolve();
+          }),
+        );
+      },
+    });
+
+    expect(createdOptions).toHaveLength(2);
+    const genericOptions = createdOptions[0];
+    const spotOptions = createdOptions[1];
+    expect(genericOptions?.controlPlane).toBe(database.controlPlane);
+    expect(genericOptions?.workerId).toBeUndefined();
+    expect(spotOptions?.controlPlane).toBe(database.spotReconciliation);
+    expect(spotOptions?.workerId).toBe(workerId);
+    expect(spotOptions?.readers).toBe(genericOptions?.readers);
+    const spotHandler = spotOptions?.readers?.find(
+      "hyperliquid",
+      "spot_intent",
+    );
+    expect(spotHandler?.mode).toBe("atomic_domain");
+    expect(
+      spotHandler?.mode === "atomic_domain"
+        ? typeof spotHandler.run
+        : "missing",
+    ).toBe("function");
+    expect(
+      spotOptions?.readers?.find("hyperliquid", "perp_intent"),
+    ).toBeUndefined();
+    expect(runSignals).toHaveLength(2);
+    expect(runSignals[1]).toBe(runSignals[0]);
+    expect(events).toEqual(["ping", "run-generic", "run-spot", "close"]);
+  });
+
+  it("fails closed before either loop runs when the Spot worker identity diverges", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const genericRun = vi.fn(() => Promise.resolve());
+    const spotRun = vi.fn(() => Promise.resolve());
+    let workerIndex = 0;
+
+    await expect(
+      runReconciliationWorker({
+        config: workerConfig(false, false, true),
+        logger: fakeLogger(),
+        signalSource: fakeSignalSource(),
+        createDatabase: () => database,
+        createWorker: () => {
+          if (workerIndex++ === 0) {
+            return fakeWorker(genericRun);
+          }
+
+          return {
+            ...fakeWorker(spotRun),
+            workerId: "10d15c5c-d334-4ff6-bdad-eebefef02137",
+          };
+        },
+      }),
+    ).rejects.toThrowError(/Spot reconciliation worker identity mismatch/);
+
+    expect(genericRun).not.toHaveBeenCalled();
+    expect(spotRun).not.toHaveBeenCalled();
+    expect(events).toEqual(["ping", "close"]);
+    expect(database.close).toHaveBeenCalledOnce();
   });
 
   it("runs the database-only Spot Agent lifecycle loop only when enabled", async () => {
@@ -343,6 +462,107 @@ describe("reconciliation worker runtime", () => {
     expect(events).toEqual(["ping", "reconciliation-aborted", "close"]);
     expect(database.close).toHaveBeenCalledOnce();
   });
+
+  it.each(["generic", "spot"] as const)(
+    "aborts the sibling and closes once when the %s reconciliation loop fails",
+    async (failingLoop) => {
+      const events: string[] = [];
+      const database = fakeDatabase(events);
+      const failure = new Error(`${failingLoop} private failure`);
+      let workerIndex = 0;
+
+      await expect(
+        runReconciliationWorker({
+          config: workerConfig(false, false, true),
+          logger: fakeLogger(),
+          signalSource: fakeSignalSource(),
+          createDatabase: () => database,
+          createWorker: () => {
+            const loop = workerIndex++ === 0 ? "generic" : "spot";
+            return fakeWorker(
+              vi.fn((signal: AbortSignal) => {
+                events.push(`${loop}-started`);
+                if (loop === failingLoop) {
+                  return Promise.reject(failure);
+                }
+                return new Promise<void>((resolve) => {
+                  const finish = () => {
+                    events.push(`${loop}-aborted`);
+                    resolve();
+                  };
+                  if (signal.aborted) {
+                    finish();
+                    return;
+                  }
+                  signal.addEventListener("abort", finish, { once: true });
+                });
+              }),
+            );
+          },
+        }),
+      ).rejects.toBe(failure);
+
+      const sibling = failingLoop === "generic" ? "spot" : "generic";
+      expect(events).toContain("generic-started");
+      expect(events).toContain("spot-started");
+      expect(events).toContain(`${sibling}-aborted`);
+      expect(events.at(-1)).toBe("close");
+      expect(database.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["generic", "spot", "lifecycle"] as const)(
+    "aborts every sibling before close when all loops run and %s fails",
+    async (failingLoop) => {
+      const events: string[] = [];
+      const database = fakeDatabase(events);
+      const failure = new Error(`${failingLoop} private failure`);
+      let workerIndex = 0;
+      const runLoop = (loop: "generic" | "spot" | "lifecycle") =>
+        vi.fn((signal: AbortSignal) => {
+          events.push(`${loop}-started`);
+          if (loop === failingLoop) {
+            return Promise.reject(failure);
+          }
+
+          return new Promise<void>((resolve) => {
+            const finish = () => {
+              events.push(`${loop}-aborted`);
+              resolve();
+            };
+            if (signal.aborted) {
+              finish();
+              return;
+            }
+            signal.addEventListener("abort", finish, { once: true });
+          });
+        });
+
+      await expect(
+        runReconciliationWorker({
+          config: workerConfig(false, true, true),
+          logger: fakeLogger(),
+          signalSource: fakeSignalSource(),
+          createDatabase: () => database,
+          createWorker: () => {
+            const loop = workerIndex++ === 0 ? "generic" : "spot";
+            return fakeWorker(runLoop(loop));
+          },
+          createLifecycleWorker: () =>
+            fakeLifecycleWorker(runLoop("lifecycle")),
+        }),
+      ).rejects.toBe(failure);
+
+      for (const loop of ["generic", "spot", "lifecycle"] as const) {
+        expect(events).toContain(`${loop}-started`);
+        if (loop !== failingLoop) {
+          expect(events).toContain(`${loop}-aborted`);
+        }
+      }
+      expect(events.at(-1)).toBe("close");
+      expect(database.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("closes the database without creating a worker when readiness fails", async () => {
     const events: string[] = [];

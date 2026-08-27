@@ -99,12 +99,20 @@ The dedicated Spot lane can reuse the tested reconciliation deadlines,
 backoff, attempt budget, and process lifecycle without importing Perp domain
 logic or gaining any provider-write capability.
 
-This decision does not enable the Spot worker registration, Hyperliquid
-Exchange writes, signing, Mainnet, cancellation, withdrawals, transfers, or
-automation. The repository finalizer, strict read-only Hyperliquid Info reader,
-and runtime-validating atomic handler are present. Production registry
-composition remains a separate default-closed gate and must preserve the
-evidence rules in Decision 0014.
+This decision does not enable Hyperliquid Exchange writes, signing, Mainnet,
+cancellation, withdrawals, transfers, or automation. The repository finalizer,
+strict read-only Hyperliquid Info reader, and runtime-validating atomic handler
+are present. Production composition registers the Spot tuple only when the
+independent `HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED=true` gate is
+explicitly set. Its default is false, it does not enable the retained Perp
+reader, and it must remain false until nonempty Testnet conformance passes.
+
+Because the generic control plane deliberately excludes Spot, the process runs
+the gated Spot lane through a second worker shell backed by the Spot repository.
+It shares the process worker UUID, abort controller, provider-global quota,
+reader registry, retry policy, shutdown, and database lifecycle with the
+generic shell, while each lane retains its own non-overlapping lease source. A
+failure in either loop aborts and awaits the other before PostgreSQL closes.
 
 The first reader reserves one provider-global Info quota budget before making
 five sequential, individually identified Testnet reads: CLOID order status,

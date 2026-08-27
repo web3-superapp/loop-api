@@ -123,6 +123,7 @@ const reconciliationWorkerEnvironmentSchema = z
       "silent",
     ]),
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: booleanString,
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: booleanString,
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
@@ -133,13 +134,15 @@ const reconciliationWorkerEnvironmentSchema = z
   })
   .superRefine((value, context) => {
     if (
-      value.HYPERLIQUID_RECONCILIATION_READS_ENABLED &&
-      value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined
+      value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined &&
+      (value.HYPERLIQUID_RECONCILIATION_READS_ENABLED ||
+        value.HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED)
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Hyperliquid reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
+        message: value.HYPERLIQUID_RECONCILIATION_READS_ENABLED
+          ? "Hyperliquid reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"
+          : "Hyperliquid Spot reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
         path: ["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
       });
     }
@@ -206,6 +209,7 @@ export interface ReconciliationWorkerConfig {
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
   readonly hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null;
+  readonly hyperliquidSpotReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly spotAgentLifecycleMaintenanceEnabled: boolean;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
@@ -384,8 +388,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
 
 /**
  * The reconciliation process deliberately has no HTTP or provider credential
- * configuration. Its one read-only provider capability has a separate,
- * default-off switch and never inherits the API process's private-read flag.
+ * configuration. Its read-only provider capabilities have independent,
+ * default-off switches and never inherit the API process's private-read flag.
  */
 export function loadReconciliationWorkerConfig(
   environment: NodeJS.ProcessEnv,
@@ -395,6 +399,8 @@ export function loadReconciliationWorkerConfig(
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
     HYPERLIQUID_RECONCILIATION_READS_ENABLED:
       environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED:
+      environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] ?? "false",
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
       environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
@@ -418,16 +424,18 @@ export function loadReconciliationWorkerConfig(
 
   const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
   assertDatabaseUrl(databaseUrl);
-  let hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null =
-    null;
-  if (parsed.data.HYPERLIQUID_RECONCILIATION_READS_ENABLED) {
+  let reconciliationReadCapability: HyperliquidPrivateReadsConfig | null = null;
+  if (
+    parsed.data.HYPERLIQUID_RECONCILIATION_READS_ENABLED ||
+    parsed.data.HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED
+  ) {
     const quotaHmacSecret = parsed.data.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET;
     if (quotaHmacSecret === undefined) {
       throw new ConfigurationError([
         "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: required when reconciliation reads are enabled",
       ]);
     }
-    hyperliquidReconciliationReads = Object.freeze({
+    reconciliationReadCapability = Object.freeze({
       quotaHmacSecret,
       policyVersion: "hyperliquid_info_v1",
       windowDurationSeconds: 60,
@@ -442,7 +450,14 @@ export function loadReconciliationWorkerConfig(
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
-    hyperliquidReconciliationReads,
+    hyperliquidReconciliationReads: parsed.data
+      .HYPERLIQUID_RECONCILIATION_READS_ENABLED
+      ? reconciliationReadCapability
+      : null,
+    hyperliquidSpotReconciliationReads: parsed.data
+      .HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED
+      ? reconciliationReadCapability
+      : null,
     spotAgentLifecycleMaintenanceEnabled:
       parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
     serviceName: "loop-reconciliation-worker",

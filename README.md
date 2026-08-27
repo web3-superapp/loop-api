@@ -61,7 +61,9 @@ implemented as independently verified slices:
   abort-safe shutdown, and an independently buildable image; it also runs
   default-on database-only Spot Agent expiry/retirement maintenance. A
   default-off fixed-Testnet limit-order reader can atomically finalize generic
-  and Perp state, while every unsupported action remains operator-held
+  and Perp state. A separately gated Spot IOC reader uses its dedicated
+  projection-safe lane; every unsupported or ambiguous action remains
+  operator-held
 - a committed, deterministic OpenAPI artifact with a drift check
 - unit, contract, worker, and PostgreSQL integration gates; a high-confidence
   tracked-secret guard; linting; type checking; production compilation; and
@@ -88,12 +90,12 @@ evaluator or scheduler, Firebase device-token/delivery path, notification
 inbox, or social graph.
 
 The standalone worker makes bounded lifecycle updates in PostgreSQL, but its
-provider boundary remains read-only. Its Hyperliquid limit-order reconciliation
-capability is default-off and has not passed a nonempty Testnet-account
-conformance or deployment gate. It has no signer, executor, replay path,
-transfer finalizer, or provider-mutation capability; market orders, modify,
-batch-modify, cancel, leverage, and isolated-margin reconciliation remain
-operator-held.
+provider boundary remains read-only. Its retained Perp limit-order and dedicated
+Spot IOC reconciliation capabilities are independently default-off and have not
+passed a nonempty Testnet-account conformance or deployment gate. It has no
+signer, executor, replay path, transfer finalizer, or provider-mutation
+capability; market orders, modify, batch-modify, cancel, leverage, and
+isolated-margin reconciliation remain operator-held.
 
 Current product decisions are summarized in
 [`docs/product-decisions.md`](docs/product-decisions.md). The runtime decision is
@@ -162,7 +164,9 @@ generations. `SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false` temporarily
 disables that maintenance. Any due unsupported provider domain or action is
 parked for an operator instead of guessed or replayed. Explicitly setting
 `HYPERLIQUID_RECONCILIATION_READS_ENABLED=true` plus the independent quota
-secret enables only the fixed-Testnet, read-only limit-order evidence path. No
+secret enables only the retained fixed-Testnet Perp limit-order evidence path.
+`HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED=true` independently enables the
+strict Spot IOC evidence lane. Both share one provider-global quota; neither
 setting enables submission or replay.
 
 The safe default listens on `http://127.0.0.1:3000` only.
