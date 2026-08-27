@@ -29,6 +29,22 @@ import {
   createProfileService,
   type ProfileService,
 } from "./features/profile/profile-service.js";
+import {
+  createUnavailableSpotAgentAuthorizationService,
+  type SpotAgentAuthorizationService,
+} from "./features/spot/spot-agent-authorization-service.js";
+import {
+  createUnavailableSpotIntentService,
+  type SpotIntentService,
+} from "./features/spot/spot-intent-service.js";
+import {
+  createUnavailableSpotMarketService,
+  type SpotMarketService,
+} from "./features/spot/spot-market-service.js";
+import {
+  createUnavailableSpotWalletBindingService,
+  type SpotWalletBindingService,
+} from "./features/spot/spot-wallet-binding-service.js";
 import { createPerpPrivateReadCursorCodec } from "./features/perp/private-read-cursor.js";
 import { createPerpPrivateReadService } from "./features/perp/private-read-service.js";
 import {
@@ -85,6 +101,10 @@ import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
 import { registerPerpWalletBindingRoutes } from "./routes/perp-wallet-binding.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerStreamTokenRoutes } from "./routes/stream-tokens.js";
+import { registerSpotAgentAuthorizationRoutes } from "./routes/spot-agent-authorizations.js";
+import { registerSpotIntentRoutes } from "./routes/spot-intents.js";
+import { registerSpotMarketDataRoutes } from "./routes/spot-market-data.js";
+import { registerSpotWalletBindingRoutes } from "./routes/spot-wallet-binding.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 
@@ -104,6 +124,10 @@ export interface BuildAppOptions {
   readonly profileService?: ProfileService;
   readonly watchlistService?: WatchlistService;
   readonly alertService?: AlertService;
+  readonly spotMarketService?: SpotMarketService;
+  readonly spotIntentService?: SpotIntentService;
+  readonly spotWalletBindingService?: SpotWalletBindingService;
+  readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -281,6 +305,11 @@ export async function buildApp(
             "Authenticated Hyperliquid Testnet Core perpetual interfaces",
         },
         {
+          name: "spot",
+          description:
+            "Authenticated Hyperliquid Testnet Spot interfaces; provider capabilities remain default-closed",
+        },
+        {
           name: "transfer",
           description:
             "Authenticated Privy same-chain transfer interfaces; capability remains unavailable",
@@ -429,6 +458,16 @@ export async function buildApp(
     createWatchlistService({ repository: database.watchlists });
   const alertService =
     options.alertService ?? createAlertService({ repository: database.alerts });
+  const spotMarketService =
+    options.spotMarketService ?? createUnavailableSpotMarketService();
+  const spotIntentService =
+    options.spotIntentService ?? createUnavailableSpotIntentService();
+  const spotWalletBindingService =
+    options.spotWalletBindingService ??
+    createUnavailableSpotWalletBindingService();
+  const spotAgentAuthorizationService =
+    options.spotAgentAuthorizationService ??
+    createUnavailableSpotAgentAuthorizationService();
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -463,6 +502,26 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     alertService,
+  );
+  registerSpotMarketDataRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    spotMarketService,
+  );
+  registerSpotIntentRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    spotIntentService,
+  );
+  registerSpotWalletBindingRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    spotWalletBindingService,
+  );
+  registerSpotAgentAuthorizationRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    spotAgentAuthorizationService,
   );
   registerPerpWalletBindingRoutes(
     app,

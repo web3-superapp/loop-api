@@ -158,6 +158,72 @@ describe("committed OpenAPI artifact", () => {
         "deletePerpWalletBinding",
       ],
     ] as const;
+    const spotOperations = [
+      [
+        document.paths["/v1/spot/config"]?.["get"],
+        "getSpotConfig",
+        ["200", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/markets/{market_id}/facts"]?.["get"],
+        "getSpotMarketFacts",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/balances"]?.["get"],
+        "getSpotBalances",
+        ["200", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/intents"]?.["post"],
+        "prepareSpotIntent",
+        ["201", "400", "401", "409", "429", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/intents/{intent_id}"]?.["get"],
+        "getSpotIntent",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/intents/{intent_id}/submit"]?.["post"],
+        "submitSpotIntent",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/wallet-binding"]?.["get"],
+        "getSpotWalletBinding",
+        ["200", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/wallet-binding"]?.["put"],
+        "putSpotWalletBinding",
+        ["200", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/wallet-binding"]?.["delete"],
+        "deleteSpotWalletBinding",
+        ["200", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/agent-authorizations"]?.["post"],
+        "issueSpotAgentAuthorization",
+        ["201", "400", "401", "409", "500", "503"],
+      ],
+      [
+        document.paths["/v1/spot/agent-authorizations/{authorization_id}"]?.[
+          "get"
+        ],
+        "getSpotAgentAuthorization",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+      [
+        document.paths[
+          "/v1/spot/agent-authorizations/{authorization_id}/signatures"
+        ]?.["post"],
+        "submitSpotAgentAuthorizationSignature",
+        ["200", "400", "401", "404", "409", "500", "503"],
+      ],
+    ] as const;
 
     expect(document.openapi).toBe("3.1.0");
     expect(document.servers).toEqual([
@@ -187,6 +253,16 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/wallet-binding",
       "/v1/profile",
       "/v1/profile/privacy",
+      "/v1/spot/agent-authorizations",
+      "/v1/spot/agent-authorizations/{authorization_id}",
+      "/v1/spot/agent-authorizations/{authorization_id}/signatures",
+      "/v1/spot/balances",
+      "/v1/spot/config",
+      "/v1/spot/intents",
+      "/v1/spot/intents/{intent_id}",
+      "/v1/spot/intents/{intent_id}/submit",
+      "/v1/spot/markets/{market_id}/facts",
+      "/v1/spot/wallet-binding",
       "/v1/transfer/assets",
       "/v1/transfer/authorize",
       "/v1/transfer/current-result",
@@ -199,7 +275,7 @@ describe("committed OpenAPI artifact", () => {
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
-    expect(operationIds).toHaveLength(40);
+    expect(operationIds).toHaveLength(52);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapCurrentUser",
@@ -296,7 +372,10 @@ describe("committed OpenAPI artifact", () => {
         `responses.${successStatus}.headers.cache-control.schema.const`,
         "no-store",
       );
-      const serializedRequest = JSON.stringify(operation?.requestBody ?? {});
+      const serializedRequest = JSON.stringify({
+        parameters: operation?.parameters ?? [],
+        requestBody: operation?.requestBody ?? {},
+      });
       for (const forbidden of [
         "owner_user_id",
         "privy_user_id",
@@ -484,6 +563,86 @@ describe("committed OpenAPI artifact", () => {
     expect(issueAgentAuthorization?.responses).not.toHaveProperty("200");
     expect(getAgentAuthorization).not.toHaveProperty("requestBody");
     expect(submitAgentAuthorizationSignature).toHaveProperty("requestBody");
+
+    for (const [operation, operationId, statuses] of spotOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(Object.keys(operation?.responses ?? {}).sort()).toEqual(statuses);
+      expect(operation).toHaveProperty(
+        "responses.503.content.application/json.schema.properties.code.enum",
+        ["authentication_unavailable", "spot_unavailable", "request_timeout"],
+      );
+      const serializedRequest = JSON.stringify(operation?.requestBody ?? {});
+      for (const forbidden of [
+        "network",
+        "provider_url",
+        "account_address",
+        "wallet_id",
+        "owner_user_id",
+        "agent_address",
+        "nonce",
+        "cloid",
+        "canonical_action",
+        "transport_attempt_id",
+      ]) {
+        expect(serializedRequest).not.toContain(forbidden);
+      }
+      const serialized = JSON.stringify(operation);
+      for (const forbidden of [
+        "mainnet",
+        "provider_url",
+        "account_address",
+        "wallet_id",
+        "owner_user_id",
+        "canonical_action",
+        "transport_attempt_id",
+        "signer_ref",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+    for (const [index, [operation]] of spotOperations.entries()) {
+      if (index === 9) {
+        continue;
+      }
+      const serializedResponses = JSON.stringify(operation?.responses ?? {});
+      for (const forbidden of [
+        "provider_url",
+        "account_address",
+        "wallet_id",
+        "owner_user_id",
+        "agent_address",
+        "nonce",
+        "cloid",
+        "canonical_action",
+        "transport_attempt_id",
+        "signer_ref",
+        "signable_payload",
+        "typed_data",
+      ]) {
+        expect(serializedResponses).not.toContain(forbidden);
+      }
+    }
+    expect(spotOperations[3][0]).toHaveProperty(
+      "parameters.0.name",
+      "idempotency-key",
+    );
+    for (const branch of [0, 1]) {
+      expect(spotOperations[3][0]).toHaveProperty(
+        `requestBody.content.application/json.schema.oneOf.${branch}.additionalProperties`,
+        false,
+      );
+    }
+    expect(spotOperations[9][0]).not.toHaveProperty("requestBody");
+    expect(
+      JSON.stringify(spotOperations[10][0]?.responses?.["200"] ?? {}),
+    ).not.toContain("signable_payload");
+    expect(spotOperations[11][0]).toHaveProperty(
+      "requestBody.content.application/json.schema.required",
+      ["signature"],
+    );
 
     for (const [operation, operationId, hasRequestBody] of transferOperations) {
       expect(operation).toMatchObject({

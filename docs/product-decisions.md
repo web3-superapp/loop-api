@@ -31,10 +31,11 @@ evidence definition below.
 Decision 0014 approves a separate twelve-route Hyperliquid native Spot Testnet
 contract for one reviewed capped IOC buy or sell, one shared master-wallet
 binding authority, a per-owner/binding-epoch Agent handoff, persistent nonce
-allocation, one provider write attempt, and read-only reconciliation. Those
-Spot routes, repositories, readers, signer, and executor are not implemented by
-the decision itself. The writer remains unavailable until an exact Node adapter
-passes the official-Python byte-conformance and credentialed Testnet gates.
+allocation, one provider write attempt, and read-only reconciliation. The route
+contracts, persistence, read-only reconciliation, and generated OpenAPI are now
+implemented, but the main HTTP runtime selects unavailable Spot services. The
+writer and signer remain unavailable until an exact Node adapter passes the
+official-Python byte-conformance and credentialed Testnet gates.
 Decision 0015 keeps Mainnet absent as a separate future release project rather
 than a URL or runtime flag.
 

@@ -3,7 +3,9 @@
 This directory is the reviewable authority for LOOP's first Hyperliquid native
 Spot vertical slice. It approves Development plus Hyperliquid **Testnet** only,
 one manually reviewed capped IOC buy or sell, and read-only authoritative
-reconciliation. It does not claim the twelve API routes are implemented yet.
+reconciliation. The twelve route operations are registered in the main runtime
+and generated OpenAPI with unavailable default services; this does not claim a
+provider writer or signer is available.
 
 Hyperliquid is the authority for token/pair metadata, books, balances, fees,
 orders, fills, Agent authorization state, and settlement. Privy is the identity

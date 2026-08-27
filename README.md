@@ -40,6 +40,10 @@ implemented as independently verified slices:
   canonical decimal-string DTOs, UUID idempotency, immutable reviews,
   server-generated cloids, PostgreSQL lifecycle records, and a default-deny
   per-action mutation gate
+- the exact twelve authenticated Hyperliquid Spot Testnet route operations are
+  registered in the main Fastify runtime and generated OpenAPI; their default
+  services return a sanitized 503 before any claim, nonce, signer, or provider
+  work
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
@@ -135,7 +139,7 @@ are recorded in Decisions
 [`0014`](docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md),
 [`0015`](docs/decisions/0015-mainnet-separate-release-gate.md), and
 [`0016`](docs/decisions/0016-spot-agent-generation-lifecycle.md). Spot projection
-isolation, fenced finalization, and the default-unregistered authoritative read
+isolation, fenced finalization, and the independently gated authoritative read
 boundary are recorded in
 [`0017`](docs/decisions/0017-spot-reconciliation-projection-isolation.md).
 
@@ -208,6 +212,12 @@ The safe default listens on `http://127.0.0.1:3000` only.
   The default issue route returns `perp_mutation_disabled`; no successful
   signable payload, signature recovery, relay, or reconciliation transition is
   composed.
+- `/v1/spot/*` exposes the exact twelve-operation Testnet Spot contract after
+  current Privy authentication and bootstrap. The main runtime deliberately
+  composes unavailable services, so every valid authenticated operation returns
+  a sanitized 503 and no Spot claim, wallet change, Agent handoff, nonce,
+  signature, or Hyperliquid/Spot provider request occurs. Privy verification
+  and the required internal-user lookup still run.
 - `GET /v1/transfer/assets`, the three transfer POST boundaries, and the two
   owner-session status routes expose the reviewed top-level contract. All six
   require bootstrap and currently return `transfer_unavailable`; OpenAPI

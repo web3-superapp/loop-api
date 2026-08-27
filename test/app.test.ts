@@ -152,6 +152,10 @@ describe("LOOP API foundation", () => {
     expect(document.paths).toHaveProperty("/health/live");
     expect(document.paths).toHaveProperty("/health/ready");
     expect(document.paths).toHaveProperty("/v1/perp/wallet-binding");
+    expect(document.paths).toHaveProperty("/v1/spot/config");
+    expect(document.paths).toHaveProperty(
+      "/v1/spot/intents/{intent_id}/submit",
+    );
     expect(document.paths["/health/live"]).toHaveProperty("get.responses.500");
     expect(document.paths["/health/ready"]).toHaveProperty("get.responses.503");
     expect(document.paths).not.toHaveProperty("/openapi.json");
@@ -190,6 +194,95 @@ describe("LOOP API foundation", () => {
     expect(database.internalUsers.findByPrivyUserId).toHaveBeenCalledWith(
       "did:privy:transfer-app-user",
     );
+  });
+
+  it("composes the exact Spot surface as authenticated and default-closed", async () => {
+    const { database } = fakeDatabase();
+    const verifyAccessToken = vi.fn(() =>
+      Promise.resolve({ privyUserId: "did:privy:spot-app-user" }),
+    );
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      privyAccessTokenVerifier: { verifyAccessToken },
+      logger: false,
+    });
+    apps.push(app);
+
+    const marketId = "22222222-2222-4222-8222-222222222222";
+    const intentId = "33333333-3333-4333-8333-333333333333";
+    const authorizationId = "44444444-4444-4444-8444-444444444444";
+    const idempotencyKey = "55555555-5555-4555-8555-555555555555";
+    const requests = [
+      { method: "GET", url: "/v1/spot/config" },
+      { method: "GET", url: `/v1/spot/markets/${marketId}/facts` },
+      { method: "GET", url: "/v1/spot/balances" },
+      {
+        method: "POST",
+        url: "/v1/spot/intents",
+        headers: { "idempotency-key": idempotencyKey },
+        payload: {
+          market_id: marketId,
+          side: "buy",
+          amount: { mode: "quote", value: "10" },
+        },
+      },
+      { method: "GET", url: `/v1/spot/intents/${intentId}` },
+      { method: "POST", url: `/v1/spot/intents/${intentId}/submit` },
+      { method: "GET", url: "/v1/spot/wallet-binding" },
+      {
+        method: "PUT",
+        url: "/v1/spot/wallet-binding",
+        payload: { expected_binding_version: "7" },
+      },
+      {
+        method: "DELETE",
+        url: "/v1/spot/wallet-binding?expected_binding_version=7",
+      },
+      { method: "POST", url: "/v1/spot/agent-authorizations" },
+      {
+        method: "GET",
+        url: `/v1/spot/agent-authorizations/${authorizationId}`,
+      },
+      {
+        method: "POST",
+        url: `/v1/spot/agent-authorizations/${authorizationId}/signatures`,
+        payload: { signature: "0xopaque" },
+      },
+    ] as const;
+
+    for (const request of requests) {
+      const response = await app.inject({
+        method: request.method,
+        url: request.url,
+        headers: {
+          authorization: "Bearer header.payload.signature",
+          ...("headers" in request ? request.headers : {}),
+        },
+        ...("payload" in request ? { payload: request.payload } : {}),
+      });
+
+      expect(
+        response.statusCode,
+        `${request.method} ${request.url}: ${response.body}`,
+      ).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: "spot_unavailable",
+        message: "Spot is unavailable.",
+      });
+      expect(response.headers["cache-control"]).toBe("no-store");
+    }
+
+    expect(verifyAccessToken).toHaveBeenCalledTimes(requests.length);
+    expect(database.internalUsers.findByPrivyUserId).toHaveBeenCalledTimes(
+      requests.length,
+    );
+    for (const call of database.internalUsers.findByPrivyUserId.mock.calls) {
+      expect(call).toEqual(["did:privy:spot-app-user"]);
+    }
+    expect(
+      database.internalUsers.getOrCreateByPrivyUserId,
+    ).not.toHaveBeenCalled();
   });
 
   it("keeps OpenAPI retrieval disabled when configured off", async () => {
@@ -342,6 +435,12 @@ describe("LOOP API foundation", () => {
       "/v1/perp/orders",
       "/v1/perp/fills",
       "/v1/perp/funding",
+      "/v1/spot/config",
+      "/v1/spot/markets/22222222-2222-4222-8222-222222222222/facts",
+      "/v1/spot/balances",
+      "/v1/spot/intents/33333333-3333-4333-8333-333333333333",
+      "/v1/spot/wallet-binding",
+      "/v1/spot/agent-authorizations/44444444-4444-4444-8444-444444444444",
     ]) {
       const response = await app.inject({
         method: "HEAD",

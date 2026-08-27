@@ -122,25 +122,27 @@ mutations, and do not claim connected Stream state.
 ## Approved Hyperliquid native Spot Testnet contract
 
 Decision 0014 approves the following exact owner-scoped contract for one
-manually reviewed capped IOC Spot buy or sell. These routes are not yet present
-in generated OpenAPI or production composition; their strict default-closed
-route modules are implemented under `src/routes/spot-*.ts`. This does not claim
-a provider, signer, wallet, or execution integration.
+manually reviewed capped IOC Spot buy or sell. All twelve operations are now
+registered in the main Fastify runtime and generated OpenAPI with unavailable
+default services. Authentication and strict request validation are reachable;
+the default runtime returns a sanitized 503 for every valid authenticated
+operation before any domain mutation. This does not claim a provider, signer,
+wallet, or execution integration.
 
-| Method and path                                                    | Key contract                                                                                                         | Interface           | Capability                                  |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------- |
-| `GET /v1/spot/config`                                              | Fixed Testnet policy, opaque allowlisted markets, review policy, and explicit capability state                       | `approved-contract` | `blocked-provider`                          |
-| `GET /v1/spot/markets/{market_id}/facts`                           | One bounded metadata/book fact set; no raw provider identifier                                                       | `approved-contract` | `blocked-provider`                          |
-| `GET /v1/spot/balances`                                            | Current bound master-account Spot holdings                                                                           | `approved-contract` | `blocked-provider`                          |
-| `POST /v1/spot/intents`                                            | UUID `Idempotency-Key`; business intent only; durable executable quote plus immutable F11 review                     | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
-| `GET /v1/spot/intents/{intent_id}`                                 | Owner-scoped reviewed execution/reconciliation resource                                                              | `approved-contract` | `blocked-provider`                          |
-| `POST /v1/spot/intents/{intent_id}/submit`                         | No body; fresh authority and review validation; one durable provider write attempt at most                           | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
-| `GET /v1/spot/wallet-binding`                                      | Provider-neutral binding state and monotonic epoch; no address or wallet ID                                          | `approved-contract` | `blocked-provider`                          |
-| `PUT /v1/spot/wallet-binding`                                      | Bind, exact refresh, or rotate using only `expected_binding_version`                                                 | `approved-contract` | `blocked-provider`                          |
-| `DELETE /v1/spot/wallet-binding?expected_binding_version={epoch}`  | Compare-and-swap unbind while retaining the monotonic epoch                                                          | `approved-contract` | `blocked-provider`                          |
-| `POST /v1/spot/agent-authorizations`                               | No body/query/client key; issue one server-owned expiring Testnet `approveAgent` handoff                             | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
-| `GET /v1/spot/agent-authorizations/{authorization_id}`             | Owner-scoped sanitized authorization state                                                                           | `approved-contract` | `blocked-provider`                          |
-| `POST /v1/spot/agent-authorizations/{authorization_id}/signatures` | Exact `{signature}` body; verify current owner/digest/Agent/epoch/expiry, journal one relay, then authoritative read | `approved-contract` | `blocked-provider`; `blocked-product-legal` |
+| Method and path                                                    | Key contract                                                                                                         | Interface     | Capability                                  |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------- |
+| `GET /v1/spot/config`                                              | Fixed Testnet policy, opaque allowlisted markets, review policy, and explicit capability state                       | `implemented` | `blocked-provider`                          |
+| `GET /v1/spot/markets/{market_id}/facts`                           | One bounded metadata/book fact set; no raw provider identifier                                                       | `implemented` | `blocked-provider`                          |
+| `GET /v1/spot/balances`                                            | Current bound master-account Spot holdings                                                                           | `implemented` | `blocked-provider`                          |
+| `POST /v1/spot/intents`                                            | UUID `Idempotency-Key`; business intent only; durable executable quote plus immutable F11 review                     | `implemented` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/intents/{intent_id}`                                 | Owner-scoped reviewed execution/reconciliation resource                                                              | `implemented` | `blocked-provider`                          |
+| `POST /v1/spot/intents/{intent_id}/submit`                         | No body; fresh authority and review validation; one durable provider write attempt at most                           | `implemented` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/wallet-binding`                                      | Provider-neutral binding state and monotonic epoch; no address or wallet ID                                          | `implemented` | `blocked-provider`                          |
+| `PUT /v1/spot/wallet-binding`                                      | Bind, exact refresh, or rotate using only `expected_binding_version`                                                 | `implemented` | `blocked-provider`                          |
+| `DELETE /v1/spot/wallet-binding?expected_binding_version={epoch}`  | Compare-and-swap unbind while retaining the monotonic epoch                                                          | `implemented` | `blocked-provider`                          |
+| `POST /v1/spot/agent-authorizations`                               | No body/query/client key; issue one server-owned expiring Testnet `approveAgent` handoff                             | `implemented` | `blocked-provider`; `blocked-product-legal` |
+| `GET /v1/spot/agent-authorizations/{authorization_id}`             | Owner-scoped sanitized authorization state                                                                           | `implemented` | `blocked-provider`                          |
+| `POST /v1/spot/agent-authorizations/{authorization_id}/signatures` | Exact `{signature}` body; verify current owner/digest/Agent/epoch/expiry, journal one relay, then authoritative read | `implemented` | `blocked-provider`; `blocked-product-legal` |
 
 `POST /v1/spot/intents` is the quote/review resource; no separate
 `/quotes` route is approved. General order/fill lists, resting orders,
@@ -169,7 +171,8 @@ and official signing fixtures live under
 now atomically binds fresh server-only wallet, market, policy, legal,
 kill-switch, signer, and reconciliation evidence to exactly one transport
 attempt and one persisted Agent nonce. It is not composed into a workflow or
-route, and only its first transaction winner receives the internal execution
+provider-capable service; the registered submit route therefore returns 503,
+and only a future first transaction winner may receive the internal execution
 material. The PostgreSQL repository can now atomically project that exact
 attempt to `unknown`/pending reconciliation for only two server-normalized
 ambiguous-response reasons, or quarantine an elapsed attempt with the fixed
@@ -178,9 +181,8 @@ Spot projections plus their append-only events in one transaction and preserve
 the single nonce allocation. Generic deadline quarantine, reconciliation
 leasing, completion, rescheduling, and operator holds all exclude both Spot
 intent and Spot Agent authorization operations, so generic recovery cannot
-leave either projection split. These recovery primitives remain uncomposed
-until a Spot-aware authoritative reconciler is available. A dedicated
-repository-only Spot intent lane now atomically leases `unknown` intents into
+leave either projection split. A dedicated
+repository-only Spot intent lane atomically leases `unknown` intents into
 `reconciling`, reclaims expired leases with a fresh fence, reschedules both
 projections, parks both projections for an operator, and loads only sanitized
 read authority. Its generic completion method always fails closed. A
@@ -207,8 +209,9 @@ conformance. Spot Agent
 authorization submission recovery is a separate future lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped
-public intent resource, but preparation and a first submission still stop
-before any claim, submission journal, nonce, signer, or provider work.
+public intent resource, but it is not selected by the main HTTP runtime yet;
+the registered routes use unavailable services and stop before any claim,
+submission journal, nonce, signer, or provider work.
 Production terminal outcomes, provider writes, and a production signer remain
 unavailable, and no Hyperliquid Node SDK has been installed.
 
