@@ -29,6 +29,7 @@ import {
   createPostgresSpotIntentRepository,
   SPOT_INTENT_PENDING_CLAIM_LEASE_MILLISECONDS,
   SPOT_INTENT_PENDING_CLAIM_LIMIT_PER_OWNER,
+  SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS,
@@ -84,6 +85,9 @@ interface AuthorityFixture extends OwnerFixture {
   readonly agentIdentityId: string;
   readonly authorizationId: string;
   readonly walletId: string;
+  readonly walletVerifiedAt: string;
+  readonly walletExpiresAt: string;
+  readonly agentValidUntil: string;
 }
 
 interface AuthorityTimes {
@@ -451,6 +455,9 @@ async function seedAuthority(
     agentIdentityId,
     authorizationId,
     walletId,
+    walletVerifiedAt: times.verifiedAt,
+    walletExpiresAt: times.expiresAt,
+    agentValidUntil: times.agentValidUntil,
   });
   if (options.activate === false) {
     await pool.query({
@@ -535,6 +542,8 @@ function prepareInput(
     maximumSpendOrMinimumReceive: "10",
     feeRate: "0.001",
     feeEstimate: "0.01",
+    privyUserId: authority.privyUserId,
+    walletId: authority.walletId,
     accountAddress,
     accountKind: "master",
     bindingVersion: "1",
@@ -560,8 +569,66 @@ function prepareInput(
     factsObservedAt: times.factsObservedAt,
     referenceSourceTime: times.referenceSourceTime,
     expiresAt: times.expiresAt,
+    walletVerifiedAt: authority.walletVerifiedAt,
+    walletExpiresAt: authority.walletExpiresAt,
     ...overrides,
   };
+}
+
+function withReviewExpiry(
+  input: PrepareSpotIntentInput,
+  expiresAt: string,
+): PrepareSpotIntentInput {
+  const { review_digest: _reviewDigest, ...baseReview } = parseSpotReview(
+    input.publicReview,
+  );
+  void _reviewDigest;
+  const publicReview = createSpotReview({
+    ...baseReview,
+    expires_at: expiresAt,
+  });
+  return Object.freeze({
+    ...input,
+    publicReview,
+    reviewSha256: publicReview.review_digest,
+    expiresAt,
+  });
+}
+
+async function prepareAuthorityLease(
+  pool: InstanceType<typeof Pool>,
+  input: Readonly<{
+    verifiedOffsetMs: number;
+    expiresOffsetMs: number;
+  }>,
+): Promise<
+  Pick<PrepareSpotIntentInput, "walletVerifiedAt" | "walletExpiresAt">
+> {
+  const result = await pool.query<{
+    verified_at: Date;
+    expires_at: Date;
+  }>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      )
+      select
+        observed_at + ($1::integer * interval '1 millisecond')
+          as verified_at,
+        observed_at + ($2::integer * interval '1 millisecond')
+          as expires_at
+      from database_clock
+    `,
+    values: [input.verifiedOffsetMs, input.expiresOffsetMs],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error("Spot intent prepare authority lease fixture failed");
+  }
+  return Object.freeze({
+    walletVerifiedAt: row.verified_at.toISOString(),
+    walletExpiresAt: row.expires_at.toISOString(),
+  });
 }
 
 async function submissionInput(
@@ -2350,7 +2417,7 @@ describe("PostgreSQL Spot intent repository", () => {
     });
   });
 
-  it("recomputes review and Agent attempt coverage after an operation-lock wait", async () => {
+  it("recomputes review and authority attempt windows after an operation-lock wait", async () => {
     const reviewAuthority = await seedAuthority(pool, "submit-review-window");
     const provisional = prepareInput(reviewAuthority, randomUUID());
     const shortWindow = timestampWindow({ expiresOffsetMs: 12_000 });
@@ -2403,7 +2470,16 @@ describe("PostgreSQL Spot intent repository", () => {
       signingExpiresOffsetMs: 4_000,
       agentValidUntilOffsetMs: 12_000,
     });
-    const agentIntent = await prepareStoredIntent(repository, agentAuthority);
+    const agentProvisional = withReviewExpiry(
+      prepareInput(agentAuthority, randomUUID()),
+      agentAuthority.agentValidUntil,
+    );
+    const agentClaimId = await claim(repository, agentProvisional);
+    const agentPrepared = await repository.prepare({
+      ...agentProvisional,
+      claimId: agentClaimId,
+    });
+    const agentIntent = agentPrepared.intent;
     const agentInput = await submissionInput(pool, agentAuthority, agentIntent);
     expect(
       await submissionOutcomeAfterOperationLockWait(
@@ -2412,7 +2488,7 @@ describe("PostgreSQL Spot intent repository", () => {
         agentInput,
         2.2,
       ),
-    ).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    ).toBeInstanceOf(SpotIntentPrepareExpiredError);
     expect(await spotAttemptSnapshot(pool, agentIntent.id)).toMatchObject({
       operation_state: "prepared",
       attempt_count: 0,
@@ -2877,72 +2953,87 @@ describe("PostgreSQL Spot intent repository", () => {
     });
   });
 
-  it("checks Agent authorization validity after taking its lock with the database clock", async () => {
-    const authority = await seedAuthority(pool, "authorization-expired", {
-      signingExpiresOffsetMs: 4_000,
-      agentValidUntilOffsetMs: 5_000,
+  it("accepts the exact prepare lease and Agent end-boundary", async () => {
+    const authority = await seedAuthority(pool, "prepare-boundaries", {
+      signingExpiresOffsetMs: 13_000,
+      agentValidUntilOffsetMs: 14_000,
     });
-    const provisional = prepareInput(authority, randomUUID());
+    const provisional = withReviewExpiry(
+      prepareInput(authority, randomUUID()),
+      authority.agentValidUntil,
+    );
+    const walletLease = await prepareAuthorityLease(pool, {
+      verifiedOffsetMs: -100,
+      expiresOffsetMs: SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS - 100,
+    });
     const claimId = await claim(repository, provisional);
-    const blocker = await pool.connect();
-    try {
-      await blocker.query("begin");
-      await blocker.query({
-        text: `
-            select id
-            from public.spot_agent_authorizations
-            where id = $1
-            for update
-          `,
-        values: [authority.authorizationId],
-      });
-      const prepareOutcome = repository
-        .prepare({ ...provisional, claimId })
-        .then(
-          () => null,
-          (error: unknown) => error,
-        );
-      await waitForRowLockWait(pool, "from public.spot_agent_authorizations");
-      await blocker.query({
-        text: `
-            select pg_sleep(
-              greatest(
-                extract(
-                  epoch from (agent_valid_until - clock_timestamp())
-                ),
-                0
-              ) + 0.05
-            )
-            from public.spot_agent_authorizations
-            where id = $1
-        `,
-        values: [authority.authorizationId],
-      });
-      const authorizationRepository =
-        createPostgresSpotAgentAuthorizationRepository(pool);
-      await expect(
-        authorizationRepository.retireElapsedAgentIdentities({
-          requestId: randomUUID(),
-          limit: 10,
-        }),
-      ).resolves.toEqual({ retiredCount: 0 });
-      await blocker.query("commit");
 
-      expect(await prepareOutcome).toBeInstanceOf(
-        SpotIntentAuthorityStaleError,
-      );
+    await expect(
+      repository.prepare({
+        ...provisional,
+        ...walletLease,
+        claimId,
+      }),
+    ).resolves.toMatchObject({ created: true });
+    expect(await counts(pool)).toEqual({
+      idempotency_count: "1",
+      operation_count: "1",
+      intent_count: "1",
+      audit_count: "1",
+      event_count: "1",
+    });
+  });
+
+  it.each([
+    ["future", 5_000, 10_000],
+    ["expired", -2_000, -1_000],
+    [
+      "overlong",
+      -100,
+      SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS - 100 + 1,
+    ],
+  ] as const)(
+    "rejects %s wallet resolver evidence before durable writes",
+    async (_label, verifiedOffsetMs, expiresOffsetMs) => {
+      const authority = await seedAuthority(pool, `prepare-${_label}-lease`);
+      const provisional = prepareInput(authority, randomUUID());
+      const walletLease = await prepareAuthorityLease(pool, {
+        verifiedOffsetMs,
+        expiresOffsetMs,
+      });
+      const claimId = await claim(repository, provisional);
+
       await expect(
-        authorizationRepository.retireElapsedAgentIdentities({
-          requestId: randomUUID(),
-          limit: 10,
+        repository.prepare({
+          ...provisional,
+          ...walletLease,
+          claimId,
         }),
-      ).resolves.toEqual({ retiredCount: 1 });
-    } catch (error) {
-      await blocker.query("rollback").catch(() => undefined);
-      throw error;
-    } finally {
-      blocker.release();
-    }
+      ).rejects.toBeInstanceOf(SpotIntentAuthorityStaleError);
+      expect(await counts(pool)).toEqual({
+        idempotency_count: "1",
+        operation_count: "0",
+        intent_count: "0",
+        audit_count: "0",
+        event_count: "0",
+      });
+    },
+  );
+
+  it("requires the active Agent to cover the complete review", async () => {
+    const authority = await seedAuthority(pool, "prepare-agent-coverage", {
+      signingExpiresOffsetMs: 13_000,
+      agentValidUntilOffsetMs: 14_000,
+    });
+    const provisional = withReviewExpiry(
+      prepareInput(authority, randomUUID()),
+      new Date(Date.parse(authority.agentValidUntil) + 1).toISOString(),
+    );
+    const claimId = await claim(repository, provisional);
+
+    await expect(
+      repository.prepare({ ...provisional, claimId }),
+    ).rejects.toBeInstanceOf(SpotIntentAuthorityStaleError);
     expect(await counts(pool)).toEqual({
       idempotency_count: "1",
       operation_count: "0",
@@ -2950,19 +3041,33 @@ describe("PostgreSQL Spot intent repository", () => {
       audit_count: "0",
       event_count: "0",
     });
-    await expect(
-      pool.query<{ lifecycle_state: string }>({
-        text: `
-          select lifecycle_state
-          from public.spot_agent_identities
-          where id = $1
-        `,
-        values: [authority.agentIdentityId],
-      }),
-    ).resolves.toMatchObject({
-      rows: [{ lifecycle_state: "retired" }],
-    });
-  }, 15_000);
+  });
+
+  it.each([
+    ["Privy identity", { privyUserId: "did:privy:spot-intent:stale" }],
+    ["wallet ID", { walletId: `wallet-${randomUUID()}` }],
+  ] as const)(
+    "rejects a stale %s even when the address and epoch still match",
+    async (_label, authorityDrift) => {
+      const authority = await seedAuthority(
+        pool,
+        `prepare-provider-identity-stale-${_label}`,
+      );
+      const provisional = prepareInput(authority, randomUUID(), authorityDrift);
+      const claimId = await claim(repository, provisional);
+
+      await expect(
+        repository.prepare({ ...provisional, claimId }),
+      ).rejects.toBeInstanceOf(SpotIntentAuthorityStaleError);
+      expect(await counts(pool)).toEqual({
+        idempotency_count: "1",
+        operation_count: "0",
+        intent_count: "0",
+        audit_count: "0",
+        event_count: "0",
+      });
+    },
+  );
 
   it("uses the database clock for expiry and keeps the durable claim only", async () => {
     const authority = await seedAuthority(pool, "expired");
@@ -3006,6 +3111,180 @@ describe("PostgreSQL Spot intent repository", () => {
       event_count: "0",
     });
   });
+
+  it("rechecks the wallet lease after a post-validation database lock wait", async () => {
+    const authority = await seedAuthority(pool, "prepare-final-lease-check");
+    const provisional = prepareInput(authority, randomUUID());
+    const claimId = await claim(repository, provisional);
+    const walletLease = await prepareAuthorityLease(pool, {
+      verifiedOffsetMs: -100,
+      expiresOffsetMs: 2_000,
+    });
+    const blocker = await pool.connect();
+    let prepareOutcome: Promise<unknown> | undefined;
+    try {
+      await blocker.query("begin");
+      await blocker.query(
+        "lock table public.spot_intent_events in access exclusive mode",
+      );
+      prepareOutcome = repository
+        .prepare({
+          ...provisional,
+          ...walletLease,
+          claimId,
+        })
+        .then(
+          (result) => result,
+          (error: unknown) => error,
+        );
+      await waitForDatabaseLockWait(
+        pool,
+        "insert into public.spot_intent_events",
+      );
+      await blocker.query({
+        text: `
+          select pg_sleep(
+            greatest(
+              extract(epoch from ($1::timestamptz - clock_timestamp())),
+              0
+            ) + 0.05
+          )
+        `,
+        values: [walletLease.walletExpiresAt],
+      });
+      await blocker.query("commit");
+
+      expect(await prepareOutcome).toBeInstanceOf(
+        SpotIntentAuthorityStaleError,
+      );
+    } catch (error) {
+      await blocker.query("rollback").catch(() => undefined);
+      if (prepareOutcome !== undefined) {
+        await prepareOutcome;
+      }
+      throw error;
+    } finally {
+      blocker.release();
+    }
+    expect(await counts(pool)).toEqual({
+      idempotency_count: "1",
+      operation_count: "0",
+      intent_count: "0",
+      audit_count: "0",
+      event_count: "0",
+    });
+  }, 10_000);
+
+  it("rechecks the wallet lease after deferred constraints finish waiting", async () => {
+    const advisoryLockKeys = [1_280_262_480, 1_397_772_116] as const;
+    const authority = await seedAuthority(
+      pool,
+      "prepare-deferred-final-lease-check",
+    );
+    const provisional = prepareInput(authority, randomUUID());
+    const claimId = await claim(repository, provisional);
+    const walletLease = await prepareAuthorityLease(pool, {
+      verifiedOffsetMs: -100,
+      expiresOffsetMs: 2_000,
+    });
+    await pool.query(`
+      create function public.wait_spot_intent_projection_for_test()
+      returns trigger
+      language plpgsql
+      as $function$
+      begin
+        perform pg_advisory_xact_lock(
+          ${advisoryLockKeys[0]},
+          ${advisoryLockKeys[1]}
+        );
+        return new;
+      end;
+      $function$;
+
+      create constraint trigger wait_spot_intent_projection_for_test
+        after insert on public.spot_intents
+        deferrable initially deferred
+        for each row
+        execute function public.wait_spot_intent_projection_for_test();
+    `);
+    const blocker = await pool.connect();
+    let lockHeld = false;
+    let prepareOutcome: Promise<unknown> | undefined;
+    try {
+      await blocker.query({
+        text: "select pg_advisory_lock($1, $2)",
+        values: [...advisoryLockKeys],
+      });
+      lockHeld = true;
+      prepareOutcome = repository
+        .prepare({
+          ...provisional,
+          ...walletLease,
+          claimId,
+        })
+        .then(
+          (result) => result,
+          (error: unknown) => error,
+        );
+      await waitForDatabaseLockWait(pool, "set constraints all immediate");
+      await blocker.query({
+        text: `
+          select pg_sleep(
+            greatest(
+              extract(epoch from ($1::timestamptz - clock_timestamp())),
+              0
+            ) + 0.05
+          )
+        `,
+        values: [walletLease.walletExpiresAt],
+      });
+      await blocker.query({
+        text: "select pg_advisory_unlock($1, $2)",
+        values: [...advisoryLockKeys],
+      });
+      lockHeld = false;
+
+      expect(await prepareOutcome).toBeInstanceOf(
+        SpotIntentAuthorityStaleError,
+      );
+      expect(await counts(pool)).toEqual({
+        idempotency_count: "1",
+        operation_count: "0",
+        intent_count: "0",
+        audit_count: "0",
+        event_count: "0",
+      });
+    } catch (error) {
+      if (lockHeld) {
+        await blocker
+          .query({
+            text: "select pg_advisory_unlock($1, $2)",
+            values: [...advisoryLockKeys],
+          })
+          .catch(() => undefined);
+        lockHeld = false;
+      }
+      if (prepareOutcome !== undefined) {
+        await prepareOutcome;
+      }
+      throw error;
+    } finally {
+      if (lockHeld) {
+        await blocker
+          .query({
+            text: "select pg_advisory_unlock($1, $2)",
+            values: [...advisoryLockKeys],
+          })
+          .catch(() => undefined);
+      }
+      blocker.release();
+      await pool.query(`
+        drop trigger if exists wait_spot_intent_projection_for_test
+          on public.spot_intents;
+        drop function if exists public.wait_spot_intent_projection_for_test();
+      `);
+    }
+  }, 10_000);
 
   it("forces deferred projection checks before commit and fully rolls back their failure", async () => {
     const authority = await seedAuthority(pool, "deferred-rollback");

@@ -54,6 +54,7 @@ const dependencyRequestIds = [
   "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
 ] as const;
 const privyUserId = "did:privy:spot-prepare";
+const walletId = "wallet-spot-prepare";
 const accountAddress = `0x${"12".repeat(20)}`;
 const clientOrderId = `0x${"ab".repeat(16)}`;
 const baseTokenId = `0x${"23".repeat(16)}`;
@@ -133,6 +134,7 @@ function authority(
   return Object.freeze({
     ownerUserId,
     privyUserId,
+    walletId,
     accountAddress,
     accountKind: "master",
     bindingVersion: "1",
@@ -375,10 +377,14 @@ describe("uncomposed Spot intent prepare coordinator", () => {
         side: "buy",
         amountMode: "quote",
         amountValue: "10",
+        privyUserId,
+        walletId,
         accountAddress,
         bindingVersion: "1",
         agentIdentityId,
         clientOrderId,
+        walletVerifiedAt: authority().verifiedAt,
+        walletExpiresAt: authority().expiresAt,
       }),
     );
     expect(result).toEqual(input.record.resource);
@@ -485,6 +491,7 @@ describe("uncomposed Spot intent prepare coordinator", () => {
   });
 
   it.each([
+    ["wallet", { walletId: "wallet-spot-prepare-rotated" }],
     ["account", { accountAddress: `0x${"56".repeat(20)}` }],
     ["binding epoch", { bindingVersion: "2" }],
     [

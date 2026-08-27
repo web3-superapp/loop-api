@@ -40,12 +40,15 @@ encoder, or alternate Hyperliquid protocol implementation.
 
 The preparation coordinator is not a runtime capability. A real authority
 resolver and metadata/book/fee reviewer do not exist. Composition is forbidden
-until the repository rechecks the resolver's wallet-evidence lease against the
-database clock after lock waits and verifies that the active Agent remains
-valid through the review expiry. The v1 draft verifier currently locks a 25 bps
-default and 100 bps maximum slippage, a 15-second review lifetime, a 2-second
-maximum reference-source age, and a 15-second maximum fee-source age. It also
-uses exact arithmetic to bind the real action notional to the reviewed maximum
+until a real resolver, reviewer, and default-deny product/legal decision are
+available. The atomic repository already exact-matches owner, Privy subject,
+wallet ID, address, binding epoch, and Agent under locks; it validates the
+resolver lease with the database clock after those waits and again after
+deferred projection checks, while requiring Agent validity through review
+expiry. The v1 draft verifier currently locks a 25 bps default and 100 bps
+maximum slippage, a 15-second review lifetime, a 2-second maximum
+reference-source age, and a 15-second maximum fee-source age. It also uses exact
+arithmetic to bind the real action notional to the reviewed maximum
 spend/minimum receive. In v1, `fee_estimate` is a conservative
 quote-denominated bound: it cannot be below `price * size * fee_rate`, and it is
 included when proving the user's maximum spend or minimum receive. Changing

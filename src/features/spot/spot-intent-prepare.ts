@@ -90,6 +90,7 @@ const authoritySchema = z
   .object({
     ownerUserId: uuidSchema,
     privyUserId: opaqueProviderIdSchema,
+    walletId: opaqueProviderIdSchema,
     accountAddress: addressSchema,
     accountKind: z.literal("master"),
     bindingVersion: bindingVersionSchema,
@@ -291,6 +292,7 @@ export function sameSpotIntentPrepareAuthority(
   return (
     left.ownerUserId === right.ownerUserId &&
     left.privyUserId === right.privyUserId &&
+    left.walletId === right.walletId &&
     left.accountAddress === right.accountAddress &&
     left.bindingVersion === right.bindingVersion &&
     left.agentIdentityId === right.agentIdentityId

@@ -215,9 +215,8 @@ async function findOwnedRecord(
 export function createSpotIntentPrepareWorkflow(
   input: CreateSpotIntentPrepareWorkflowInput,
 ): SpotIntentWorkflow {
-  // Keep this workflow out of runtime composition until repository.prepare
-  // validates the resolver's wallet-evidence lease with the DB clock after
-  // lock waits and proves the active Agent covers the review expiry.
+  // Keep this workflow out of runtime composition until real authority,
+  // reviewer, and product/legal dependencies are available and verified.
   const createUuid = input.createUuid ?? randomUUID;
   const createClientOrderId =
     input.createClientOrderId ?? (() => createSpotClientOrderId());
@@ -345,11 +344,15 @@ export function createSpotIntentPrepareWorkflow(
           side: workflowInput.request.side,
           amountMode: workflowInput.request.amount.mode,
           amountValue: workflowInput.request.amount.value,
+          privyUserId: currentAuthority.privyUserId,
+          walletId: currentAuthority.walletId,
           accountAddress: currentAuthority.accountAddress,
           accountKind: currentAuthority.accountKind,
           bindingVersion: currentAuthority.bindingVersion,
           agentIdentityId: currentAuthority.agentIdentityId,
           clientOrderId,
+          walletVerifiedAt: currentAuthority.verifiedAt,
+          walletExpiresAt: currentAuthority.expiresAt,
         });
       } catch (error) {
         return mapRepositoryError(error);

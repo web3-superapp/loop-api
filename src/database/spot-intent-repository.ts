@@ -19,6 +19,7 @@ import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "./hyperliqu
 export const SPOT_INTENT_PENDING_CLAIM_LIMIT_PER_OWNER = 32;
 export const SPOT_INTENT_PENDING_CLAIM_GLOBAL_FUSE = 10_000;
 export const SPOT_INTENT_PENDING_CLAIM_LEASE_MILLISECONDS = 30_000;
+export const SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS = 15_000;
 export const SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS = 10_000;
 export const SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS = 15_000;
 export const SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS = 60_000;
@@ -266,6 +267,8 @@ const prepareInputEnvelopeSchema = z
     maximumSpendOrMinimumReceive: positiveDecimalSchema,
     feeRate: nonnegativeDecimalSchema,
     feeEstimate: nonnegativeDecimalSchema,
+    privyUserId: opaqueProviderIdSchema,
+    walletId: opaqueProviderIdSchema,
     accountAddress: addressSchema,
     accountKind: z.literal("master"),
     bindingVersion: bindingVersionSchema,
@@ -275,6 +278,8 @@ const prepareInputEnvelopeSchema = z
     factsObservedAt: rfc3339Schema,
     referenceSourceTime: rfc3339Schema,
     expiresAt: rfc3339Schema,
+    walletVerifiedAt: rfc3339Schema,
+    walletExpiresAt: rfc3339Schema,
   })
   .strict();
 
@@ -325,6 +330,16 @@ const activeAgentAuthorizationRowSchema = z
 
 const currentAgentValidityRowSchema = z
   .object({ is_current: z.literal(true) })
+  .strict();
+
+const prepareAuthorityValidityRowSchema = z
+  .object({
+    review_current: z.boolean(),
+    agent_current: z.boolean(),
+    agent_covers_review: z.boolean(),
+    wallet_evidence_current: z.boolean(),
+    wallet_evidence_bounded: z.boolean(),
+  })
   .strict();
 
 const submissionOperationStateSchema = z.enum([
@@ -598,6 +613,8 @@ export interface PrepareSpotIntentInput {
   readonly maximumSpendOrMinimumReceive: string;
   readonly feeRate: string;
   readonly feeEstimate: string;
+  readonly privyUserId: string;
+  readonly walletId: string;
   readonly accountAddress: string;
   readonly accountKind: "master";
   readonly bindingVersion: string;
@@ -609,6 +626,10 @@ export interface PrepareSpotIntentInput {
   readonly factsObservedAt: string;
   readonly referenceSourceTime: string;
   readonly expiresAt: string;
+  /** Fresh server resolver observation, never route input. */
+  readonly walletVerifiedAt: string;
+  /** Short resolver lease checked against the database clock after lock waits. */
+  readonly walletExpiresAt: string;
 }
 
 export interface BeginSpotIntentSubmissionInput {
@@ -833,12 +854,18 @@ interface CurrentSpotAuthority {
 
 interface SpotAuthorityCoordinates {
   readonly ownerUserId: string;
-  readonly privyUserId?: string;
-  readonly walletId?: string;
+  readonly privyUserId: string;
+  readonly walletId: string;
   readonly accountAddress: string;
   readonly accountKind: "master";
   readonly bindingVersion: string;
   readonly agentIdentityId: string;
+}
+
+interface PrepareSpotAuthorityValidityRequirement {
+  readonly walletVerifiedAt: string;
+  readonly walletExpiresAt: string;
+  readonly reviewExpiresAt: string;
 }
 
 type DatabaseClient = Pick<PoolClient, "query">;
@@ -865,7 +892,16 @@ function freezeCanonicalAction(
 }
 
 function projectionMatches(
-  input: Omit<ParsedPrepareInput, "claimId" | "idempotencyKey" | "requestId">,
+  input: Omit<
+    ParsedPrepareInput,
+    | "claimId"
+    | "idempotencyKey"
+    | "requestId"
+    | "privyUserId"
+    | "walletId"
+    | "walletVerifiedAt"
+    | "walletExpiresAt"
+  >,
 ): boolean {
   const review = input.publicReview;
   const order = input.canonicalAction.orders[0];
@@ -935,6 +971,8 @@ function parsePrepareInput(
       maximumSpendOrMinimumReceive: rawInput.maximumSpendOrMinimumReceive,
       feeRate: rawInput.feeRate,
       feeEstimate: rawInput.feeEstimate,
+      privyUserId: rawInput.privyUserId,
+      walletId: rawInput.walletId,
       accountAddress: rawInput.accountAddress,
       accountKind: rawInput.accountKind,
       bindingVersion: rawInput.bindingVersion,
@@ -944,6 +982,8 @@ function parsePrepareInput(
       factsObservedAt: rawInput.factsObservedAt,
       referenceSourceTime: rawInput.referenceSourceTime,
       expiresAt: rawInput.expiresAt,
+      walletVerifiedAt: rawInput.walletVerifiedAt,
+      walletExpiresAt: rawInput.walletExpiresAt,
     });
     const canonicalAction = freezeCanonicalAction(
       canonicalActionSchema.parse(rawInput.canonicalAction),
@@ -1714,9 +1754,67 @@ async function readClaimedIntent(
   return intent ?? failUnavailable();
 }
 
+async function validatePrepareAuthorityWindow(
+  client: DatabaseClient,
+  ownerUserId: string,
+  authorizationId: string,
+  requirement: PrepareSpotAuthorityValidityRequirement,
+): Promise<void> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      )
+      select
+        database_clock.observed_at < $5::timestamptz as review_current,
+        database_clock.observed_at < agent_authorization.agent_valid_until
+          as agent_current,
+        $5::timestamptz <= agent_authorization.agent_valid_until
+          as agent_covers_review,
+        $3::timestamptz <= database_clock.observed_at
+          and database_clock.observed_at < $4::timestamptz
+          as wallet_evidence_current,
+        $3::timestamptz < $4::timestamptz
+          and $4::timestamptz <= $3::timestamptz
+            + ($6::integer * interval '1 millisecond')
+          as wallet_evidence_bounded
+      from public.spot_agent_authorizations as agent_authorization
+      cross join database_clock
+      where agent_authorization.id = $1
+        and agent_authorization.owner_user_id = $2
+        and agent_authorization.state = 'active'
+      limit 1
+    `,
+    values: [
+      authorizationId,
+      ownerUserId,
+      requirement.walletVerifiedAt,
+      requirement.walletExpiresAt,
+      requirement.reviewExpiresAt,
+      SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS,
+    ],
+  });
+  const validity = prepareAuthorityValidityRowSchema.safeParse(result.rows[0]);
+  if (!validity.success) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+  if (!validity.data.review_current) {
+    throw new SpotIntentPrepareExpiredError();
+  }
+  if (
+    !validity.data.agent_current ||
+    !validity.data.agent_covers_review ||
+    !validity.data.wallet_evidence_current ||
+    !validity.data.wallet_evidence_bounded
+  ) {
+    throw new SpotIntentAuthorityStaleError();
+  }
+}
+
 async function assertCurrentAuthority(
   client: DatabaseClient,
   input: SpotAuthorityCoordinates,
+  prepareRequirement: PrepareSpotAuthorityValidityRequirement | null,
 ): Promise<CurrentSpotAuthority> {
   const ownerResult = await client.query<Record<string, unknown>>({
     text: `
@@ -1732,8 +1830,7 @@ async function assertCurrentAuthority(
   if (
     !owner.success ||
     owner.data.id !== input.ownerUserId ||
-    (input.privyUserId !== undefined &&
-      owner.data.privy_user_id !== input.privyUserId)
+    owner.data.privy_user_id !== input.privyUserId
   ) {
     throw new SpotIntentAuthorityStaleError();
   }
@@ -1757,10 +1854,8 @@ async function assertCurrentAuthority(
   const wallet = currentWalletBindingRowSchema.safeParse(walletResult.rows[0]);
   if (
     !wallet.success ||
-    (input.privyUserId !== undefined &&
-      wallet.data.privy_user_id !== input.privyUserId) ||
-    (input.walletId !== undefined &&
-      wallet.data.wallet_id !== input.walletId) ||
+    wallet.data.privy_user_id !== input.privyUserId ||
+    wallet.data.wallet_id !== input.walletId ||
     wallet.data.account_address !== input.accountAddress ||
     wallet.data.binding_version !== input.bindingVersion
   ) {
@@ -1835,20 +1930,29 @@ async function assertCurrentAuthority(
     throw new SpotIntentAuthorityStaleError();
   }
 
-  const validityResult = await client.query<Record<string, unknown>>({
-    text: `
-      select clock_timestamp() < agent_valid_until as is_current
-      from public.spot_agent_authorizations
-      where id = $1
-        and owner_user_id = $2
-        and state = 'active'
-    `,
-    values: [authorization.data.id, input.ownerUserId],
-  });
-  if (
-    !currentAgentValidityRowSchema.safeParse(validityResult.rows[0]).success
-  ) {
-    throw new SpotIntentAuthorityStaleError();
+  if (prepareRequirement === null) {
+    const validityResult = await client.query<Record<string, unknown>>({
+      text: `
+        select clock_timestamp() < agent_valid_until as is_current
+        from public.spot_agent_authorizations
+        where id = $1
+          and owner_user_id = $2
+          and state = 'active'
+      `,
+      values: [authorization.data.id, input.ownerUserId],
+    });
+    if (
+      !currentAgentValidityRowSchema.safeParse(validityResult.rows[0]).success
+    ) {
+      throw new SpotIntentAuthorityStaleError();
+    }
+  } else {
+    await validatePrepareAuthorityWindow(
+      client,
+      input.ownerUserId,
+      authorization.data.id,
+      prepareRequirement,
+    );
   }
   return Object.freeze({
     authorizationId: authorization.data.id,
@@ -1882,15 +1986,19 @@ async function beginSubmissionTransaction(
     throw new SpotIntentAuthorityStaleError();
   }
 
-  const authority = await assertCurrentAuthority(client, {
-    ownerUserId: input.ownerUserId,
-    privyUserId: input.walletEvidence.privyUserId,
-    walletId: input.walletEvidence.walletId,
-    accountAddress: discovered.accountAddress,
-    accountKind: "master",
-    bindingVersion: discovered.bindingVersion,
-    agentIdentityId: discovered.agentIdentityId,
-  });
+  const authority = await assertCurrentAuthority(
+    client,
+    {
+      ownerUserId: input.ownerUserId,
+      privyUserId: input.walletEvidence.privyUserId,
+      walletId: input.walletEvidence.walletId,
+      accountAddress: discovered.accountAddress,
+      accountKind: "master",
+      bindingVersion: discovered.bindingVersion,
+      agentIdentityId: discovered.agentIdentityId,
+    },
+    null,
+  );
   const operation = await lockSubmissionOperation(
     client,
     input.ownerUserId,
@@ -2563,7 +2671,11 @@ export function createPostgresSpotIntentRepository(
             return Object.freeze({ created: false, intent: existingIntent });
           }
 
-          await assertCurrentAuthority(client, input);
+          const authority = await assertCurrentAuthority(client, input, {
+            walletVerifiedAt: input.walletVerifiedAt,
+            walletExpiresAt: input.walletExpiresAt,
+            reviewExpiresAt: input.expiresAt,
+          });
           const operationId = randomUUID();
           await client.query({
             text: `
@@ -2723,6 +2835,21 @@ export function createPostgresSpotIntentRepository(
             `,
             values: [operationId, input.ownerUserId, input.requestId],
           });
+
+          // Force deferred cross-projection checks before the final DB-clock
+          // authority validation. Any wait here must not outlive the resolver
+          // evidence or the review while still committing a prepared intent.
+          await client.query("set constraints all immediate");
+          await validatePrepareAuthorityWindow(
+            client,
+            input.ownerUserId,
+            authority.authorizationId,
+            {
+              walletVerifiedAt: input.walletVerifiedAt,
+              walletExpiresAt: input.walletExpiresAt,
+              reviewExpiresAt: input.expiresAt,
+            },
+          );
 
           const intent = await readOwnedIntent(
             client,

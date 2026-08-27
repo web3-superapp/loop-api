@@ -217,14 +217,17 @@ also return an existing owner-scoped public intent resource. It is not selected
 by the main HTTP runtime: the registered routes still use unavailable services
 and stop before any claim, submission journal, nonce, signer, or provider work.
 No production authority resolver or metadata/book/fee reviewer exists. Before
-runtime composition, the repository must recheck the resolver's wallet-evidence
-lease with the database clock after lock waits and require the active Agent
-validity to cover the complete review lifetime. The uncomposed v1 draft
-verifier uses exact arithmetic, a 25 bps default/100 bps maximum slippage, a
-15-second review lifetime, 2-second reference freshness, and 15-second fee
-freshness. Its quote-denominated `fee_estimate` is a conservative bound: it
-must cover exact reviewed notional times `fee_rate` and is included in the
-displayed maximum spend or minimum receive.
+runtime composition, real resolver/reviewer ports and a default-deny
+product/legal decision are still required. The atomic repository now
+exact-matches the owner, Privy subject, wallet ID, address, binding epoch, and
+Agent under locks; it rechecks the resolver lease with the database clock after
+those waits and after deferred projection checks, and requires active Agent
+validity to cover the complete review lifetime. The uncomposed v1 draft verifier
+uses exact arithmetic, a 25 bps default/100 bps maximum slippage, a 15-second
+review lifetime, 2-second reference freshness, and 15-second fee freshness. Its
+quote-denominated `fee_estimate` is a conservative bound: it must cover exact
+reviewed notional times `fee_rate` and is included in the displayed maximum
+spend or minimum receive.
 An additional uncomposed fake-only submission coordinator now verifies the
 ordering and fields across preflight -> atomic journal/nonce -> minimal fake
 signer -> single fake writer -> normalized unknown handoff. A conservative

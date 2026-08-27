@@ -50,9 +50,12 @@ implemented as independently verified slices:
   unknown/reconciliation handoff without an SDK or network implementation
 - an uncomposed Spot intent-preparation coordinator claims idempotency before
   dependency reads, performs zero reads on replay/pending, resolves the current
-  wallet/Agent authority both before and after review, generates the server
-  CLOID, strictly validates the executable review draft, and hands it to the
-  atomic repository; no real authority resolver or reviewer is composed
+  wallet/Agent authority both before and after review, including the exact
+  wallet ID, generates the server CLOID, strictly validates the executable
+  review draft, and hands it to the atomic repository. The repository checks
+  the resolver lease with the database clock after authority locks and again
+  after deferred projection checks, and requires the active Agent to cover the
+  review expiry; no real authority resolver or reviewer is composed
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
@@ -96,17 +99,18 @@ mutation remain unavailable or denied before provider writes. The Spot prepare
 and submit coordinators are ports plus fake-only behavior tests: the real Spot
 authority resolver, metadata/book/fee reviewer, product/legal gate, signer, and
 writer are absent and neither coordinator is selected by the main runtime.
-Before prepare can be composed, the repository must also validate the fresh
-wallet evidence against the database clock after lock waits and prove the active
-Agent remains valid through the full review lifetime. Transfer routes
-publish only their reviewed negative contract and return a sanitized 503 after
+The atomic prepare repository now performs those database-clock resolver-lease
+and complete Agent-lifetime checks, including a final check after deferred
+constraint waits. Runtime composition still requires the missing real resolver,
+reviewer, and default-deny product/legal decision. Transfer routes publish only
+their reviewed negative contract and return a sanitized 503 after
 authentication; there is still no trading execution path, Privy transfer
 execution, Firebase push path, physical-device integration, or production
 deployment. Interfaces, control-plane records, and quota primitives do not by
 themselves prove a live provider integration. Profile/Watchlist and inactive
-alert records are local PostgreSQL capabilities, but there is no price
-evaluator or scheduler, Firebase device-token/delivery path, notification
-inbox, or social graph.
+alert records are local PostgreSQL capabilities, but there is no price evaluator
+or scheduler, Firebase device-token/delivery path, notification inbox, or social
+graph.
 
 The standalone worker makes bounded lifecycle updates in PostgreSQL, but its
 provider boundary remains read-only. Its retained Perp limit-order and dedicated
