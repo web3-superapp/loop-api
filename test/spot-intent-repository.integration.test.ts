@@ -735,6 +735,31 @@ async function spotAttemptSnapshot(
   return row;
 }
 
+async function writeGenericLeaseWithoutSpotProjection(
+  pool: InstanceType<typeof Pool>,
+  operationId: string,
+): Promise<void> {
+  await pool.query({
+    text: `
+      update public.provider_operations
+      set
+        reconciliation_status = 'leased',
+        reconciliation_attempt_count = reconciliation_attempt_count + 1,
+        lease_owner = $2,
+        lease_expires_at = clock_timestamp() + interval '30 seconds',
+        fence_token = fence_token + 1,
+        record_version = record_version + 1,
+        updated_at = clock_timestamp()
+      where id = $1
+        and domain = 'hyperliquid'
+        and operation_kind in ('spot_intent', 'spot_agent_authorization')
+        and state = 'unknown'
+        and reconciliation_status = 'pending'
+    `,
+    values: [operationId, randomUUID()],
+  });
+}
+
 async function expireSubmissionDeadline(
   pool: InstanceType<typeof Pool>,
   intentId: string,
@@ -1350,6 +1375,10 @@ describe("PostgreSQL Spot intent repository", () => {
     expect(snapshot.result_observed_at?.toISOString()).toBe(
       snapshot.reconcile_after?.toISOString(),
     );
+    await expect(
+      writeGenericLeaseWithoutSpotProjection(pool, prepared.id),
+    ).rejects.toMatchObject({ code: "23514" });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
 
     const generic = createPostgresControlPlaneRepository(pool);
     const genericPrepared = await generic.prepareProviderOperation({
@@ -1968,6 +1997,9 @@ describe("PostgreSQL Spot intent repository", () => {
       `,
       values: [authority.authorizationId],
     });
+    await expect(
+      writeGenericLeaseWithoutSpotProjection(pool, authority.authorizationId),
+    ).rejects.toMatchObject({ code: "23514" });
     await expect(
       createPostgresControlPlaneRepository(
         pool,

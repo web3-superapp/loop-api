@@ -403,6 +403,7 @@ describe("000008 Spot Agent generation migration against PostgreSQL", () => {
 
   it("round-trips generation one but refuses lossy rollback after generation two", async () => {
     await withTemporaryDatabase(async (database) => {
+      await migrateDownTo(database, "000008_spot_agent_generations");
       const legacyOwner = await insertOwner(database.pool, "down-one");
       await insertGeneration(database.pool, legacyOwner, "1");
 
