@@ -137,6 +137,7 @@ export function registerSpotIntentRoutes(
             "bootstrap_required",
             "wallet_binding_required",
             "idempotency_conflict",
+            "spot_intent_expired",
             "spot_intent_stale",
           ]),
           429: spotErrorResponseSchema(["spot_intent_claim_rate_limited"]),

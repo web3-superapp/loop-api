@@ -48,6 +48,11 @@ implemented as independently verified slices:
   ordering, one journal/nonce winner, the exact fields passed to fake
   signer/writer ports, DB-deadline admission, and durable
   unknown/reconciliation handoff without an SDK or network implementation
+- an uncomposed Spot intent-preparation coordinator claims idempotency before
+  dependency reads, performs zero reads on replay/pending, resolves the current
+  wallet/Agent authority both before and after review, generates the server
+  CLOID, strictly validates the executable review draft, and hands it to the
+  atomic repository; no real authority resolver or reviewer is composed
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
@@ -87,7 +92,13 @@ enabled. The Hyperliquid wallet-binding lifecycle, resolver, and Testnet private
 reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
 reviewer, signer/executor, Agent authorization handoff, and every trading
-mutation remain unavailable or denied before provider writes. Transfer routes
+mutation remain unavailable or denied before provider writes. The Spot prepare
+and submit coordinators are ports plus fake-only behavior tests: the real Spot
+authority resolver, metadata/book/fee reviewer, product/legal gate, signer, and
+writer are absent and neither coordinator is selected by the main runtime.
+Before prepare can be composed, the repository must also validate the fresh
+wallet evidence against the database clock after lock waits and prove the active
+Agent remains valid through the full review lifetime. Transfer routes
 publish only their reviewed negative contract and return a sanitized 503 after
 authentication; there is still no trading execution path, Privy transfer
 execution, Firebase push path, physical-device integration, or production

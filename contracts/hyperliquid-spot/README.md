@@ -25,6 +25,11 @@ encoder, or alternate Hyperliquid protocol implementation.
   server CLOID.
 - Result: immediate strict parsing plus read-only reconciliation after any
   ambiguous outcome.
+- Preparation: an uncomposed coordinator permanently claims the idempotency
+  key before dependency reads, resolves short-lived wallet/Agent authority
+  before and after review, generates a 16-byte server CLOID, and accepts only a
+  strict executable-review draft before the atomic repository handoff. Replay
+  and pending claims perform no authority, reviewer, or CLOID work.
 - Writer: **unavailable**. No Node signing package is installed or composed.
 - Orchestration: an uncomposed fake-only coordinator verifies one call through
   the minimal signer and writer ports plus unknown/reconciliation handoff after
@@ -32,6 +37,20 @@ encoder, or alternate Hyperliquid protocol implementation.
   writer admission. It does not prove signing conformance and is not a provider
   implementation or runtime capability.
 - Mainnet: absent. Decision 0015 is a boundary, not an activation.
+
+The preparation coordinator is not a runtime capability. A real authority
+resolver and metadata/book/fee reviewer do not exist. Composition is forbidden
+until the repository rechecks the resolver's wallet-evidence lease against the
+database clock after lock waits and verifies that the active Agent remains
+valid through the review expiry. The v1 draft verifier currently locks a 25 bps
+default and 100 bps maximum slippage, a 15-second review lifetime, a 2-second
+maximum reference-source age, and a 15-second maximum fee-source age. It also
+uses exact arithmetic to bind the real action notional to the reviewed maximum
+spend/minimum receive. In v1, `fee_estimate` is a conservative
+quote-denominated bound: it cannot be below `price * size * fee_rate`, and it is
+included when proving the user's maximum spend or minimum receive. Changing
+these numbers or fee semantics requires a coordinated reviewer, config,
+contract, and test update.
 
 The first public contract is exactly the twelve routes in `contract.json`.
 `POST /v1/spot/intents` is both the durable executable quote and the immutable

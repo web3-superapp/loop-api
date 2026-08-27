@@ -10,7 +10,10 @@ import { ApiError } from "../src/core/http/api-error.js";
 import type { AuthenticatedLoopPrincipal } from "../src/core/http/authentication.js";
 import type { SpotAgentAuthorizationService } from "../src/features/spot/spot-agent-authorization-service.js";
 import { createSpotReview } from "../src/features/spot/spot-intent-contract.js";
-import type { SpotIntentService } from "../src/features/spot/spot-intent-service.js";
+import {
+  SpotIntentExpiredError,
+  type SpotIntentService,
+} from "../src/features/spot/spot-intent-service.js";
 import type { SpotMarketService } from "../src/features/spot/spot-market-service.js";
 import { SpotUnavailableError } from "../src/features/spot/spot-errors.js";
 import type { SpotWalletBindingService } from "../src/features/spot/spot-wallet-binding-service.js";
@@ -582,5 +585,28 @@ describe("Spot closed-loop routes", () => {
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({ code: "spot_unavailable" });
     expect(response.body).not.toContain("perp_unavailable");
+  });
+
+  it("publishes and maps a prepare-time expiry race", async () => {
+    const dependenciesWithExpiry = dependencies();
+    dependenciesWithExpiry.intentService.prepare.mockRejectedValueOnce(
+      new SpotIntentExpiredError(),
+    );
+    const input = await harness(dependenciesWithExpiry);
+
+    const response = await input.app.inject({
+      method: "POST",
+      url: "/v1/spot/intents",
+      headers: { "idempotency-key": idempotencyKey },
+      payload: {
+        market_id: marketId,
+        side: "buy",
+        amount: { mode: "quote", value: "10" },
+        max_slippage_bps: 25,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "spot_intent_expired" });
   });
 });

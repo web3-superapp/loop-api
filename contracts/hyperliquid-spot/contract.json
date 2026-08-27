@@ -254,6 +254,7 @@
       "binding_epoch",
       "expires_at"
     ],
+    "fee_semantics": "fee_estimate is a conservative quote-denominated bound, is not below exact reviewed notional times fee_rate, and is included in maximum spend or minimum receive",
     "submit_rule": "use exact persisted base size and worst price; never silently refetch or recalculate",
     "material_change": "new intent and visible review required"
   },
