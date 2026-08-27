@@ -880,6 +880,13 @@ export function createPostgresControlPlaneRepository(
                 reconciliation_status as previous_reconciliation_status
               from public.provider_operations
               where state = 'unknown'
+                and not (
+                  domain = 'hyperliquid'
+                  and operation_kind in (
+                    'spot_intent',
+                    'spot_agent_authorization'
+                  )
+                )
                 and (
                   (
                     reconciliation_status = 'pending'
@@ -949,6 +956,7 @@ export function createPostgresControlPlaneRepository(
       return withTransaction(pool, async (client) => {
         const result = await client.query<Record<string, unknown>>({
           text: `
+            /* loop_complete_provider_operation_reconciliation */
             with locked as materialized (
               select id as operation_id
               from public.provider_operations
@@ -973,6 +981,13 @@ export function createPostgresControlPlaneRepository(
               updated_at = clock_timestamp()
             from locked
             where operation.id = locked.operation_id
+              and not (
+                operation.domain = 'hyperliquid'
+                and operation.operation_kind in (
+                  'spot_intent',
+                  'spot_agent_authorization'
+                )
+              )
               and operation.lease_expires_at > clock_timestamp()
             returning ${operationReturningColumns}
           `,
@@ -1038,6 +1053,13 @@ export function createPostgresControlPlaneRepository(
               updated_at = clock_timestamp()
             from locked
             where operation.id = locked.operation_id
+              and not (
+                operation.domain = 'hyperliquid'
+                and operation.operation_kind in (
+                  'spot_intent',
+                  'spot_agent_authorization'
+                )
+              )
               and operation.lease_expires_at > clock_timestamp()
             returning ${operationReturningColumns}
           `,
@@ -1100,6 +1122,13 @@ export function createPostgresControlPlaneRepository(
               updated_at = clock_timestamp()
             from locked
             where operation.id = locked.operation_id
+              and not (
+                operation.domain = 'hyperliquid'
+                and operation.operation_kind in (
+                  'spot_intent',
+                  'spot_agent_authorization'
+                )
+              )
               and operation.lease_expires_at > clock_timestamp()
             returning ${operationReturningColumns}
           `,

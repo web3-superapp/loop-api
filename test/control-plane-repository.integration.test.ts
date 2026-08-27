@@ -678,7 +678,7 @@ describe("PostgreSQL control-plane repository", () => {
               from pg_stat_activity
               where datname = current_database()
                 and wait_event_type = 'Lock'
-                and query like '%lease_expires_at > clock_timestamp()%'
+                and query like '%loop_complete_provider_operation_reconciliation%'
             ) as waiting
           `,
         });

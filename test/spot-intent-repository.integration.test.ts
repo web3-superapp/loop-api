@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createPostgresControlPlaneRepository,
   IdempotencyConflictError,
+  StaleProviderOperationLeaseError,
 } from "../src/database/control-plane-repository.js";
 import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "../src/database/hyperliquid-signer-nonce.js";
 import {
@@ -639,7 +640,12 @@ async function spotAttemptSnapshot(
   readonly attempt_committed_at: Date | null;
   readonly attempt_deadline_at: Date | null;
   readonly reconciliation_status: string;
+  readonly reconciliation_attempt_count: number;
   readonly reconcile_after: Date | null;
+  readonly operator_required_at: Date | null;
+  readonly lease_owner: string | null;
+  readonly lease_expires_at: Date | null;
+  readonly fence_token: string;
   readonly operation_version: string;
   readonly intent_state: string;
   readonly intent_version: string;
@@ -659,7 +665,12 @@ async function spotAttemptSnapshot(
     attempt_committed_at: Date | null;
     attempt_deadline_at: Date | null;
     reconciliation_status: string;
+    reconciliation_attempt_count: number;
     reconcile_after: Date | null;
+    operator_required_at: Date | null;
+    lease_owner: string | null;
+    lease_expires_at: Date | null;
+    fence_token: string;
     operation_version: string;
     intent_state: string;
     intent_version: string;
@@ -680,7 +691,12 @@ async function spotAttemptSnapshot(
         operation.attempt_committed_at,
         operation.attempt_deadline_at,
         operation.reconciliation_status,
+        operation.reconciliation_attempt_count,
         operation.reconcile_after,
+        operation.operator_required_at,
+        operation.lease_owner,
+        operation.lease_expires_at,
+        operation.fence_token::text as fence_token,
         operation.record_version::text as operation_version,
         intent.state as intent_state,
         intent.record_version::text as intent_version,
@@ -1335,6 +1351,49 @@ describe("PostgreSQL Spot intent repository", () => {
       snapshot.reconcile_after?.toISOString(),
     );
 
+    const generic = createPostgresControlPlaneRepository(pool);
+    const genericPrepared = await generic.prepareProviderOperation({
+      ownerUserId: authority.ownerUserId,
+      scope: "perp_order_submit",
+      idempotencyKey: randomUUID(),
+      keySource: "client",
+      requestSha256: digestB,
+      domain: "hyperliquid",
+      operationKind: "perp_order_submit",
+      requestId: randomUUID(),
+    });
+    const genericSubmitting = await generic.markProviderOperationSubmitting({
+      ownerUserId: authority.ownerUserId,
+      operationId: genericPrepared.operation.id,
+      requestId: randomUUID(),
+      attemptDurationMs: 30_000,
+    });
+    await generic.markProviderOperationUnknown({
+      ownerUserId: authority.ownerUserId,
+      operationId: genericPrepared.operation.id,
+      requestId: randomUUID(),
+      transportAttemptId: genericSubmitting.transportAttemptId ?? "",
+      recordVersion: genericSubmitting.recordVersion,
+      reasonCode: "submission_transport_ambiguous",
+      retryDelayMs: 0,
+    });
+    await expect(
+      generic.leaseProviderOperationsForReconciliation({
+        workerId: randomUUID(),
+        requestId: randomUUID(),
+        limit: 1,
+        leaseDurationMs: 30_000,
+      }),
+    ).resolves.toMatchObject([
+      {
+        id: genericPrepared.operation.id,
+        domain: "hyperliquid",
+        operationKind: "perp_order_submit",
+        reconciliationStatus: "leased",
+      },
+    ]);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+
     await expect(
       repository.recordSubmissionUnknown({
         ...unknownInput,
@@ -1383,6 +1442,122 @@ describe("PostgreSQL Spot intent repository", () => {
       kind: "already_attempted",
       intent: { id: prepared.id, state: "unknown", recordVersion: "2" },
     });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+  });
+
+  it("rejects every generic reconciliation mutation for a pre-existing Spot lease", async () => {
+    const authority = await seedAuthority(pool, "generic-reconciliation-deny");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the guarded Spot submission to start");
+    }
+    const recorded = await repository.recordSubmissionUnknown({
+      ownerUserId: authority.ownerUserId,
+      intentId: prepared.id,
+      requestId: randomUUID(),
+      transportAttemptId: started.attempt.transportAttemptId,
+      expectedOperationRecordVersion: started.attempt.operationRecordVersion,
+      expectedIntentRecordVersion: started.intent.recordVersion,
+      outcome: {
+        state: "unknown",
+        providerOrderId: null,
+        reasonCode: "submission_transport_ambiguous",
+      },
+    });
+    if (recorded.kind !== "recorded") {
+      throw new Error("Expected the guarded Spot outcome to be recorded");
+    }
+
+    const workerId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const operation = await client.query({
+        text: `
+          update public.provider_operations
+          set
+            reconciliation_status = 'leased',
+            reconciliation_attempt_count = reconciliation_attempt_count + 1,
+            lease_owner = $2,
+            lease_expires_at = clock_timestamp() + interval '30 seconds',
+            fence_token = fence_token + 1,
+            record_version = record_version + 1,
+            updated_at = clock_timestamp()
+          where id = $1
+            and domain = 'hyperliquid'
+            and operation_kind = 'spot_intent'
+            and state = 'unknown'
+            and reconciliation_status = 'pending'
+        `,
+        values: [prepared.id, workerId],
+      });
+      const intent = await client.query({
+        text: `
+          update public.spot_intents
+          set
+            state = 'reconciling',
+            record_version = record_version + 1,
+            updated_at = clock_timestamp()
+          where id = $1 and state = 'unknown'
+        `,
+        values: [prepared.id],
+      });
+      expect(operation.rowCount).toBe(1);
+      expect(intent.rowCount).toBe(1);
+      await client.query("set constraints all immediate");
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "unknown",
+      reconciliation_status: "leased",
+      reconciliation_attempt_count: 1,
+      lease_owner: workerId,
+      fence_token: "1",
+      operation_version: "3",
+      intent_state: "reconciling",
+      intent_version: "3",
+    });
+    const generic = createPostgresControlPlaneRepository(pool);
+    const leaseIdentity = {
+      ownerUserId: authority.ownerUserId,
+      operationId: prepared.id,
+      workerId,
+      fenceToken: snapshot.fence_token,
+      recordVersion: snapshot.operation_version,
+      requestId: randomUUID(),
+    } as const;
+
+    await expect(
+      generic.completeProviderOperationReconciliation({
+        ...leaseIdentity,
+        state: "succeeded",
+      }),
+    ).rejects.toBeInstanceOf(StaleProviderOperationLeaseError);
+    await expect(
+      generic.rescheduleProviderOperationReconciliation({
+        ...leaseIdentity,
+        requestId: randomUUID(),
+        reasonCode: "provider_pending",
+        retryDelayMs: 1_000,
+      }),
+    ).rejects.toBeInstanceOf(StaleProviderOperationLeaseError);
+    await expect(
+      generic.holdProviderOperationForOperator({
+        ...leaseIdentity,
+        requestId: randomUUID(),
+        reasonCode: "provider_evidence_conflict",
+      }),
+    ).rejects.toBeInstanceOf(StaleProviderOperationLeaseError);
     expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
   });
 
@@ -1655,7 +1830,7 @@ describe("PostgreSQL Spot intent repository", () => {
     ]);
   });
 
-  it("also excludes expired Spot Agent authorization attempts from generic quarantine", async () => {
+  it("also excludes Spot Agent authorization attempts from generic recovery lanes", async () => {
     const authority = await seedAuthority(pool, "authorization-quarantine", {
       activate: false,
     });
@@ -1731,6 +1906,98 @@ describe("PostgreSQL Spot intent repository", () => {
         },
       ],
     });
+
+    const transition = await pool.connect();
+    try {
+      await transition.query("begin");
+      const operation = await transition.query({
+        text: `
+          update public.provider_operations
+          set
+            state = 'unknown',
+            reconciliation_status = 'pending',
+            reconcile_after = clock_timestamp(),
+            record_version = record_version + 1,
+            updated_at = clock_timestamp()
+          where id = $1
+            and state = 'submitting'
+            and reconciliation_status = 'not_required'
+        `,
+        values: [authority.authorizationId],
+      });
+      const authorization = await transition.query({
+        text: `
+          update public.spot_agent_authorizations
+          set
+            state = 'unknown',
+            result_observed_at = clock_timestamp(),
+            result_reason_code = 'submission_transport_ambiguous',
+            record_version = record_version + 1,
+            updated_at = clock_timestamp()
+          where id = $1 and state = 'submitting'
+        `,
+        values: [authority.authorizationId],
+      });
+      expect(operation.rowCount).toBe(1);
+      expect(authorization.rowCount).toBe(1);
+      await transition.query("set constraints all immediate");
+      await transition.query("commit");
+    } catch (error) {
+      await transition.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      transition.release();
+    }
+
+    const beforeLease = await pool.query({
+      text: `
+        select
+          operation.state as operation_state,
+          operation.reconciliation_status,
+          operation.record_version::text as operation_version,
+          operation.lease_owner,
+          operation.lease_expires_at,
+          operation.fence_token::text as fence_token,
+          agent_auth.state as authorization_state,
+          agent_auth.record_version::text as authorization_version,
+          agent_auth.result_reason_code
+        from public.provider_operations as operation
+        join public.spot_agent_authorizations as agent_auth
+          on agent_auth.id = operation.id
+        where operation.id = $1
+      `,
+      values: [authority.authorizationId],
+    });
+    await expect(
+      createPostgresControlPlaneRepository(
+        pool,
+      ).leaseProviderOperationsForReconciliation({
+        workerId: randomUUID(),
+        requestId: randomUUID(),
+        limit: 1,
+        leaseDurationMs: 30_000,
+      }),
+    ).resolves.toEqual([]);
+    const afterLease = await pool.query({
+      text: `
+        select
+          operation.state as operation_state,
+          operation.reconciliation_status,
+          operation.record_version::text as operation_version,
+          operation.lease_owner,
+          operation.lease_expires_at,
+          operation.fence_token::text as fence_token,
+          agent_auth.state as authorization_state,
+          agent_auth.record_version::text as authorization_version,
+          agent_auth.result_reason_code
+        from public.provider_operations as operation
+        join public.spot_agent_authorizations as agent_auth
+          on agent_auth.id = operation.id
+        where operation.id = $1
+      `,
+      values: [authority.authorizationId],
+    });
+    expect(afterLease.rows).toEqual(beforeLease.rows);
   });
 
   it("requires exact fresh wallet, market, policy, and review evidence before journaling", async () => {

@@ -175,11 +175,12 @@ attempt to `unknown`/pending reconciliation for only two server-normalized
 ambiguous-response reasons, or quarantine an elapsed attempt with the fixed
 `submission_deadline_elapsed` reason. Both transitions update the generic and
 Spot projections plus their append-only events in one transaction and preserve
-the single nonce allocation. Generic deadline quarantine excludes both Spot
-intent and Spot Agent authorization operations so it cannot leave either
-projection split. These recovery primitives remain uncomposed until a
-Spot-aware authoritative reconciler is available; Spot Agent authorization
-submission recovery does not yet have its own lane and therefore remains
+the single nonce allocation. Generic deadline quarantine, reconciliation
+leasing, completion, rescheduling, and operator holds all exclude both Spot
+intent and Spot Agent authorization operations, so generic recovery cannot
+leave either projection split. These recovery primitives remain uncomposed
+until a Spot-aware authoritative reconciler is available; Spot Agent
+authorization submission recovery does not yet have its own lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped
 public intent resource, but preparation and a first submission still stop
