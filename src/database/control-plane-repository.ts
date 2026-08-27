@@ -825,6 +825,13 @@ export function createPostgresControlPlaneRepository(
               where state = 'submitting'
                 and reconciliation_status = 'not_required'
                 and attempt_deadline_at <= clock_timestamp()
+                and not (
+                  domain = 'hyperliquid'
+                  and operation_kind in (
+                    'spot_intent',
+                    'spot_agent_authorization'
+                  )
+                )
               order by attempt_deadline_at, id
               for update skip locked
               limit $1

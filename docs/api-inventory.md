@@ -170,11 +170,22 @@ now atomically binds fresh server-only wallet, market, policy, legal,
 kill-switch, signer, and reconciliation evidence to exactly one transport
 attempt and one persisted Agent nonce. It is not composed into a workflow or
 route, and only its first transaction winner receives the internal execution
-material. A repository-backed default-closed workflow may return an existing
-owner-scoped public intent resource, but preparation and a first submission
-still stop before any claim, submission journal, nonce, signer, or provider
-work. The production writer remains unavailable and no Hyperliquid Node SDK
-has been installed.
+material. The PostgreSQL repository can now atomically project that exact
+attempt to `unknown`/pending reconciliation for only two server-normalized
+ambiguous-response reasons, or quarantine an elapsed attempt with the fixed
+`submission_deadline_elapsed` reason. Both transitions update the generic and
+Spot projections plus their append-only events in one transaction and preserve
+the single nonce allocation. Generic deadline quarantine excludes both Spot
+intent and Spot Agent authorization operations so it cannot leave either
+projection split. These recovery primitives remain uncomposed until a
+Spot-aware authoritative reconciler is available; Spot Agent authorization
+submission recovery does not yet have its own lane and therefore remains
+safely stopped at `submitting` after its generic exclusion. A
+repository-backed default-closed workflow may return an existing owner-scoped
+public intent resource, but preparation and a first submission still stop
+before any claim, submission journal, nonce, signer, or provider work.
+Terminal outcomes, provider writes, and a production signer remain
+unavailable, and no Hyperliquid Node SDK has been installed.
 
 ## Perp wallet-binding lifecycle
 

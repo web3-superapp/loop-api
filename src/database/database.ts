@@ -38,7 +38,7 @@ import {
 } from "./spot-agent-authorization-repository.js";
 import {
   createPostgresSpotIntentRepository,
-  type SpotIntentRepository,
+  type PostgresSpotIntentRepository,
 } from "./spot-intent-repository.js";
 import {
   createPostgresWatchlistRepository,
@@ -65,7 +65,7 @@ export interface Database {
 export interface PostgresDatabase extends Database {
   readonly perpReconciliation: PerpReconciliationRepository;
   readonly spotAgentAuthorizations: SpotAgentAuthorizationRepository;
-  readonly spotIntents: SpotIntentRepository;
+  readonly spotIntents: PostgresSpotIntentRepository;
 }
 
 export interface PostgresDatabaseConfig {

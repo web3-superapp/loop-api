@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { IdempotencyConflictError } from "../src/database/control-plane-repository.js";
+import {
+  createPostgresControlPlaneRepository,
+  IdempotencyConflictError,
+} from "../src/database/control-plane-repository.js";
 import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "../src/database/hyperliquid-signer-nonce.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
@@ -25,7 +28,9 @@ import {
   SpotIntentPrepareClaimRequiredError,
   SpotIntentPrepareExpiredError,
   SpotIntentRepositoryUnavailableError,
+  SpotIntentSubmissionConflictError,
   type BeginSpotIntentSubmissionInput,
+  type PostgresSpotIntentRepository,
   type PrepareSpotIntentInput,
   type SpotIntentRecord,
   type SpotIntentRepository,
@@ -633,9 +638,13 @@ async function spotAttemptSnapshot(
   readonly transport_attempt_id: string | null;
   readonly attempt_committed_at: Date | null;
   readonly attempt_deadline_at: Date | null;
+  readonly reconciliation_status: string;
+  readonly reconcile_after: Date | null;
   readonly operation_version: string;
   readonly intent_state: string;
   readonly intent_version: string;
+  readonly result_observed_at: Date | null;
+  readonly result_reason_code: string | null;
   readonly allocation_count: string;
   readonly allocation_nonce: string | null;
   readonly signer_kind: string | null;
@@ -649,9 +658,13 @@ async function spotAttemptSnapshot(
     transport_attempt_id: string | null;
     attempt_committed_at: Date | null;
     attempt_deadline_at: Date | null;
+    reconciliation_status: string;
+    reconcile_after: Date | null;
     operation_version: string;
     intent_state: string;
     intent_version: string;
+    result_observed_at: Date | null;
+    result_reason_code: string | null;
     allocation_count: string;
     allocation_nonce: string | null;
     signer_kind: string | null;
@@ -666,9 +679,13 @@ async function spotAttemptSnapshot(
         operation.transport_attempt_id,
         operation.attempt_committed_at,
         operation.attempt_deadline_at,
+        operation.reconciliation_status,
+        operation.reconcile_after,
         operation.record_version::text as operation_version,
         intent.state as intent_state,
         intent.record_version::text as intent_version,
+        intent.result_observed_at,
+        intent.result_reason_code,
         (
           select count(*)::text
           from public.hyperliquid_signer_nonce_allocations as allocation
@@ -700,6 +717,28 @@ async function spotAttemptSnapshot(
     throw new Error("Spot intent attempt snapshot failed");
   }
   return row;
+}
+
+async function expireSubmissionDeadline(
+  pool: InstanceType<typeof Pool>,
+  intentId: string,
+): Promise<void> {
+  const result = await pool.query({
+    text: `
+      update public.provider_operations
+      set
+        attempt_committed_at = clock_timestamp() - interval '20 seconds',
+        attempt_deadline_at = clock_timestamp() - interval '10 seconds'
+      where id = $1
+        and domain = 'hyperliquid'
+        and operation_kind = 'spot_intent'
+        and state = 'submitting'
+    `,
+    values: [intentId],
+  });
+  if (result.rowCount !== 1) {
+    throw new Error("Spot intent deadline fixture failed");
+  }
 }
 
 async function claim(
@@ -892,7 +931,7 @@ async function submissionOutcomeAfterOperationLockWait(
 
 describe("PostgreSQL Spot intent repository", () => {
   const pool = new Pool({ connectionString: databaseUrl });
-  let repository: SpotIntentRepository;
+  let repository: PostgresSpotIntentRepository;
 
   beforeAll(() => {
     repository = createPostgresSpotIntentRepository(pool);
@@ -1119,6 +1158,7 @@ describe("PostgreSQL Spot intent repository", () => {
       attempt: {
         intentId: prepared.id,
         network: "testnet",
+        operationRecordVersion: "1",
         vaultAddress: null,
         expiresAfter: String(Date.parse(prepared.resource.expires_at)),
         canonicalAction: prepared.canonicalAction,
@@ -1217,6 +1257,479 @@ describe("PostgreSQL Spot intent repository", () => {
       allocation_count: "1",
       audit_count: "2",
       event_count: "2",
+    });
+  });
+
+  it("atomically records one ambiguous Spot submission and replays it without a second attempt", async () => {
+    const authority = await seedAuthority(pool, "submit-unknown");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the ambiguous Spot submission to start");
+    }
+    const unknownInput = Object.freeze({
+      ownerUserId: authority.ownerUserId,
+      intentId: prepared.id,
+      requestId: randomUUID(),
+      transportAttemptId: started.attempt.transportAttemptId,
+      expectedOperationRecordVersion: started.attempt.operationRecordVersion,
+      expectedIntentRecordVersion: started.intent.recordVersion,
+      outcome: Object.freeze({
+        state: "unknown" as const,
+        providerOrderId: null,
+        reasonCode: "submission_transport_ambiguous" as const,
+      }),
+    });
+
+    const recorded = await repository.recordSubmissionUnknown(unknownInput);
+    expect(recorded).toMatchObject({
+      kind: "recorded",
+      intent: {
+        id: prepared.id,
+        state: "unknown",
+        recordVersion: "2",
+        result: {
+          state: "unknown",
+          order_id: null,
+          reason_code: "submission_transport_ambiguous",
+        },
+        resource: {
+          intent_id: prepared.id,
+          state: "unknown",
+          submission: { state: "attempted" },
+          result: {
+            state: "unknown",
+            order_id: null,
+            reason_code: "submission_transport_ambiguous",
+          },
+        },
+      },
+    });
+    if (recorded.kind !== "recorded") {
+      throw new Error("Expected the unknown Spot outcome to be recorded");
+    }
+    const publicResource = JSON.stringify(recorded.intent.resource);
+    expect(publicResource).not.toContain(started.attempt.nonce);
+    expect(publicResource).not.toContain(started.attempt.agentAddress);
+    expect(publicResource).not.toContain(started.attempt.signerRef);
+
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "unknown",
+      attempt_count: 1,
+      transport_attempt_id: started.attempt.transportAttemptId,
+      reconciliation_status: "pending",
+      operation_version: "2",
+      intent_state: "unknown",
+      intent_version: "2",
+      result_reason_code: "submission_transport_ambiguous",
+      allocation_count: "1",
+      allocation_nonce: started.attempt.nonce,
+      audit_count: "3",
+      event_count: "3",
+    });
+    expect(snapshot.reconcile_after).not.toBeNull();
+    expect(snapshot.result_observed_at?.toISOString()).toBe(
+      snapshot.reconcile_after?.toISOString(),
+    );
+
+    await expect(
+      repository.recordSubmissionUnknown({
+        ...unknownInput,
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({
+      kind: "already_recorded",
+      intent: { id: prepared.id, state: "unknown", recordVersion: "2" },
+    });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+    for (const staleVersion of [
+      {
+        expectedOperationRecordVersion: "0",
+        expectedIntentRecordVersion: "1",
+      },
+      {
+        expectedOperationRecordVersion: "1",
+        expectedIntentRecordVersion: "999",
+      },
+    ]) {
+      await expect(
+        repository.recordSubmissionUnknown({
+          ...unknownInput,
+          ...staleVersion,
+          requestId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(SpotIntentSubmissionConflictError);
+    }
+    await expect(
+      repository.recordSubmissionUnknown({
+        ...unknownInput,
+        requestId: randomUUID(),
+        outcome: {
+          state: "unknown",
+          providerOrderId: null,
+          reasonCode: "submission_response_unclassified",
+        },
+      }),
+    ).rejects.toBeInstanceOf(SpotIntentSubmissionConflictError);
+    await expect(
+      repository.beginSubmission({
+        ...(await submissionInput(pool, authority, prepared)),
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({
+      kind: "already_attempted",
+      intent: { id: prepared.id, state: "unknown", recordVersion: "2" },
+    });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+  });
+
+  it("rejects foreign, missing, mismatched-attempt, and stale-version outcome writes before mutation", async () => {
+    const authority = await seedAuthority(pool, "submit-unknown-guard");
+    const foreign = await insertOwner(pool, "submit-unknown-guard-foreign");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the guarded Spot submission to start");
+    }
+    const input = {
+      ownerUserId: authority.ownerUserId,
+      intentId: prepared.id,
+      requestId: randomUUID(),
+      transportAttemptId: started.attempt.transportAttemptId,
+      expectedOperationRecordVersion: started.attempt.operationRecordVersion,
+      expectedIntentRecordVersion: "1",
+      outcome: {
+        state: "unknown" as const,
+        providerOrderId: null,
+        reasonCode: "submission_response_unclassified" as const,
+      },
+    };
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+
+    await expect(
+      repository.recordSubmissionUnknown({
+        ...input,
+        ownerUserId: foreign.ownerUserId,
+      }),
+    ).resolves.toEqual({ kind: "not_found" });
+    await expect(
+      repository.recordSubmissionUnknown({
+        ...input,
+        intentId: randomUUID(),
+      }),
+    ).resolves.toEqual({ kind: "not_found" });
+    for (const conflicting of [
+      { ...input, requestId: randomUUID(), transportAttemptId: randomUUID() },
+      {
+        ...input,
+        requestId: randomUUID(),
+        expectedOperationRecordVersion: "0",
+      },
+      {
+        ...input,
+        requestId: randomUUID(),
+        expectedIntentRecordVersion: "0",
+      },
+    ]) {
+      await expect(
+        repository.recordSubmissionUnknown(conflicting),
+      ).rejects.toBeInstanceOf(SpotIntentSubmissionConflictError);
+    }
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+  });
+
+  it("converges concurrent reports of the same ambiguous transport attempt", async () => {
+    const authority = await seedAuthority(pool, "submit-unknown-concurrent");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the concurrent unknown submission to start");
+    }
+    const results = await Promise.all(
+      Array.from({ length: 20 }, async () =>
+        repository.recordSubmissionUnknown({
+          ownerUserId: authority.ownerUserId,
+          intentId: prepared.id,
+          requestId: randomUUID(),
+          transportAttemptId: started.attempt.transportAttemptId,
+          expectedOperationRecordVersion:
+            started.attempt.operationRecordVersion,
+          expectedIntentRecordVersion: "1",
+          outcome: {
+            state: "unknown",
+            providerOrderId: null,
+            reasonCode: "submission_transport_ambiguous",
+          },
+        }),
+      ),
+    );
+
+    expect(results.filter(({ kind }) => kind === "recorded")).toHaveLength(1);
+    expect(
+      results.filter(({ kind }) => kind === "already_recorded"),
+    ).toHaveLength(19);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "unknown",
+      reconciliation_status: "pending",
+      operation_version: "2",
+      intent_state: "unknown",
+      intent_version: "2",
+      result_reason_code: "submission_transport_ambiguous",
+      allocation_count: "1",
+      audit_count: "3",
+      event_count: "3",
+    });
+  });
+
+  it("keeps expired Spot attempts out of generic quarantine and atomically quarantines them in the Spot lane", async () => {
+    const authority = await seedAuthority(pool, "submit-quarantine");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the expiring Spot submission to start");
+    }
+    await expireSubmissionDeadline(pool, prepared.id);
+
+    await expect(
+      createPostgresControlPlaneRepository(pool).quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toEqual([]);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "submitting",
+      reconciliation_status: "not_required",
+      operation_version: "1",
+      intent_state: "submitting",
+      intent_version: "1",
+      audit_count: "2",
+      event_count: "2",
+    });
+
+    const quarantined = await repository.quarantineExpiredSubmissions({
+      requestId: randomUUID(),
+      limit: 10,
+    });
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]).toMatchObject({
+      id: prepared.id,
+      state: "unknown",
+      recordVersion: "2",
+      result: {
+        state: "unknown",
+        order_id: null,
+        reason_code: "submission_deadline_elapsed",
+      },
+    });
+    await expect(
+      repository.quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toEqual([]);
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "unknown",
+      attempt_count: 1,
+      transport_attempt_id: started.attempt.transportAttemptId,
+      reconciliation_status: "pending",
+      operation_version: "2",
+      intent_state: "unknown",
+      intent_version: "2",
+      result_reason_code: "submission_deadline_elapsed",
+      allocation_count: "1",
+      audit_count: "3",
+      event_count: "3",
+    });
+    await expect(
+      repository.beginSubmission({
+        ...(await submissionInput(pool, authority, prepared)),
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({
+      kind: "already_attempted",
+      intent: { id: prepared.id, state: "unknown", recordVersion: "2" },
+    });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+  });
+
+  it("admits exactly one concurrent Spot deadline quarantine winner", async () => {
+    const authority = await seedAuthority(pool, "submit-quarantine-concurrent");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the concurrent quarantine submission to start");
+    }
+    await expireSubmissionDeadline(pool, prepared.id);
+
+    const results = await Promise.all([
+      repository.quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+      repository.quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ]);
+    expect(results.flat()).toHaveLength(1);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "unknown",
+      reconciliation_status: "pending",
+      operation_version: "2",
+      intent_state: "unknown",
+      intent_version: "2",
+      result_reason_code: "submission_deadline_elapsed",
+      allocation_count: "1",
+      audit_count: "3",
+      event_count: "3",
+    });
+  });
+
+  it("rolls back the complete Spot quarantine when its deferred event fails", async () => {
+    const authority = await seedAuthority(pool, "submit-quarantine-rollback");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const started = await repository.beginSubmission(
+      await submissionInput(pool, authority, prepared),
+    );
+    if (started.kind !== "started") {
+      throw new Error("Expected the quarantine rollback submission to start");
+    }
+    await expireSubmissionDeadline(pool, prepared.id);
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    await pool.query(`
+      create function public.fail_spot_quarantine_event_for_test()
+      returns trigger
+      language plpgsql
+      as $function$
+      begin
+        raise exception 'forced deferred Spot quarantine event failure'
+          using errcode = '23514';
+      end;
+      $function$;
+
+      create constraint trigger fail_spot_quarantine_event_for_test
+        after insert on public.spot_intent_events
+        deferrable initially deferred
+        for each row
+        execute function public.fail_spot_quarantine_event_for_test();
+    `);
+    try {
+      await expect(
+        repository.quarantineExpiredSubmissions({
+          requestId: randomUUID(),
+          limit: 10,
+        }),
+      ).rejects.toBeInstanceOf(SpotIntentRepositoryUnavailableError);
+      expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+    } finally {
+      await pool.query(`
+        drop trigger if exists fail_spot_quarantine_event_for_test
+          on public.spot_intent_events;
+        drop function if exists public.fail_spot_quarantine_event_for_test();
+      `);
+    }
+    await expect(
+      repository.quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toMatchObject([
+      {
+        id: prepared.id,
+        state: "unknown",
+        recordVersion: "2",
+        result: { reason_code: "submission_deadline_elapsed" },
+      },
+    ]);
+  });
+
+  it("also excludes expired Spot Agent authorization attempts from generic quarantine", async () => {
+    const authority = await seedAuthority(pool, "authorization-quarantine", {
+      activate: false,
+    });
+    const transportAttemptId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query({
+        text: `
+          with database_clock as (
+            select clock_timestamp() as observed_at
+          )
+          update public.provider_operations as operation
+          set
+            state = 'submitting',
+            attempt_count = 1,
+            transport_attempt_id = $2,
+            attempt_committed_at = database_clock.observed_at - interval '20 seconds',
+            attempt_deadline_at = database_clock.observed_at - interval '10 seconds',
+            record_version = 1,
+            updated_at = database_clock.observed_at
+          from database_clock
+          where operation.id = $1 and operation.state = 'prepared'
+        `,
+        values: [authority.authorizationId, transportAttemptId],
+      });
+      await client.query({
+        text: `
+          update public.spot_agent_authorizations
+          set
+            state = 'submitting',
+            record_version = 1,
+            updated_at = clock_timestamp()
+          where id = $1 and state = 'prepared'
+        `,
+        values: [authority.authorizationId],
+      });
+      await client.query("set constraints all immediate");
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await expect(
+      createPostgresControlPlaneRepository(pool).quarantineExpiredSubmissions({
+        requestId: randomUUID(),
+        limit: 10,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      pool.query({
+        text: `
+          select
+            operation.state as operation_state,
+            operation.reconciliation_status,
+            agent_auth.state as authorization_state
+          from public.provider_operations as operation
+          join public.spot_agent_authorizations as agent_auth
+            on agent_auth.id = operation.id
+          where operation.id = $1
+        `,
+        values: [authority.authorizationId],
+      }),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          operation_state: "submitting",
+          reconciliation_status: "not_required",
+          authorization_state: "submitting",
+        },
+      ],
     });
   });
 

@@ -209,6 +209,36 @@ const beginSubmissionInputSchema = z
   })
   .strict();
 
+const submissionUnknownSchema = z
+  .object({
+    state: z.literal("unknown"),
+    providerOrderId: z.null(),
+    reasonCode: z.enum([
+      "submission_transport_ambiguous",
+      "submission_response_unclassified",
+    ]),
+  })
+  .strict();
+
+const recordSubmissionUnknownInputSchema = z
+  .object({
+    ownerUserId: uuidSchema,
+    intentId: uuidSchema,
+    requestId: uuidSchema,
+    transportAttemptId: uuidSchema,
+    expectedOperationRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    expectedIntentRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    outcome: submissionUnknownSchema,
+  })
+  .strict();
+
+const quarantineExpiredSubmissionsInputSchema = z
+  .object({
+    requestId: uuidSchema,
+    limit: z.number().int().min(1).max(100),
+  })
+  .strict();
+
 const prepareInputEnvelopeSchema = z
   .object({
     ownerUserId: uuidSchema,
@@ -638,6 +668,7 @@ export interface SpotIntentSubmissionAttempt {
   readonly intentId: string;
   readonly network: "testnet";
   readonly transportAttemptId: string;
+  readonly operationRecordVersion: string;
   readonly attemptCommittedAt: string;
   readonly attemptDeadlineAt: string;
   readonly nonce: string;
@@ -661,6 +692,34 @@ export type BeginSpotIntentSubmissionResult =
     }>
   | Readonly<{ kind: "not_found" }>;
 
+export type SpotIntentSubmissionUnknown = Readonly<
+  z.output<typeof submissionUnknownSchema>
+>;
+
+export interface RecordSpotIntentSubmissionUnknownInput {
+  readonly ownerUserId: string;
+  readonly intentId: string;
+  readonly requestId: string;
+  readonly transportAttemptId: string;
+  readonly expectedOperationRecordVersion: string;
+  readonly expectedIntentRecordVersion: string;
+  /**
+   * A server-normalized result. Provider payloads, errors, signatures, and
+   * wire bytes must be parsed and discarded before this boundary.
+   */
+  readonly outcome: SpotIntentSubmissionUnknown;
+}
+
+export type RecordSpotIntentSubmissionUnknownResult =
+  | Readonly<{ kind: "recorded"; intent: SpotIntentRecord }>
+  | Readonly<{ kind: "already_recorded"; intent: SpotIntentRecord }>
+  | Readonly<{ kind: "not_found" }>;
+
+export interface QuarantineExpiredSpotIntentSubmissionsInput {
+  readonly requestId: string;
+  readonly limit: number;
+}
+
 export interface SpotIntentRepository {
   claimPrepare(
     input: ClaimSpotIntentPrepareInput,
@@ -677,6 +736,18 @@ export interface SpotIntentRepository {
     intentId: string,
   ): Promise<SpotIntentRecord | null>;
 }
+
+export interface SpotIntentSubmissionRecoveryRepository {
+  recordSubmissionUnknown(
+    input: RecordSpotIntentSubmissionUnknownInput,
+  ): Promise<RecordSpotIntentSubmissionUnknownResult>;
+  quarantineExpiredSubmissions(
+    input: QuarantineExpiredSpotIntentSubmissionsInput,
+  ): Promise<readonly SpotIntentRecord[]>;
+}
+
+export interface PostgresSpotIntentRepository
+  extends SpotIntentRepository, SpotIntentSubmissionRecoveryRepository {}
 
 export class SpotIntentPrepareClaimRequiredError extends Error {
   readonly code = "spot_intent_prepare_claim_required";
@@ -723,6 +794,15 @@ export class SpotIntentRepositoryUnavailableError extends Error {
   }
 }
 
+export class SpotIntentSubmissionConflictError extends Error {
+  readonly code = "spot_intent_submission_conflict";
+
+  constructor() {
+    super("The Spot submission attempt or outcome no longer matches");
+    this.name = "SpotIntentSubmissionConflictError";
+  }
+}
+
 interface ParsedPrepareInput extends Omit<
   PrepareSpotIntentInput,
   "canonicalAction" | "publicReview"
@@ -733,6 +813,9 @@ interface ParsedPrepareInput extends Omit<
 
 type ParsedBeginSpotIntentSubmissionInput = z.output<
   typeof beginSubmissionInputSchema
+>;
+type ParsedRecordSpotIntentSubmissionUnknownInput = z.output<
+  typeof recordSubmissionUnknownInputSchema
 >;
 
 interface CurrentSpotAuthority {
@@ -1993,6 +2076,7 @@ async function beginSubmissionTransaction(
       intentId: intent.id,
       network: "testnet" as const,
       transportAttemptId,
+      operationRecordVersion: journal.data.record_version,
       attemptCommittedAt: journal.data.attempt_committed_at.toISOString(),
       attemptDeadlineAt: journal.data.attempt_deadline_at.toISOString(),
       nonce,
@@ -2005,6 +2089,387 @@ async function beginSubmissionTransaction(
   });
 }
 
+type ParsedSubmissionUnknown = z.output<typeof submissionUnknownSchema>;
+type PersistedSubmissionUnknown = Readonly<
+  Omit<ParsedSubmissionUnknown, "reasonCode"> & {
+    readonly reasonCode:
+      ParsedSubmissionUnknown["reasonCode"] | "submission_deadline_elapsed";
+  }
+>;
+type LockedSpotIntent = NonNullable<
+  Awaited<ReturnType<typeof lockOwnedIntent>>
+>;
+
+function storedSubmissionUnknownMatches(
+  operation: z.output<typeof submissionOperationRowSchema>,
+  locked: LockedSpotIntent,
+  transportAttemptId: string,
+  expectedOperationRecordVersion: string,
+  expectedIntentRecordVersion: string,
+  outcome: ParsedSubmissionUnknown,
+): boolean {
+  const result = locked.record.result;
+  return (
+    operation.transport_attempt_id === transportAttemptId &&
+    expectedOperationRecordVersion === "1" &&
+    expectedIntentRecordVersion === "1" &&
+    operation.state === "unknown" &&
+    operation.reconciliation_status === "pending" &&
+    operation.record_version === "2" &&
+    locked.record.recordVersion === "2" &&
+    locked.row.stored_state === "unknown" &&
+    locked.record.state === "unknown" &&
+    result !== null &&
+    result.state === "unknown" &&
+    result.order_id === null &&
+    result.reason_code === outcome.reasonCode &&
+    locked.row.filled_base_size === null &&
+    locked.row.filled_quote_amount === null &&
+    locked.row.average_fill_price === null &&
+    locked.row.result_fee_amount === null &&
+    locked.row.result_fee_token_index === null &&
+    locked.row.result_fee_token_id === null &&
+    locked.row.result_fee_asset_display_identity === null
+  );
+}
+
+interface PersistSubmissionUnknownOptions {
+  readonly actorType: "api" | "worker";
+  readonly auditEventType:
+    "provider_submission_uncertain" | "submission_deadline_quarantined";
+  readonly intentEventType:
+    "intent_submission_uncertain" | "intent_submission_deadline_quarantined";
+}
+
+async function persistSubmissionUnknown(
+  client: DatabaseClient,
+  input: Readonly<{
+    ownerUserId: string;
+    intentId: string;
+    requestId: string;
+    transportAttemptId: string;
+    expectedOperationRecordVersion: string;
+    expectedIntentRecordVersion: string;
+    outcome: PersistedSubmissionUnknown;
+  }>,
+  operation: z.output<typeof submissionOperationRowSchema>,
+  locked: LockedSpotIntent,
+  options: PersistSubmissionUnknownOptions,
+): Promise<SpotIntentRecord> {
+  if (
+    operation.state !== "submitting" ||
+    operation.reconciliation_status !== "not_required" ||
+    operation.transport_attempt_id !== input.transportAttemptId ||
+    operation.record_version !== input.expectedOperationRecordVersion ||
+    locked.record.recordVersion !== input.expectedIntentRecordVersion ||
+    operation.record_version !== "1" ||
+    locked.row.stored_state !== "submitting" ||
+    locked.record.recordVersion !== "1"
+  ) {
+    throw new SpotIntentSubmissionConflictError();
+  }
+
+  const observedResult = await client.query<{ observed_at: Date }>(
+    "select clock_timestamp() as observed_at",
+  );
+  const observedAt = validDateSchema.safeParse(
+    observedResult.rows[0]?.observed_at,
+  );
+  if (!observedAt.success) {
+    return failUnavailable();
+  }
+  const observedAtIso = observedAt.data.toISOString();
+  const operationResult = await client.query<{ record_version: string }>({
+    text: `
+      update public.provider_operations as operation
+      set
+        state = 'unknown',
+        reconciliation_status = 'pending',
+        reconcile_after = $5::timestamptz,
+        operator_required_at = null,
+        lease_owner = null,
+        lease_expires_at = null,
+        record_version = operation.record_version + 1,
+        updated_at = $5::timestamptz
+      where operation.id = $1
+        and operation.owner_user_id = $2
+        and operation.domain = 'hyperliquid'
+        and operation.operation_kind = 'spot_intent'
+        and operation.state = 'submitting'
+        and operation.reconciliation_status = 'not_required'
+        and operation.transport_attempt_id = $3
+        and operation.record_version = $4::bigint
+      returning operation.record_version::text as record_version
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      input.transportAttemptId,
+      operation.record_version,
+      observedAtIso,
+    ],
+  });
+  const operationVersion = operationResult.rows[0]?.record_version;
+  if (operationVersion === undefined) {
+    return failUnavailable();
+  }
+
+  const intentResult = await client.query<{ record_version: string }>({
+    text: `
+      update public.spot_intents as intent
+      set
+        state = 'unknown',
+        provider_order_id = null,
+        filled_base_size = null,
+        filled_quote_amount = null,
+        average_fill_price = null,
+        result_fee_amount = null,
+        result_fee_token_index = null,
+        result_fee_token_id = null,
+        result_fee_asset_display_identity = null,
+        result_observed_at = $4::timestamptz,
+        result_reason_code = $5,
+        record_version = intent.record_version + 1,
+        updated_at = $4::timestamptz
+      where intent.id = $1
+        and intent.owner_user_id = $2
+        and intent.domain = 'hyperliquid'
+        and intent.operation_kind = 'spot_intent'
+        and intent.state = 'submitting'
+        and intent.record_version = $3::bigint
+      returning intent.record_version::text as record_version
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      locked.record.recordVersion,
+      observedAtIso,
+      input.outcome.reasonCode,
+    ],
+  });
+  const intentVersion = intentResult.rows[0]?.record_version;
+  if (
+    intentVersion === undefined ||
+    operationVersion !== intentVersion ||
+    operationVersion !== "2"
+  ) {
+    return failUnavailable();
+  }
+
+  const auditResult = await client.query({
+    text: `
+      insert into public.audit_events (
+        owner_user_id,
+        operation_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        from_reconciliation_status,
+        to_reconciliation_status,
+        outcome,
+        reason_code,
+        operation_version,
+        fence_token,
+        transport_attempt_id
+      )
+      values (
+        $1, $2, $3, $4, $5, 'submitting', 'unknown',
+        'not_required', 'pending', 'unknown', $6, $7::bigint, 0, $8
+      )
+    `,
+    values: [
+      input.ownerUserId,
+      input.intentId,
+      input.requestId,
+      options.actorType,
+      options.auditEventType,
+      input.outcome.reasonCode,
+      operationVersion,
+      input.transportAttemptId,
+    ],
+  });
+  const eventResult = await client.query({
+    text: `
+      insert into public.spot_intent_events (
+        intent_id,
+        owner_user_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        outcome,
+        reason_code,
+        intent_version
+      )
+      values (
+        $1, $2, $3, $4, $5, 'submitting', 'unknown', 'unknown', $6,
+        $7::bigint
+      )
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      input.requestId,
+      options.actorType,
+      options.intentEventType,
+      input.outcome.reasonCode,
+      intentVersion,
+    ],
+  });
+  if (auditResult.rowCount !== 1 || eventResult.rowCount !== 1) {
+    return failUnavailable();
+  }
+
+  const intent = await readOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (
+    intent === null ||
+    intent.recordVersion !== intentVersion ||
+    intent.state !== "unknown" ||
+    intent.result === null
+  ) {
+    return failUnavailable();
+  }
+  return intent;
+}
+
+async function recordSubmissionUnknownTransaction(
+  client: PoolClient,
+  input: ParsedRecordSpotIntentSubmissionUnknownInput,
+): Promise<RecordSpotIntentSubmissionUnknownResult> {
+  const operation = await lockSubmissionOperation(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (operation === null) {
+    return Object.freeze({ kind: "not_found" as const });
+  }
+  const locked = await lockOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (locked === null) {
+    return failUnavailable();
+  }
+  assertSubmissionProjection(operation, locked.row);
+
+  if (operation.state !== "submitting") {
+    if (
+      storedSubmissionUnknownMatches(
+        operation,
+        locked,
+        input.transportAttemptId,
+        input.expectedOperationRecordVersion,
+        input.expectedIntentRecordVersion,
+        input.outcome,
+      )
+    ) {
+      return Object.freeze({
+        kind: "already_recorded" as const,
+        intent: locked.record,
+      });
+    }
+    throw new SpotIntentSubmissionConflictError();
+  }
+
+  const intent = await persistSubmissionUnknown(
+    client,
+    input,
+    operation,
+    locked,
+    Object.freeze({
+      actorType: "api" as const,
+      auditEventType: "provider_submission_uncertain" as const,
+      intentEventType: "intent_submission_uncertain" as const,
+    }),
+  );
+  return Object.freeze({ kind: "recorded" as const, intent });
+}
+
+async function quarantineExpiredSubmissionTransactions(
+  client: PoolClient,
+  input: z.output<typeof quarantineExpiredSubmissionsInputSchema>,
+): Promise<readonly SpotIntentRecord[]> {
+  const candidates = await client.query<{
+    id: string;
+    owner_user_id: string;
+  }>({
+    text: `
+      select operation.id, operation.owner_user_id
+      from public.provider_operations as operation
+      where operation.domain = 'hyperliquid'
+        and operation.operation_kind = 'spot_intent'
+        and operation.state = 'submitting'
+        and operation.reconciliation_status = 'not_required'
+        and operation.attempt_deadline_at <= clock_timestamp()
+      order by operation.attempt_deadline_at, operation.id
+      for update skip locked
+      limit $1
+    `,
+    values: [input.limit],
+  });
+  const quarantined: SpotIntentRecord[] = [];
+  for (const candidate of candidates.rows) {
+    const ownerUserId = uuidSchema.safeParse(candidate.owner_user_id);
+    const intentId = uuidSchema.safeParse(candidate.id);
+    if (!ownerUserId.success || !intentId.success) {
+      return failUnavailable();
+    }
+    const operation = await lockSubmissionOperation(
+      client,
+      ownerUserId.data,
+      intentId.data,
+    );
+    const locked = await lockOwnedIntent(
+      client,
+      ownerUserId.data,
+      intentId.data,
+    );
+    if (
+      operation === null ||
+      locked === null ||
+      operation.transport_attempt_id === null
+    ) {
+      return failUnavailable();
+    }
+    assertSubmissionProjection(operation, locked.row);
+    quarantined.push(
+      await persistSubmissionUnknown(
+        client,
+        Object.freeze({
+          ownerUserId: ownerUserId.data,
+          intentId: intentId.data,
+          requestId: input.requestId,
+          transportAttemptId: operation.transport_attempt_id,
+          expectedOperationRecordVersion: operation.record_version,
+          expectedIntentRecordVersion: locked.record.recordVersion,
+          outcome: Object.freeze({
+            state: "unknown" as const,
+            providerOrderId: null,
+            reasonCode: "submission_deadline_elapsed",
+          }),
+        }),
+        operation,
+        locked,
+        Object.freeze({
+          actorType: "worker" as const,
+          auditEventType: "submission_deadline_quarantined" as const,
+          intentEventType: "intent_submission_deadline_quarantined" as const,
+        }),
+      ),
+    );
+  }
+  return Object.freeze(quarantined);
+}
+
 function translateRepositoryError(error: unknown): never {
   if (
     error instanceof IdempotencyConflictError ||
@@ -2012,6 +2477,7 @@ function translateRepositoryError(error: unknown): never {
     error instanceof SpotIntentPrepareExpiredError ||
     error instanceof SpotIntentAuthorityStaleError ||
     error instanceof SpotIntentClaimLimitExceededError ||
+    error instanceof SpotIntentSubmissionConflictError ||
     error instanceof SpotIntentRepositoryUnavailableError
   ) {
     throw error;
@@ -2021,7 +2487,7 @@ function translateRepositoryError(error: unknown): never {
 
 export function createPostgresSpotIntentRepository(
   pool: Pool,
-): SpotIntentRepository {
+): PostgresSpotIntentRepository {
   return Object.freeze({
     async claimPrepare(
       rawInput: ClaimSpotIntentPrepareInput,
@@ -2260,6 +2726,32 @@ export function createPostgresSpotIntentRepository(
         const input = beginSubmissionInputSchema.parse(rawInput);
         return await withTransaction(pool, async (client) =>
           beginSubmissionTransaction(client, input),
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async recordSubmissionUnknown(
+      rawInput: RecordSpotIntentSubmissionUnknownInput,
+    ): Promise<RecordSpotIntentSubmissionUnknownResult> {
+      try {
+        const input = recordSubmissionUnknownInputSchema.parse(rawInput);
+        return await withTransaction(pool, async (client) =>
+          recordSubmissionUnknownTransaction(client, input),
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async quarantineExpiredSubmissions(
+      rawInput: QuarantineExpiredSpotIntentSubmissionsInput,
+    ): Promise<readonly SpotIntentRecord[]> {
+      try {
+        const input = quarantineExpiredSubmissionsInputSchema.parse(rawInput);
+        return await withTransaction(pool, async (client) =>
+          quarantineExpiredSubmissionTransactions(client, input),
         );
       } catch (error) {
         return translateRepositoryError(error);
