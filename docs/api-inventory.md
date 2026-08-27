@@ -170,8 +170,11 @@ now atomically binds fresh server-only wallet, market, policy, legal,
 kill-switch, signer, and reconciliation evidence to exactly one transport
 attempt and one persisted Agent nonce. It is not composed into a workflow or
 route, and only its first transaction winner receives the internal execution
-material. The production writer remains unavailable and no Hyperliquid Node
-SDK has been installed.
+material. A repository-backed default-closed workflow may return an existing
+owner-scoped public intent resource, but preparation and a first submission
+still stop before any claim, submission journal, nonce, signer, or provider
+work. The production writer remains unavailable and no Hyperliquid Node SDK
+has been installed.
 
 ## Perp wallet-binding lifecycle
 

@@ -37,6 +37,10 @@ import {
   type SpotAgentAuthorizationRepository,
 } from "./spot-agent-authorization-repository.js";
 import {
+  createPostgresSpotIntentRepository,
+  type SpotIntentRepository,
+} from "./spot-intent-repository.js";
+import {
   createPostgresWatchlistRepository,
   type WatchlistRepository,
 } from "./watchlist-repository.js";
@@ -61,6 +65,7 @@ export interface Database {
 export interface PostgresDatabase extends Database {
   readonly perpReconciliation: PerpReconciliationRepository;
   readonly spotAgentAuthorizations: SpotAgentAuthorizationRepository;
+  readonly spotIntents: SpotIntentRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -164,6 +169,7 @@ export function createPostgresDatabase(
   const agentAuthorizations = createPostgresAgentAuthorizationRepository(pool);
   const spotAgentAuthorizations =
     createPostgresSpotAgentAuthorizationRepository(pool);
+  const spotIntents = createPostgresSpotIntentRepository(pool);
   const profiles = createPostgresProfileRepository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
@@ -176,6 +182,7 @@ export function createPostgresDatabase(
     perpReconciliation,
     agentAuthorizations,
     spotAgentAuthorizations,
+    spotIntents,
     profiles,
     watchlists,
     alerts,
