@@ -179,8 +179,14 @@ the single nonce allocation. Generic deadline quarantine, reconciliation
 leasing, completion, rescheduling, and operator holds all exclude both Spot
 intent and Spot Agent authorization operations, so generic recovery cannot
 leave either projection split. These recovery primitives remain uncomposed
-until a Spot-aware authoritative reconciler is available; Spot Agent
-authorization submission recovery does not yet have its own lane and remains
+until a Spot-aware authoritative reconciler is available. A dedicated
+repository-only Spot intent lane now atomically leases `unknown` intents into
+`reconciling`, reclaims expired leases with a fresh fence, reschedules both
+projections, parks both projections for an operator, and loads only sanitized
+read authority. Its generic completion method always fails closed. It is not
+connected to the production worker because the strict provider reader and
+Spot-specific atomic terminal finalizer are not yet present. Spot Agent
+authorization submission recovery is a separate future lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped
 public intent resource, but preparation and a first submission still stop

@@ -6,6 +6,7 @@ import type {
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
+import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
 import {
   createPostgresAlertRepository,
   type AlertRepository,
@@ -40,6 +41,7 @@ import {
   createPostgresSpotIntentRepository,
   type PostgresSpotIntentRepository,
 } from "./spot-intent-repository.js";
+import { createPostgresSpotReconciliationRepository } from "./spot-reconciliation-repository.js";
 import {
   createPostgresWatchlistRepository,
   type WatchlistRepository,
@@ -66,6 +68,7 @@ export interface PostgresDatabase extends Database {
   readonly perpReconciliation: PerpReconciliationRepository;
   readonly spotAgentAuthorizations: SpotAgentAuthorizationRepository;
   readonly spotIntents: PostgresSpotIntentRepository;
+  readonly spotReconciliation: SpotReconciliationRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -170,6 +173,10 @@ export function createPostgresDatabase(
   const spotAgentAuthorizations =
     createPostgresSpotAgentAuthorizationRepository(pool);
   const spotIntents = createPostgresSpotIntentRepository(pool);
+  const spotReconciliation = createPostgresSpotReconciliationRepository(
+    pool,
+    spotIntents,
+  );
   const profiles = createPostgresProfileRepository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
@@ -183,6 +190,7 @@ export function createPostgresDatabase(
     agentAuthorizations,
     spotAgentAuthorizations,
     spotIntents,
+    spotReconciliation,
     profiles,
     watchlists,
     alerts,
