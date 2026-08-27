@@ -4,6 +4,10 @@ import {
   parseSpotContract,
   type DeepReadonly,
 } from "./spot-contract-support.js";
+import {
+  compareExactUnsignedDecimals,
+  exactUnsignedDecimalSumEquals,
+} from "./spot-exact-decimal.js";
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -30,49 +34,6 @@ const bindingVersionSchema = z
   .string()
   .regex(/^[1-9][0-9]{0,18}$/)
   .refine((value) => BigInt(value) <= maximumBindingVersion);
-
-function exactDecimalSumEquals(
-  total: string,
-  available: string,
-  hold: string,
-): boolean {
-  const parts = [total, available, hold].map((value) => {
-    const point = value.indexOf(".");
-    return {
-      coefficient: BigInt(point === -1 ? value : value.replace(".", "")),
-      scale: point === -1 ? 0 : value.length - point - 1,
-    };
-  });
-  const scale = Math.max(...parts.map((part) => part.scale));
-  const scaled = parts.map(
-    (part) => part.coefficient * 10n ** BigInt(scale - part.scale),
-  );
-  const [scaledTotal, scaledAvailable, scaledHold] = scaled;
-  return (
-    scaledTotal !== undefined &&
-    scaledAvailable !== undefined &&
-    scaledHold !== undefined &&
-    scaledTotal === scaledAvailable + scaledHold
-  );
-}
-
-function compareExactUnsignedDecimals(left: string, right: string): number {
-  const parts = [left, right].map((value) => {
-    const point = value.indexOf(".");
-    return {
-      coefficient: BigInt(point === -1 ? value : value.replace(".", "")),
-      scale: point === -1 ? 0 : value.length - point - 1,
-    };
-  });
-  const scale = Math.max(...parts.map((part) => part.scale));
-  const [scaledLeft, scaledRight] = parts.map(
-    (part) => part.coefficient * 10n ** BigInt(scale - part.scale),
-  );
-  if (scaledLeft === undefined || scaledRight === undefined) {
-    return 0;
-  }
-  return scaledLeft < scaledRight ? -1 : scaledLeft > scaledRight ? 1 : 0;
-}
 
 const sourceSchema = z
   .object({
@@ -228,7 +189,9 @@ const balancesSchema = z
         return;
       }
       ids.add(item.asset_id);
-      if (!exactDecimalSumEquals(item.total, item.available, item.hold)) {
+      if (
+        !exactUnsignedDecimalSumEquals(item.total, item.available, item.hold)
+      ) {
         context.addIssue({
           code: "custom",
           path: ["items", item.asset_id],

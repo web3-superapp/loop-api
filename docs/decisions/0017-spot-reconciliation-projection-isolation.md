@@ -60,6 +60,27 @@ policy through a separate control-plane implementation:
 - a resolved authoritative read uses a Spot-specific atomic finalizer. Generic
   completion is unavailable in this lane.
 
+The initial Spot intent finalizer accepts only a proven full `filled` result,
+the exact `iocCancelRejected` no-fill outcome, or the Spot-compatible rejection
+statuses `insufficientSpotBalanceRejected`, `minTradeNtlRejected`,
+`oracleRejected`, `tickRejected`, and `rejected`. Every resolution must echo
+the persisted CLOID. A fill must equal the full reviewed base size, preserve an exact
+`quote = size * average price` relation, remain inside the reviewed IOC price
+bound, and use one nonnegative fee whose token index, ID, and display identity
+match the frozen base or quote asset and whose amount does not exceed the
+corresponding filled asset amount. This deliberately leaves a
+non-terminating average-price quotient, partial/open/cancelled order, negative
+fee or maker rebate, mixed fee token, unknown status, and incomplete evidence
+for operator handling until a later decision approves a wider representation.
+
+Terminal evidence parsing, exact unsigned-decimal arithmetic, IOC bounds, and
+fee authority remain in the Spot feature boundary. The PostgreSQL repository
+owns only row authority, lock order, database-clock checks, atomic projection
+writes, and translation to its fail-closed repository error. Migration 000010
+widens the original result-fee display-identity constraint to the same frozen
+Spot review grammar, including mixed case and `:/+-`; its rollback refuses to
+narrow after such an identity has been stored.
+
 Every write locks `provider_operations` before the Spot projection and checks
 the owner, exact tuple, one persisted transport attempt, worker, fence, shared
 record version, and database-clock lease expiry. A provider read never receives
@@ -80,5 +101,6 @@ logic or gaining any provider-write capability.
 
 This decision does not enable the Spot worker registration, Hyperliquid
 Exchange writes, signing, Mainnet, cancellation, withdrawals, transfers, or
-automation. The authoritative reader and terminal finalizer remain separate
+automation. The repository finalizer is present, but the authoritative reader,
+runtime validator/handler, and production registration remain separate
 default-closed gates and must preserve the evidence rules in Decision 0014.

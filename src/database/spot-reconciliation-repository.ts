@@ -6,11 +6,17 @@ import {
   type SpotReview,
 } from "../features/spot/spot-intent-contract.js";
 import type {
+  FinalizeSpotIntentResolutionInput,
   LoadClaimedSpotIntentSubjectInput,
   SpotIntentReconciliationSubject,
+  SpotIntentTerminalResolution,
   SpotReconciliationCanonicalAction,
   SpotReconciliationRepository,
 } from "../features/spot/spot-reconciliation-contract.js";
+import {
+  parseSpotIntentTerminalResolution,
+  spotIntentTerminalResolutionMatchesAuthority,
+} from "../features/spot/spot-reconciliation-terminal.js";
 import {
   StaleProviderOperationLeaseError,
   type CompleteReconciliationInput,
@@ -45,6 +51,11 @@ const addressSchema = z
   .refine((value) => value !== zeroAddress);
 const tokenIdSchema = z.string().regex(/^0x[0-9a-f]{32}$/);
 const clientOrderIdSchema = z.string().regex(/^0x[0-9a-f]{32}$/);
+const recoverableSubmissionReasonSchema = z.enum([
+  "submission_transport_ambiguous",
+  "submission_response_unclassified",
+  "submission_deadline_elapsed",
+]);
 const providerCoinSchema = z
   .string()
   .min(2)
@@ -206,6 +217,13 @@ const holdInputSchema = leasedTransitionInputSchema
   .extend({ reasonCode: codeSchema })
   .strict();
 const loadInputSchema = leasedTransitionInputSchema.omit({ requestId: true });
+const finalizeInputSchema = loadInputSchema
+  .extend({
+    expectedIntentRecordVersion: bigintStringSchema,
+    requestId: uuidSchema,
+    resolution: z.unknown(),
+  })
+  .strict();
 
 const operationReturningColumns = `
   id,
@@ -233,6 +251,7 @@ const operationReturningColumns = `
 type DatabaseClient = Pick<PoolClient, "query">;
 type LockedIntent = z.infer<typeof intentRowSchema>;
 type ParsedLeasedTransition = z.infer<typeof leasedTransitionInputSchema>;
+type ParsedFinalizeInput = z.infer<typeof finalizeInputSchema>;
 
 export class SpotReconciliationRepositoryUnavailableError extends Error {
   readonly code = "spot_reconciliation_unavailable";
@@ -389,7 +408,9 @@ async function lockIntent(
     intent.result_fee_amount !== null ||
     intent.result_fee_token_index !== null ||
     intent.result_fee_token_id !== null ||
-    intent.result_fee_asset_display_identity !== null
+    intent.result_fee_asset_display_identity !== null ||
+    !recoverableSubmissionReasonSchema.safeParse(intent.result_reason_code)
+      .success
   ) {
     return failUnavailable();
   }
@@ -868,17 +889,10 @@ function freezeCanonicalAction(
   });
 }
 
-function toSubject(
-  operation: ProviderOperation,
-  intent: LockedIntent,
-): SpotIntentReconciliationSubject {
-  if (
-    operation.transportAttemptId === null ||
-    operation.attemptCommittedAt === null ||
-    intent.state !== "reconciling"
-  ) {
-    return failUnavailable();
-  }
+function validateIntentReadAuthority(intent: LockedIntent): Readonly<{
+  canonicalAction: z.infer<typeof canonicalActionSchema>;
+  review: SpotReview;
+}> {
   const canonicalAction = canonicalActionSchema.safeParse(
     intent.canonical_action,
   );
@@ -895,6 +909,21 @@ function toSubject(
   ) {
     return failUnavailable();
   }
+  return Object.freeze({ canonicalAction: canonicalAction.data, review });
+}
+
+function toSubject(
+  operation: ProviderOperation,
+  intent: LockedIntent,
+): SpotIntentReconciliationSubject {
+  if (
+    operation.transportAttemptId === null ||
+    operation.attemptCommittedAt === null ||
+    intent.state !== "reconciling"
+  ) {
+    return failUnavailable();
+  }
+  const { canonicalAction, review } = validateIntentReadAuthority(intent);
   return Object.freeze({
     operationId: operation.id,
     ownerUserId: operation.ownerUserId,
@@ -920,8 +949,270 @@ function toSubject(
     accountAddress: intent.account_address,
     accountKind: intent.account_kind,
     clientOrderId: intent.client_order_id,
-    canonicalAction: freezeCanonicalAction(canonicalAction.data),
+    canonicalAction: freezeCanonicalAction(canonicalAction),
   });
+}
+
+async function assertResolutionObservationTime(
+  client: DatabaseClient,
+  operationId: string,
+  observedAt: string,
+): Promise<void> {
+  const result = await client.query<{ observation_valid: boolean }>({
+    text: `
+      select
+        $2::timestamptz >= operation.attempt_committed_at
+        and $2::timestamptz >= intent.result_observed_at
+        and $2::timestamptz <= clock_timestamp() as observation_valid
+      from public.provider_operations as operation
+      join public.spot_intents as intent on intent.id = operation.id
+      where operation.id = $1
+    `,
+    values: [operationId, observedAt],
+  });
+  if (result.rows[0]?.observation_valid !== true) {
+    return failUnavailable();
+  }
+}
+
+async function writeTerminalIntent(
+  client: DatabaseClient,
+  intent: LockedIntent,
+  input: ParsedFinalizeInput,
+  resolution: SpotIntentTerminalResolution,
+): Promise<string> {
+  const fee = resolution.state === "filled" ? resolution.fee : null;
+  const result = await client.query<{ record_version: string }>({
+    text: `
+      update public.spot_intents
+      set
+        state = $4,
+        provider_order_id = $5,
+        filled_base_size = $6,
+        filled_quote_amount = $7,
+        average_fill_price = $8,
+        result_fee_amount = $9,
+        result_fee_token_index = $10,
+        result_fee_token_id = $11,
+        result_fee_asset_display_identity = $12,
+        result_observed_at = $13::timestamptz,
+        result_reason_code = $14,
+        record_version = record_version + 1,
+        updated_at = clock_timestamp()
+      where id = $1
+        and owner_user_id = $2
+        and domain = 'hyperliquid'
+        and operation_kind = 'spot_intent'
+        and state = 'reconciling'
+        and record_version = $3::bigint
+      returning record_version::text as record_version
+    `,
+    values: [
+      intent.id,
+      intent.owner_user_id,
+      input.expectedIntentRecordVersion,
+      resolution.state,
+      resolution.providerOrderId,
+      resolution.filledBaseSize,
+      resolution.quoteAmount,
+      resolution.averageFillPrice,
+      fee?.amount ?? null,
+      fee?.tokenIndex ?? null,
+      fee?.tokenId ?? null,
+      fee?.assetDisplayIdentity ?? null,
+      resolution.observedAt,
+      resolution.reasonCode,
+    ],
+  });
+  const version = result.rows[0]?.record_version;
+  if (version === undefined || result.rows.length !== 1) {
+    return failUnavailable();
+  }
+  return version;
+}
+
+async function writeTerminalOperation(
+  client: DatabaseClient,
+  operation: ProviderOperation,
+  input: ParsedFinalizeInput,
+  resolution: SpotIntentTerminalResolution,
+): Promise<ProviderOperation> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      update public.provider_operations as operation
+      set
+        state = $6,
+        reconciliation_status = 'complete',
+        reconcile_after = null,
+        operator_required_at = null,
+        lease_owner = null,
+        lease_expires_at = null,
+        record_version = operation.record_version + 1,
+        updated_at = clock_timestamp()
+      where operation.id = $1
+        and operation.owner_user_id = $2
+        and operation.domain = 'hyperliquid'
+        and operation.operation_kind = 'spot_intent'
+        and operation.state = 'unknown'
+        and operation.reconciliation_status = 'leased'
+        and operation.lease_owner = $3
+        and operation.fence_token = $4::bigint
+        and operation.record_version = $5::bigint
+        and operation.lease_expires_at > clock_timestamp()
+      returning ${operationReturningColumns}
+    `,
+    values: [
+      operation.id,
+      operation.ownerUserId,
+      input.workerId,
+      input.fenceToken,
+      input.recordVersion,
+      resolution.state === "rejected" ? "rejected" : "succeeded",
+    ],
+  });
+  const row = result.rows[0];
+  if (row === undefined || result.rows.length !== 1) {
+    throw new StaleProviderOperationLeaseError();
+  }
+  return toProviderOperation(row);
+}
+
+async function appendTerminalEvents(
+  client: DatabaseClient,
+  operation: ProviderOperation,
+  input: ParsedFinalizeInput,
+  resolution: SpotIntentTerminalResolution,
+  intentVersion: string,
+): Promise<void> {
+  const audit = await client.query({
+    text: `
+      insert into public.audit_events (
+        owner_user_id,
+        operation_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        from_reconciliation_status,
+        to_reconciliation_status,
+        outcome,
+        reason_code,
+        operation_version,
+        fence_token,
+        transport_attempt_id
+      )
+      values (
+        $1, $2, $3, 'worker', 'reconciliation_resolved', 'unknown', $4,
+        'leased', 'complete', $5, $6, $7::bigint, $8::bigint, $9
+      )
+    `,
+    values: [
+      operation.ownerUserId,
+      operation.id,
+      input.requestId,
+      operation.state,
+      operation.state,
+      resolution.reasonCode,
+      operation.recordVersion,
+      operation.fenceToken,
+      operation.transportAttemptId,
+    ],
+  });
+  if (audit.rowCount !== 1) {
+    return failUnavailable();
+  }
+  const event = await client.query({
+    text: `
+      insert into public.spot_intent_events (
+        intent_id,
+        owner_user_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        outcome,
+        reason_code,
+        intent_version
+      )
+      values (
+        $1, $2, $3, 'worker', 'intent_reconciliation_resolved',
+        'reconciling', $4, $4, $5, $6::bigint
+      )
+    `,
+    values: [
+      operation.id,
+      operation.ownerUserId,
+      input.requestId,
+      resolution.state,
+      resolution.reasonCode,
+      intentVersion,
+    ],
+  });
+  if (event.rowCount !== 1) {
+    return failUnavailable();
+  }
+}
+
+async function finalizeTerminalResolution(
+  client: DatabaseClient,
+  input: ParsedFinalizeInput,
+  resolution: SpotIntentTerminalResolution,
+): Promise<void> {
+  const operation = await lockClaimedOperation(client, input);
+  const intent = await lockIntent(client, operation);
+  await assertClaimedLeaseCurrent(client, operation.id);
+  if (
+    intent.state !== "reconciling" ||
+    intent.record_version !== input.expectedIntentRecordVersion
+  ) {
+    return failUnavailable();
+  }
+  const { review } = validateIntentReadAuthority(intent);
+  if (
+    !spotIntentTerminalResolutionMatchesAuthority(
+      {
+        clientOrderId: intent.client_order_id,
+        side: intent.side,
+        computedBaseSize: intent.computed_base_size,
+        worstIocLimitPrice: intent.worst_ioc_limit_price,
+        baseTokenIndex: intent.base_token_index,
+        baseTokenId: intent.base_token_id,
+        baseDisplayIdentity: review.base_display_identity,
+        quoteTokenIndex: intent.quote_token_index,
+        quoteTokenId: intent.quote_token_id,
+        quoteDisplayIdentity: review.quote_display_identity,
+      },
+      resolution,
+    )
+  ) {
+    return failUnavailable();
+  }
+  await assertResolutionObservationTime(
+    client,
+    operation.id,
+    resolution.observedAt,
+  );
+  const intentVersion = await writeTerminalIntent(
+    client,
+    intent,
+    input,
+    resolution,
+  );
+  const completedOperation = await writeTerminalOperation(
+    client,
+    operation,
+    input,
+    resolution,
+  );
+  await appendTerminalEvents(
+    client,
+    completedOperation,
+    input,
+    resolution,
+    intentVersion,
+  );
 }
 
 export function createPostgresSpotReconciliationRepository(
@@ -1007,6 +1298,20 @@ export function createPostgresSpotReconciliationRepository(
           await assertClaimedLeaseCurrent(client, operation.id);
           return toSubject(operation, intent);
         });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async finalizeSpotIntentResolution(
+      rawInput: FinalizeSpotIntentResolutionInput,
+    ): Promise<void> {
+      try {
+        const input = finalizeInputSchema.parse(rawInput);
+        const resolution = parseSpotIntentTerminalResolution(input.resolution);
+        await withTransaction(pool, (client) =>
+          finalizeTerminalResolution(client, input, resolution),
+        );
       } catch (error) {
         return translateRepositoryError(error);
       }

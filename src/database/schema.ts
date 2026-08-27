@@ -1,4 +1,4 @@
-export const latestMigrationName = "000009_spot_reconciliation_projection";
+export const latestMigrationName = "000010_spot_fee_display_identity";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

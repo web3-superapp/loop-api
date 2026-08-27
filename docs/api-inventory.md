@@ -183,15 +183,26 @@ until a Spot-aware authoritative reconciler is available. A dedicated
 repository-only Spot intent lane now atomically leases `unknown` intents into
 `reconciling`, reclaims expired leases with a fresh fence, reschedules both
 projections, parks both projections for an operator, and loads only sanitized
-read authority. Its generic completion method always fails closed. It is not
-connected to the production worker because the strict provider reader and
-Spot-specific atomic terminal finalizer are not yet present. Spot Agent
+read authority. Its generic completion method always fails closed. A
+Spot-specific repository finalizer now atomically resolves only a proven full
+fill, exact IOC no-fill, or finite Spot rejection. It rechecks the persisted
+CLOID, immutable action/review, both record versions, database-clock lease,
+full size, exact quote/average-price arithmetic, reviewed IOC price bound,
+fee-token identity, observation window, shared operation, Spot projection, and
+both append-only histories. Fee display identity uses the same case-sensitive
+grammar as the frozen Spot review rather than an uppercase-only database
+subset. A negative fee/maker rebate, non-terminating
+average-price quotient, partial/open/cancelled result, unknown or incompatible
+status, unbounded evidence, or fee-token ambiguity is not automatically
+finalized. The lane is not connected to the production worker because the
+strict Spot provider reader, runtime result validator/handler, and registry
+composition are not yet present. Spot Agent
 authorization submission recovery is a separate future lane and remains
 safely stopped at `submitting` after its generic exclusion. A
 repository-backed default-closed workflow may return an existing owner-scoped
 public intent resource, but preparation and a first submission still stop
 before any claim, submission journal, nonce, signer, or provider work.
-Terminal outcomes, provider writes, and a production signer remain
+Production terminal outcomes, provider writes, and a production signer remain
 unavailable, and no Hyperliquid Node SDK has been installed.
 
 ## Perp wallet-binding lifecycle
