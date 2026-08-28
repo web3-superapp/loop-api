@@ -30,6 +30,7 @@ import {
   SPOT_INTENT_PENDING_CLAIM_LEASE_MILLISECONDS,
   SPOT_INTENT_PENDING_CLAIM_LIMIT_PER_OWNER,
   SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS,
+  SPOT_INTENT_SUBMISSION_ACCOUNT_EVIDENCE_LEASE_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS,
   SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS,
@@ -73,7 +74,7 @@ const accountAddress = `0x${"1".repeat(40)}`;
 const rotatedAccountAddress = `0x${"9".repeat(40)}`;
 const baseTokenId = `0x${"2".repeat(32)}`;
 const quoteTokenId = `0x${"3".repeat(32)}`;
-const metadataVersion = "testnet_metadata_v1";
+const metadataVersion = metadataSha256;
 const policyVersion = "spot_ioc_v1";
 
 interface OwnerFixture {
@@ -639,10 +640,12 @@ async function submissionInput(
   const windowResult = await pool.query<{
     observed_at: Date;
     expires_at: Date;
+    account_expires_at: Date;
   }>(`
     select
       clock_timestamp() - interval '100 milliseconds' as observed_at,
-      clock_timestamp() + interval '14 seconds' as expires_at
+      clock_timestamp() + interval '14 seconds' as expires_at,
+      clock_timestamp() + interval '1900 milliseconds' as account_expires_at
   `);
   const window = windowResult.rows[0];
   if (window === undefined) {
@@ -650,6 +653,19 @@ async function submissionInput(
   }
   const observedAt = window.observed_at.toISOString();
   const expiresAt = window.expires_at.toISOString();
+  const accountExpiresAt = window.account_expires_at.toISOString();
+  const balanceTarget =
+    intent.publicReview.side === "buy"
+      ? Object.freeze({
+          tokenIndex: intent.quoteTokenIndex,
+          tokenId: intent.quoteTokenId,
+          available: intent.publicReview.maximum_spend_or_minimum_receive.value,
+        })
+      : Object.freeze({
+          tokenIndex: intent.baseTokenIndex,
+          tokenId: intent.baseTokenId,
+          available: intent.publicReview.computed_base_size,
+        });
   return Object.freeze({
     ownerUserId: authority.ownerUserId,
     intentId: intent.id,
@@ -681,6 +697,26 @@ async function submissionInput(
       metadataSha256: intent.metadataSha256,
       fetchedAt: observedAt,
       expiresAt,
+    }),
+    accountEvidence: Object.freeze({
+      provider: "hyperliquid" as const,
+      network: "testnet" as const,
+      accountAddress: intent.accountAddress,
+      metadataVersion: intent.metadataVersion,
+      balance: Object.freeze({
+        dataset: "spotClearinghouseState" as const,
+        tokenIndex: balanceTarget.tokenIndex,
+        tokenId: balanceTarget.tokenId,
+        available: balanceTarget.available,
+        fetchedAt: observedAt,
+        expiresAt: accountExpiresAt,
+      }),
+      fees: Object.freeze({
+        dataset: "userFees" as const,
+        currentTakerRate: intent.publicReview.fee_rate,
+        fetchedAt: observedAt,
+        expiresAt: accountExpiresAt,
+      }),
     }),
     policyEvidence: Object.freeze({
       ownerUserId: authority.ownerUserId,
@@ -1392,6 +1428,7 @@ describe("PostgreSQL Spot intent repository", () => {
         Promise.resolve({
           walletEvidence: evidence.walletEvidence,
           marketEvidence: evidence.marketEvidence,
+          accountEvidence: evidence.accountEvidence,
           policyEvidence: evidence.policyEvidence,
         }),
       ),
@@ -2184,7 +2221,7 @@ describe("PostgreSQL Spot intent repository", () => {
     expect(afterLease.rows).toEqual(beforeLease.rows);
   });
 
-  it("requires exact fresh wallet, market, policy, and review evidence before journaling", async () => {
+  it("requires exact fresh wallet, market, account, policy, and review evidence before journaling", async () => {
     const authority = await seedAuthority(pool, "submit-evidence");
     const prepared = await prepareStoredIntent(repository, authority);
     const input = await submissionInput(pool, authority, prepared);
@@ -2206,6 +2243,17 @@ describe("PostgreSQL Spot intent repository", () => {
         SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS +
         1,
     ).toISOString();
+    const overlongBalanceExpiry = new Date(
+      Date.parse(input.accountEvidence.balance.fetchedAt) +
+        SPOT_INTENT_SUBMISSION_ACCOUNT_EVIDENCE_LEASE_MILLISECONDS +
+        1,
+    ).toISOString();
+    const overlongFeeExpiry = new Date(
+      Date.parse(input.accountEvidence.fees.fetchedAt) +
+        SPOT_INTENT_SUBMISSION_ACCOUNT_EVIDENCE_LEASE_MILLISECONDS +
+        1,
+    ).toISOString();
+    const futureAccountExpiresAt = new Date(Date.now() + 2_900).toISOString();
     const staleInputs: readonly BeginSpotIntentSubmissionInput[] = [
       { ...input, expectedReviewSha256: digestB },
       {
@@ -2234,6 +2282,50 @@ describe("PostgreSQL Spot intent repository", () => {
         policyEvidence: {
           ...input.policyEvidence,
           policyVersion: "spot_ioc_v2",
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          accountAddress: rotatedAccountAddress,
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          metadataVersion: digestB,
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          balance: {
+            ...input.accountEvidence.balance,
+            tokenId: baseTokenId,
+          },
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          balance: {
+            ...input.accountEvidence.balance,
+            available: "9.99999999",
+          },
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          fees: {
+            ...input.accountEvidence.fees,
+            currentTakerRate: "0.0010000001",
+          },
         },
       },
       {
@@ -2277,6 +2369,28 @@ describe("PostgreSQL Spot intent repository", () => {
       },
       {
         ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          balance: {
+            ...input.accountEvidence.balance,
+            fetchedAt: futureObservedAt,
+            expiresAt: futureAccountExpiresAt,
+          },
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          fees: {
+            ...input.accountEvidence.fees,
+            fetchedAt: futureObservedAt,
+            expiresAt: futureAccountExpiresAt,
+          },
+        },
+      },
+      {
+        ...input,
         walletEvidence: {
           ...input.walletEvidence,
           expiresAt: overlongWalletExpiry,
@@ -2294,6 +2408,26 @@ describe("PostgreSQL Spot intent repository", () => {
         policyEvidence: {
           ...input.policyEvidence,
           expiresAt: overlongPolicyExpiry,
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          balance: {
+            ...input.accountEvidence.balance,
+            expiresAt: overlongBalanceExpiry,
+          },
+        },
+      },
+      {
+        ...input,
+        accountEvidence: {
+          ...input.accountEvidence,
+          fees: {
+            ...input.accountEvidence.fees,
+            expiresAt: overlongFeeExpiry,
+          },
         },
       },
     ];
@@ -2771,6 +2905,95 @@ describe("PostgreSQL Spot intent repository", () => {
       }),
     ).resolves.toMatchObject({ rows: [{ nonce: highWater }] });
   });
+
+  it("rolls back journal and nonce when private evidence expires during deferred checks", async () => {
+    const authority = await seedAuthority(
+      pool,
+      "submit-account-evidence-deferred-wait",
+    );
+    const prepared = await prepareStoredIntent(repository, authority);
+    const identity = await pool.query<{ agent_address: string }>({
+      text: `
+        select agent_address
+        from public.spot_agent_identities
+        where id = $1
+      `,
+      values: [authority.agentIdentityId],
+    });
+    const agentAddress = identity.rows[0]?.agent_address;
+    if (agentAddress === undefined) {
+      throw new Error("Spot Agent account-evidence fixture failed");
+    }
+    const advisoryLockKey = 824_026_002;
+    await pool.query(`
+      create function public.wait_spot_submission_account_evidence_for_test()
+      returns trigger
+      language plpgsql
+      as $function$
+      begin
+        perform pg_advisory_xact_lock(${advisoryLockKey});
+        return null;
+      end;
+      $function$;
+
+      create constraint trigger wait_spot_submission_account_evidence_for_test
+        after insert on public.spot_intent_events
+        deferrable initially deferred
+        for each row
+        execute function public.wait_spot_submission_account_evidence_for_test();
+    `);
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query({
+        text: "select pg_advisory_xact_lock($1)",
+        values: [advisoryLockKey],
+      });
+      const input = await submissionInput(pool, authority, prepared);
+      const outcome = repository.beginSubmission(input).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await waitForDatabaseLockWait(pool, "set constraints all immediate");
+      await blocker.query("select pg_sleep(2.2)");
+      await blocker.query("commit");
+      expect(await outcome).toBeInstanceOf(SpotIntentAuthorityStaleError);
+    } catch (error) {
+      await blocker.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      blocker.release();
+      await pool.query(`
+        drop trigger if exists wait_spot_submission_account_evidence_for_test
+          on public.spot_intent_events;
+        drop function if exists public.wait_spot_submission_account_evidence_for_test();
+      `);
+    }
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toMatchObject({
+      operation_state: "prepared",
+      attempt_count: 0,
+      transport_attempt_id: null,
+      operation_version: "0",
+      intent_state: "prepared",
+      intent_version: "0",
+      allocation_count: "0",
+      audit_count: "1",
+      event_count: "1",
+    });
+    await expect(
+      pool.query<{ count: string }>({
+        text: `
+          select count(*)::text as count
+          from public.hyperliquid_signer_nonce_state
+          where network = 'testnet'
+            and signer_address = $1
+            and signer_kind = 'spot_agent'
+        `,
+        values: [agentAddress],
+      }),
+    ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+  }, 10_000);
 
   it("rolls back a journal whose deferred constraints wait past its fixed attempt deadline", async () => {
     const authority = await seedAuthority(pool, "submit-deadline-wait");

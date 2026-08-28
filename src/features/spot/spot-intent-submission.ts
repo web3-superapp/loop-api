@@ -14,7 +14,57 @@ export type SpotIntentSubmissionRepository = Pick<
 export interface SpotIntentSubmissionEvidence {
   readonly walletEvidence: BeginSpotIntentSubmissionInput["walletEvidence"];
   readonly marketEvidence: BeginSpotIntentSubmissionInput["marketEvidence"];
+  readonly accountEvidence: BeginSpotIntentSubmissionInput["accountEvidence"];
   readonly policyEvidence: BeginSpotIntentSubmissionInput["policyEvidence"];
+}
+
+/**
+ * Immutable server-sensitive facts derived from the persisted intent. They
+ * contain owner/account identifiers, so adapters must not log or expose this
+ * subject even though it contains no signing key. The route cannot construct
+ * or override it.
+ */
+export interface SpotIntentSubmissionSubject {
+  readonly ownerUserId: string;
+  readonly intentId: string;
+  readonly network: "testnet";
+  readonly marketId: string;
+  readonly providerCoin: string;
+  readonly baseTokenIndex: number;
+  readonly baseTokenId: string;
+  readonly baseDisplayIdentity: string;
+  readonly quoteTokenIndex: number;
+  readonly quoteTokenId: string;
+  readonly quoteDisplayIdentity: string;
+  readonly spotPairIndex: number;
+  readonly exchangeOrderAsset: number;
+  readonly metadataVersion: string;
+  readonly metadataSha256: string;
+  readonly policyVersion: string;
+  readonly accountAddress: string;
+  readonly bindingVersion: string;
+  readonly agentIdentityId: string;
+  readonly reviewSha256: string;
+  readonly side: "buy" | "sell";
+  readonly computedBaseSize: string;
+  readonly maximumSpendOrMinimumReceive: Readonly<{
+    readonly kind: "maximum_spend" | "minimum_receive";
+    readonly value: string;
+  }>;
+  readonly feeRate: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Produces a short-lived aggregate mutation decision. A real implementation
+ * remains absent until product/legal, signer, and reconciliation gates exist.
+ */
+export interface SpotIntentSubmissionPolicyGate {
+  evaluate(input: {
+    readonly subject: SpotIntentSubmissionSubject;
+    readonly requestId: string;
+    readonly signal: AbortSignal;
+  }): Promise<unknown>;
 }
 
 /**
@@ -30,6 +80,7 @@ export interface SpotIntentSubmissionPreflight {
     readonly network: "testnet";
     readonly action: "spot_ioc_order";
     readonly expectedReviewSha256: string;
+    readonly subject: SpotIntentSubmissionSubject;
     readonly requestId: string;
     readonly signal: AbortSignal;
   }): Promise<SpotIntentSubmissionEvidence>;

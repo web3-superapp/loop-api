@@ -814,11 +814,16 @@ export function createHyperliquidSpotIntentReviewer(
         );
         const market = metadata.market;
         if (
-          validated.request.side === "sell" &&
-          !hasAtMostExactUnsignedDecimalPlaces(
-            validated.request.amount.value,
-            market.base.sizeDecimals,
-          )
+          (validated.request.side === "buy" &&
+            !hasAtMostExactUnsignedDecimalPlaces(
+              validated.request.amount.value,
+              market.quote.weiDecimals,
+            )) ||
+          (validated.request.side === "sell" &&
+            !hasAtMostExactUnsignedDecimalPlaces(
+              validated.request.amount.value,
+              market.base.sizeDecimals,
+            ))
         ) {
           return unavailable();
         }

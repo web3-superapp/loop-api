@@ -30,6 +30,12 @@ encoder, or alternate Hyperliquid protocol implementation.
   before and after review, generates a 16-byte server CLOID, and accepts only a
   strict executable-review draft before the atomic repository handoff. Replay
   and pending claims perform no authority, reviewer, or CLOID work.
+- Submission preflight: an uncomposed read-only adapter resolves current
+  wallet/Agent authority before and after provider reads, exact-matches fresh
+  metadata, checks quote balance against buy maximum spend or base balance
+  against sell size, rejects a current taker rate above the persisted ceiling,
+  and requires an injected positive aggregate policy decision. It never signs
+  or writes.
 - Writer: **unavailable**. No Node signing package is installed or composed.
 - Orchestration: an uncomposed fake-only coordinator verifies one call through
   the minimal signer and writer ports plus unknown/reconciliation handoff after
@@ -40,15 +46,19 @@ encoder, or alternate Hyperliquid protocol implementation.
 
 The preparation coordinator is not a runtime capability. A real authority
 resolver and pure-read current-Agent repository path are implemented and tested
-but remain uncomposed. A real Testnet metadata/book/fee reviewer and exact
-precision formatter are implemented and tested but likewise remain uncomposed.
+but remain uncomposed. A real Testnet metadata/book/fee reviewer, exact
+precision formatter, and read-only submission preflight are implemented and
+tested but likewise remain uncomposed.
 The reviewer uses best ask for buy, best bid for sell, bounded depth, directed
 Hyperliquid price quantization, the official 10-quote-token minimum, an explicit
 injected quote-notional/fee-rate policy, and a dependency deadline. It does not
-read balances or imply funds availability; a fresh balance check belongs to
-submit preflight. Composition is forbidden until a default-deny product/legal
-decision supplies the exact policy values and both adapters are explicitly
-composed. The atomic
+read balances or imply funds availability; the submit preflight independently
+reads current account evidence. Its 2-second balance and fee leases are checked
+by the repository with the database clock before journaling and again after
+deferred constraints. They are admission facts, not a local reservation, and
+cannot cover the full 10-second attempt. Composition is forbidden until a
+default-deny product/legal decision supplies the exact policy values and the
+adapters are explicitly composed. The atomic
 repository already exact-matches owner, Privy subject,
 wallet ID, address, binding epoch, and Agent under locks; it validates the
 resolver lease with the database clock after those waits and again after
@@ -80,8 +90,10 @@ Because the approved action is IOC, sell `minimum_receive` is conditional on
 the complete `computed_base_size` filling. A positive partial fill must preserve
 the same proportional net-quote-per-base floor; exact cross-multiplication can
 verify that without division. `not_filled` promises no settlement amount. The
-submit/reconciliation path must enforce these semantics before this adapter can
-be composed; the reviewer alone does not prove the final settlement.
+reconciliation path must enforce these semantics before the write path can be
+composed; neither reviewer nor preflight proves final settlement. A real writer
+also needs a just-before-send evidence rule or a durable proven-not-sent outcome
+because private evidence can expire after the journal wins.
 
 The first public contract is exactly the twelve routes in `contract.json`.
 `POST /v1/spot/intents` is both the durable executable quote and the immutable

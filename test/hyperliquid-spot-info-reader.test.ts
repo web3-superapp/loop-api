@@ -651,6 +651,14 @@ describe("Hyperliquid Spot Info reader", () => {
       "unknown balance field",
       `{"balances":[{"coin":"USDC","token":0,"total":"1","hold":"0","entryNtl":"0","wallet":"authority"}]}`,
     ],
+    [
+      "total beyond token atomic precision",
+      `{"balances":[{"coin":"USDC","token":0,"total":"1.000000001","hold":"0","entryNtl":"0"}]}`,
+    ],
+    [
+      "hold beyond token atomic precision",
+      `{"balances":[{"coin":"USDC","token":0,"total":"2","hold":"1.000000001","entryNtl":"0"}]}`,
+    ],
   ])("rejects %s", async (_label, body) => {
     const testHarness = harness({ balances: parse(body) });
 

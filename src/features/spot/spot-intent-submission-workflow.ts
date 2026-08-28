@@ -15,6 +15,7 @@ import type {
   SpotIntentSubmissionEvidence,
   SpotIntentSubmissionPreflight,
   SpotIntentSubmissionRepository,
+  SpotIntentSubmissionSubject,
   SpotIocExchangeWriter,
   SpotIocSignature,
   SpotIocSigner,
@@ -65,8 +66,11 @@ function assertEvidence(value: unknown): SpotIntentSubmissionEvidence {
     return unavailable();
   }
   if (
+    Object.keys(value).sort().join(",") !==
+      "accountEvidence,marketEvidence,policyEvidence,walletEvidence" ||
     !("walletEvidence" in value) ||
     !("marketEvidence" in value) ||
+    !("accountEvidence" in value) ||
     !("policyEvidence" in value)
   ) {
     return unavailable();
@@ -95,6 +99,64 @@ function assertSignature(value: unknown): SpotIocSignature {
     r: candidate["r"],
     s: candidate["s"],
     v: candidate["v"],
+  });
+}
+
+function createSubmissionSubject(
+  record: SpotIntentRecord,
+): SpotIntentSubmissionSubject {
+  const review = record.publicReview;
+  const order = record.canonicalAction.orders[0];
+  const expectedBuy = review.side === "buy";
+  if (
+    review.market_id !== record.marketId ||
+    review.metadata_version !== record.metadataVersion ||
+    record.metadataSha256 !== record.metadataVersion ||
+    review.policy_version !== record.policyVersion ||
+    review.binding_epoch !== record.bindingVersion ||
+    review.review_digest !== record.reviewSha256 ||
+    review.expires_at !== record.resource.expires_at ||
+    review.maximum_spend_or_minimum_receive.asset_display_identity !==
+      review.quote_display_identity ||
+    review.maximum_spend_or_minimum_receive.kind !==
+      (expectedBuy ? "maximum_spend" : "minimum_receive") ||
+    order.a !== record.exchangeOrderAsset ||
+    order.b !== expectedBuy ||
+    order.p !== review.worst_ioc_limit_price ||
+    order.s !== review.computed_base_size ||
+    order.c !== record.clientOrderId
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    ownerUserId: record.ownerUserId,
+    intentId: record.id,
+    network: "testnet" as const,
+    marketId: record.marketId,
+    providerCoin: record.providerCoin,
+    baseTokenIndex: record.baseTokenIndex,
+    baseTokenId: record.baseTokenId,
+    baseDisplayIdentity: review.base_display_identity,
+    quoteTokenIndex: record.quoteTokenIndex,
+    quoteTokenId: record.quoteTokenId,
+    quoteDisplayIdentity: review.quote_display_identity,
+    spotPairIndex: record.spotPairIndex,
+    exchangeOrderAsset: record.exchangeOrderAsset,
+    metadataVersion: record.metadataVersion,
+    metadataSha256: record.metadataSha256,
+    policyVersion: record.policyVersion,
+    accountAddress: record.accountAddress,
+    bindingVersion: record.bindingVersion,
+    agentIdentityId: record.agentIdentityId,
+    reviewSha256: record.reviewSha256,
+    side: review.side,
+    computedBaseSize: review.computed_base_size,
+    maximumSpendOrMinimumReceive: Object.freeze({
+      kind: review.maximum_spend_or_minimum_receive.kind,
+      value: review.maximum_spend_or_minimum_receive.value,
+    }),
+    feeRate: review.fee_rate,
+    expiresAt: review.expires_at,
   });
 }
 
@@ -189,6 +251,7 @@ export function createSpotIntentSubmissionWorkflow(
       if (currentResource.state !== "prepared") {
         return currentResource;
       }
+      const subject = createSubmissionSubject(record);
 
       let evidence: SpotIntentSubmissionEvidence;
       try {
@@ -202,6 +265,7 @@ export function createSpotIntentSubmissionWorkflow(
             network: "testnet",
             action: "spot_ioc_order",
             expectedReviewSha256: record.reviewSha256,
+            subject,
             requestId: workflowInput.requestId,
             signal: workflowInput.signal,
           }),

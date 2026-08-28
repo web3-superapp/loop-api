@@ -13,6 +13,7 @@ import {
   type SpotIntentResult,
   type SpotReview,
 } from "../features/spot/spot-intent-contract.js";
+import { compareExactUnsignedDecimals } from "../features/spot/spot-exact-decimal.js";
 import { IdempotencyConflictError } from "./control-plane-repository.js";
 import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "./hyperliquid-signer-nonce.js";
 
@@ -23,6 +24,7 @@ export const SPOT_INTENT_PREPARE_AUTHORITY_LEASE_MILLISECONDS = 15_000;
 export const SPOT_INTENT_SUBMISSION_ATTEMPT_MILLISECONDS = 10_000;
 export const SPOT_INTENT_SUBMISSION_AUTHORITY_LEASE_MILLISECONDS = 15_000;
 export const SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS = 60_000;
+export const SPOT_INTENT_SUBMISSION_ACCOUNT_EVIDENCE_LEASE_MILLISECONDS = 2_000;
 
 const claimBudgetLockName = "loop.spot_intent.claim_budget.v1";
 const maximumPostgresBigint = 9_223_372_036_854_775_807n;
@@ -179,6 +181,33 @@ const submissionMarketEvidenceSchema = z
   })
   .strict();
 
+const submissionAccountEvidenceSchema = z
+  .object({
+    provider: z.literal("hyperliquid"),
+    network: z.literal("testnet"),
+    accountAddress: addressSchema,
+    metadataVersion: metadataVersionSchema,
+    balance: z
+      .object({
+        dataset: z.literal("spotClearinghouseState"),
+        tokenIndex: nonnegativeIntegerSchema,
+        tokenId: tokenIdSchema,
+        available: nonnegativeDecimalSchema,
+        fetchedAt: rfc3339Schema,
+        expiresAt: rfc3339Schema,
+      })
+      .strict(),
+    fees: z
+      .object({
+        dataset: z.literal("userFees"),
+        currentTakerRate: nonnegativeDecimalSchema,
+        fetchedAt: rfc3339Schema,
+        expiresAt: rfc3339Schema,
+      })
+      .strict(),
+  })
+  .strict();
+
 const submissionPolicyEvidenceSchema = z
   .object({
     ownerUserId: uuidSchema,
@@ -206,6 +235,7 @@ const beginSubmissionInputSchema = z
     expectedReviewSha256: sha256Schema,
     walletEvidence: submissionWalletEvidenceSchema,
     marketEvidence: submissionMarketEvidenceSchema,
+    accountEvidence: submissionAccountEvidenceSchema,
     policyEvidence: submissionPolicyEvidenceSchema,
   })
   .strict();
@@ -397,6 +427,10 @@ const submissionValidityRowSchema = z
     policy_evidence_current: z.boolean(),
     policy_evidence_bounded: z.boolean(),
     policy_evidence_covers_attempt: z.boolean(),
+    balance_evidence_current: z.boolean(),
+    balance_evidence_bounded: z.boolean(),
+    fee_evidence_current: z.boolean(),
+    fee_evidence_bounded: z.boolean(),
     attempt_current: z.boolean(),
     attempt_remaining_milliseconds: z
       .number()
@@ -666,6 +700,31 @@ export interface BeginSpotIntentSubmissionInput {
     metadataSha256: string;
     fetchedAt: string;
     expiresAt: string;
+  }>;
+  /**
+   * Sanitized private-account facts. They are checked with the database clock
+   * immediately before the journal and after deferred constraints, but cannot
+   * reserve funds or promise to cover the complete transport window.
+   */
+  readonly accountEvidence: Readonly<{
+    provider: "hyperliquid";
+    network: "testnet";
+    accountAddress: string;
+    metadataVersion: string;
+    balance: Readonly<{
+      dataset: "spotClearinghouseState";
+      tokenIndex: number;
+      tokenId: string;
+      available: string;
+      fetchedAt: string;
+      expiresAt: string;
+    }>;
+    fees: Readonly<{
+      dataset: "userFees";
+      currentTakerRate: string;
+      fetchedAt: string;
+      expiresAt: string;
+    }>;
   }>;
   /**
    * Short-lived, server-generated aggregate mutation gate. Every positive
@@ -1291,7 +1350,23 @@ function expectedSubmissionAuthorityMatches(
 ): boolean {
   const wallet = input.walletEvidence;
   const market = input.marketEvidence;
+  const account = input.accountEvidence;
   const policy = input.policyEvidence;
+  const review = intent.publicReview;
+  const expectedBalance =
+    review.side === "buy"
+      ? Object.freeze({
+          tokenIndex: intent.quoteTokenIndex,
+          tokenId: intent.quoteTokenId,
+          required: review.maximum_spend_or_minimum_receive.value,
+          kind: "maximum_spend" as const,
+        })
+      : Object.freeze({
+          tokenIndex: intent.baseTokenIndex,
+          tokenId: intent.baseTokenId,
+          required: review.computed_base_size,
+          kind: "minimum_receive" as const,
+        });
   return (
     input.ownerUserId === wallet.ownerUserId &&
     input.ownerUserId === policy.ownerUserId &&
@@ -1310,6 +1385,19 @@ function expectedSubmissionAuthorityMatches(
     market.exchangeOrderAsset === 10_000 + market.spotPairIndex &&
     market.metadataVersion === intent.metadataVersion &&
     market.metadataSha256 === intent.metadataSha256 &&
+    account.accountAddress === intent.accountAddress &&
+    account.metadataVersion === intent.metadataVersion &&
+    account.balance.tokenIndex === expectedBalance.tokenIndex &&
+    account.balance.tokenId === expectedBalance.tokenId &&
+    review.maximum_spend_or_minimum_receive.kind === expectedBalance.kind &&
+    compareExactUnsignedDecimals(
+      account.balance.available,
+      expectedBalance.required,
+    ) >= 0 &&
+    compareExactUnsignedDecimals(
+      account.fees.currentTakerRate,
+      review.fee_rate,
+    ) <= 0 &&
     policy.policyVersion === intent.policyVersion
   );
 }
@@ -1396,6 +1484,10 @@ function assertSubmissionValidity(value: unknown, finalCheck: boolean): number {
     !validity.policy_evidence_current ||
     !validity.policy_evidence_bounded ||
     !validity.policy_evidence_covers_attempt ||
+    !validity.balance_evidence_current ||
+    !validity.balance_evidence_bounded ||
+    !validity.fee_evidence_current ||
+    !validity.fee_evidence_bounded ||
     (finalCheck && !validity.attempt_current)
   ) {
     throw new SpotIntentAuthorityStaleError();
@@ -1459,6 +1551,20 @@ async function validateSubmissionWindow(
           as policy_evidence_bounded,
         submission_window.attempt_deadline_at < $13::timestamptz
           as policy_evidence_covers_attempt,
+        $14::timestamptz <= submission_window.observed_at
+          and submission_window.observed_at < $15::timestamptz
+          as balance_evidence_current,
+        $14::timestamptz < $15::timestamptz
+          and $15::timestamptz <= $14::timestamptz
+            + ($18::integer * interval '1 millisecond')
+          as balance_evidence_bounded,
+        $16::timestamptz <= submission_window.observed_at
+          and submission_window.observed_at < $17::timestamptz
+          as fee_evidence_current,
+        $16::timestamptz < $17::timestamptz
+          and $17::timestamptz <= $16::timestamptz
+            + ($18::integer * interval '1 millisecond')
+          as fee_evidence_bounded,
         submission_window.observed_at
           < submission_window.attempt_deadline_at as attempt_current,
         greatest(
@@ -1497,6 +1603,11 @@ async function validateSubmissionWindow(
       SPOT_INTENT_SUBMISSION_METADATA_LEASE_MILLISECONDS,
       input.policyEvidence.checkedAt,
       input.policyEvidence.expiresAt,
+      input.accountEvidence.balance.fetchedAt,
+      input.accountEvidence.balance.expiresAt,
+      input.accountEvidence.fees.fetchedAt,
+      input.accountEvidence.fees.expiresAt,
+      SPOT_INTENT_SUBMISSION_ACCOUNT_EVIDENCE_LEASE_MILLISECONDS,
     ],
   });
   return assertSubmissionValidity(result.rows[0], attemptDeadlineAt !== null);

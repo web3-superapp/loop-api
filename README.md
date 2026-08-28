@@ -48,6 +48,13 @@ implemented as independently verified slices:
   ordering, one journal/nonce winner, the exact fields passed to fake
   signer/writer ports, DB-deadline admission, and durable
   unknown/reconciliation handoff without an SDK or network implementation
+- an uncomposed read-only Spot submission preflight resolves current
+  wallet/Agent authority before and after its reads, binds fresh metadata,
+  available balance, account taker fee, and a positive aggregate policy
+  decision to the persisted review, and passes only sanitized evidence to the
+  atomic repository. Buy requires quote availability at least equal to the
+  reviewed maximum spend; sell requires base availability at least equal to
+  the reviewed size; the current taker rate cannot exceed the persisted cap
 - an uncomposed Spot intent-preparation coordinator claims idempotency before
   dependency reads, performs zero reads on replay/pending, resolves the current
   wallet/Agent authority both before and after review, including the exact
@@ -108,10 +115,13 @@ metadata/book/fee reviewer and exact precision formatter are implemented and
 tested against injected strict-reader evidence, but no product policy values
 select them in the main runtime and no credentialed intent preparation has run.
 The product/legal gate, signer, and writer are absent, and neither coordinator
-is selected by the main runtime. Balance remains a separate read and a future
-fresh submit-preflight concern; the immutable quote review does not imply funds
-availability.
-The atomic prepare repository now performs those database-clock resolver-lease
+is selected by the main runtime. The read-only submit preflight is implemented
+and tested against injected strict-reader evidence but remains uncomposed. Its
+2-second balance and fee evidence is checked with the database clock before the
+journal and again after deferred constraints; this is admission evidence, not a
+funds reservation, and it does not cover the full 10-second transport attempt.
+The immutable quote review does not imply funds availability.
+The atomic prepare repository now performs its database-clock resolver-lease
 and complete Agent-lifetime checks, including a final check after deferred
 constraint waits. Runtime composition still requires a default-deny
 product/legal decision with explicit quote-notional and fee-rate caps, plus

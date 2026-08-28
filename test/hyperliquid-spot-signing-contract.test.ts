@@ -302,6 +302,14 @@ describe("Hyperliquid Spot signing contract", () => {
             readonly path: string;
           }[];
         };
+        readonly submission_preflight: {
+          readonly runtime_composed: boolean;
+          readonly provider_write: boolean;
+          readonly private_evidence_maximum_lifetime_ms: number;
+          readonly database_clock_checks: readonly string[];
+          readonly reserves_funds: boolean;
+          readonly covers_full_attempt: boolean;
+        };
         readonly mainnet_boundary: {
           readonly activation_approved: boolean;
           readonly runtime_code_or_configuration_present: boolean;
@@ -332,6 +340,17 @@ describe("Hyperliquid Spot signing contract", () => {
     expect(contract).toMatchObject({
       status: "approved_contract_writer_unavailable",
       runtime: { writer: "unavailable", signer_adapter: null },
+      submission_preflight: {
+        runtime_composed: false,
+        provider_write: false,
+        private_evidence_maximum_lifetime_ms: 2_000,
+        database_clock_checks: [
+          "after authority and intent locks before journal and nonce allocation",
+          "after deferred constraints before transaction commit",
+        ],
+        reserves_funds: false,
+        covers_full_attempt: false,
+      },
       mainnet_boundary: {
         activation_approved: false,
         runtime_code_or_configuration_present: false,

@@ -23,6 +23,7 @@ import type {
   SpotIntentSubmissionEvidence,
   SpotIntentSubmissionPreflight,
   SpotIntentSubmissionRepository,
+  SpotIntentSubmissionSubject,
   SpotIocExchangeWriter,
   SpotIocSignature,
   SpotIocSigner,
@@ -45,6 +46,7 @@ const createdAt = "2026-08-26T00:00:00.000Z";
 const observedAt = "2026-08-26T00:00:05.000Z";
 const expiresAt = "2026-08-26T00:00:15.000Z";
 const clientOrderId = `0x${"ab".repeat(16)}`;
+const metadataVersion = "b".repeat(64);
 
 function review() {
   return createSpotReview({
@@ -69,7 +71,7 @@ function review() {
     fee_rate: "0.001",
     fee_estimate: "0.01",
     fee_source: { dataset: "user_fees", observed_at: createdAt },
-    metadata_version: "meta-v1",
+    metadata_version: metadataVersion,
     policy_version: "policy-v1",
     binding_epoch: "7",
     expires_at: expiresAt,
@@ -173,8 +175,8 @@ function recordFor(resource: SpotIntentResource): SpotIntentRecord {
     quoteTokenId: `0x${"22".repeat(16)}`,
     spotPairIndex: 0,
     exchangeOrderAsset: 10_000,
-    metadataVersion: "meta-v1",
-    metadataSha256: "b".repeat(64),
+    metadataVersion,
+    metadataSha256: metadataVersion,
     policyVersion: "policy-v1",
     accountAddress: `0x${"33".repeat(20)}`,
     bindingVersion: "7",
@@ -260,10 +262,30 @@ function submissionEvidence(): SpotIntentSubmissionEvidence {
       quoteTokenId: `0x${"22".repeat(16)}`,
       spotPairIndex: 0,
       exchangeOrderAsset: 10_000,
-      metadataVersion: "meta-v1",
-      metadataSha256: "b".repeat(64),
+      metadataVersion,
+      metadataSha256: metadataVersion,
       fetchedAt: createdAt,
       expiresAt,
+    }),
+    accountEvidence: Object.freeze({
+      provider: "hyperliquid",
+      network: "testnet",
+      accountAddress: `0x${"33".repeat(20)}`,
+      metadataVersion,
+      balance: Object.freeze({
+        dataset: "spotClearinghouseState",
+        tokenIndex: 0,
+        tokenId: `0x${"22".repeat(16)}`,
+        available: "10",
+        fetchedAt: observedAt,
+        expiresAt,
+      }),
+      fees: Object.freeze({
+        dataset: "userFees",
+        currentTakerRate: "0.001",
+        fetchedAt: observedAt,
+        expiresAt,
+      }),
     }),
     policyEvidence: Object.freeze({
       ownerUserId,
@@ -281,6 +303,41 @@ function submissionEvidence(): SpotIntentSubmissionEvidence {
       checkedAt: createdAt,
       expiresAt,
     }),
+  });
+}
+
+function submissionSubject(
+  record: SpotIntentRecord,
+): SpotIntentSubmissionSubject {
+  return Object.freeze({
+    ownerUserId: record.ownerUserId,
+    intentId: record.id,
+    network: "testnet",
+    marketId: record.marketId,
+    providerCoin: record.providerCoin,
+    baseTokenIndex: record.baseTokenIndex,
+    baseTokenId: record.baseTokenId,
+    baseDisplayIdentity: record.publicReview.base_display_identity,
+    quoteTokenIndex: record.quoteTokenIndex,
+    quoteTokenId: record.quoteTokenId,
+    quoteDisplayIdentity: record.publicReview.quote_display_identity,
+    spotPairIndex: record.spotPairIndex,
+    exchangeOrderAsset: record.exchangeOrderAsset,
+    metadataVersion: record.metadataVersion,
+    metadataSha256: record.metadataSha256,
+    policyVersion: record.policyVersion,
+    accountAddress: record.accountAddress,
+    bindingVersion: record.bindingVersion,
+    agentIdentityId: record.agentIdentityId,
+    reviewSha256: record.reviewSha256,
+    side: record.publicReview.side,
+    computedBaseSize: record.publicReview.computed_base_size,
+    maximumSpendOrMinimumReceive: Object.freeze({
+      kind: record.publicReview.maximum_spend_or_minimum_receive.kind,
+      value: record.publicReview.maximum_spend_or_minimum_receive.value,
+    }),
+    feeRate: record.publicReview.fee_rate,
+    expiresAt: record.publicReview.expires_at,
   });
 }
 
@@ -594,6 +651,7 @@ describe("fake-only Spot intent submission workflow", () => {
       network: "testnet",
       action: "spot_ioc_order",
       expectedReviewSha256: input.prepared.reviewSha256,
+      subject: submissionSubject(input.prepared),
       requestId,
       signal: workflowSubmitInput.signal,
     });

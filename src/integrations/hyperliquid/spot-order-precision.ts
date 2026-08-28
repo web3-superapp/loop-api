@@ -102,7 +102,7 @@ export function hasAtMostExactUnsignedDecimalPlaces(
   if (
     !Number.isSafeInteger(maximumDecimalPlaces) ||
     maximumDecimalPlaces < 0 ||
-    maximumDecimalPlaces > 8
+    maximumDecimalPlaces > 18
   ) {
     return false;
   }

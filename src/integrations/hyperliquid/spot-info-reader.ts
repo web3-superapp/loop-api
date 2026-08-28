@@ -4,6 +4,7 @@ import { isLosslessNumber } from "lossless-json";
 import { z } from "zod";
 
 import type { HyperliquidInfoQuota } from "./info-quota.js";
+import { hasAtMostExactUnsignedDecimalPlaces } from "./spot-order-precision.js";
 import {
   HYPERLIQUID_SPOT_BOOK_MAX_AGE_MILLISECONDS,
   HYPERLIQUID_SPOT_BOOK_MAX_FUTURE_SKEW_MILLISECONDS,
@@ -824,7 +825,9 @@ function mapBalances(
       token === undefined ||
       token.symbol !== balance.coin ||
       seenTokenIndexes.has(tokenIndex) ||
-      compareUnsignedDecimals(balance.hold, balance.total) > 0
+      compareUnsignedDecimals(balance.hold, balance.total) > 0 ||
+      !hasAtMostExactUnsignedDecimalPlaces(balance.total, token.weiDecimals) ||
+      !hasAtMostExactUnsignedDecimalPlaces(balance.hold, token.weiDecimals)
     ) {
       return unavailable();
     }

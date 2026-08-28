@@ -396,6 +396,28 @@ describe("Hyperliquid Spot intent reviewer", () => {
     expect(testHarness.readUserFees).not.toHaveBeenCalled();
   });
 
+  it("rejects a buy quote outside USDC atomic precision before book and fee reads", async () => {
+    const invalidHarness = harness();
+    const invalid = buyRequest({
+      amount: Object.freeze({ mode: "quote", value: "25.000000001" }),
+    });
+
+    await expect(
+      invalidHarness.reviewer.review(reviewInput(invalid)),
+    ).rejects.toBeInstanceOf(SpotIntentReviewerUnavailableError);
+    expect(invalidHarness.readMetadata).toHaveBeenCalledOnce();
+    expect(invalidHarness.readBook).not.toHaveBeenCalled();
+    expect(invalidHarness.readUserFees).not.toHaveBeenCalled();
+
+    const trailingZeroHarness = harness();
+    const trailingZeros = buyRequest({
+      amount: Object.freeze({ mode: "quote", value: "25.000000000" }),
+    });
+    await expect(
+      trailingZeroHarness.reviewer.review(reviewInput(trailingZeros)),
+    ).resolves.toHaveProperty("computedBaseSize", "4.98");
+  });
+
   it("rejects insufficient bounded depth instead of shrinking the order", async () => {
     const sparseBook = book();
     const asks = Object.freeze([

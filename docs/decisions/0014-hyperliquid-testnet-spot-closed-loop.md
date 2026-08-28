@@ -187,6 +187,16 @@ is unavailable. Enabling the one Spot writer requires all of:
 Any missing, unknown, stale, malformed, or failed gate denies the mutation
 before Privy signing, SDK use, or an Exchange request.
 
+The implemented but uncomposed submission-preflight slice treats fresh private
+balance and account-fee observations as short-lived admission evidence only.
+The repository validates their maximum 2-second lifetime with the database
+clock before the journal and again after deferred constraints; it does not
+pretend to reserve Exchange funds or require that evidence to cover the full
+10-second transport attempt. Runtime composition still requires a
+just-before-send rule or durable proven-not-sent outcome, credentialed fee-token
+and rounding evidence, and settlement checks that enforce the reviewed maximum
+spend/minimum receive for full and partial IOC outcomes.
+
 ## Consequences
 
 This decision authorizes implementation of the twelve Testnet Spot contracts,

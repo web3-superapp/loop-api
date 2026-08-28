@@ -263,6 +263,22 @@
     "submit_rule": "use exact persisted base size and worst price; never silently refetch or recalculate",
     "material_change": "new intent and visible review required"
   },
+  "submission_preflight": {
+    "runtime_composed": false,
+    "provider_write": false,
+    "authority_resolution": "two resolver results must agree on owner, Privy subject, wallet ID, account, binding epoch, and Agent; account, binding epoch, and Agent must match the persisted intent, and the complete authority must match current database ownership",
+    "buy_funds_rule": "fresh quote-token available balance must be greater than or equal to reviewed maximum spend",
+    "sell_funds_rule": "fresh base-token available balance must be greater than or equal to reviewed computed base size",
+    "fee_rule": "fresh account Spot taker rate must be less than or equal to persisted reviewed fee_rate",
+    "private_evidence_maximum_lifetime_ms": 2000,
+    "database_clock_checks": [
+      "after authority and intent locks before journal and nonce allocation",
+      "after deferred constraints before transaction commit"
+    ],
+    "reserves_funds": false,
+    "covers_full_attempt": false,
+    "runtime_composition_requires": "a just-before-send check or durable proven-not-sent outcome plus credentialed fee-token, rounding, and settlement evidence"
+  },
   "decimal_policy": {
     "financial_transport": "canonical decimal strings",
     "arithmetic": "exact Decimal or BigInt scale only",
