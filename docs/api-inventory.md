@@ -267,8 +267,13 @@ authoritative finalization. The just-before-send evidence rule, actual fee-token
 and rounding semantics, and bounded partial/full settlement checks remain
 composition blockers; the reviewer and preflight do not implement them.
 An additional uncomposed submission coordinator verifies the ordering and
-fields across preflight -> atomic journal/nonce -> narrow signer -> single
-writer -> normalized unknown handoff. A conservative
+fields across preflight -> atomic journal/nonce -> narrow signer -> strict
+post-signature write-start guard -> single writer -> normalized unknown
+handoff. Before writer invocation, signing failure, guard denial, or an expired
+one-second permit is atomically recorded as a sanitized
+`rejected/not_required` proven-not-sent result; this is not a provider
+rejection. Once writer invocation begins, every resolution or rejection remains
+unknown and no write is retried. A conservative
 DB-clock budget and the persisted absolute attempt deadline stop writer
 admission after a slow signer. The selected `@nktkas/hyperliquid@0.33.3`
 low-level surface canonicalizes and signs only the journaled Testnet IOC; a
@@ -277,10 +282,12 @@ lossless responses into the existing unknown/reconciliation path. Both pass
 offline action-hash, EIP-712 digest, signature, and transport tests. They are
 not main-app composed and do not prove a real Privy Agent signer, provider write, or
 credentialed prepare/submit E2E. The strict Info reader is a real read adapter,
-but the reviewer and preflight still have only local injected-evidence
-verification. Production terminal outcomes and provider writes remain
-unavailable until Agent authorization, just-before-send, policy, and
-credentialed Testnet gates pass.
+but the reviewer, preflight, and final guard still have only local
+injected-evidence verification. Production terminal outcomes and provider
+writes remain unavailable until Agent authorization, a real final guard,
+policy, settlement-bound reconciliation, and credentialed Testnet gates pass.
+Decision 0020 freezes further Hyperliquid product work after this verified
+safety slice pending an explicit scope decision.
 
 ## Perp wallet-binding lifecycle
 

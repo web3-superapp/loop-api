@@ -45,8 +45,10 @@ implemented as independently verified slices:
   services return a sanitized 503 before any claim, nonce, signer, or provider
   work
 - an uncomposed Spot submission coordinator verifies coordinator ordering,
-  one journal/nonce winner, DB-deadline admission, and durable
-  unknown/reconciliation handoff; exact low-level Testnet signer and
+  one journal/nonce winner, DB-deadline admission, a strict post-signature
+  one-second write-start permit, durable proven-not-sent rejection before the
+  writer, and durable unknown/reconciliation handoff after writer invocation;
+  exact low-level Testnet signer and
   single-attempt Exchange writer adapters now pass offline action-hash,
   EIP-712 digest, signature, and bounded-transport tests but are not selected
   by the main runtime
@@ -131,15 +133,20 @@ implemented and tested, but remain uncomposed. The real Testnet
 metadata/book/fee reviewer and exact precision formatter are implemented and
 tested against injected strict-reader evidence, but no product policy values
 select them in the main runtime and no credentialed intent preparation has run.
-The product/legal gate and just-before-send recheck remain absent. The signer
-and writer adapters are implemented but uncomposed, and neither coordinator is
-selected by the main runtime. The read-only submit preflight is implemented
+The production product/legal gate and final write-start guard remain absent.
+The coordinator now enforces a strict injected guard permit and can atomically
+record a sanitized proven-not-sent rejection before writer invocation; writer
+invocation itself still always hands off as unknown. The signer and writer
+adapters are implemented but uncomposed, and neither coordinator is selected
+by the main runtime. The read-only submit preflight is implemented
 and tested against injected strict-reader evidence but remains uncomposed. Its
 2-second balance and fee evidence is checked with the database clock before the
 journal and again after deferred constraints; this is admission evidence, not a
 funds reservation, and it does not cover the full 10-second transport attempt.
 The immutable quote review does not imply funds availability. No credentialed
 Privy Agent signature or Hyperliquid Exchange write has run.
+Decision 0020 freezes further Hyperliquid product work after this safety slice
+pending an explicit scope change; it does not relax any missing provider gate.
 The atomic prepare repository now performs its database-clock resolver-lease
 and complete Agent-lifetime checks, including a final check after deferred
 constraint waits. Runtime composition still requires a default-deny

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { SpotIocExchangeWriter } from "../../features/spot/spot-intent-submission.js";
 import {
   assertHyperliquidSpotIocTiming,
+  assertHyperliquidSpotIocWriteAdmission,
   HyperliquidSpotIocAdapterUnavailableError,
   parseHyperliquidSpotIocAction,
   parseHyperliquidSpotIocRequestId,
@@ -25,6 +26,7 @@ const writerInputSchema = z
     vaultAddress: z.null(),
     expiresAfter: z.string(),
     attemptDeadlineAt: z.string(),
+    writeAdmissionExpiresAt: z.string(),
     signal: z.instanceof(AbortSignal),
   })
   .strict();
@@ -174,12 +176,19 @@ export function createHyperliquidSpotIocExchangeWriter(
       parseHyperliquidSpotIocRequestId(rawInput.transportAttemptId);
       const action = parseHyperliquidSpotIocAction(rawInput.action);
       const signature = parseHyperliquidSpotIocSignature(rawInput.signature);
+      const nowMilliseconds = readNow(now);
       const timing = assertHyperliquidSpotIocTiming({
         nonce: rawInput.nonce,
         expiresAfter: rawInput.expiresAfter,
         attemptDeadlineAt: rawInput.attemptDeadlineAt,
         signal: rawInput.signal,
-        nowMilliseconds: readNow(now),
+        nowMilliseconds,
+      });
+      assertHyperliquidSpotIocWriteAdmission({
+        writeAdmissionExpiresAt: rawInput.writeAdmissionExpiresAt,
+        attemptDeadlineAt: rawInput.attemptDeadlineAt,
+        signal: rawInput.signal,
+        nowMilliseconds,
       });
       const body = JSON.stringify({
         action,

@@ -4,6 +4,8 @@ import {
   SpotIntentAuthorityStaleError,
   SpotIntentPrepareExpiredError,
   type SpotIntentRecord,
+  type SpotIntentSubmissionAttempt,
+  type SpotIntentSubmissionNotSent,
 } from "../../database/spot-intent-repository.js";
 import {
   SpotIntentExpiredError,
@@ -11,14 +13,17 @@ import {
   SpotIntentStaleError,
   type SpotIntentWorkflow,
 } from "./spot-intent-service.js";
-import type {
-  SpotIntentSubmissionEvidence,
-  SpotIntentSubmissionPreflight,
-  SpotIntentSubmissionRepository,
-  SpotIntentSubmissionSubject,
-  SpotIocExchangeWriter,
-  SpotIocSignature,
-  SpotIocSigner,
+import {
+  SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS,
+  type SpotIntentSubmissionEvidence,
+  type SpotIntentSubmissionPreflight,
+  type SpotIntentSubmissionRepository,
+  type SpotIntentSubmissionSubject,
+  type SpotIocExchangeWriter,
+  type SpotIocSignature,
+  type SpotIocSigner,
+  type SpotIocWriteStartAdmission,
+  type SpotIocWriteStartGuard,
 } from "./spot-intent-submission.js";
 import { parseOwnedSpotIntentResource } from "./spot-intent-workflow.js";
 import {
@@ -30,10 +35,27 @@ export interface CreateSpotIntentSubmissionWorkflowInput {
   readonly repository: SpotIntentSubmissionRepository;
   readonly preflight: SpotIntentSubmissionPreflight;
   readonly signer: SpotIocSigner;
+  readonly writeStartGuard: SpotIocWriteStartGuard;
   readonly writer: SpotIocExchangeWriter;
 }
 
 const writeStartSafetyMarginMilliseconds = 1_000;
+const maximumWriteAdmissionClockSkewMilliseconds = 1_000;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const canonicalTimestampPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function parseCanonicalTimestamp(value: string): number {
+  if (!canonicalTimestampPattern.test(value)) {
+    return Number.NaN;
+  }
+  const milliseconds = Date.parse(value);
+  return Number.isSafeInteger(milliseconds) &&
+    new Date(milliseconds).toISOString() === value
+    ? milliseconds
+    : Number.NaN;
+}
 
 function unavailable(): never {
   throw new SpotUnavailableError();
@@ -99,6 +121,99 @@ function assertSignature(value: unknown): SpotIocSignature {
     r: candidate["r"],
     s: candidate["s"],
     v: candidate["v"],
+  });
+}
+
+function assertWriteStartAdmission(
+  value: unknown,
+  expected: Readonly<{
+    writeAdmissionId: string;
+    subject: SpotIntentSubmissionSubject;
+    transportAttemptId: string;
+    operationRecordVersion: string;
+    intentRecordVersion: string;
+    network: "testnet";
+    agentAddress: string;
+    attemptDeadlineAt: string;
+  }>,
+): SpotIocWriteStartAdmission {
+  if (typeof value !== "object" || value === null) {
+    return unavailable();
+  }
+  if (
+    Object.keys(value).sort().join(",") !==
+    [
+      "agentAddress",
+      "agentIdentityId",
+      "checkedAt",
+      "decision",
+      "expiresAt",
+      "intentId",
+      "intentRecordVersion",
+      "network",
+      "operationRecordVersion",
+      "ownerUserId",
+      "reviewSha256",
+      "transportAttemptId",
+      "writeAdmissionId",
+    ]
+      .sort()
+      .join(",")
+  ) {
+    return unavailable();
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate["decision"] !== "allow" ||
+    candidate["writeAdmissionId"] !== expected.writeAdmissionId ||
+    candidate["ownerUserId"] !== expected.subject.ownerUserId ||
+    candidate["intentId"] !== expected.subject.intentId ||
+    candidate["transportAttemptId"] !== expected.transportAttemptId ||
+    candidate["operationRecordVersion"] !== expected.operationRecordVersion ||
+    candidate["intentRecordVersion"] !== expected.intentRecordVersion ||
+    candidate["network"] !== expected.network ||
+    candidate["agentIdentityId"] !== expected.subject.agentIdentityId ||
+    candidate["agentAddress"] !== expected.agentAddress ||
+    candidate["reviewSha256"] !== expected.subject.reviewSha256 ||
+    typeof candidate["checkedAt"] !== "string" ||
+    !canonicalTimestampPattern.test(candidate["checkedAt"]) ||
+    typeof candidate["expiresAt"] !== "string" ||
+    !canonicalTimestampPattern.test(candidate["expiresAt"])
+  ) {
+    return unavailable();
+  }
+  const checkedAt = parseCanonicalTimestamp(candidate["checkedAt"]);
+  const expiresAt = parseCanonicalTimestamp(candidate["expiresAt"]);
+  const attemptDeadlineAt = parseCanonicalTimestamp(expected.attemptDeadlineAt);
+  const now = Date.now();
+  if (
+    !uuidPattern.test(expected.writeAdmissionId) ||
+    !Number.isSafeInteger(checkedAt) ||
+    !Number.isSafeInteger(expiresAt) ||
+    !Number.isSafeInteger(attemptDeadlineAt) ||
+    checkedAt >= expiresAt ||
+    expiresAt - checkedAt > SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS ||
+    checkedAt > now + maximumWriteAdmissionClockSkewMilliseconds ||
+    now >= expiresAt ||
+    expiresAt > now + SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS ||
+    expiresAt > attemptDeadlineAt
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    decision: "allow" as const,
+    writeAdmissionId: candidate["writeAdmissionId"],
+    ownerUserId: candidate["ownerUserId"],
+    intentId: candidate["intentId"],
+    network: candidate["network"],
+    transportAttemptId: candidate["transportAttemptId"],
+    operationRecordVersion: candidate["operationRecordVersion"],
+    intentRecordVersion: candidate["intentRecordVersion"],
+    agentIdentityId: candidate["agentIdentityId"],
+    agentAddress: candidate["agentAddress"],
+    reviewSha256: candidate["reviewSha256"],
+    checkedAt: candidate["checkedAt"],
+    expiresAt: candidate["expiresAt"],
   });
 }
 
@@ -218,6 +333,55 @@ export function createSpotIntentSubmissionWorkflow(
     return record;
   }
 
+  async function recordSubmissionNotSent(recordInput: {
+    readonly ownerUserId: string;
+    readonly intentId: string;
+    readonly attempt: SpotIntentSubmissionAttempt;
+    readonly expectedIntentRecordVersion: string;
+    readonly reasonCode: SpotIntentSubmissionNotSent["reasonCode"];
+  }) {
+    let recorded: Awaited<
+      ReturnType<SpotIntentSubmissionRepository["recordSubmissionNotSent"]>
+    >;
+    try {
+      recorded = await input.repository.recordSubmissionNotSent({
+        ownerUserId: recordInput.ownerUserId,
+        intentId: recordInput.intentId,
+        requestId: randomUUID(),
+        transportAttemptId: recordInput.attempt.transportAttemptId,
+        expectedOperationRecordVersion:
+          recordInput.attempt.operationRecordVersion,
+        expectedIntentRecordVersion: recordInput.expectedIntentRecordVersion,
+        outcome: {
+          state: "rejected",
+          providerOrderId: null,
+          reasonCode: recordInput.reasonCode,
+        },
+      });
+    } catch {
+      return unavailable();
+    }
+    if (recorded.kind === "not_found") {
+      return unavailable();
+    }
+    const resource = parseOwnedSpotIntentResource(
+      recorded.intent,
+      recordInput.ownerUserId,
+      recordInput.intentId,
+    );
+    if (
+      recorded.intent.recordVersion !== "2" ||
+      resource.state !== "rejected" ||
+      resource.submission.state !== "attempted" ||
+      resource.result?.state !== "rejected" ||
+      resource.result.order_id !== null ||
+      resource.result.reason_code !== recordInput.reasonCode
+    ) {
+      return unavailable();
+    }
+    return resource;
+  }
+
   return Object.freeze({
     prepare(): Promise<never> {
       return Promise.reject(new SpotUnavailableError());
@@ -310,24 +474,45 @@ export function createSpotIntentSubmissionWorkflow(
         return resource;
       }
 
-      const submittingResource = parseOwnedSpotIntentResource(
-        begun.intent,
-        workflowInput.ownerUserId,
-        workflowInput.intentId,
-      );
-      if (
-        submittingResource.state !== "submitting" ||
-        submittingResource.submission.state !== "attempted" ||
-        begun.attempt.intentId !== workflowInput.intentId
-      ) {
-        return unavailable();
+      try {
+        const submittingResource = parseOwnedSpotIntentResource(
+          begun.intent,
+          workflowInput.ownerUserId,
+          workflowInput.intentId,
+        );
+        if (
+          submittingResource.state !== "submitting" ||
+          submittingResource.submission.state !== "attempted" ||
+          begun.attempt.intentId !== workflowInput.intentId
+        ) {
+          return unavailable();
+        }
+      } catch {
+        return recordSubmissionNotSent({
+          ownerUserId: workflowInput.ownerUserId,
+          intentId: workflowInput.intentId,
+          attempt: begun.attempt,
+          expectedIntentRecordVersion: begun.intent.recordVersion,
+          reasonCode: "submission_signing_not_completed",
+        });
       }
 
-      const attemptSignal = createAttemptSignal(
-        begun.attempt,
-        workflowInput.signal,
-        beginCallStartedAt,
-      );
+      let attemptSignal: AbortSignal;
+      try {
+        attemptSignal = createAttemptSignal(
+          begun.attempt,
+          workflowInput.signal,
+          beginCallStartedAt,
+        );
+      } catch {
+        return recordSubmissionNotSent({
+          ownerUserId: workflowInput.ownerUserId,
+          intentId: workflowInput.intentId,
+          attempt: begun.attempt,
+          expectedIntentRecordVersion: begun.intent.recordVersion,
+          reasonCode: "submission_signing_not_completed",
+        });
+      }
 
       let signature: SpotIocSignature;
       try {
@@ -354,7 +539,58 @@ export function createSpotIntentSubmissionWorkflow(
           attemptSignal,
         );
       } catch {
-        return unavailable();
+        return recordSubmissionNotSent({
+          ownerUserId: workflowInput.ownerUserId,
+          intentId: workflowInput.intentId,
+          attempt: begun.attempt,
+          expectedIntentRecordVersion: begun.intent.recordVersion,
+          reasonCode: "submission_signing_not_completed",
+        });
+      }
+
+      let writeAdmissionId: string;
+      let writeAdmission: SpotIocWriteStartAdmission;
+      try {
+        writeAdmissionId = randomUUID();
+        assertBeforeAttemptDeadline(
+          begun.attempt.attemptDeadlineAt,
+          attemptSignal,
+        );
+        writeAdmission = assertWriteStartAdmission(
+          await input.writeStartGuard.authorize({
+            writeAdmissionId,
+            privyUserId: workflowInput.privyUserId,
+            subject,
+            attempt: Object.freeze({
+              intentId: begun.attempt.intentId,
+              network: begun.attempt.network,
+              transportAttemptId: begun.attempt.transportAttemptId,
+              operationRecordVersion: begun.attempt.operationRecordVersion,
+              attemptDeadlineAt: begun.attempt.attemptDeadlineAt,
+              agentAddress: begun.attempt.agentAddress,
+            }),
+            expectedIntentRecordVersion: begun.intent.recordVersion,
+            signal: attemptSignal,
+          }),
+          {
+            writeAdmissionId,
+            subject,
+            transportAttemptId: begun.attempt.transportAttemptId,
+            operationRecordVersion: begun.attempt.operationRecordVersion,
+            intentRecordVersion: begun.intent.recordVersion,
+            network: begun.attempt.network,
+            agentAddress: begun.attempt.agentAddress,
+            attemptDeadlineAt: begun.attempt.attemptDeadlineAt,
+          },
+        );
+      } catch {
+        return recordSubmissionNotSent({
+          ownerUserId: workflowInput.ownerUserId,
+          intentId: workflowInput.intentId,
+          attempt: begun.attempt,
+          expectedIntentRecordVersion: begun.intent.recordVersion,
+          reasonCode: "submission_write_start_denied",
+        });
       }
 
       let reasonCode:
@@ -364,8 +600,17 @@ export function createSpotIntentSubmissionWorkflow(
           begun.attempt.attemptDeadlineAt,
           attemptSignal,
         );
+        if (Date.now() >= Date.parse(writeAdmission.expiresAt)) {
+          return unavailable();
+        }
       } catch {
-        return unavailable();
+        return recordSubmissionNotSent({
+          ownerUserId: workflowInput.ownerUserId,
+          intentId: workflowInput.intentId,
+          attempt: begun.attempt,
+          expectedIntentRecordVersion: begun.intent.recordVersion,
+          reasonCode: "submission_write_admission_expired",
+        });
       }
       try {
         await input.writer.submit({
@@ -377,6 +622,7 @@ export function createSpotIntentSubmissionWorkflow(
           vaultAddress: begun.attempt.vaultAddress,
           expiresAfter: begun.attempt.expiresAfter,
           attemptDeadlineAt: begun.attempt.attemptDeadlineAt,
+          writeAdmissionExpiresAt: writeAdmission.expiresAt,
           signal: attemptSignal,
         });
         reasonCode = "submission_response_unclassified";

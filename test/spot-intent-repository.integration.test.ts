@@ -58,6 +58,7 @@ import type {
   SpotIntentSubmissionPreflight,
   SpotIocExchangeWriter,
   SpotIocSigner,
+  SpotIocWriteStartGuard,
 } from "../src/features/spot/spot-intent-submission.js";
 import { createSpotIntentSubmissionWorkflow } from "../src/features/spot/spot-intent-submission-workflow.js";
 
@@ -1454,6 +1455,30 @@ describe("PostgreSQL Spot intent repository", () => {
         }),
       ),
     } satisfies SpotIocSigner;
+    const writeStartGuard = {
+      authorize: vi.fn<SpotIocWriteStartGuard["authorize"]>((input) => {
+        const checkedAt = Date.now();
+        const expiresAt = Math.min(
+          checkedAt + 500,
+          Date.parse(input.attempt.attemptDeadlineAt),
+        );
+        return Promise.resolve({
+          decision: "allow",
+          writeAdmissionId: input.writeAdmissionId,
+          ownerUserId: input.subject.ownerUserId,
+          intentId: input.subject.intentId,
+          network: input.attempt.network,
+          transportAttemptId: input.attempt.transportAttemptId,
+          operationRecordVersion: input.attempt.operationRecordVersion,
+          intentRecordVersion: input.expectedIntentRecordVersion,
+          agentIdentityId: input.subject.agentIdentityId,
+          agentAddress: input.attempt.agentAddress,
+          reviewSha256: input.subject.reviewSha256,
+          checkedAt: new Date(checkedAt).toISOString(),
+          expiresAt: new Date(expiresAt).toISOString(),
+        });
+      }),
+    } satisfies SpotIocWriteStartGuard;
     const writer = {
       submit: vi.fn<SpotIocExchangeWriter["submit"]>(() => Promise.resolve()),
     } satisfies SpotIocExchangeWriter;
@@ -1461,6 +1486,7 @@ describe("PostgreSQL Spot intent repository", () => {
       repository,
       preflight,
       signer,
+      writeStartGuard,
       writer,
     });
 
@@ -1483,6 +1509,7 @@ describe("PostgreSQL Spot intent repository", () => {
       }),
     ).toBe(true);
     expect(signer.sign).toHaveBeenCalledOnce();
+    expect(writeStartGuard.authorize).toHaveBeenCalledOnce();
     expect(writer.submit).toHaveBeenCalledOnce();
     const snapshot = await spotAttemptSnapshot(pool, prepared.id);
     expect(snapshot).toMatchObject({
@@ -1500,6 +1527,152 @@ describe("PostgreSQL Spot intent repository", () => {
     expect(snapshot.transport_attempt_id).not.toBeNull();
     expect(snapshot.allocation_nonce).not.toBeNull();
     expect(snapshot.reconcile_after).not.toBeNull();
+  });
+
+  it("atomically records and idempotently replays a proven-not-sent Spot attempt", async () => {
+    const authority = await seedAuthority(pool, "submit-proven-not-sent");
+    const prepared = await prepareStoredIntent(repository, authority);
+    const submission = await submissionInput(pool, authority, prepared);
+    const started = await repository.beginSubmission(submission);
+    if (started.kind !== "started") {
+      throw new Error("Expected the proven-not-sent Spot submission to start");
+    }
+    const notSentInput = Object.freeze({
+      ownerUserId: authority.ownerUserId,
+      intentId: prepared.id,
+      requestId: randomUUID(),
+      transportAttemptId: started.attempt.transportAttemptId,
+      expectedOperationRecordVersion: started.attempt.operationRecordVersion,
+      expectedIntentRecordVersion: started.intent.recordVersion,
+      outcome: Object.freeze({
+        state: "rejected" as const,
+        providerOrderId: null,
+        reasonCode: "submission_write_start_denied" as const,
+      }),
+    });
+
+    const recorded = await repository.recordSubmissionNotSent(notSentInput);
+    expect(recorded).toMatchObject({
+      kind: "recorded",
+      intent: {
+        id: prepared.id,
+        state: "rejected",
+        recordVersion: "2",
+        result: {
+          state: "rejected",
+          order_id: null,
+          reason_code: "submission_write_start_denied",
+        },
+        resource: {
+          intent_id: prepared.id,
+          state: "rejected",
+          submission: { state: "attempted" },
+          result: {
+            state: "rejected",
+            order_id: null,
+            reason_code: "submission_write_start_denied",
+          },
+        },
+      },
+    });
+    const snapshot = await spotAttemptSnapshot(pool, prepared.id);
+    expect(snapshot).toMatchObject({
+      operation_state: "rejected",
+      attempt_count: 1,
+      transport_attempt_id: started.attempt.transportAttemptId,
+      reconciliation_status: "not_required",
+      reconciliation_attempt_count: 0,
+      reconcile_after: null,
+      operator_required_at: null,
+      operation_version: "2",
+      intent_state: "rejected",
+      intent_version: "2",
+      result_reason_code: "submission_write_start_denied",
+      allocation_count: "1",
+      allocation_nonce: started.attempt.nonce,
+      audit_count: "3",
+      event_count: "3",
+    });
+    await expect(
+      pool.query({
+        text: `
+          select event_type, from_state, to_state, reason_code,
+            operation_version::text, transport_attempt_id
+          from public.audit_events
+          where operation_id = $1 and operation_version = 2
+        `,
+        values: [prepared.id],
+      }),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          event_type: "provider_submission_not_sent",
+          from_state: "submitting",
+          to_state: "rejected",
+          reason_code: "submission_write_start_denied",
+          operation_version: "2",
+          transport_attempt_id: started.attempt.transportAttemptId,
+        },
+      ],
+    });
+    await expect(
+      pool.query({
+        text: `
+          select event_type, from_state, to_state, reason_code,
+            intent_version::text
+          from public.spot_intent_events
+          where intent_id = $1 and intent_version = 2
+        `,
+        values: [prepared.id],
+      }),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          event_type: "intent_submission_not_sent",
+          from_state: "submitting",
+          to_state: "rejected",
+          reason_code: "submission_write_start_denied",
+          intent_version: "2",
+        },
+      ],
+    });
+
+    await expect(
+      repository.recordSubmissionNotSent({
+        ...notSentInput,
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({
+      kind: "already_recorded",
+      intent: { state: "rejected", recordVersion: "2" },
+    });
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+
+    await expect(
+      repository.recordSubmissionNotSent({
+        ...notSentInput,
+        requestId: randomUUID(),
+        outcome: {
+          ...notSentInput.outcome,
+          reasonCode: "submission_write_admission_expired",
+        },
+      }),
+    ).rejects.toBeInstanceOf(SpotIntentSubmissionConflictError);
+    await expect(
+      repository.recordSubmissionNotSent({
+        ...notSentInput,
+        requestId: randomUUID(),
+        transportAttemptId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(SpotIntentSubmissionConflictError);
+    expect(await spotAttemptSnapshot(pool, prepared.id)).toEqual(snapshot);
+
+    await expect(
+      repository.beginSubmission({ ...submission, requestId: randomUUID() }),
+    ).resolves.toMatchObject({
+      kind: "already_attempted",
+      intent: { state: "rejected", recordVersion: "2" },
+    });
   });
 
   it("atomically records one ambiguous Spot submission and replays it without a second attempt", async () => {

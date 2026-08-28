@@ -2,13 +2,17 @@ import type {
   BeginSpotIntentSubmissionInput,
   SpotCanonicalAction,
   SpotIntentRepository,
+  SpotIntentSubmissionCoordinatorRepository,
   SpotIntentSubmissionRecoveryRepository,
 } from "../../database/spot-intent-repository.js";
+
+export const SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS = 1_000;
 
 export type SpotIntentSubmissionRepository = Pick<
   SpotIntentRepository,
   "findOwned" | "beginSubmission"
 > &
+  Pick<SpotIntentSubmissionCoordinatorRepository, "recordSubmissionNotSent"> &
   Pick<SpotIntentSubmissionRecoveryRepository, "recordSubmissionUnknown">;
 
 export interface SpotIntentSubmissionEvidence {
@@ -92,6 +96,47 @@ export interface SpotIocSignature {
   readonly v: 27 | 28;
 }
 
+export interface SpotIocWriteStartAdmission {
+  readonly decision: "allow";
+  readonly writeAdmissionId: string;
+  readonly ownerUserId: string;
+  readonly intentId: string;
+  readonly network: "testnet";
+  readonly transportAttemptId: string;
+  readonly operationRecordVersion: string;
+  readonly intentRecordVersion: string;
+  readonly agentIdentityId: string;
+  readonly agentAddress: string;
+  readonly reviewSha256: string;
+  readonly checkedAt: string;
+  readonly expiresAt: string;
+}
+
+export interface SpotIocWriteStartAttemptBinding {
+  readonly intentId: string;
+  readonly network: "testnet";
+  readonly transportAttemptId: string;
+  readonly operationRecordVersion: string;
+  readonly attemptDeadlineAt: string;
+  readonly agentAddress: string;
+}
+
+/**
+ * Performs the final read-only authority, account, policy, signer, and
+ * reconciliation-readiness checks after signing and before Exchange I/O.
+ * Implementations must bind their short lease to the exact durable attempt.
+ */
+export interface SpotIocWriteStartGuard {
+  authorize(input: {
+    readonly writeAdmissionId: string;
+    readonly privyUserId: string;
+    readonly subject: SpotIntentSubmissionSubject;
+    readonly attempt: SpotIocWriteStartAttemptBinding;
+    readonly expectedIntentRecordVersion: string;
+    readonly signal: AbortSignal;
+  }): Promise<unknown>;
+}
+
 /**
  * Signs only the exact Testnet IOC action returned by the durable submission
  * journal. It cannot choose an action, network, nonce, or signer identity.
@@ -129,6 +174,8 @@ export interface SpotIocExchangeWriter {
     readonly expiresAfter: string;
     /** Persisted DB deadline; implementations must refuse a late send. */
     readonly attemptDeadlineAt: string;
+    /** Final read-only admission lease; implementations must refuse expiry. */
+    readonly writeAdmissionExpiresAt: string;
     readonly signal: AbortSignal;
   }): Promise<void>;
 }

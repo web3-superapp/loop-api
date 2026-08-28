@@ -251,6 +251,18 @@ const submissionUnknownSchema = z
   })
   .strict();
 
+const submissionNotSentSchema = z
+  .object({
+    state: z.literal("rejected"),
+    providerOrderId: z.null(),
+    reasonCode: z.enum([
+      "submission_signing_not_completed",
+      "submission_write_start_denied",
+      "submission_write_admission_expired",
+    ]),
+  })
+  .strict();
+
 const recordSubmissionUnknownInputSchema = z
   .object({
     ownerUserId: uuidSchema,
@@ -260,6 +272,18 @@ const recordSubmissionUnknownInputSchema = z
     expectedOperationRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
     expectedIntentRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
     outcome: submissionUnknownSchema,
+  })
+  .strict();
+
+const recordSubmissionNotSentInputSchema = z
+  .object({
+    ownerUserId: uuidSchema,
+    intentId: uuidSchema,
+    requestId: uuidSchema,
+    transportAttemptId: uuidSchema,
+    expectedOperationRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    expectedIntentRecordVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    outcome: submissionNotSentSchema,
   })
   .strict();
 
@@ -783,6 +807,10 @@ export type SpotIntentSubmissionUnknown = Readonly<
   z.output<typeof submissionUnknownSchema>
 >;
 
+export type SpotIntentSubmissionNotSent = Readonly<
+  z.output<typeof submissionNotSentSchema>
+>;
+
 export interface RecordSpotIntentSubmissionUnknownInput {
   readonly ownerUserId: string;
   readonly intentId: string;
@@ -798,6 +826,25 @@ export interface RecordSpotIntentSubmissionUnknownInput {
 }
 
 export type RecordSpotIntentSubmissionUnknownResult =
+  | Readonly<{ kind: "recorded"; intent: SpotIntentRecord }>
+  | Readonly<{ kind: "already_recorded"; intent: SpotIntentRecord }>
+  | Readonly<{ kind: "not_found" }>;
+
+export interface RecordSpotIntentSubmissionNotSentInput {
+  readonly ownerUserId: string;
+  readonly intentId: string;
+  readonly requestId: string;
+  readonly transportAttemptId: string;
+  readonly expectedOperationRecordVersion: string;
+  readonly expectedIntentRecordVersion: string;
+  /**
+   * The coordinator invokes this only before the Exchange writer is called.
+   * It is a durable proven-not-sent outcome, not a provider rejection.
+   */
+  readonly outcome: SpotIntentSubmissionNotSent;
+}
+
+export type RecordSpotIntentSubmissionNotSentResult =
   | Readonly<{ kind: "recorded"; intent: SpotIntentRecord }>
   | Readonly<{ kind: "already_recorded"; intent: SpotIntentRecord }>
   | Readonly<{ kind: "not_found" }>;
@@ -824,6 +871,12 @@ export interface SpotIntentRepository {
   ): Promise<SpotIntentRecord | null>;
 }
 
+export interface SpotIntentSubmissionCoordinatorRepository {
+  recordSubmissionNotSent(
+    input: RecordSpotIntentSubmissionNotSentInput,
+  ): Promise<RecordSpotIntentSubmissionNotSentResult>;
+}
+
 export interface SpotIntentSubmissionRecoveryRepository {
   recordSubmissionUnknown(
     input: RecordSpotIntentSubmissionUnknownInput,
@@ -834,7 +887,10 @@ export interface SpotIntentSubmissionRecoveryRepository {
 }
 
 export interface PostgresSpotIntentRepository
-  extends SpotIntentRepository, SpotIntentSubmissionRecoveryRepository {}
+  extends
+    SpotIntentRepository,
+    SpotIntentSubmissionCoordinatorRepository,
+    SpotIntentSubmissionRecoveryRepository {}
 
 export class SpotIntentPrepareClaimRequiredError extends Error {
   readonly code = "spot_intent_prepare_claim_required";
@@ -903,6 +959,9 @@ type ParsedBeginSpotIntentSubmissionInput = z.output<
 >;
 type ParsedRecordSpotIntentSubmissionUnknownInput = z.output<
   typeof recordSubmissionUnknownInputSchema
+>;
+type ParsedRecordSpotIntentSubmissionNotSentInput = z.output<
+  typeof recordSubmissionNotSentInputSchema
 >;
 
 interface CurrentSpotAuthority {
@@ -2339,6 +2398,247 @@ type LockedSpotIntent = NonNullable<
   Awaited<ReturnType<typeof lockOwnedIntent>>
 >;
 
+function storedSubmissionNotSentMatches(
+  operation: z.output<typeof submissionOperationRowSchema>,
+  locked: LockedSpotIntent,
+  input: ParsedRecordSpotIntentSubmissionNotSentInput,
+): boolean {
+  const result = locked.record.result;
+  return (
+    operation.transport_attempt_id === input.transportAttemptId &&
+    input.expectedOperationRecordVersion === "1" &&
+    input.expectedIntentRecordVersion === "1" &&
+    operation.state === "rejected" &&
+    operation.reconciliation_status === "not_required" &&
+    operation.record_version === "2" &&
+    locked.record.recordVersion === "2" &&
+    locked.row.stored_state === "rejected" &&
+    locked.record.state === "rejected" &&
+    result !== null &&
+    result.state === "rejected" &&
+    result.order_id === null &&
+    result.reason_code === input.outcome.reasonCode &&
+    locked.row.filled_base_size === null &&
+    locked.row.filled_quote_amount === null &&
+    locked.row.average_fill_price === null &&
+    locked.row.result_fee_amount === null &&
+    locked.row.result_fee_token_index === null &&
+    locked.row.result_fee_token_id === null &&
+    locked.row.result_fee_asset_display_identity === null
+  );
+}
+
+async function recordSubmissionNotSentTransaction(
+  client: PoolClient,
+  input: ParsedRecordSpotIntentSubmissionNotSentInput,
+): Promise<RecordSpotIntentSubmissionNotSentResult> {
+  const operation = await lockSubmissionOperation(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (operation === null) {
+    return Object.freeze({ kind: "not_found" as const });
+  }
+  const locked = await lockOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (locked === null) {
+    return failUnavailable();
+  }
+  assertSubmissionProjection(operation, locked.row);
+
+  if (operation.state !== "submitting") {
+    if (storedSubmissionNotSentMatches(operation, locked, input)) {
+      return Object.freeze({
+        kind: "already_recorded" as const,
+        intent: locked.record,
+      });
+    }
+    throw new SpotIntentSubmissionConflictError();
+  }
+  if (
+    operation.reconciliation_status !== "not_required" ||
+    operation.transport_attempt_id !== input.transportAttemptId ||
+    operation.record_version !== input.expectedOperationRecordVersion ||
+    locked.record.recordVersion !== input.expectedIntentRecordVersion ||
+    operation.record_version !== "1" ||
+    locked.row.stored_state !== "submitting" ||
+    locked.record.recordVersion !== "1"
+  ) {
+    throw new SpotIntentSubmissionConflictError();
+  }
+
+  const observedResult = await client.query<{ observed_at: Date }>(
+    "select clock_timestamp() as observed_at",
+  );
+  const observedAt = validDateSchema.safeParse(
+    observedResult.rows[0]?.observed_at,
+  );
+  if (!observedAt.success) {
+    return failUnavailable();
+  }
+  const observedAtIso = observedAt.data.toISOString();
+  const operationResult = await client.query<{ record_version: string }>({
+    text: `
+      update public.provider_operations as operation
+      set
+        state = 'rejected',
+        reconciliation_status = 'not_required',
+        reconcile_after = null,
+        operator_required_at = null,
+        lease_owner = null,
+        lease_expires_at = null,
+        record_version = operation.record_version + 1,
+        updated_at = $5::timestamptz
+      where operation.id = $1
+        and operation.owner_user_id = $2
+        and operation.domain = 'hyperliquid'
+        and operation.operation_kind = 'spot_intent'
+        and operation.state = 'submitting'
+        and operation.reconciliation_status = 'not_required'
+        and operation.transport_attempt_id = $3
+        and operation.record_version = $4::bigint
+      returning operation.record_version::text as record_version
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      input.transportAttemptId,
+      operation.record_version,
+      observedAtIso,
+    ],
+  });
+  const operationVersion = operationResult.rows[0]?.record_version;
+  if (operationVersion === undefined) {
+    return failUnavailable();
+  }
+
+  const intentResult = await client.query<{ record_version: string }>({
+    text: `
+      update public.spot_intents as intent
+      set
+        state = 'rejected',
+        provider_order_id = null,
+        filled_base_size = null,
+        filled_quote_amount = null,
+        average_fill_price = null,
+        result_fee_amount = null,
+        result_fee_token_index = null,
+        result_fee_token_id = null,
+        result_fee_asset_display_identity = null,
+        result_observed_at = $4::timestamptz,
+        result_reason_code = $5,
+        record_version = intent.record_version + 1,
+        updated_at = $4::timestamptz
+      where intent.id = $1
+        and intent.owner_user_id = $2
+        and intent.domain = 'hyperliquid'
+        and intent.operation_kind = 'spot_intent'
+        and intent.state = 'submitting'
+        and intent.record_version = $3::bigint
+      returning intent.record_version::text as record_version
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      locked.record.recordVersion,
+      observedAtIso,
+      input.outcome.reasonCode,
+    ],
+  });
+  const intentVersion = intentResult.rows[0]?.record_version;
+  if (
+    intentVersion === undefined ||
+    operationVersion !== intentVersion ||
+    operationVersion !== "2"
+  ) {
+    return failUnavailable();
+  }
+
+  const auditResult = await client.query({
+    text: `
+      insert into public.audit_events (
+        owner_user_id,
+        operation_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        from_reconciliation_status,
+        to_reconciliation_status,
+        outcome,
+        reason_code,
+        operation_version,
+        fence_token,
+        transport_attempt_id
+      )
+      values (
+        $1, $2, $3, 'api', 'provider_submission_not_sent',
+        'submitting', 'rejected', 'not_required', 'not_required',
+        'rejected', $4, $5::bigint, 0, $6
+      )
+    `,
+    values: [
+      input.ownerUserId,
+      input.intentId,
+      input.requestId,
+      input.outcome.reasonCode,
+      operationVersion,
+      input.transportAttemptId,
+    ],
+  });
+  const eventResult = await client.query({
+    text: `
+      insert into public.spot_intent_events (
+        intent_id,
+        owner_user_id,
+        request_id,
+        actor_type,
+        event_type,
+        from_state,
+        to_state,
+        outcome,
+        reason_code,
+        intent_version
+      )
+      values (
+        $1, $2, $3, 'api', 'intent_submission_not_sent',
+        'submitting', 'rejected', 'rejected', $4, $5::bigint
+      )
+    `,
+    values: [
+      input.intentId,
+      input.ownerUserId,
+      input.requestId,
+      input.outcome.reasonCode,
+      intentVersion,
+    ],
+  });
+  if (auditResult.rowCount !== 1 || eventResult.rowCount !== 1) {
+    return failUnavailable();
+  }
+
+  const intent = await readOwnedIntent(
+    client,
+    input.ownerUserId,
+    input.intentId,
+  );
+  if (
+    intent === null ||
+    intent.recordVersion !== intentVersion ||
+    intent.state !== "rejected" ||
+    intent.result?.state !== "rejected" ||
+    intent.result.reason_code !== input.outcome.reasonCode
+  ) {
+    return failUnavailable();
+  }
+  return Object.freeze({ kind: "recorded" as const, intent });
+}
+
 function storedSubmissionUnknownMatches(
   operation: z.output<typeof submissionOperationRowSchema>,
   locked: LockedSpotIntent,
@@ -2997,6 +3297,19 @@ export function createPostgresSpotIntentRepository(
         const input = recordSubmissionUnknownInputSchema.parse(rawInput);
         return await withTransaction(pool, async (client) =>
           recordSubmissionUnknownTransaction(client, input),
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async recordSubmissionNotSent(
+      rawInput: RecordSpotIntentSubmissionNotSentInput,
+    ): Promise<RecordSpotIntentSubmissionNotSentResult> {
+      try {
+        const input = recordSubmissionNotSentInputSchema.parse(rawInput);
+        return await withTransaction(pool, async (client) =>
+          recordSubmissionNotSentTransaction(client, input),
         );
       } catch (error) {
         return translateRepositoryError(error);

@@ -3,6 +3,7 @@ import { canonicalize } from "@nktkas/hyperliquid/signing";
 import { z } from "zod";
 
 import type { SpotCanonicalAction } from "../../database/spot-intent-repository.js";
+import { SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS } from "../../features/spot/spot-intent-submission.js";
 
 const maximumPostgresInteger = 2_147_483_647;
 const maximumSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
@@ -183,4 +184,41 @@ export function assertHyperliquidSpotIocTiming(input: {
     return unavailable();
   }
   return Object.freeze({ nonce, expiresAfter, attemptDeadlineAt });
+}
+
+export function assertHyperliquidSpotIocWriteAdmission(input: {
+  readonly writeAdmissionExpiresAt: string;
+  readonly attemptDeadlineAt: string;
+  readonly signal: AbortSignal;
+  readonly nowMilliseconds: number;
+}): number {
+  if (!(input.signal instanceof AbortSignal)) {
+    return unavailable();
+  }
+  input.signal.throwIfAborted();
+  const admissionTimestamp = canonicalTimestampSchema.safeParse(
+    input.writeAdmissionExpiresAt,
+  );
+  const attemptTimestamp = canonicalTimestampSchema.safeParse(
+    input.attemptDeadlineAt,
+  );
+  const writeAdmissionExpiresAt = admissionTimestamp.success
+    ? Date.parse(admissionTimestamp.data)
+    : Number.NaN;
+  const attemptDeadlineAt = attemptTimestamp.success
+    ? Date.parse(attemptTimestamp.data)
+    : Number.NaN;
+  if (
+    !Number.isSafeInteger(input.nowMilliseconds) ||
+    input.nowMilliseconds < 0 ||
+    !Number.isSafeInteger(writeAdmissionExpiresAt) ||
+    !Number.isSafeInteger(attemptDeadlineAt) ||
+    input.nowMilliseconds >= writeAdmissionExpiresAt ||
+    writeAdmissionExpiresAt - input.nowMilliseconds >
+      SPOT_IOC_WRITE_ADMISSION_MAX_MILLISECONDS ||
+    writeAdmissionExpiresAt > attemptDeadlineAt
+  ) {
+    return unavailable();
+  }
+  return writeAdmissionExpiresAt;
 }

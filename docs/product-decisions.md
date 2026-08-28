@@ -38,6 +38,13 @@ low-level Node signer and fixed-Testnet one-attempt writer now pass offline
 official-Python-vector conformance and remain uncomposed. Credentialed Agent,
 just-before-send, Testnet write, crash, and reconciliation gates still block
 runtime enablement.
+Decision 0020 adds a strict post-signature, pre-writer admission boundary and a
+durable coordinator-only `rejected/not_required` outcome when LOOP can prove
+the Exchange writer was never invoked. Any writer invocation still becomes
+`unknown` and read-only reconciliation; no second write is allowed. The guard
+port is not a production guard and the runtime remains unavailable. After this
+verified safety slice, Hyperliquid product work is frozen pending an explicit
+scope decision; the freeze does not claim a credentialed Testnet transaction.
 Decision 0015 keeps Mainnet absent as a separate future release project rather
 than a URL or runtime flag.
 Decision 0018 adds an uncomposed Agent-authorization issuance coordinator. It

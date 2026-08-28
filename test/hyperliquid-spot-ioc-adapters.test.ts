@@ -80,6 +80,8 @@ function validWriterInput(vector: L1Vector) {
     throw new Error("The runtime writer fixture requires expiresAfter");
   }
   const expiresAfter = Number(vector.semantic_input.expires_after);
+  const now = Number(vector.semantic_input.nonce);
+  const attemptDeadlineAt = expiresAfter - 1_000;
   return {
     transportAttemptId,
     network: "testnet" as const,
@@ -88,7 +90,10 @@ function validWriterInput(vector: L1Vector) {
     signature: vector.signature.official_json,
     vaultAddress: null,
     expiresAfter: vector.semantic_input.expires_after,
-    attemptDeadlineAt: new Date(expiresAfter - 1_000).toISOString(),
+    attemptDeadlineAt: new Date(attemptDeadlineAt).toISOString(),
+    writeAdmissionExpiresAt: new Date(
+      Math.min(now + 500, attemptDeadlineAt),
+    ).toISOString(),
     signal: new AbortController().signal,
   };
 }
@@ -378,6 +383,18 @@ describe("Hyperliquid Spot IOC Exchange writer", () => {
     });
 
     await expect(writer.submit(input)).resolves.toBeUndefined();
+    expect(Object.keys(input)).toEqual([
+      "transportAttemptId",
+      "network",
+      "action",
+      "nonce",
+      "signature",
+      "vaultAddress",
+      "expiresAfter",
+      "attemptDeadlineAt",
+      "writeAdmissionExpiresAt",
+      "signal",
+    ]);
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]?.[0]).toBe(HYPERLIQUID_TESTNET_EXCHANGE_URL);
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({
@@ -486,6 +503,17 @@ describe("Hyperliquid Spot IOC Exchange writer", () => {
       { ...valid, transportAttemptId: "not-a-uuid" },
       { ...valid, nonce: "9007199254740992" },
       { ...valid, attemptDeadlineAt: new Date(now).toISOString() },
+      { ...valid, writeAdmissionExpiresAt: new Date(now).toISOString() },
+      {
+        ...valid,
+        writeAdmissionExpiresAt: new Date(now + 1_001).toISOString(),
+      },
+      {
+        ...valid,
+        writeAdmissionExpiresAt: new Date(
+          Date.parse(valid.attemptDeadlineAt) + 1,
+        ).toISOString(),
+      },
       { ...valid, vaultAddress: `0x${"12".repeat(20)}` },
       {
         ...valid,
