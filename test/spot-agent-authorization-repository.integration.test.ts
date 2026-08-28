@@ -7,6 +7,7 @@ import { createPostgresPerpWalletBindingRepository } from "../src/database/perp-
 import {
   createPostgresSpotAgentAuthorizationRepository,
   HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS,
+  SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
   SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS,
   SPOT_AGENT_AUTHORIZATION_MAX_AGENT_LIFETIME_MILLISECONDS,
   SPOT_AGENT_AUTHORIZATION_POLICY_VERSION,
@@ -20,6 +21,7 @@ import {
   type MaterializeSpotAgentAuthorizationForNonce,
   type PreflightSpotAgentAuthorizationInput,
   type PostgresSpotAgentAuthorizationRepository,
+  type ResolveCurrentSpotAgentAuthorityInput,
   type SpotAgentAuthorizationMaterializationContext,
 } from "../src/database/spot-agent-authorization-repository.js";
 import { createPerpWalletBindingResolver } from "../src/features/perp/wallet-binding-resolver.js";
@@ -77,6 +79,10 @@ interface AuthorityFixture {
 interface DatabaseTimes {
   readonly verifiedAt: string;
   readonly expiresAt: string;
+  readonly policyCheckedAt: string;
+  readonly policyExpiresAt: string;
+  readonly admissionStartedAt: string;
+  readonly admissionExpiresAt: string;
   readonly signingExpiresAt: string;
   readonly agentValidUntil: string;
 }
@@ -118,13 +124,34 @@ async function databaseTimes(
   overrides: {
     readonly verifiedOffsetMs?: number;
     readonly authorityExpiresOffsetMs?: number;
+    readonly policyCheckedOffsetMs?: number;
+    readonly policyExpiresOffsetMs?: number;
+    readonly admissionStartedOffsetMs?: number;
+    readonly admissionExpiresOffsetMs?: number;
     readonly signingExpiresOffsetMs?: number;
     readonly agentValidUntilOffsetMs?: number;
   } = {},
 ): Promise<DatabaseTimes> {
+  const verifiedOffsetMs = overrides.verifiedOffsetMs ?? -100;
+  const authorityExpiresOffsetMs = overrides.authorityExpiresOffsetMs ?? 14_000;
+  const policyCheckedOffsetMs = overrides.policyCheckedOffsetMs ?? -100;
+  const policyExpiresOffsetMs = overrides.policyExpiresOffsetMs ?? 14_000;
+  const admissionStartedOffsetMs = overrides.admissionStartedOffsetMs ?? -100;
+  const admissionExpiresOffsetMs =
+    overrides.admissionExpiresOffsetMs ??
+    Math.min(
+      authorityExpiresOffsetMs,
+      policyExpiresOffsetMs,
+      admissionStartedOffsetMs +
+        SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
+    );
   const result = await pool.query<{
+    admission_expires_at: Date;
+    admission_started_at: Date;
     agent_valid_until: Date;
     expires_at: Date;
+    policy_checked_at: Date;
+    policy_expires_at: Date;
     signing_expires_at: Date;
     verified_at: Date;
   }>({
@@ -138,14 +165,26 @@ async function databaseTimes(
         database_clock.observed_at
           + ($2::bigint * interval '1 millisecond') as expires_at,
         database_clock.observed_at
-          + ($3::bigint * interval '1 millisecond') as signing_expires_at,
+          + ($3::bigint * interval '1 millisecond') as policy_checked_at,
         database_clock.observed_at
-          + ($4::bigint * interval '1 millisecond') as agent_valid_until
+          + ($4::bigint * interval '1 millisecond') as policy_expires_at,
+        database_clock.observed_at
+          + ($5::bigint * interval '1 millisecond') as admission_started_at,
+        database_clock.observed_at
+          + ($6::bigint * interval '1 millisecond') as admission_expires_at,
+        database_clock.observed_at
+          + ($7::bigint * interval '1 millisecond') as signing_expires_at,
+        database_clock.observed_at
+          + ($8::bigint * interval '1 millisecond') as agent_valid_until
       from database_clock
     `,
     values: [
-      overrides.verifiedOffsetMs ?? -100,
-      overrides.authorityExpiresOffsetMs ?? 14_000,
+      verifiedOffsetMs,
+      authorityExpiresOffsetMs,
+      policyCheckedOffsetMs,
+      policyExpiresOffsetMs,
+      admissionStartedOffsetMs,
+      admissionExpiresOffsetMs,
       overrides.signingExpiresOffsetMs ?? 120_000,
       overrides.agentValidUntilOffsetMs ?? 3_600_000,
     ],
@@ -157,6 +196,10 @@ async function databaseTimes(
   return Object.freeze({
     verifiedAt: row.verified_at.toISOString(),
     expiresAt: row.expires_at.toISOString(),
+    policyCheckedAt: row.policy_checked_at.toISOString(),
+    policyExpiresAt: row.policy_expires_at.toISOString(),
+    admissionStartedAt: row.admission_started_at.toISOString(),
+    admissionExpiresAt: row.admission_expires_at.toISOString(),
     signingExpiresAt: row.signing_expires_at.toISOString(),
     agentValidUntil: row.agent_valid_until.toISOString(),
   });
@@ -213,9 +256,10 @@ async function issueInput(
 ): Promise<IssueSpotAgentAuthorizationInput> {
   const times = await databaseTimes(pool, timeOverrides);
   const agentValidUntil = overrides.agentValidUntil ?? times.agentValidUntil;
+  const agentAddress = overrides.agentAddress ?? randomAddress();
   const agentName =
     overrides.agentName ??
-    `Loop-${randomHex(11)} valid_until ${Date.parse(agentValidUntil)}`;
+    `Loop-${agentAddress.slice(2, 13)} valid_until ${Date.parse(agentValidUntil)}`;
   return Object.freeze({
     authorizationId: randomUUID(),
     agentIdentityId: randomUUID(),
@@ -229,7 +273,14 @@ async function issueInput(
     bindingVersion: "1",
     verifiedAt: times.verifiedAt,
     expiresAt: times.expiresAt,
-    agentAddress: randomAddress(),
+    policyOwnerUserId: authority.ownerUserId,
+    policyNetwork: "testnet",
+    policyAction: "approve_agent",
+    policyCheckedAt: times.policyCheckedAt,
+    policyExpiresAt: times.policyExpiresAt,
+    admissionStartedAt: times.admissionStartedAt,
+    admissionExpiresAt: times.admissionExpiresAt,
+    agentAddress,
     agentName,
     signerRef: `privy-server-wallet:${randomUUID()}`,
     agentValidUntil,
@@ -243,6 +294,32 @@ function preflightInput(
   input: IssueSpotAgentAuthorizationInput,
   overrides: Partial<PreflightSpotAgentAuthorizationInput> = {},
 ): PreflightSpotAgentAuthorizationInput {
+  return Object.freeze({
+    ownerUserId: input.ownerUserId,
+    privyUserId: input.privyUserId,
+    requestId: input.requestId,
+    walletId: input.walletId,
+    accountAddress: input.accountAddress,
+    accountKind: input.accountKind,
+    bindingVersion: input.bindingVersion,
+    verifiedAt: input.verifiedAt,
+    expiresAt: input.expiresAt,
+    policyOwnerUserId: input.policyOwnerUserId,
+    policyNetwork: input.policyNetwork,
+    policyAction: input.policyAction,
+    policyCheckedAt: input.policyCheckedAt,
+    policyExpiresAt: input.policyExpiresAt,
+    admissionStartedAt: input.admissionStartedAt,
+    admissionExpiresAt: input.admissionExpiresAt,
+    policyVersion: input.policyVersion,
+    ...overrides,
+  });
+}
+
+function activeAuthorityInput(
+  input: IssueSpotAgentAuthorizationInput,
+  overrides: Partial<ResolveCurrentSpotAgentAuthorityInput> = {},
+): ResolveCurrentSpotAgentAuthorityInput {
   return Object.freeze({
     ownerUserId: input.ownerUserId,
     privyUserId: input.privyUserId,
@@ -287,7 +364,7 @@ function typedData(
       type: "approveAgent",
       agentAddress: context.agentAddress,
       agentName: context.agentName,
-      nonce: context.authorizationNonce,
+      nonce: Number(context.authorizationNonce),
       signatureChainId: "0x66eee",
       hyperliquidChain: "Testnet",
     },
@@ -589,7 +666,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
 
     await expect(
       repository.findCurrentActive(
-        preflightInput(input, { requestId: randomUUID() }),
+        activeAuthorityInput(input, { requestId: randomUUID() }),
       ),
     ).resolves.toEqual({
       authorizationId: input.authorizationId,
@@ -673,7 +750,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     const input = await issueInput(pool, authority);
 
     await expect(
-      repository.findCurrentActive(preflightInput(input)),
+      repository.findCurrentActive(activeAuthorityInput(input)),
     ).resolves.toBeNull();
 
     await repository.issueOrReplayCurrent(
@@ -682,7 +759,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       computeSigningDigest,
     );
     await expect(
-      repository.findCurrentActive(preflightInput(input)),
+      repository.findCurrentActive(activeAuthorityInput(input)),
     ).resolves.toBeNull();
   });
 
@@ -701,7 +778,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     );
 
     await expect(
-      repository.findCurrentActive(preflightInput(input)),
+      repository.findCurrentActive(activeAuthorityInput(input)),
     ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
   });
 
@@ -721,7 +798,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     await activateAuthorization(pool, input);
 
     await expect(
-      repository.findCurrentActive(preflightInput(input, drift)),
+      repository.findCurrentActive(activeAuthorityInput(input, drift)),
     ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
   });
 
@@ -747,7 +824,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
 
       await expect(
         repository.findCurrentActive(
-          preflightInput(input, {
+          activeAuthorityInput(input, {
             verifiedAt: times.verifiedAt,
             expiresAt: times.expiresAt,
           }),
@@ -778,7 +855,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
 
     await expect(
       repository.findCurrentActive(
-        preflightInput(input, {
+        activeAuthorityInput(input, {
           verifiedAt: times.verifiedAt,
           expiresAt: times.expiresAt,
         }),
@@ -813,7 +890,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       });
 
       const pending = repository.findCurrentActive(
-        preflightInput(input, {
+        activeAuthorityInput(input, {
           verifiedAt: times.verifiedAt,
           expiresAt: times.expiresAt,
         }),
@@ -862,7 +939,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
         values: [input.authorizationId],
       });
 
-      const pending = repository.findCurrentActive(preflightInput(input));
+      const pending = repository.findCurrentActive(activeAuthorityInput(input));
       const earlyState = await Promise.race([
         pending.then(
           () => "settled" as const,
@@ -1064,6 +1141,56 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     expect(nonceAfter.rows[0]).toEqual(nonceBefore.rows[0]);
   });
 
+  it.each(["preflight", "issue"] as const)(
+    "does not return a %s replay whose signing handoff expires during materialization",
+    async (operation) => {
+      const authority = await seedAuthority(pool, `replay-expiry-${operation}`);
+      const firstInput = await issueInput(
+        pool,
+        authority,
+        {},
+        { signingExpiresOffsetMs: 900 },
+      );
+      await expect(
+        repository.issueOrReplayCurrent(
+          firstInput,
+          materializeForNonce,
+          computeSigningDigest,
+        ),
+      ).resolves.toMatchObject({ kind: "issued", created: true });
+      const before = await durableCounts(pool);
+      const retryInput = await issueInput(pool, authority);
+      const slowReplayMaterializer =
+        vi.fn<MaterializeSpotAgentAuthorizationForNonce>((context) => {
+          void Atomics.wait(
+            new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+            0,
+            0,
+            1_000,
+          );
+          return materializeForNonce(context);
+        });
+
+      const replay =
+        operation === "preflight"
+          ? repository.preflightCurrent(
+              preflightInput(retryInput),
+              slowReplayMaterializer,
+              computeSigningDigest,
+            )
+          : repository.issueOrReplayCurrent(
+              retryInput,
+              slowReplayMaterializer,
+              computeSigningDigest,
+            );
+      await expect(replay).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationPrepareExpiredError,
+      );
+      expect(slowReplayMaterializer).toHaveBeenCalledTimes(1);
+      expect(await durableCounts(pool)).toEqual(before);
+    },
+  );
+
   it("locks the owner then rejects stale authority identity, wallet, address, and lease snapshots before allocation", async () => {
     const authority = await seedAuthority(pool, "authority-fence");
     const base = await issueInput(pool, authority);
@@ -1087,9 +1214,13 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       authorityExpiresOffsetMs:
         SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS - 100,
     });
+    const foreignOwnerUserId = randomUUID();
     const cases: readonly PreflightSpotAgentAuthorizationInput[] = [
       preflightInput(base, { privyUserId: `did:privy:wrong:${randomUUID()}` }),
-      preflightInput(base, { ownerUserId: randomUUID() }),
+      preflightInput(base, {
+        ownerUserId: foreignOwnerUserId,
+        policyOwnerUserId: foreignOwnerUserId,
+      }),
       preflightInput(base, { walletId: `wallet-${randomUUID()}` }),
       preflightInput(base, { accountAddress: randomAddress() }),
       preflightInput(base, {
@@ -1128,6 +1259,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       kind: "issue_required",
       created: false,
       agentGeneration: "1",
+      reservedIdentity: null,
       authorization: null,
       signablePayload: null,
     });
@@ -1243,6 +1375,252 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
         computeSigningDigest,
       ),
     ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("rejects stale or unbounded policy and admission evidence before any durable write", async () => {
+    const authority = await seedAuthority(pool, "policy-admission-window");
+    const valid = await issueInput(pool, authority);
+    const mismatchedPolicyCoordinates = [
+      { ...valid, policyOwnerUserId: randomUUID() },
+      { ...valid, policyNetwork: "mainnet" },
+      { ...valid, policyAction: "approve_builder_fee" },
+    ] as unknown as readonly IssueSpotAgentAuthorizationInput[];
+    const cases = [
+      {
+        policyCheckedOffsetMs: 100,
+        policyExpiresOffsetMs: 1_000,
+      },
+      {
+        policyCheckedOffsetMs: -2_000,
+        policyExpiresOffsetMs: -1,
+      },
+      {
+        policyCheckedOffsetMs: -100,
+        policyExpiresOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS + 1,
+      },
+      {
+        admissionStartedOffsetMs: -100,
+        admissionExpiresOffsetMs:
+          SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS + 1,
+      },
+      {
+        policyExpiresOffsetMs: 5_000,
+        admissionExpiresOffsetMs: 6_000,
+      },
+      {
+        authorityExpiresOffsetMs: 5_000,
+        admissionExpiresOffsetMs: 6_000,
+      },
+      {
+        admissionStartedOffsetMs: 100,
+        admissionExpiresOffsetMs: 1_000,
+      },
+    ] as const;
+    const materializer = vi.fn(materializeForNonce);
+
+    for (const input of mismatchedPolicyCoordinates) {
+      await expect(
+        repository.issueOrReplayCurrent(
+          input,
+          materializer,
+          computeSigningDigest,
+        ),
+      ).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
+      expectNoIssuedRows(await durableCounts(pool));
+    }
+
+    for (const timeOverrides of cases) {
+      await expect(
+        repository.issueOrReplayCurrent(
+          await issueInput(pool, authority, {}, timeOverrides),
+          materializer,
+          computeSigningDigest,
+        ),
+      ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+      expectNoIssuedRows(await durableCounts(pool));
+    }
+    expect(materializer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["policy lease", { policyExpiresOffsetMs: 500 }],
+    ["workflow admission", { admissionExpiresOffsetMs: 500 }],
+  ] as const)(
+    "rolls back identity, nonce, and authorization when the %s expires before commit",
+    async (_label, timeOverrides) => {
+      const authority = await seedAuthority(pool, `issuance-toctou-${_label}`);
+      const input = await issueInput(pool, authority, {}, timeOverrides);
+      const slowMaterializer: MaterializeSpotAgentAuthorizationForNonce = (
+        context,
+      ) => {
+        void Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+          0,
+          0,
+          650,
+        );
+        return materializeForNonce(context);
+      };
+
+      await expect(
+        repository.issueOrReplayCurrent(
+          input,
+          slowMaterializer,
+          computeSigningDigest,
+        ),
+      ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+      expectNoIssuedRows(await durableCounts(pool));
+    },
+  );
+
+  it("aborts a saturated pool acquisition and releases the late client without opening a transaction", async () => {
+    const authority = await seedAuthority(pool, "issuance-pool-abort");
+    const input = await issueInput(pool, authority);
+    const constrainedPool = new Pool({ connectionString: databaseUrl, max: 1 });
+    const heldClient = await constrainedPool.connect();
+    const constrainedRepository =
+      createPostgresSpotAgentAuthorizationRepository(constrainedPool);
+    const controller = new AbortController();
+    const pending = constrainedRepository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+      controller.signal,
+    );
+    const pendingExpectation = expect(pending).rejects.toBeInstanceOf(
+      SpotAgentAuthorizationAuthorityStaleError,
+    );
+    const abortTimer = setTimeout(() => controller.abort(), 25);
+
+    try {
+      await pendingExpectation;
+    } finally {
+      clearTimeout(abortTimer);
+      heldClient.release();
+    }
+    await expect(constrainedPool.query("select 1")).resolves.toBeDefined();
+    await constrainedPool.end();
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("bounds an advisory-lock wait by the admission deadline and rolls back after abort", async () => {
+    const authority = await seedAuthority(pool, "issuance-lock-abort");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      { admissionExpiresOffsetMs: 300 },
+    );
+    const blocker = await pool.connect();
+    const controller = new AbortController();
+    try {
+      await blocker.query("begin");
+      await blocker.query({
+        text: "select pg_advisory_xact_lock(hashtext($1))",
+        values: [
+          `loop.spot.agent-authorization.issue-lock.v1:${input.ownerUserId}:${input.bindingVersion}`,
+        ],
+      });
+      const pending = repository.issueOrReplayCurrent(
+        input,
+        materializeForNonce,
+        computeSigningDigest,
+        controller.signal,
+      );
+      const pendingExpectation = expect(pending).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
+      const abortTimer = setTimeout(() => controller.abort(), 25);
+      try {
+        await pendingExpectation;
+      } finally {
+        clearTimeout(abortTimer);
+      }
+      await blocker.query("rollback");
+    } catch (error) {
+      await blocker.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      blocker.release();
+    }
+    await expect(pool.query("select 1")).resolves.toBeDefined();
+    expectNoIssuedRows(await durableCounts(pool));
+  });
+
+  it("re-arms each SQL wait against one absolute admission deadline", async () => {
+    const authority = await seedAuthority(pool, "issuance-absolute-deadline");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      { admissionExpiresOffsetMs: 1_200 },
+    );
+    const advisoryBlocker = await pool.connect();
+    const ownerBlocker = await pool.connect();
+    let releaseAdvisory: Promise<void> | undefined;
+    try {
+      await advisoryBlocker.query("begin");
+      await advisoryBlocker.query({
+        text: "select pg_advisory_xact_lock(hashtext($1))",
+        values: [
+          `loop.spot.agent-authorization.issue-lock.v1:${input.ownerUserId}:${input.bindingVersion}`,
+        ],
+      });
+      await ownerBlocker.query("begin");
+      await ownerBlocker.query({
+        text: `
+          select id
+          from public.loop_users
+          where id = $1
+          for update
+        `,
+        values: [input.ownerUserId],
+      });
+
+      const startedAt = Date.now();
+      releaseAdvisory = new Promise<void>((resolve, reject) => {
+        setTimeout(() => {
+          advisoryBlocker.query("commit").then(() => resolve(), reject);
+        }, 700);
+      });
+      const pending = repository.issueOrReplayCurrent(
+        input,
+        materializeForNonce,
+        computeSigningDigest,
+      );
+      const settlement = pending.then(
+        () => "settled" as const,
+        () => "settled" as const,
+      );
+      await releaseAdvisory;
+      const afterFirstLock = await Promise.race([
+        settlement,
+        new Promise<"waiting">((resolve) =>
+          setTimeout(() => resolve("waiting"), 100),
+        ),
+      ]);
+      expect(afterFirstLock).toBe("waiting");
+      await expect(pending).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
+      const elapsedMilliseconds = Date.now() - startedAt;
+      expect(elapsedMilliseconds).toBeGreaterThanOrEqual(750);
+      expect(elapsedMilliseconds).toBeLessThan(1_550);
+      await ownerBlocker.query("rollback");
+    } catch (error) {
+      await releaseAdvisory?.catch(() => undefined);
+      await advisoryBlocker.query("rollback").catch(() => undefined);
+      await ownerBlocker.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      advisoryBlocker.release();
+      ownerBlocker.release();
+    }
+    await expect(pool.query("select 1")).resolves.toBeDefined();
     expectNoIssuedRows(await durableCounts(pool));
   });
 
@@ -1379,6 +1757,11 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       {
         ...valid,
         authorizationId: randomUUID(),
+        agentName: `Loop-00000000000 valid_until ${validUntilMilliseconds}`,
+      },
+      {
+        ...valid,
+        authorizationId: randomUUID(),
         agentValidUntil: new Date(validUntilMilliseconds + 1_000).toISOString(),
       },
       {
@@ -1411,7 +1794,10 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
         const message = value["message"] as Record<string, unknown>;
         const malformed = {
           ...value,
-          message: { ...message, nonce: `${context.authorizationNonce}0` },
+          message: {
+            ...message,
+            nonce: Number(context.authorizationNonce) + 1,
+          },
         };
         return {
           typedData: malformed,
@@ -1645,6 +2031,22 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       nonce_state_count: "1",
     });
 
+    await expect(
+      repository.preflightCurrent(
+        preflightInput(await issueInput(pool, authority)),
+        materializeForNonce,
+        computeSigningDigest,
+      ),
+    ).resolves.toMatchObject({
+      kind: "issue_required",
+      agentGeneration: "1",
+      reservedIdentity: {
+        agentIdentityId: first.authorization.agentIdentityId,
+        agentGeneration: "1",
+        ...existingIdentity,
+      },
+    });
+
     const replacement = await repository.issueOrReplayCurrent(
       await issueInput(pool, authority, existingIdentity),
       materializeForNonce,
@@ -1677,7 +2079,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
     ]);
   });
 
-  it("commits expiry-only cleanup even when its authority lease elapses before commit", async () => {
+  it("rolls back expiry-only cleanup when its admission deadline elapses before commit", async () => {
     const authority = await seedAuthority(pool, "expiry-cleanup-lease");
     const issuedInput = await issueInput(
       pool,
@@ -1709,13 +2111,12 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
         materializeForNonce,
         computeSigningDigest,
       );
+      const cleanupExpectation = expect(cleanup).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationRepositoryUnavailableError,
+      );
       await new Promise((resolve) => setTimeout(resolve, 650));
       await blocker.query("commit");
-      await expect(cleanup).resolves.toMatchObject({
-        kind: "expired",
-        authorization: { id: issuedInput.authorizationId },
-        signablePayload: null,
-      });
+      await cleanupExpectation;
     } catch (error) {
       await blocker.query("rollback");
       throw error;
@@ -1739,8 +2140,8 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       values: [issuedInput.authorizationId],
     });
     expect(state.rows[0]).toEqual({
-      authorization_state: "expired",
-      identity_state: "reserved",
+      authorization_state: "prepared",
+      identity_state: "authorization_pending",
     });
   });
 
@@ -2510,6 +2911,7 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
       kind: "issue_required",
       created: false,
       agentGeneration: "2",
+      reservedIdentity: null,
       authorization: null,
       signablePayload: null,
     });

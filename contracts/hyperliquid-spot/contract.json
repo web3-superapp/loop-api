@@ -3,7 +3,10 @@
   "status": "approved_contract_writer_unavailable",
   "decision_refs": [
     "docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md",
-    "docs/decisions/0015-mainnet-spot-release-boundary.md"
+    "docs/decisions/0015-mainnet-spot-release-boundary.md",
+    "docs/decisions/0016-spot-agent-generation-lifecycle.md",
+    "docs/decisions/0017-spot-reconciliation-projection-isolation.md",
+    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md"
   ],
   "implementation_inventory": {
     "path": "contracts/hyperliquid-spot/target-inventory.json",
@@ -325,10 +328,39 @@
   },
   "agent_authorization": {
     "identity_scope": ["owner", "testnet", "binding_epoch"],
-    "identity_reuse": "forbidden after expiry, revocation, retirement, or operator hold",
+    "identity_reuse": "permitted only after signing-handoff expiry while Agent validity remains current; forbidden after Agent-validity expiry, revocation, retirement, or operator hold",
     "preferred_key_custody": "Privy server wallet with no private-key export",
     "action": "approveAgent",
     "operation_kind": "spot_agent_authorization",
+    "issuance_coordinator": {
+      "implemented": true,
+      "runtime_composed": false,
+      "provider_write": false,
+      "policy_and_wallet_authority_checks": "before preflight and again before issuance",
+      "exact_replay_allocator_calls": 0,
+      "exact_replay_confirmation": "second database preflight after the second policy and wallet observations",
+      "reserved_identity_reuse": "reuse the persisted internal identity facts after an expired signing handoff; never allocate a second Agent for the same generation",
+      "allocator_output_exact_fields": ["agentAddress", "signerRef"],
+      "database_nonce_allocation": true,
+      "independent_digest_match_required": true,
+      "admission_maximum_ms": 8000,
+      "admission_deadline_reusable": false,
+      "database_clock_checks": "before every guarded SQL statement, after deferred constraints, and immediately before commit",
+      "database_wait_limits": ["statement_timeout", "lock_timeout"],
+      "database_wait_limit_rearming": "both limits are re-armed from the one absolute admission deadline before every guarded statement and commit",
+      "prepared_handoff_precommit_check": "issued or replayed authorization remains prepared and signing_expires_at is after the database clock",
+      "transient_policy_times_in_idempotency_digest": false,
+      "abort_after_commit_point": "response may be lost; owner-scoped replay must recover the same immutable authorization without another Agent or nonce"
+    },
+    "nonce_representation": {
+      "database_review_and_envelope": "canonical decimal string",
+      "typed_data_message": "JSON safe nonnegative integer",
+      "maximum_typed_data_value": 9007199254740991,
+      "round_trip_equality_required": true
+    },
+    "signing_handoff_maximum_lifetime_ms": 300000,
+    "agent_maximum_lifetime_ms": 86400000,
+    "agent_name": "Loop-<first 11 lowercase Agent address hex characters> valid_until <unix-milliseconds>",
     "signable_payload_exception": "the creation response may contain the one-time server-generated public agentAddress, agentName, nonce, domain, and typed-data fields required by Privy; the client cannot select or edit them",
     "status_resource_forbidden_fields": [
       "typed_data",
@@ -354,6 +386,9 @@
       "relay_attempts_max": 1,
       "ambiguous_result": "authoritative readback; never automatic replay"
     },
+    "signature_recovery": false,
+    "relay": false,
+    "authoritative_reconciliation": false,
     "loop_signer_allowlist": ["single_spot_ioc_order"],
     "protocol_broad_authorization_warning": true
   },

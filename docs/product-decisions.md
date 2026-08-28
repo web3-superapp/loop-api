@@ -38,6 +38,14 @@ writer and signer remain unavailable until an exact Node adapter passes the
 official-Python byte-conformance and credentialed Testnet gates.
 Decision 0015 keeps Mainnet absent as a separate future release project rather
 than a URL or runtime flag.
+Decision 0018 adds an uncomposed Agent-authorization issuance coordinator. It
+uses dual policy/wallet checks, repository-first replay, reserved-identity
+reuse, database-owned nonces, and the official JSON safe-integer typed-data
+nonce. A single eight-second admission deadline is checked with the database
+clock before every guarded SQL statement and commit; a prepared handoff is
+rechecked before return, and replay is re-confirmed after the second authority
+observations, without enabling a Privy allocator, signature recovery, relay,
+reconciliation, or runtime provider write.
 
 The generic reconciliation loop now has a separate process entry point and
 runtime image. Its default-off fixed-Testnet capability can reconcile only a

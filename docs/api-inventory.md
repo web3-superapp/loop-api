@@ -167,8 +167,21 @@ proof that an Agent remains current. The standalone worker enables this
 database-only expiry/retirement maintenance by default; it uses no Privy,
 signer, relay, Exchange, or provider-read capability for that path. The contract
 and official signing fixtures live under
-`contracts/hyperliquid-spot/`. A dormant repository-only submission primitive
-now atomically binds fresh server-only wallet, market, policy, legal,
+`contracts/hyperliquid-spot/`. An uncomposed issuance coordinator now performs
+policy and wallet-authority checks before and after preflight/allocation. Exact
+replay calls no allocator and is confirmed again in PostgreSQL after the second
+authority observations. An expired signing handoff reuses its persisted
+internal Agent identity, and PostgreSQL remains the only nonce allocator. One
+non-renewable, at-most-eight-second admission window covers every pass; the
+database re-arms lock/query waits against that absolute deadline before every
+guarded SQL statement and commit, then rechecks that an issued or replayed
+handoff is still prepared and unexpired. The outer signable envelope retains a
+canonical decimal-string nonce, while the official EIP-712 message carries the
+exact corresponding JSON safe integer.
+
+The runtime still selects the unavailable service; signature recovery, relay,
+and Agent reconciliation remain absent. A dormant repository-only submission
+primitive now atomically binds fresh server-only wallet, market, policy, legal,
 kill-switch, signer, and reconciliation evidence to exactly one transport
 attempt and one persisted Agent nonce. It is not composed into a workflow or
 provider-capable service; the registered submit route therefore returns 503,

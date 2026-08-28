@@ -150,12 +150,12 @@ function approveAgentTypedData(
   input: {
     readonly agentAddress?: string;
     readonly agentName?: string;
-    readonly nonce?: string;
+    readonly nonce?: number;
   } = {},
 ) {
   const agentAddress = input.agentAddress ?? `0x${"11".repeat(20)}`;
   const agentName = input.agentName ?? "loop-spot-agent";
-  const nonce = input.nonce ?? "1760000000789";
+  const nonce = input.nonce ?? 1_760_000_000_789;
   return {
     domain: {
       name: "HyperliquidSignTransaction",
@@ -722,7 +722,7 @@ describe("Spot closed-loop contracts", () => {
       ...base,
       signable_payload: {
         ...base.signable_payload,
-        typed_data: approveAgentTypedData({ nonce: "1760000000790" }),
+        typed_data: approveAgentTypedData({ nonce: 1_760_000_000_790 }),
       },
     };
     const wrongDomain = {
@@ -748,6 +748,29 @@ describe("Spot closed-loop contracts", () => {
     ]) {
       expect(() =>
         parseSpotAgentAuthorizationCreationResource(invalid),
+      ).toThrow(InvalidSpotContractValueError);
+    }
+
+    for (const nonce of [
+      "1760000000789",
+      -1,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      expect(() =>
+        parseSpotAgentAuthorizationCreationResource({
+          ...base,
+          signable_payload: {
+            ...base.signable_payload,
+            typed_data: {
+              ...base.signable_payload.typed_data,
+              message: {
+                ...base.signable_payload.typed_data.message,
+                nonce,
+              },
+            },
+          },
+        }),
       ).toThrow(InvalidSpotContractValueError);
     }
   });

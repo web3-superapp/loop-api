@@ -36,6 +36,16 @@ encoder, or alternate Hyperliquid protocol implementation.
   against sell size, rejects a current taker rate above the persisted ceiling,
   and requires an injected positive aggregate policy decision. It never signs
   or writes.
+- Agent issuance: an uncomposed coordinator checks aggregate product policy and
+  the current master-wallet authority before and after preflight/allocation.
+  Exact replay performs no allocation, an expired handoff reuses its persisted
+  internal Agent identity, and PostgreSQL remains the nonce authority. The
+  envelope nonce remains a canonical decimal string while the official
+  `typed_data.message.nonce` is the exact JSON safe integer. One non-renewable
+  admission deadline covers all passes; the database re-arms statement and lock
+  waits from that absolute deadline before every guarded SQL statement and
+  commit, rechecks the prepared signing handoff before commit, and confirms a
+  replay in a second database transaction after the second authority checks.
 - Writer: **unavailable**. No Node signing package is installed or composed.
 - Orchestration: an uncomposed fake-only coordinator verifies one call through
   the minimal signer and writer ports plus unknown/reconciliation handoff after
@@ -129,6 +139,9 @@ owner may receive one server-generated, expiring `approveAgent` typed-data
 payload because Privy must sign those exact public fields; the client cannot
 choose or edit the Agent, nonce, domain, or action. GET/status resources and
 signature-submission requests do not accept or return those authority fields.
+The issuance coordinator is behavior-tested only with injected ports and is not
+selected by `src/app.ts`. There is no real Privy Agent allocator, signature
+recovery, relay journal, Hyperliquid mutation, or Agent reconciliation handler.
 
 ## Fixtures and conformance
 

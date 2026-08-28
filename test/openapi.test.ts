@@ -636,6 +636,22 @@ describe("committed OpenAPI artifact", () => {
       );
     }
     expect(spotOperations[9][0]).not.toHaveProperty("requestBody");
+    expect(spotOperations[9][0]).toHaveProperty(
+      "responses.201.content.application/json.schema.properties.signable_payload.properties.nonce",
+      {
+        type: "string",
+        pattern: "^(?:0|[1-9][0-9]{0,19})$",
+        maxLength: 20,
+      },
+    );
+    expect(spotOperations[9][0]).toHaveProperty(
+      "responses.201.content.application/json.schema.properties.signable_payload.properties.typed_data.properties.message.properties.nonce",
+      {
+        type: "integer",
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+      },
+    );
     expect(
       JSON.stringify(spotOperations[10][0]?.responses?.["200"] ?? {}),
     ).not.toContain("signable_payload");

@@ -310,6 +310,25 @@ describe("Hyperliquid Spot signing contract", () => {
           readonly reserves_funds: boolean;
           readonly covers_full_attempt: boolean;
         };
+        readonly agent_authorization: {
+          readonly issuance_coordinator: {
+            readonly implemented: boolean;
+            readonly runtime_composed: boolean;
+            readonly provider_write: boolean;
+            readonly exact_replay_allocator_calls: number;
+            readonly database_nonce_allocation: boolean;
+            readonly independent_digest_match_required: boolean;
+          };
+          readonly nonce_representation: {
+            readonly database_review_and_envelope: string;
+            readonly typed_data_message: string;
+            readonly maximum_typed_data_value: number;
+            readonly round_trip_equality_required: boolean;
+          };
+          readonly signature_recovery: boolean;
+          readonly relay: boolean;
+          readonly authoritative_reconciliation: boolean;
+        };
         readonly mainnet_boundary: {
           readonly activation_approved: boolean;
           readonly runtime_code_or_configuration_present: boolean;
@@ -350,6 +369,25 @@ describe("Hyperliquid Spot signing contract", () => {
         ],
         reserves_funds: false,
         covers_full_attempt: false,
+      },
+      agent_authorization: {
+        issuance_coordinator: {
+          implemented: true,
+          runtime_composed: false,
+          provider_write: false,
+          exact_replay_allocator_calls: 0,
+          database_nonce_allocation: true,
+          independent_digest_match_required: true,
+        },
+        nonce_representation: {
+          database_review_and_envelope: "canonical decimal string",
+          typed_data_message: "JSON safe nonnegative integer",
+          maximum_typed_data_value: Number.MAX_SAFE_INTEGER,
+          round_trip_equality_required: true,
+        },
+        signature_recovery: false,
+        relay: false,
+        authoritative_reconciliation: false,
       },
       mainnet_boundary: {
         activation_approved: false,

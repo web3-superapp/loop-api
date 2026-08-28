@@ -127,7 +127,7 @@ function approveAgentTypedData() {
       type: "approveAgent",
       agentAddress: `0x${"11".repeat(20)}`,
       agentName: "loop-spot-agent",
-      nonce: "1760000000789",
+      nonce: 1_760_000_000_789,
       signatureChainId: "0x66eee",
       hyperliquidChain: "Testnet",
     },

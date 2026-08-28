@@ -636,6 +636,11 @@ const authorizationNonceSchema = {
   pattern: "^(?:0|[1-9][0-9]{0,19})$",
   maxLength: 20,
 } as const;
+const authorizationTypedDataNonceSchema = {
+  type: "integer",
+  minimum: 0,
+  maximum: Number.MAX_SAFE_INTEGER,
+} as const;
 const signableDomainSchema = {
   type: "object",
   additionalProperties: false,
@@ -704,7 +709,7 @@ const approveAgentTypedDataSchema = {
         type: { type: "string", const: "approveAgent" },
         agentAddress: agentAddressSchema,
         agentName: agentNameSchema,
-        nonce: authorizationNonceSchema,
+        nonce: authorizationTypedDataNonceSchema,
         signatureChainId: { type: "string", const: "0x66eee" },
         hyperliquidChain: { type: "string", const: "Testnet" },
       },

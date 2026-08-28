@@ -26,6 +26,11 @@ const nonceSchema = z
   .string()
   .regex(/^(?:0|[1-9][0-9]{0,19})$/)
   .refine((value) => BigInt(value) <= maximumUint64);
+const typedDataNonceSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER);
 
 const signableDomainSchema = z
   .object({
@@ -84,7 +89,7 @@ const approveAgentTypedDataSchema = z
           .max(64)
           .regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/)
           .refine((value) => value === value.trim()),
-        nonce: nonceSchema,
+        nonce: typedDataNonceSchema,
         signatureChainId: z.literal("0x66eee"),
         hyperliquidChain: z.literal("Testnet"),
       })
@@ -206,7 +211,7 @@ const signablePayloadSchema = z
     if (
       payload.typed_data.message.agentAddress !== payload.agent_address ||
       payload.typed_data.message.agentName !== payload.agent_name ||
-      payload.typed_data.message.nonce !== payload.nonce
+      String(payload.typed_data.message.nonce) !== payload.nonce
     ) {
       context.addIssue({ code: "custom", path: ["typed_data", "message"] });
     }

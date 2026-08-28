@@ -3,7 +3,10 @@
   "authority": "machine_readable_spot_implementation_surface",
   "decision_refs": [
     "docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md",
-    "docs/decisions/0015-mainnet-spot-release-boundary.md"
+    "docs/decisions/0015-mainnet-spot-release-boundary.md",
+    "docs/decisions/0016-spot-agent-generation-lifecycle.md",
+    "docs/decisions/0017-spot-reconciliation-projection-isolation.md",
+    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md"
   ],
   "owner_order": [
     "contracts/hyperliquid-spot/**",

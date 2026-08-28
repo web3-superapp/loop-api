@@ -20,6 +20,7 @@ export const SPOT_AGENT_AUTHORIZATION_REQUEST_DIGEST_VERSION =
 export const SPOT_AGENT_AUTHORIZATION_REVIEW_VERSION =
   "spot_agent_authorization_review_v1";
 export const SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS = 15_000;
+export const SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS = 8_000;
 export const SPOT_AGENT_AUTHORIZATION_BASE_NAME_MAX_CHARACTERS = 16;
 export const SPOT_AGENT_AUTHORIZATION_MAX_AGENT_LIFETIME_MILLISECONDS = 86_400_000;
 export const SPOT_AGENT_AUTHORIZATION_POLICY_VERSION = "spot_agent_v1";
@@ -104,7 +105,7 @@ const signerRefSchema = z
   );
 const walletIdSchema = signerRefSchema;
 
-const preflightInputSchema = z
+const authorityInputSchema = z
   .object({
     ownerUserId: uuidSchema,
     privyUserId: privyUserIdSchema,
@@ -116,6 +117,18 @@ const preflightInputSchema = z
     verifiedAt: rfc3339Schema,
     expiresAt: rfc3339Schema,
     policyVersion: z.literal(SPOT_AGENT_AUTHORIZATION_POLICY_VERSION),
+  })
+  .strict();
+
+const preflightInputSchema = authorityInputSchema
+  .extend({
+    policyOwnerUserId: uuidSchema,
+    policyNetwork: z.literal("testnet"),
+    policyAction: z.literal("approve_agent"),
+    policyCheckedAt: rfc3339Schema,
+    policyExpiresAt: rfc3339Schema,
+    admissionStartedAt: rfc3339Schema,
+    admissionExpiresAt: rfc3339Schema,
   })
   .strict();
 
@@ -380,10 +393,7 @@ export interface SpotAgentAuthorizationRecord {
   readonly resource: SpotAgentAuthorizationResource;
 }
 
-export interface IssueSpotAgentAuthorizationInput {
-  readonly authorizationId: string;
-  readonly agentIdentityId: string;
-  readonly agentGeneration: string;
+export interface SpotAgentAuthorizationAuthorityInput {
   readonly ownerUserId: string;
   readonly privyUserId: string;
   readonly requestId: string;
@@ -393,25 +403,28 @@ export interface IssueSpotAgentAuthorizationInput {
   readonly bindingVersion: string;
   readonly verifiedAt: string;
   readonly expiresAt: string;
+  readonly policyVersion: typeof SPOT_AGENT_AUTHORIZATION_POLICY_VERSION;
+}
+
+export interface PreflightSpotAgentAuthorizationInput extends SpotAgentAuthorizationAuthorityInput {
+  readonly policyOwnerUserId: string;
+  readonly policyNetwork: "testnet";
+  readonly policyAction: "approve_agent";
+  readonly policyCheckedAt: string;
+  readonly policyExpiresAt: string;
+  readonly admissionStartedAt: string;
+  readonly admissionExpiresAt: string;
+}
+
+export interface IssueSpotAgentAuthorizationInput extends PreflightSpotAgentAuthorizationInput {
+  readonly authorizationId: string;
+  readonly agentIdentityId: string;
+  readonly agentGeneration: string;
   readonly agentAddress: string;
   readonly agentName: string;
   readonly signerRef: string;
   readonly agentValidUntil: string;
   readonly signingExpiresAt: string;
-  readonly policyVersion: typeof SPOT_AGENT_AUTHORIZATION_POLICY_VERSION;
-}
-
-export interface PreflightSpotAgentAuthorizationInput {
-  readonly ownerUserId: string;
-  readonly privyUserId: string;
-  readonly requestId: string;
-  readonly walletId: string;
-  readonly accountAddress: string;
-  readonly accountKind: "master";
-  readonly bindingVersion: string;
-  readonly verifiedAt: string;
-  readonly expiresAt: string;
-  readonly policyVersion: typeof SPOT_AGENT_AUTHORIZATION_POLICY_VERSION;
 }
 
 export interface SpotAgentAuthorizationMaterializationContext {
@@ -470,12 +483,22 @@ export type IssueSpotAgentAuthorizationResult =
       signablePayload: null;
     }>;
 
+export interface ReservedSpotAgentIdentity {
+  readonly agentIdentityId: string;
+  readonly agentGeneration: string;
+  readonly agentAddress: string;
+  readonly agentName: string;
+  readonly signerRef: string;
+  readonly agentValidUntil: string;
+}
+
 export type PreflightSpotAgentAuthorizationResult =
   | Extract<IssueSpotAgentAuthorizationResult, { kind: "replayed" | "expired" }>
   | Readonly<{
       kind: "issue_required";
       created: false;
       agentGeneration: string;
+      reservedIdentity: ReservedSpotAgentIdentity | null;
       authorization: null;
       signablePayload: null;
     }>;
@@ -485,11 +508,13 @@ export interface SpotAgentAuthorizationRepository {
     input: PreflightSpotAgentAuthorizationInput,
     materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,
     computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest,
+    signal?: AbortSignal,
   ): Promise<PreflightSpotAgentAuthorizationResult>;
   issueOrReplayCurrent(
     input: IssueSpotAgentAuthorizationInput,
     materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,
     computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest,
+    signal?: AbortSignal,
   ): Promise<IssueSpotAgentAuthorizationResult>;
   expireElapsedPrepared(input: {
     readonly requestId: string;
@@ -506,7 +531,7 @@ export interface SpotAgentAuthorizationRepository {
 }
 
 export type ResolveCurrentSpotAgentAuthorityInput =
-  PreflightSpotAgentAuthorizationInput;
+  SpotAgentAuthorizationAuthorityInput;
 
 export interface CurrentSpotAgentAuthority {
   readonly authorizationId: string;
@@ -584,9 +609,18 @@ interface ParsedIssueInput extends IssueSpotAgentAuthorizationInput {
   readonly expiresAt: string;
 }
 
+interface ParsedAuthorityInput extends SpotAgentAuthorizationAuthorityInput {
+  readonly verifiedAt: string;
+  readonly expiresAt: string;
+}
+
 interface ParsedPreflightInput extends PreflightSpotAgentAuthorizationInput {
   readonly verifiedAt: string;
   readonly expiresAt: string;
+  readonly policyCheckedAt: string;
+  readonly policyExpiresAt: string;
+  readonly admissionStartedAt: string;
+  readonly admissionExpiresAt: string;
 }
 
 interface AuthorityDigestSnapshot {
@@ -612,11 +646,25 @@ interface DatabaseClient {
   ): Promise<QueryResult<Row>>;
 }
 
+interface TransactionStatementGuard<T> {
+  readonly initialTimeoutMilliseconds: number;
+  beforeStatement(client: DatabaseClient): Promise<void>;
+  beforeCommit?(client: DatabaseClient, result: T): Promise<void>;
+}
+
+type IssuanceGuardResult =
+  | Readonly<{
+      kind: "issued" | "replayed";
+      authorization: SpotAgentAuthorizationRecord;
+    }>
+  | Readonly<{ kind: "expired" | "issue_required" }>;
+
 function failUnavailable(): never {
   throw new SpotAgentAuthorizationRepositoryUnavailableError();
 }
 
 function assertCanonicalAgentExpiryBinding(
+  agentAddress: string,
   agentName: string,
   agentValidUntil: string,
 ): void {
@@ -624,16 +672,10 @@ function assertCanonicalAgentExpiryBinding(
   if (!Number.isSafeInteger(validUntilMilliseconds)) {
     return failUnavailable();
   }
-  const suffix = ` valid_until ${validUntilMilliseconds}`;
-  if (!agentName.endsWith(suffix)) {
-    return failUnavailable();
-  }
-  const baseName = agentName.slice(0, -suffix.length);
+  const baseName = `Loop-${agentAddress.slice(2, 13)}`;
   if (
-    baseName.length === 0 ||
     baseName.length > SPOT_AGENT_AUTHORIZATION_BASE_NAME_MAX_CHARACTERS ||
-    baseName !== baseName.trim() ||
-    baseName.includes(" valid_until ")
+    agentName !== `${baseName} valid_until ${validUntilMilliseconds}`
   ) {
     return failUnavailable();
   }
@@ -644,14 +686,25 @@ function parseIssueInput(
 ): ParsedIssueInput {
   try {
     const input = issueInputSchema.parse(rawInput);
+    if (input.policyOwnerUserId !== input.ownerUserId) {
+      return failUnavailable();
+    }
     const parsed = Object.freeze({
       ...input,
       verifiedAt: new Date(input.verifiedAt).toISOString(),
       expiresAt: new Date(input.expiresAt).toISOString(),
+      policyCheckedAt: new Date(input.policyCheckedAt).toISOString(),
+      policyExpiresAt: new Date(input.policyExpiresAt).toISOString(),
+      admissionStartedAt: new Date(input.admissionStartedAt).toISOString(),
+      admissionExpiresAt: new Date(input.admissionExpiresAt).toISOString(),
       agentValidUntil: new Date(input.agentValidUntil).toISOString(),
       signingExpiresAt: new Date(input.signingExpiresAt).toISOString(),
     });
-    assertCanonicalAgentExpiryBinding(parsed.agentName, parsed.agentValidUntil);
+    assertCanonicalAgentExpiryBinding(
+      parsed.agentAddress,
+      parsed.agentName,
+      parsed.agentValidUntil,
+    );
     return parsed;
   } catch {
     return failUnavailable();
@@ -663,6 +716,28 @@ function parsePreflightInput(
 ): ParsedPreflightInput {
   try {
     const input = preflightInputSchema.parse(rawInput);
+    if (input.policyOwnerUserId !== input.ownerUserId) {
+      return failUnavailable();
+    }
+    return Object.freeze({
+      ...input,
+      verifiedAt: new Date(input.verifiedAt).toISOString(),
+      expiresAt: new Date(input.expiresAt).toISOString(),
+      policyCheckedAt: new Date(input.policyCheckedAt).toISOString(),
+      policyExpiresAt: new Date(input.policyExpiresAt).toISOString(),
+      admissionStartedAt: new Date(input.admissionStartedAt).toISOString(),
+      admissionExpiresAt: new Date(input.admissionExpiresAt).toISOString(),
+    });
+  } catch {
+    return failUnavailable();
+  }
+}
+
+function parseAuthorityInput(
+  rawInput: ResolveCurrentSpotAgentAuthorityInput,
+): ParsedAuthorityInput {
+  try {
+    const input = authorityInputSchema.parse(rawInput);
     return Object.freeze({
       ...input,
       verifiedAt: new Date(input.verifiedAt).toISOString(),
@@ -750,6 +825,7 @@ function materializeIssue(
 ): PreparedIssueBinding {
   try {
     assertCanonicalAgentExpiryBinding(
+      context.agentAddress,
       context.agentName,
       context.agentValidUntil,
     );
@@ -865,6 +941,7 @@ function toAuthorizationRecord(value: unknown): SpotAgentAuthorizationRecord {
     const publicReview = publicReviewSchema.parse(row.public_review);
     const reviewSha256 = digestReview(publicReview);
     assertCanonicalAgentExpiryBinding(
+      row.agent_address,
       row.agent_name,
       row.agent_valid_until.toISOString(),
     );
@@ -947,32 +1024,162 @@ function toAuthorizationRecord(value: unknown): SpotAgentAuthorizationRecord {
 
 async function withTransaction<T>(
   pool: Pool,
-  operation: (client: PoolClient) => Promise<T>,
-  validateBeforeCommit?: (client: PoolClient, result: T) => Promise<void>,
+  operation: (client: DatabaseClient) => Promise<T>,
+  validateBeforeCommit?: (client: DatabaseClient, result: T) => Promise<void>,
+  signal?: AbortSignal,
+  statementGuard?: TransactionStatementGuard<T>,
 ): Promise<T> {
-  const client = await pool.connect();
+  assertTransactionNotAborted(signal);
+  const client = await connectWithAbort(pool, signal);
+  let releaseError: Error | undefined;
   try {
+    assertTransactionNotAborted(signal);
     await client.query("begin");
-    const result = await operation(client);
+    assertTransactionNotAborted(signal);
+    if (statementGuard !== undefined) {
+      await configureInitialTransactionTimeouts(
+        client,
+        statementGuard.initialTimeoutMilliseconds,
+      );
+    }
+    const operationClient =
+      statementGuard === undefined
+        ? client
+        : createStatementGuardedClient(client, statementGuard, signal);
+    const result = await operation(operationClient);
+    assertTransactionNotAborted(signal);
+    await statementGuard?.beforeStatement(client);
+    assertTransactionNotAborted(signal);
     await client.query("set constraints all immediate");
-    await validateBeforeCommit?.(client, result);
+    assertTransactionNotAborted(signal);
+    await validateBeforeCommit?.(operationClient, result);
+    assertTransactionNotAborted(signal);
+    if (statementGuard?.beforeCommit === undefined) {
+      await statementGuard?.beforeStatement(client);
+    } else {
+      await statementGuard.beforeCommit(client, result);
+    }
+    assertTransactionNotAborted(signal);
     await client.query("commit");
     return result;
   } catch (error) {
     try {
       await client.query("rollback");
-    } catch {
+    } catch (rollbackError) {
+      releaseError =
+        rollbackError instanceof Error
+          ? rollbackError
+          : new SpotAgentAuthorizationRepositoryUnavailableError();
       throw new SpotAgentAuthorizationRepositoryUnavailableError();
     }
     throw error;
   } finally {
-    client.release();
+    client.release(releaseError);
+  }
+}
+
+async function configureInitialTransactionTimeouts(
+  client: DatabaseClient,
+  timeoutMilliseconds: number,
+): Promise<void> {
+  if (
+    !Number.isSafeInteger(timeoutMilliseconds) ||
+    timeoutMilliseconds < 1 ||
+    timeoutMilliseconds > SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+  await client.query({
+    text: `
+      select
+        set_config('statement_timeout', $1::text, true),
+        set_config('lock_timeout', $1::text, true)
+    `,
+    values: [timeoutMilliseconds],
+  });
+}
+
+function createStatementGuardedClient<T>(
+  client: PoolClient,
+  statementGuard: TransactionStatementGuard<T>,
+  signal: AbortSignal | undefined,
+): DatabaseClient {
+  return Object.freeze({
+    async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+      config:
+        | string
+        | { readonly text: string; readonly values?: readonly unknown[] },
+    ): Promise<QueryResult<Row>> {
+      assertTransactionNotAborted(signal);
+      await statementGuard.beforeStatement(client);
+      assertTransactionNotAborted(signal);
+      const result =
+        typeof config === "string"
+          ? await client.query<Row>(config)
+          : await client.query<Row>(
+              config.values === undefined
+                ? { text: config.text }
+                : { text: config.text, values: [...config.values] },
+            );
+      assertTransactionNotAborted(signal);
+      return result;
+    },
+  });
+}
+
+function connectWithAbort(
+  pool: Pool,
+  signal: AbortSignal | undefined,
+): Promise<PoolClient> {
+  if (signal === undefined) {
+    return pool.connect();
+  }
+  if (signal.aborted) {
+    return Promise.reject(new SpotAgentAuthorizationAuthorityStaleError());
+  }
+  return new Promise<PoolClient>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () =>
+      finish(() => reject(new SpotAgentAuthorizationAuthorityStaleError()));
+    signal.addEventListener("abort", onAbort, { once: true });
+    pool.connect().then(
+      (client) => {
+        if (settled || signal.aborted) {
+          client.release();
+          finish(() => reject(new SpotAgentAuthorizationAuthorityStaleError()));
+          return;
+        }
+        finish(() => resolve(client));
+      },
+      (error: unknown) =>
+        finish(() =>
+          reject(
+            error instanceof Error
+              ? error
+              : new SpotAgentAuthorizationRepositoryUnavailableError(),
+          ),
+        ),
+    );
+  });
+}
+
+function assertTransactionNotAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
   }
 }
 
 async function assertAuthorityLeaseStillCurrent(
   client: DatabaseClient,
-  input: ParsedPreflightInput,
+  input: ParsedAuthorityInput,
 ): Promise<void> {
   const result = await client.query<{
     lease_is_bounded: boolean;
@@ -1002,6 +1209,145 @@ async function assertAuthorityLeaseStillCurrent(
   if (row?.lease_is_current !== true || row.lease_is_bounded !== true) {
     throw new SpotAgentAuthorizationAuthorityStaleError();
   }
+}
+
+async function assertIssuanceAdmissionStillCurrent(
+  client: DatabaseClient,
+  input: ParsedPreflightInput,
+  guardResult?: IssuanceGuardResult,
+): Promise<void> {
+  const handoff =
+    guardResult?.kind === "issued" || guardResult?.kind === "replayed"
+      ? guardResult.authorization
+      : null;
+  const validation = await client.query<{
+    admission_is_bounded: boolean;
+    admission_is_current: boolean;
+    admission_within_authorities: boolean;
+    policy_lease_is_bounded: boolean;
+    policy_lease_is_current: boolean;
+    prepared_handoff_is_current: boolean;
+    wallet_lease_is_bounded: boolean;
+    wallet_lease_is_current: boolean;
+  }>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      ), admission as (
+        select
+          database_clock.observed_at,
+          greatest(
+            1,
+            ceil(
+              extract(
+                epoch from ($4::timestamptz - database_clock.observed_at)
+              ) * 1000
+            )::bigint
+          ) as remaining_milliseconds
+        from database_clock
+      )
+      select
+        $1::timestamptz <= admission.observed_at
+          and admission.observed_at < $2::timestamptz
+          as policy_lease_is_current,
+        $2::timestamptz > $1::timestamptz
+          and $2::timestamptz <= $1::timestamptz
+            + ($7::bigint * interval '1 millisecond')
+          as policy_lease_is_bounded,
+        $3::timestamptz <= admission.observed_at
+          and admission.observed_at < $4::timestamptz
+          as admission_is_current,
+        $4::timestamptz > $3::timestamptz
+          and $4::timestamptz <= $3::timestamptz
+            + ($8::bigint * interval '1 millisecond')
+          as admission_is_bounded,
+        $4::timestamptz <= $2::timestamptz
+          and $4::timestamptz <= $6::timestamptz
+          as admission_within_authorities,
+        $5::timestamptz <= admission.observed_at
+          and admission.observed_at < $6::timestamptz
+          as wallet_lease_is_current,
+        $6::timestamptz > $5::timestamptz
+          and $6::timestamptz <= $5::timestamptz
+            + ($7::bigint * interval '1 millisecond')
+          as wallet_lease_is_bounded,
+        case
+          when $9::boolean then exists (
+            select 1
+            from public.spot_agent_authorizations as agent_auth
+            where agent_auth.id = $10::uuid
+              and agent_auth.owner_user_id = $11::uuid
+              and agent_auth.state = 'prepared'
+              and agent_auth.signing_expires_at = $12::timestamptz
+              and admission.observed_at < agent_auth.signing_expires_at
+          )
+          else true
+        end as prepared_handoff_is_current,
+        set_config(
+          'statement_timeout',
+          admission.remaining_milliseconds::text,
+          true
+        ) as configured_statement_timeout,
+        set_config(
+          'lock_timeout',
+          admission.remaining_milliseconds::text,
+          true
+        ) as configured_lock_timeout
+      from admission
+    `,
+    values: [
+      input.policyCheckedAt,
+      input.policyExpiresAt,
+      input.admissionStartedAt,
+      input.admissionExpiresAt,
+      input.verifiedAt,
+      input.expiresAt,
+      SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS,
+      SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
+      handoff !== null,
+      handoff?.id ?? null,
+      handoff?.ownerUserId ?? null,
+      handoff?.signingExpiresAt ?? null,
+    ],
+  });
+  const row = validation.rows[0];
+  if (
+    row?.policy_lease_is_current !== true ||
+    row.policy_lease_is_bounded !== true ||
+    row.admission_is_current !== true ||
+    row.admission_is_bounded !== true ||
+    row.admission_within_authorities !== true ||
+    row.wallet_lease_is_current !== true ||
+    row.wallet_lease_is_bounded !== true
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+  if (row.prepared_handoff_is_current !== true) {
+    throw new SpotAgentAuthorizationPrepareExpiredError();
+  }
+}
+
+function issuanceStatementGuard<T extends IssuanceGuardResult>(
+  input: ParsedPreflightInput,
+): TransactionStatementGuard<T> {
+  const initialRemainingMilliseconds =
+    Date.parse(input.admissionExpiresAt) - Date.now();
+  if (
+    !Number.isSafeInteger(initialRemainingMilliseconds) ||
+    initialRemainingMilliseconds < 1
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+  return Object.freeze({
+    initialTimeoutMilliseconds: Math.min(
+      initialRemainingMilliseconds,
+      SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
+    ),
+    beforeStatement: (client: DatabaseClient) =>
+      assertIssuanceAdmissionStillCurrent(client, input),
+    beforeCommit: (client: DatabaseClient, result: T) =>
+      assertIssuanceAdmissionStillCurrent(client, input, result),
+  });
 }
 
 async function readOwnedAuthorization(
@@ -1037,7 +1383,7 @@ async function readOwnedAuthorization(
 
 async function lockCurrentWalletBinding(
   client: DatabaseClient,
-  input: ParsedPreflightInput,
+  input: ParsedAuthorityInput,
 ): Promise<void> {
   const ownerResult = await client.query<Record<string, unknown>>({
     text: `
@@ -1191,7 +1537,7 @@ async function readLiveAuthorizationForIdentity(
 
 async function inspectCurrentActiveAgentAuthority(
   client: DatabaseClient,
-  input: ParsedPreflightInput,
+  input: ParsedAuthorityInput,
 ): Promise<CurrentSpotAgentAuthority | null> {
   await lockCurrentWalletBinding(client, input);
   const identity = await readCurrentIdentity(
@@ -1250,7 +1596,7 @@ async function inspectCurrentActiveAgentAuthority(
 
 async function assertCurrentActiveAgentAuthorityStillCurrent(
   client: DatabaseClient,
-  input: ParsedPreflightInput,
+  input: ParsedAuthorityInput,
   authority: CurrentSpotAgentAuthority,
 ): Promise<void> {
   const result = await client.query<{
@@ -2385,6 +2731,7 @@ type InspectedCurrentAuthorization =
       kind: "issue_required";
       identity: CurrentIdentity | null;
       agentGeneration: string;
+      reservedIdentity: ReservedSpotAgentIdentity | null;
     }>;
 
 async function inspectCurrentAuthorization(
@@ -2413,6 +2760,7 @@ async function inspectCurrentAuthorization(
         input.ownerUserId,
         input.bindingVersion,
       ),
+      reservedIdentity: null,
     });
   }
 
@@ -2465,6 +2813,7 @@ async function inspectCurrentAuthorization(
         input.ownerUserId,
         input.bindingVersion,
       ),
+      reservedIdentity: null,
     });
   }
 
@@ -2511,13 +2860,31 @@ async function inspectCurrentAuthorization(
     });
   }
 
-  if (identity.lifecycle_state !== "reserved" || live !== null) {
+  if (
+    identity.lifecycle_state !== "reserved" ||
+    live !== null ||
+    latest === null ||
+    latest.resource.state !== "expired" ||
+    latest.agentIdentityId !== identity.id ||
+    latest.agentGeneration !== identity.agent_generation ||
+    latest.agentAddress !== identity.agent_address ||
+    latest.agentName !== identity.agent_name ||
+    latest.signerRef !== identity.signer_ref
+  ) {
     throw new SpotAgentAuthorizationAuthorityStaleError();
   }
   return Object.freeze({
     kind: "issue_required" as const,
     identity,
     agentGeneration: identity.agent_generation,
+    reservedIdentity: Object.freeze({
+      agentIdentityId: identity.id,
+      agentGeneration: identity.agent_generation,
+      agentAddress: identity.agent_address,
+      agentName: identity.agent_name,
+      signerRef: identity.signer_ref,
+      agentValidUntil: latest.agentValidUntil,
+    }),
   });
 }
 
@@ -2526,10 +2893,12 @@ async function issueAtomicPass(
   input: ParsedIssueInput,
   materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,
   computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest,
+  signal?: AbortSignal,
 ): Promise<IssueSpotAgentAuthorizationResult> {
-  return withTransaction(
+  return withTransaction<IssueSpotAgentAuthorizationResult>(
     pool,
     async (client) => {
+      assertTransactionNotAborted(signal);
       const inspected = await inspectCurrentAuthorization(
         client,
         input,
@@ -2616,11 +2985,9 @@ async function issueAtomicPass(
         signablePayload: validatedSignablePayload(authorization, prepared),
       });
     },
-    async (client, result) => {
-      if (result.kind !== "expired") {
-        await assertAuthorityLeaseStillCurrent(client, input);
-      }
-    },
+    undefined,
+    signal,
+    issuanceStatementGuard(input),
   );
 }
 
@@ -2635,7 +3002,7 @@ export function createPostgresSpotAgentAuthorizationRepository(
       rawInput: ResolveCurrentSpotAgentAuthorityInput,
     ): Promise<CurrentSpotAgentAuthority | null> {
       try {
-        const input = parsePreflightInput(rawInput);
+        const input = parseAuthorityInput(rawInput);
         return await withTransaction(
           pool,
           (client) => inspectCurrentActiveAgentAuthority(client, input),
@@ -2659,29 +3026,31 @@ export function createPostgresSpotAgentAuthorizationRepository(
       rawInput: PreflightSpotAgentAuthorizationInput,
       materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,
       computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest,
+      signal?: AbortSignal,
     ): Promise<PreflightSpotAgentAuthorizationResult> {
       try {
         const input = parsePreflightInput(rawInput);
-        const inspected = await withTransaction(
+        const inspected = await withTransaction<InspectedCurrentAuthorization>(
           pool,
-          (client) =>
-            inspectCurrentAuthorization(
+          async (client) => {
+            assertTransactionNotAborted(signal);
+            return inspectCurrentAuthorization(
               client,
               input,
               materializeForNonce,
               computeSigningDigest,
-            ),
-          async (client, result) => {
-            if (result.kind !== "expired") {
-              await assertAuthorityLeaseStillCurrent(client, input);
-            }
+            );
           },
+          undefined,
+          signal,
+          issuanceStatementGuard(input),
         );
         if (inspected.kind === "issue_required") {
           return Object.freeze({
             kind: "issue_required" as const,
             created: false as const,
             agentGeneration: inspected.agentGeneration,
+            reservedIdentity: inspected.reservedIdentity,
             authorization: null,
             signablePayload: null,
           });
@@ -2696,6 +3065,7 @@ export function createPostgresSpotAgentAuthorizationRepository(
       rawInput: IssueSpotAgentAuthorizationInput,
       materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,
       computeSigningDigest: ComputeSpotAgentAuthorizationSigningDigest,
+      signal?: AbortSignal,
     ): Promise<IssueSpotAgentAuthorizationResult> {
       try {
         const input = parseIssueInput(rawInput);
@@ -2705,6 +3075,7 @@ export function createPostgresSpotAgentAuthorizationRepository(
             input,
             materializeForNonce,
             computeSigningDigest,
+            signal,
           );
           if (
             result.kind !== "expired" ||

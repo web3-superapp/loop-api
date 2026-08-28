@@ -72,6 +72,16 @@ implemented as independently verified slices:
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
   absent
+- an uncomposed Spot Agent-authorization issuance coordinator that checks
+  product and wallet authority twice, performs allocation only after repository
+  preflight, reuses a reserved identity after signing-handoff expiry, and lets
+  PostgreSQL bind the nonce to independently checked typed data. The public
+  envelope keeps its nonce as a decimal string while the official EIP-712
+  message uses the exact JSON safe integer. One absolute eight-second admission
+  deadline covers every pass; PostgreSQL re-arms statement and lock waits from
+  that absolute deadline before every guarded SQL statement and commit, and
+  rechecks the signing handoff before returning it. Replay is confirmed again
+  after the second authority check
 - immutable, monotonic Spot Agent generations plus bounded database-only
   expiry/retirement maintenance, so a 24-hour Agent can be replaced without
   rotating the user's wallet-binding epoch
@@ -108,7 +118,10 @@ reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
 reviewer, signer/executor, Agent authorization handoff, and every trading
 mutation remain unavailable or denied before provider writes. The Spot prepare
-and submit coordinators are ports plus fake-only behavior tests. A real Testnet
+and submit coordinators are ports plus fake-only behavior tests. The Agent
+issuance coordinator is likewise implemented and behavior-tested but remains
+uncomposed; its real Privy allocator, typed-data hasher, signature recovery,
+relay, and dedicated reconciliation path are absent. A real Testnet
 Spot authority resolver and pure-read current-Agent repository path are
 implemented and tested, but remain uncomposed. The real Testnet
 metadata/book/fee reviewer and exact precision formatter are implemented and
@@ -185,6 +198,9 @@ are recorded in Decisions
 isolation, fenced finalization, and the independently gated authoritative read
 boundary are recorded in
 [`0017`](docs/decisions/0017-spot-reconciliation-projection-isolation.md).
+The uncomposed Spot Agent issuance coordinator, safe-integer typed-data nonce,
+and retained default-closed signature/relay boundary are recorded in
+[`0018`](docs/decisions/0018-spot-agent-authorization-issuance-boundary.md).
 
 ## Quick start
 

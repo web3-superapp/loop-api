@@ -90,7 +90,7 @@ function approveAgentTypedData() {
       type: "approveAgent",
       agentAddress: `0x${"11".repeat(20)}`,
       agentName: "loop-agent",
-      nonce: "1",
+      nonce: 1,
       signatureChainId: "0x66eee",
       hyperliquidChain: "Testnet",
     },
@@ -271,7 +271,7 @@ describe("Spot closed-loop services", () => {
           ...creation.signable_payload.typed_data,
           message: {
             ...creation.signable_payload.typed_data.message,
-            nonce: "2",
+            nonce: 2,
           },
         },
       },

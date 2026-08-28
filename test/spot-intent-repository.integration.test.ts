@@ -19,6 +19,7 @@ import {
 import { HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS } from "../src/database/hyperliquid-signer-nonce.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
+  SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
   SPOT_AGENT_AUTHORIZATION_POLICY_VERSION,
   type ComputeSpotAgentAuthorizationSigningDigest,
   type IssueSpotAgentAuthorizationInput,
@@ -228,7 +229,7 @@ function authorizationTypedData(
       type: "approveAgent",
       agentAddress: context.agentAddress,
       agentName: context.agentName,
-      nonce: context.authorizationNonce,
+      nonce: Number(context.authorizationNonce),
       signatureChainId: "0x66eee",
       hyperliquidChain: "Testnet",
     },
@@ -417,7 +418,8 @@ async function seedAuthority(
   const times = await authorityTimes(pool, options);
   const agentIdentityId = randomUUID();
   const authorizationId = randomUUID();
-  const agentName = `Loop-${randomHex(8)} valid_until ${Date.parse(
+  const agentAddress = `0x${randomHex(40)}`;
+  const agentName = `Loop-${agentAddress.slice(2, 13)} valid_until ${Date.parse(
     times.agentValidUntil,
   )}`;
   const issueInput: IssueSpotAgentAuthorizationInput = Object.freeze({
@@ -433,7 +435,17 @@ async function seedAuthority(
     bindingVersion: "1",
     verifiedAt: times.verifiedAt,
     expiresAt: times.expiresAt,
-    agentAddress: `0x${randomHex(40)}`,
+    policyOwnerUserId: owner.ownerUserId,
+    policyNetwork: "testnet",
+    policyAction: "approve_agent",
+    policyCheckedAt: times.verifiedAt,
+    policyExpiresAt: times.expiresAt,
+    admissionStartedAt: times.verifiedAt,
+    admissionExpiresAt: new Date(
+      Date.parse(times.verifiedAt) +
+        SPOT_AGENT_AUTHORIZATION_ADMISSION_MAX_MILLISECONDS,
+    ).toISOString(),
+    agentAddress,
     agentName,
     signerRef: `privy-server-wallet:${randomUUID()}`,
     agentValidUntil: times.agentValidUntil,
