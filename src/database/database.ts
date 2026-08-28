@@ -35,7 +35,7 @@ import {
 import { latestMigrationName, requiredDatabaseRelations } from "./schema.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
-  type SpotAgentAuthorizationRepository,
+  type PostgresSpotAgentAuthorizationRepository,
 } from "./spot-agent-authorization-repository.js";
 import {
   createPostgresSpotIntentRepository,
@@ -66,7 +66,7 @@ export interface Database {
 
 export interface PostgresDatabase extends Database {
   readonly perpReconciliation: PerpReconciliationRepository;
-  readonly spotAgentAuthorizations: SpotAgentAuthorizationRepository;
+  readonly spotAgentAuthorizations: PostgresSpotAgentAuthorizationRepository;
   readonly spotIntents: PostgresSpotIntentRepository;
   readonly spotReconciliation: SpotReconciliationRepository;
 }

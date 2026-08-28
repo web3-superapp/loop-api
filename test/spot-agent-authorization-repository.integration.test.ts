@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createPostgresPerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
   HYPERLIQUID_SIGNER_NONCE_FUTURE_WINDOW_MILLISECONDS,
@@ -18,9 +19,12 @@ import {
   type IssueSpotAgentAuthorizationInput,
   type MaterializeSpotAgentAuthorizationForNonce,
   type PreflightSpotAgentAuthorizationInput,
+  type PostgresSpotAgentAuthorizationRepository,
   type SpotAgentAuthorizationMaterializationContext,
-  type SpotAgentAuthorizationRepository,
 } from "../src/database/spot-agent-authorization-repository.js";
+import { createPerpWalletBindingResolver } from "../src/features/perp/wallet-binding-resolver.js";
+import { createSpotIntentPrepareAuthorityResolver } from "../src/features/spot/spot-intent-prepare-authority-resolver.js";
+import type { PrivyUserReader } from "../src/integrations/privy/user-reader.js";
 
 const { Pool } = pg;
 const databaseUrl = process.env["DATABASE_URL"];
@@ -87,6 +91,14 @@ interface DurableCounts {
   readonly identity_event_count: string;
   readonly nonce_state_count: string;
   readonly operation_count: string;
+}
+
+interface DurableAuthoritySnapshot {
+  readonly authorization: Readonly<Record<string, unknown>>;
+  readonly idempotency: Readonly<Record<string, unknown>>;
+  readonly identity: Readonly<Record<string, unknown>>;
+  readonly operation: Readonly<Record<string, unknown>>;
+  readonly wallet_binding: Readonly<Record<string, unknown>>;
 }
 
 function randomHex(length: number): string {
@@ -332,6 +344,56 @@ async function durableCounts(
   return row;
 }
 
+async function durableAuthoritySnapshot(
+  pool: InstanceType<typeof Pool>,
+  input: IssueSpotAgentAuthorizationInput,
+): Promise<DurableAuthoritySnapshot> {
+  const result = await pool.query<DurableAuthoritySnapshot>({
+    text: `
+      select
+        (
+          select to_jsonb(binding)
+          from public.perp_wallet_bindings as binding
+          where binding.owner_user_id = $1
+        ) as wallet_binding,
+        (
+          select to_jsonb(identity)
+          from public.spot_agent_identities as identity
+          where identity.id = $2
+        ) as identity,
+        (
+          select to_jsonb(agent_auth)
+          from public.spot_agent_authorizations as agent_auth
+          where agent_auth.id = $3
+        ) as authorization,
+        (
+          select to_jsonb(operation)
+          from public.provider_operations as operation
+          where operation.id = $3
+        ) as operation,
+        (
+          select to_jsonb(idempotency)
+          from public.idempotency_records as idempotency
+          join public.provider_operations as operation
+            on operation.idempotency_record_id = idempotency.id
+          where operation.id = $3
+        ) as idempotency
+    `,
+    values: [input.ownerUserId, input.agentIdentityId, input.authorizationId],
+  });
+  const row = result.rows[0];
+  if (
+    row === undefined ||
+    Object.values(row).some(
+      (value) =>
+        typeof value !== "object" || value === null || Array.isArray(value),
+    )
+  ) {
+    throw new Error("Spot Agent durable-snapshot query failed");
+  }
+  return row;
+}
+
 function expectNoIssuedRows(counts: DurableCounts): void {
   expect(counts).toEqual({
     idempotency_count: "0",
@@ -500,7 +562,7 @@ async function transitionPreparedIdentity(
 
 describe("PostgreSQL Spot Agent authorization repository", () => {
   const pool = new Pool({ connectionString: databaseUrl });
-  let repository: SpotAgentAuthorizationRepository;
+  let repository: PostgresSpotAgentAuthorizationRepository;
 
   beforeEach(async () => {
     await pool.query(truncateAll);
@@ -510,6 +572,319 @@ describe("PostgreSQL Spot Agent authorization repository", () => {
   afterAll(async () => {
     await pool.query(truncateAll);
     await pool.end();
+  });
+
+  it("reads one exact current active Agent with no durable write", async () => {
+    const authority = await seedAuthority(pool, "active-reader");
+    const input = await issueInput(pool, authority);
+    const issued = await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    expect(issued.kind).toBe("issued");
+    await activateAuthorization(pool, input);
+    const before = await durableCounts(pool);
+    const beforeSnapshot = await durableAuthoritySnapshot(pool, input);
+
+    await expect(
+      repository.findCurrentActive(
+        preflightInput(input, { requestId: randomUUID() }),
+      ),
+    ).resolves.toEqual({
+      authorizationId: input.authorizationId,
+      agentIdentityId: input.agentIdentityId,
+      agentValidUntil: input.agentValidUntil,
+    });
+    expect(await durableCounts(pool)).toEqual(before);
+    expect(await durableAuthoritySnapshot(pool, input)).toEqual(beforeSnapshot);
+  });
+
+  it("joins the real wallet resolver and active-Agent reader without runtime composition", async () => {
+    const authority = await seedAuthority(pool, "active-reader-seam");
+    const input = await issueInput(pool, authority);
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+    const readCurrentUser = vi.fn<PrivyUserReader["readCurrentUser"]>(() =>
+      Promise.resolve({
+        id: authority.privyUserId,
+        linked_accounts: [
+          {
+            type: "wallet",
+            chain_type: "ethereum",
+            wallet_client_type: "privy",
+            connector_type: "embedded",
+            id: authority.walletId,
+            address: authority.accountAddress,
+          },
+        ],
+      }),
+    );
+    const walletBindingAuthorityResolver = createPerpWalletBindingResolver({
+      repository: createPostgresPerpWalletBindingRepository(pool),
+      userReader: { readCurrentUser },
+    });
+    const resolver = createSpotIntentPrepareAuthorityResolver({
+      walletBindingAuthorityResolver,
+      activeAgentAuthorityReader: repository,
+    });
+
+    const resolved = await resolver.resolve({
+      ownerUserId: authority.ownerUserId,
+      privyUserId: authority.privyUserId,
+      network: "testnet",
+      requestId: randomUUID(),
+      signal: new AbortController().signal,
+    });
+
+    if (
+      typeof resolved !== "object" ||
+      resolved === null ||
+      !("verifiedAt" in resolved) ||
+      typeof resolved.verifiedAt !== "string" ||
+      !("expiresAt" in resolved) ||
+      typeof resolved.expiresAt !== "string"
+    ) {
+      throw new Error("Spot authority seam returned a malformed lease");
+    }
+    expect(
+      Date.parse(resolved.expiresAt) - Date.parse(resolved.verifiedAt),
+    ).toBe(SPOT_AGENT_AUTHORIZATION_AUTHORITY_LEASE_MILLISECONDS);
+    expect(resolved).toStrictEqual({
+      ownerUserId: authority.ownerUserId,
+      privyUserId: authority.privyUserId,
+      walletId: authority.walletId,
+      accountAddress: authority.accountAddress,
+      accountKind: "master",
+      bindingVersion: "1",
+      agentIdentityId: input.agentIdentityId,
+      verifiedAt: resolved.verifiedAt,
+      expiresAt: resolved.expiresAt,
+    });
+    expect(readCurrentUser).toHaveBeenCalledOnce();
+  });
+
+  it("returns null before an Agent becomes active", async () => {
+    const authority = await seedAuthority(pool, "active-reader-required");
+    const input = await issueInput(pool, authority);
+
+    await expect(
+      repository.findCurrentActive(preflightInput(input)),
+    ).resolves.toBeNull();
+
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await expect(
+      repository.findCurrentActive(preflightInput(input)),
+    ).resolves.toBeNull();
+  });
+
+  it("does not turn an operator-held Agent into user-remediable missing authority", async () => {
+    const authority = await seedAuthority(pool, "active-reader-held");
+    const input = await issueInput(pool, authority);
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await transitionPreparedIdentity(
+      pool,
+      input.agentIdentityId,
+      "operator_hold",
+    );
+
+    await expect(
+      repository.findCurrentActive(preflightInput(input)),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+  });
+
+  it.each([
+    ["Privy subject", { privyUserId: "did:privy:other-subject" }],
+    ["wallet ID", { walletId: "wallet-other" }],
+    ["account address", { accountAddress: randomAddress() }],
+    ["binding epoch", { bindingVersion: "2" }],
+  ] as const)("rejects a stale %s coordinate", async (_label, drift) => {
+    const authority = await seedAuthority(pool, `active-reader-${_label}`);
+    const input = await issueInput(pool, authority);
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+
+    await expect(
+      repository.findCurrentActive(preflightInput(input, drift)),
+    ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+  });
+
+  it.each([
+    ["future", { verifiedOffsetMs: 1_000, authorityExpiresOffsetMs: 2_000 }],
+    ["expired", { verifiedOffsetMs: -2_000, authorityExpiresOffsetMs: -1_000 }],
+    ["overlong", { verifiedOffsetMs: -100, authorityExpiresOffsetMs: 15_001 }],
+  ] as const)(
+    "rejects %s wallet evidence with the DB clock",
+    async (_label, offsets) => {
+      const authority = await seedAuthority(
+        pool,
+        `active-reader-lease-${_label}`,
+      );
+      const input = await issueInput(pool, authority);
+      await repository.issueOrReplayCurrent(
+        input,
+        materializeForNonce,
+        computeSigningDigest,
+      );
+      await activateAuthorization(pool, input);
+      const times = await databaseTimes(pool, offsets);
+
+      await expect(
+        repository.findCurrentActive(
+          preflightInput(input, {
+            verifiedAt: times.verifiedAt,
+            expiresAt: times.expiresAt,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(SpotAgentAuthorizationAuthorityStaleError);
+    },
+  );
+
+  it("returns null when an otherwise active Agent validity has elapsed", async () => {
+    const authority = await seedAuthority(pool, "active-reader-elapsed");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        signingExpiresOffsetMs: 500,
+        agentValidUntilOffsetMs: 1_000,
+      },
+    );
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const times = await databaseTimes(pool);
+
+    await expect(
+      repository.findCurrentActive(
+        preflightInput(input, {
+          verifiedAt: times.verifiedAt,
+          expiresAt: times.expiresAt,
+        }),
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("rechecks wallet evidence after a row-lock wait crosses its expiry", async () => {
+    const authority = await seedAuthority(pool, "active-reader-lock-wait");
+    const input = await issueInput(pool, authority);
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+    const times = await databaseTimes(pool, {
+      verifiedOffsetMs: -50,
+      authorityExpiresOffsetMs: 250,
+    });
+    const locker = await pool.connect();
+    try {
+      await locker.query("begin");
+      await locker.query({
+        text: `
+          select owner_user_id
+          from public.perp_wallet_bindings
+          where owner_user_id = $1
+          for update
+        `,
+        values: [input.ownerUserId],
+      });
+
+      const pending = repository.findCurrentActive(
+        preflightInput(input, {
+          verifiedAt: times.verifiedAt,
+          expiresAt: times.expiresAt,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await locker.query("commit");
+
+      await expect(pending).rejects.toBeInstanceOf(
+        SpotAgentAuthorizationAuthorityStaleError,
+      );
+    } finally {
+      await locker.query("rollback").catch(() => undefined);
+      locker.release();
+    }
+  });
+
+  it("returns null after an authorization row-lock wait crosses Agent validity", async () => {
+    const authority = await seedAuthority(pool, "active-reader-agent-wait");
+    const input = await issueInput(
+      pool,
+      authority,
+      {},
+      {
+        signingExpiresOffsetMs: 500,
+        agentValidUntilOffsetMs: 2_000,
+      },
+    );
+    await repository.issueOrReplayCurrent(
+      input,
+      materializeForNonce,
+      computeSigningDigest,
+    );
+    await activateAuthorization(pool, input);
+    const before = await durableCounts(pool);
+    const beforeSnapshot = await durableAuthoritySnapshot(pool, input);
+    const locker = await pool.connect();
+    try {
+      await locker.query("begin");
+      await locker.query({
+        text: `
+          select id
+          from public.spot_agent_authorizations
+          where id = $1
+          for update
+        `,
+        values: [input.authorizationId],
+      });
+
+      const pending = repository.findCurrentActive(preflightInput(input));
+      const earlyState = await Promise.race([
+        pending.then(
+          () => "settled" as const,
+          () => "settled" as const,
+        ),
+        new Promise<"waiting">((resolve) =>
+          setTimeout(() => resolve("waiting"), 100),
+        ),
+      ]);
+      expect(earlyState).toBe("waiting");
+      await new Promise((resolve) => setTimeout(resolve, 2_050));
+      await locker.query("commit");
+
+      await expect(pending).resolves.toBeNull();
+      expect(await durableCounts(pool)).toEqual(before);
+      expect(await durableAuthoritySnapshot(pool, input)).toEqual(
+        beforeSnapshot,
+      );
+    } finally {
+      await locker.query("rollback").catch(() => undefined);
+      locker.release();
+    }
   });
 
   it("issues once under concurrency and reserves one DB-clock nonce with no transport attempt", async () => {

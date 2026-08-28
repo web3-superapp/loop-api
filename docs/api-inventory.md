@@ -216,9 +216,11 @@ authority again, and then invokes the atomic repository prepare method. It may
 also return an existing owner-scoped public intent resource. It is not selected
 by the main HTTP runtime: the registered routes still use unavailable services
 and stop before any claim, submission journal, nonce, signer, or provider work.
-No production authority resolver or metadata/book/fee reviewer exists. Before
-runtime composition, real resolver/reviewer ports and a default-deny
-product/legal decision are still required. The atomic repository now
+The production Testnet authority resolver and pure-read current-Agent repository
+path are implemented and tested but remain uncomposed; the metadata/book/fee
+reviewer does not exist. Before runtime composition, the reviewer, a
+default-deny product/legal decision, and explicit safe resolver composition are
+still required. The atomic repository now
 exact-matches the owner, Privy subject, wallet ID, address, binding epoch, and
 Agent under locks; it rechecks the resolver lease with the database clock after
 those waits and after deferred projection checks, and requires active Agent

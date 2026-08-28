@@ -6,6 +6,7 @@ import {
   WalletBindingResolutionUnavailableError as PerpWalletBindingResolutionUnavailableError,
 } from "../src/features/perp/wallet-binding-resolver.js";
 import {
+  createUnavailableWalletBindingAuthorityResolver,
   createUnavailableWalletBindingResolver,
   WalletBindingRequiredError,
   WalletBindingResolutionUnavailableError,
@@ -31,5 +32,15 @@ describe("provider-neutral wallet-binding resolver port", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toBeInstanceOf(WalletBindingRequiredError);
+  });
+
+  it("distinguishes a missing enriched authority adapter from an absent binding", async () => {
+    await expect(
+      createUnavailableWalletBindingAuthorityResolver().resolveAuthority({
+        ownerUserId: "2f79618d-fb9e-4e63-9553-244739148fb8",
+        privyUserId: "did:privy:wallet-port",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toBeInstanceOf(WalletBindingResolutionUnavailableError);
   });
 });

@@ -39,9 +39,11 @@ encoder, or alternate Hyperliquid protocol implementation.
 - Mainnet: absent. Decision 0015 is a boundary, not an activation.
 
 The preparation coordinator is not a runtime capability. A real authority
-resolver and metadata/book/fee reviewer do not exist. Composition is forbidden
-until a real resolver, reviewer, and default-deny product/legal decision are
-available. The atomic repository already exact-matches owner, Privy subject,
+resolver and pure-read current-Agent repository path are implemented and tested
+but remain uncomposed; the metadata/book/fee reviewer does not exist.
+Composition is forbidden until the reviewer and default-deny product/legal
+decision are available and the resolver is explicitly composed. The atomic
+repository already exact-matches owner, Privy subject,
 wallet ID, address, binding epoch, and Agent under locks; it validates the
 resolver lease with the database clock after those waits and again after
 deferred projection checks, while requiring Agent validity through review

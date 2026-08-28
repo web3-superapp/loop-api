@@ -13,7 +13,9 @@ import {
   WalletBindingResolutionUnavailableError,
   type ResolveWalletBindingInput,
   type VerifiedWalletBinding,
+  type VerifiedWalletBindingAuthority,
   type WalletAccountKind,
+  type WalletBindingAuthorityResolver,
   type WalletBindingResolver,
 } from "../wallet/wallet-binding-resolver.js";
 
@@ -48,102 +50,119 @@ export function createPerpWalletBindingResolver(options: {
   readonly repository: PerpWalletBindingRepository;
   readonly userReader: PrivyUserReader;
   readonly now?: () => number;
-}): PerpWalletBindingResolver {
+}): PerpWalletBindingResolver & WalletBindingAuthorityResolver {
   const now = options.now ?? Date.now;
+  async function resolveAuthority(
+    input: ResolvePerpWalletBindingInput,
+  ): Promise<VerifiedWalletBindingAuthority> {
+    const parsedInput = resolverInputSchema.safeParse(input);
+    if (!parsedInput.success) {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    parsedInput.data.signal.throwIfAborted();
+
+    let stored;
+    try {
+      stored = await options.repository.get({
+        ownerUserId: parsedInput.data.ownerUserId,
+        privyUserId: parsedInput.data.privyUserId,
+      });
+    } catch {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    parsedInput.data.signal.throwIfAborted();
+    if (stored === null) {
+      throw new WalletBindingRequiredError();
+    }
+
+    let record;
+    try {
+      record = parsePerpWalletBindingRecord(stored, {
+        ownerUserId: parsedInput.data.ownerUserId,
+        privyUserId: parsedInput.data.privyUserId,
+      });
+    } catch {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    if (record.state !== "bound") {
+      throw new WalletBindingRequiredError();
+    }
+
+    let user;
+    try {
+      user = await options.userReader.readCurrentUser({
+        privyUserId: parsedInput.data.privyUserId,
+        signal: parsedInput.data.signal,
+      });
+    } catch (error) {
+      if (parsedInput.data.signal.aborted) {
+        parsedInput.data.signal.throwIfAborted();
+        throw error;
+      }
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    parsedInput.data.signal.throwIfAborted();
+
+    let exact;
+    try {
+      const wallets = parsePrivyEmbeddedEthereumWallets(
+        user,
+        parsedInput.data.privyUserId,
+      );
+      exact = findExactPrivyWallet(wallets, {
+        walletId: record.walletId,
+        accountAddress: record.accountAddress!,
+      });
+    } catch {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    if (exact === null) {
+      throw new WalletBindingRequiredError();
+    }
+
+    const verifiedAtMilliseconds = now();
+    if (
+      !Number.isSafeInteger(verifiedAtMilliseconds) ||
+      verifiedAtMilliseconds < 0
+    ) {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+    const verifiedAt = new Date(verifiedAtMilliseconds);
+    const expiresAt = new Date(
+      verifiedAtMilliseconds + verifiedLeaseMilliseconds,
+    );
+    if (
+      Number.isNaN(verifiedAt.getTime()) ||
+      Number.isNaN(expiresAt.getTime())
+    ) {
+      throw new WalletBindingResolutionUnavailableError();
+    }
+
+    return Object.freeze({
+      ownerUserId: record.ownerUserId,
+      privyUserId: record.privyUserId,
+      walletId: record.walletId,
+      accountAddress: exact.accountAddress,
+      accountKind: "master" as const,
+      bindingVersion: record.bindingVersion,
+      verifiedAt: verifiedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    } satisfies VerifiedWalletBindingAuthority);
+  }
+
   return Object.freeze({
     async resolve(input: ResolvePerpWalletBindingInput): Promise<unknown> {
-      const parsedInput = resolverInputSchema.safeParse(input);
-      if (!parsedInput.success) {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      parsedInput.data.signal.throwIfAborted();
-
-      let stored;
-      try {
-        stored = await options.repository.get({
-          ownerUserId: parsedInput.data.ownerUserId,
-          privyUserId: parsedInput.data.privyUserId,
-        });
-      } catch {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      parsedInput.data.signal.throwIfAborted();
-      if (stored === null) {
-        throw new WalletBindingRequiredError();
-      }
-
-      let record;
-      try {
-        record = parsePerpWalletBindingRecord(stored, {
-          ownerUserId: parsedInput.data.ownerUserId,
-          privyUserId: parsedInput.data.privyUserId,
-        });
-      } catch {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      if (record.state !== "bound") {
-        throw new WalletBindingRequiredError();
-      }
-
-      let user;
-      try {
-        user = await options.userReader.readCurrentUser({
-          privyUserId: parsedInput.data.privyUserId,
-          signal: parsedInput.data.signal,
-        });
-      } catch (error) {
-        if (parsedInput.data.signal.aborted) {
-          parsedInput.data.signal.throwIfAborted();
-          throw error;
-        }
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      parsedInput.data.signal.throwIfAborted();
-
-      let exact;
-      try {
-        const wallets = parsePrivyEmbeddedEthereumWallets(
-          user,
-          parsedInput.data.privyUserId,
-        );
-        exact = findExactPrivyWallet(wallets, {
-          walletId: record.walletId,
-          accountAddress: record.accountAddress!,
-        });
-      } catch {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      if (exact === null) {
-        throw new WalletBindingRequiredError();
-      }
-
-      const verifiedAtMilliseconds = now();
-      if (
-        !Number.isSafeInteger(verifiedAtMilliseconds) ||
-        verifiedAtMilliseconds < 0
-      ) {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-      const verifiedAt = new Date(verifiedAtMilliseconds);
-      const expiresAt = new Date(
-        verifiedAtMilliseconds + verifiedLeaseMilliseconds,
-      );
-      if (
-        Number.isNaN(verifiedAt.getTime()) ||
-        Number.isNaN(expiresAt.getTime())
-      ) {
-        throw new WalletBindingResolutionUnavailableError();
-      }
-
+      const authority = await resolveAuthority(input);
       return Object.freeze({
-        ownerUserId: record.ownerUserId,
-        privyUserId: record.privyUserId,
-        accountAddress: exact.accountAddress,
-        accountKind: "master" as const,
-        bindingVersion: record.bindingVersion,
-        verifiedAt: verifiedAt.toISOString(),
-        expiresAt: expiresAt.toISOString(),
+        ownerUserId: authority.ownerUserId,
+        privyUserId: authority.privyUserId,
+        accountAddress: authority.accountAddress,
+        accountKind: authority.accountKind,
+        bindingVersion: authority.bindingVersion,
+        verifiedAt: authority.verifiedAt,
+        expiresAt: authority.expiresAt,
       } satisfies VerifiedPerpWalletBinding);
     },
+    resolveAuthority,
   });
 }

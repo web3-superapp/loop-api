@@ -505,6 +505,24 @@ export interface SpotAgentAuthorizationRepository {
   ): Promise<SpotAgentAuthorizationRecord | null>;
 }
 
+export type ResolveCurrentSpotAgentAuthorityInput =
+  PreflightSpotAgentAuthorizationInput;
+
+export interface CurrentSpotAgentAuthority {
+  readonly authorizationId: string;
+  readonly agentIdentityId: string;
+  readonly agentValidUntil: string;
+}
+
+export interface SpotActiveAgentAuthorityReader {
+  findCurrentActive(
+    input: ResolveCurrentSpotAgentAuthorityInput,
+  ): Promise<CurrentSpotAgentAuthority | null>;
+}
+
+export interface PostgresSpotAgentAuthorizationRepository
+  extends SpotAgentAuthorizationRepository, SpotActiveAgentAuthorityReader {}
+
 export class SpotAgentAuthorizationPrepareExpiredError extends Error {
   readonly code = "spot_agent_authorization_expired";
 
@@ -553,6 +571,10 @@ export function createUnavailableSpotAgentAuthorizationRepository(): SpotAgentAu
     retireElapsedAgentIdentities: unavailable,
     findOwned: unavailable,
   });
+}
+
+export function createUnavailableSpotActiveAgentAuthorityReader(): SpotActiveAgentAuthorityReader {
+  return Object.freeze({ findCurrentActive: unavailable });
 }
 
 interface ParsedIssueInput extends IssueSpotAgentAuthorizationInput {
@@ -1165,6 +1187,120 @@ async function readLiveAuthorizationForIdentity(
   return authorizationId === undefined
     ? null
     : readOwnedAuthorization(client, ownerUserId, authorizationId, true);
+}
+
+async function inspectCurrentActiveAgentAuthority(
+  client: DatabaseClient,
+  input: ParsedPreflightInput,
+): Promise<CurrentSpotAgentAuthority | null> {
+  await lockCurrentWalletBinding(client, input);
+  const identity = await readCurrentIdentity(
+    client,
+    input.ownerUserId,
+    input.bindingVersion,
+  );
+  if (identity === null) {
+    return null;
+  }
+  if (
+    identity.lifecycle_state === "reserved" ||
+    identity.lifecycle_state === "authorization_pending"
+  ) {
+    return null;
+  }
+  if (identity.lifecycle_state !== "active") {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+
+  const authorization = await readLiveAuthorizationForIdentity(
+    client,
+    input.ownerUserId,
+    identity.id,
+  );
+  if (authorization === null) {
+    return failUnavailable();
+  }
+  if (
+    authorization.storedState !== "active" ||
+    authorization.resource.state !== "active"
+  ) {
+    return failUnavailable();
+  }
+  if (
+    authorization.ownerUserId !== input.ownerUserId ||
+    authorization.agentIdentityId !== identity.id ||
+    authorization.agentGeneration !== identity.agent_generation ||
+    authorization.accountAddress !== input.accountAddress ||
+    authorization.bindingVersion !== input.bindingVersion ||
+    authorization.agentAddress !== identity.agent_address ||
+    authorization.agentName !== identity.agent_name ||
+    authorization.signerRef !== identity.signer_ref
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
+  if (await hasAgentValidityElapsed(client, authorization.agentValidUntil)) {
+    return null;
+  }
+  return Object.freeze({
+    authorizationId: authorization.id,
+    agentIdentityId: identity.id,
+    agentValidUntil: authorization.agentValidUntil,
+  });
+}
+
+async function assertCurrentActiveAgentAuthorityStillCurrent(
+  client: DatabaseClient,
+  input: ParsedPreflightInput,
+  authority: CurrentSpotAgentAuthority,
+): Promise<void> {
+  const result = await client.query<{
+    agent_is_current: boolean;
+    same_validity: boolean;
+  }>({
+    text: `
+      with database_clock as (
+        select clock_timestamp() as observed_at
+      )
+      select
+        database_clock.observed_at < agent_auth.agent_valid_until
+          as agent_is_current,
+        agent_auth.agent_valid_until = $4::timestamptz as same_validity
+      from public.spot_agent_identities as identity
+      join public.spot_agent_authorizations as agent_auth
+        on agent_auth.agent_identity_id = identity.id
+       and agent_auth.owner_user_id = identity.owner_user_id
+      cross join database_clock
+      where identity.id = $1
+        and identity.owner_user_id = $2
+        and identity.network = 'testnet'
+        and identity.binding_version = $3::bigint
+        and identity.lifecycle_state = 'active'
+        and agent_auth.id = $5
+        and agent_auth.network = 'testnet'
+        and agent_auth.action = 'approve_agent'
+        and agent_auth.account_address = $6
+        and agent_auth.account_kind = 'master'
+        and agent_auth.binding_version = $3::bigint
+        and agent_auth.agent_address = identity.agent_address
+        and agent_auth.agent_name = identity.agent_name
+        and agent_auth.state = 'active'
+      limit 1
+    `,
+    values: [
+      authority.agentIdentityId,
+      input.ownerUserId,
+      input.bindingVersion,
+      authority.agentValidUntil,
+      authority.authorizationId,
+      input.accountAddress,
+    ],
+  });
+  if (
+    result.rows[0]?.agent_is_current !== true ||
+    result.rows[0].same_validity !== true
+  ) {
+    throw new SpotAgentAuthorizationAuthorityStaleError();
+  }
 }
 
 async function readLatestAuthorizationForIdentity(
@@ -2490,11 +2626,35 @@ async function issueAtomicPass(
 
 export function createPostgresSpotAgentAuthorizationRepository(
   pool: Pool,
-): SpotAgentAuthorizationRepository {
+): PostgresSpotAgentAuthorizationRepository {
   let elapsedPreparedCursor: ElapsedPreparedCandidate | null = null;
   let elapsedAgentIdentityCursor: ElapsedAgentIdentityCandidate | null = null;
 
   return Object.freeze({
+    async findCurrentActive(
+      rawInput: ResolveCurrentSpotAgentAuthorityInput,
+    ): Promise<CurrentSpotAgentAuthority | null> {
+      try {
+        const input = parsePreflightInput(rawInput);
+        return await withTransaction(
+          pool,
+          (client) => inspectCurrentActiveAgentAuthority(client, input),
+          async (client, authority) => {
+            await assertAuthorityLeaseStillCurrent(client, input);
+            if (authority !== null) {
+              await assertCurrentActiveAgentAuthorityStillCurrent(
+                client,
+                input,
+                authority,
+              );
+            }
+          },
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
     async preflightCurrent(
       rawInput: PreflightSpotAgentAuthorizationInput,
       materializeForNonce: MaterializeSpotAgentAuthorizationForNonce,

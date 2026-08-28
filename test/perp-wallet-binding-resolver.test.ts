@@ -96,6 +96,38 @@ describe("Perp wallet-binding resolver", () => {
     );
   });
 
+  it("exposes the stored wallet ID only through the neutral authority channel", async () => {
+    const input = dependencies();
+    const resolver = createPerpWalletBindingResolver({
+      repository: input.repository,
+      userReader: input.userReader,
+      now: () => Date.parse("2026-08-25T05:00:00.000Z"),
+    });
+
+    const legacy = await resolver.resolve(resolveInput());
+    expect(legacy).toEqual({
+      ownerUserId,
+      privyUserId,
+      accountAddress: address,
+      accountKind: "master",
+      bindingVersion: "9223372036854775807",
+      verifiedAt: "2026-08-25T05:00:00.000Z",
+      expiresAt: "2026-08-25T05:00:15.000Z",
+    });
+    expect(legacy).not.toHaveProperty("walletId");
+
+    await expect(resolver.resolveAuthority(resolveInput())).resolves.toEqual({
+      ownerUserId,
+      privyUserId,
+      walletId: "wallet-a",
+      accountAddress: address,
+      accountKind: "master",
+      bindingVersion: "9223372036854775807",
+      verifiedAt: "2026-08-25T05:00:00.000Z",
+      expiresAt: "2026-08-25T05:00:15.000Z",
+    });
+  });
+
   it("matches a nullable stored wallet ID by user-scoped address", async () => {
     const input = dependencies(record({ walletId: null }));
     input.readCurrentUser.mockResolvedValueOnce({
@@ -109,6 +141,16 @@ describe("Perp wallet-binding resolver", () => {
         userReader: input.userReader,
       }).resolve(resolveInput()),
     ).resolves.toMatchObject({ accountAddress: address });
+
+    await expect(
+      createPerpWalletBindingResolver({
+        repository: input.repository,
+        userReader: input.userReader,
+      }).resolveAuthority(resolveInput()),
+    ).resolves.toMatchObject({
+      walletId: null,
+      accountAddress: address,
+    });
   });
 
   it.each([

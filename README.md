@@ -55,7 +55,9 @@ implemented as independently verified slices:
   review draft, and hands it to the atomic repository. The repository checks
   the resolver lease with the database clock after authority locks and again
   after deferred projection checks, and requires the active Agent to cover the
-  review expiry; no real authority resolver or reviewer is composed
+  review expiry; a real Testnet authority resolver and pure-read active-Agent
+  reader are implemented and tested, but the resolver remains uncomposed and
+  no metadata/book/fee reviewer exists
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
@@ -96,13 +98,16 @@ reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
 reviewer, signer/executor, Agent authorization handoff, and every trading
 mutation remain unavailable or denied before provider writes. The Spot prepare
-and submit coordinators are ports plus fake-only behavior tests: the real Spot
-authority resolver, metadata/book/fee reviewer, product/legal gate, signer, and
-writer are absent and neither coordinator is selected by the main runtime.
+and submit coordinators are ports plus fake-only behavior tests. A real Testnet
+Spot authority resolver and pure-read current-Agent repository path are
+implemented and tested, but remain uncomposed. The metadata/book/fee reviewer,
+product/legal gate, signer, and writer are absent, and neither coordinator is
+selected by the main runtime.
 The atomic prepare repository now performs those database-clock resolver-lease
 and complete Agent-lifetime checks, including a final check after deferred
-constraint waits. Runtime composition still requires the missing real resolver,
-reviewer, and default-deny product/legal decision. Transfer routes publish only
+constraint waits. Runtime composition still requires the missing reviewer and
+default-deny product/legal decision, plus explicit safe composition of the
+implemented resolver. Transfer routes publish only
 their reviewed negative contract and return a sanitized 503 after
 authentication; there is still no trading execution path, Privy transfer
 execution, Firebase push path, physical-device integration, or production

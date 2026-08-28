@@ -15,6 +15,15 @@ export interface VerifiedWalletBinding {
   readonly expiresAt: string;
 }
 
+/**
+ * Internal authority evidence includes the persisted provider wallet ID. The
+ * legacy feature resolver deliberately projects this field away so existing
+ * strict Perp consumers keep their exact seven-field contract.
+ */
+export interface VerifiedWalletBindingAuthority extends VerifiedWalletBinding {
+  readonly walletId: string | null;
+}
+
 export interface ResolveWalletBindingInput {
   readonly ownerUserId: string;
   readonly privyUserId: string;
@@ -23,6 +32,10 @@ export interface ResolveWalletBindingInput {
 
 export interface WalletBindingResolver {
   resolve(input: ResolveWalletBindingInput): Promise<unknown>;
+}
+
+export interface WalletBindingAuthorityResolver {
+  resolveAuthority(input: ResolveWalletBindingInput): Promise<unknown>;
 }
 
 export class WalletBindingRequiredError extends Error {
@@ -51,4 +64,11 @@ function unavailable(): Promise<never> {
 
 export function createUnavailableWalletBindingResolver(): WalletBindingResolver {
   return Object.freeze({ resolve: unavailable });
+}
+
+export function createUnavailableWalletBindingAuthorityResolver(): WalletBindingAuthorityResolver {
+  return Object.freeze({
+    resolveAuthority: () =>
+      Promise.reject(new WalletBindingResolutionUnavailableError()),
+  });
 }
