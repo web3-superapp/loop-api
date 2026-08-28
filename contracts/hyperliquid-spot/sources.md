@@ -1,9 +1,10 @@
 # Primary evidence
 
-Checked 2026-08-26. Hyperliquid's official documentation and official Python
+Checked 2026-08-28. Hyperliquid's official documentation and official Python
 SDK source are the protocol authority. Privy's official documentation is the
-identity, wallet, and remote-signing authority. Community TypeScript packages
-are candidates only and cannot override either authority.
+identity, wallet, and remote-signing authority. The selected community
+TypeScript package is a narrowly bounded implementation dependency and cannot
+override either authority.
 
 ## Hyperliquid official documentation
 
@@ -65,7 +66,7 @@ Privy's request-authentication signatures are not substitutes for the owner's
 Ethereum `approveAgent` signature. The mobile client may sign only the exact,
 expiring server-issued payload and return only its opaque signature.
 
-## TypeScript conformance-spike candidate
+## Selected low-level TypeScript adapter dependency
 
 - `@nktkas/hyperliquid` v0.33.3 release:
   <https://github.com/nktkas/hyperliquid/releases/tag/v0.33.3>
@@ -74,12 +75,13 @@ expiring server-issued payload and return only its opaque signature.
 - exact source commit:
   <https://github.com/nktkas/hyperliquid/tree/bb82eba38b177d3938c59fa1fb992e6c0bb0aa6b>
 
-The candidate has not been installed, imported, or selected for production.
-Its declared ranges are not a complete locked graph or SBOM. Any spike stays
-isolated and may evaluate only the low-level canonicalization, action-hash,
-EIP-712, signing, and wallet abstraction needed to satisfy LOOP's persistent
-nonce and one-attempt boundaries. High-level in-memory nonce/send ownership is
-not accepted as the backend authority.
+Decision 0019 installs the exact package only for the uncomposed IOC adapter's
+low-level canonicalization, action-hash, EIP-712 signing, and wallet
+abstraction. Its high-level clients, order methods, transports, and in-memory
+nonce manager are forbidden. PostgreSQL remains the nonce and one-attempt
+authority. The exact graph is locked, but a complete SBOM and credentialed
+Testnet gate remain pending, so this selection does not authorize runtime
+composition.
 
 The live provider-response fixtures are bounded public Testnet captures made on
 2026-08-26. They preserve provider strings and identifier types but are test

@@ -266,18 +266,21 @@ partial fill must preserve its proportional net-quote-per-base floor during
 authoritative finalization. The just-before-send evidence rule, actual fee-token
 and rounding semantics, and bounded partial/full settlement checks remain
 composition blockers; the reviewer and preflight do not implement them.
-An additional uncomposed fake-only submission coordinator now verifies the
-ordering and fields across preflight -> atomic journal/nonce -> minimal fake
-signer -> single fake writer -> normalized unknown handoff. A conservative
+An additional uncomposed submission coordinator verifies the ordering and
+fields across preflight -> atomic journal/nonce -> narrow signer -> single
+writer -> normalized unknown handoff. A conservative
 DB-clock budget and the persisted absolute attempt deadline stop writer
-admission after a slow signer. These are ports and orchestration tests only:
-they do not prove a real resolver, signature conformance, or provider adapter,
-and there is no signer, writer, Exchange SDK, provider write, or main-app
-composition. The strict Info reader is a real read adapter, but the reviewer and
-preflight have only local injected-evidence verification and no credentialed
-prepare or submit E2E.
-Production terminal outcomes, provider writes, and a production signer remain
-unavailable, and no Hyperliquid Node SDK has been installed.
+admission after a slow signer. The selected `@nktkas/hyperliquid@0.33.3`
+low-level surface canonicalizes and signs only the journaled Testnet IOC; a
+separate fixed-origin writer sends it at most once and discards bounded
+lossless responses into the existing unknown/reconciliation path. Both pass
+offline action-hash, EIP-712 digest, signature, and transport tests. They are
+not main-app composed and do not prove a real Privy Agent signer, provider write, or
+credentialed prepare/submit E2E. The strict Info reader is a real read adapter,
+but the reviewer and preflight still have only local injected-evidence
+verification. Production terminal outcomes and provider writes remain
+unavailable until Agent authorization, just-before-send, policy, and
+credentialed Testnet gates pass.
 
 ## Perp wallet-binding lifecycle
 

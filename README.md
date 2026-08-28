@@ -44,10 +44,12 @@ implemented as independently verified slices:
   registered in the main Fastify runtime and generated OpenAPI; their default
   services return a sanitized 503 before any claim, nonce, signer, or provider
   work
-- an uncomposed fake-only Spot submission coordinator verifies coordinator
-  ordering, one journal/nonce winner, the exact fields passed to fake
-  signer/writer ports, DB-deadline admission, and durable
-  unknown/reconciliation handoff without an SDK or network implementation
+- an uncomposed Spot submission coordinator verifies coordinator ordering,
+  one journal/nonce winner, DB-deadline admission, and durable
+  unknown/reconciliation handoff; exact low-level Testnet signer and
+  single-attempt Exchange writer adapters now pass offline action-hash,
+  EIP-712 digest, signature, and bounded-transport tests but are not selected
+  by the main runtime
 - an uncomposed read-only Spot submission preflight resolves current
   wallet/Agent authority before and after its reads, binds fresh metadata,
   available balance, account taker fee, and a positive aggregate policy
@@ -118,7 +120,9 @@ reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
 reviewer, signer/executor, Agent authorization handoff, and every trading
 mutation remain unavailable or denied before provider writes. The Spot prepare
-and submit coordinators are ports plus fake-only behavior tests. The Agent
+and submit coordinators remain uncomposed; their orchestration is covered by
+injected-port behavior tests, while the submit signer/writer adapters have
+separate offline conformance tests. The Agent
 issuance coordinator is likewise implemented and behavior-tested but remains
 uncomposed; its real Privy allocator, typed-data hasher, signature recovery,
 relay, and dedicated reconciliation path are absent. A real Testnet
@@ -127,13 +131,15 @@ implemented and tested, but remain uncomposed. The real Testnet
 metadata/book/fee reviewer and exact precision formatter are implemented and
 tested against injected strict-reader evidence, but no product policy values
 select them in the main runtime and no credentialed intent preparation has run.
-The product/legal gate, signer, and writer are absent, and neither coordinator
-is selected by the main runtime. The read-only submit preflight is implemented
+The product/legal gate and just-before-send recheck remain absent. The signer
+and writer adapters are implemented but uncomposed, and neither coordinator is
+selected by the main runtime. The read-only submit preflight is implemented
 and tested against injected strict-reader evidence but remains uncomposed. Its
 2-second balance and fee evidence is checked with the database clock before the
 journal and again after deferred constraints; this is admission evidence, not a
 funds reservation, and it does not cover the full 10-second transport attempt.
-The immutable quote review does not imply funds availability.
+The immutable quote review does not imply funds availability. No credentialed
+Privy Agent signature or Hyperliquid Exchange write has run.
 The atomic prepare repository now performs its database-clock resolver-lease
 and complete Agent-lifetime checks, including a final check after deferred
 constraint waits. Runtime composition still requires a default-deny

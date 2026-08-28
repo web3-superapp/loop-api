@@ -115,11 +115,13 @@ def main() -> None:
     assert_equal(signer.address.lower(), expected_signer, "fixture signer address")
 
     if fixture["runtime_adapter"] != {
-        "status": "not_selected",
-        "conformance": "not_run",
+        "status": "selected_low_level_only",
+        "package": "@nktkas/hyperliquid",
+        "version": "0.33.3",
+        "conformance": "offline_node_hash_digest_and_signature_vectors_passed",
         "production_mutation": "disabled",
     }:
-        fail("fixture must not claim runtime adapter conformance")
+        fail("runtime adapter evidence boundary mismatch")
 
     for vector in fixture["vectors"]:
         if vector["kind"] == "l1_spot_order":

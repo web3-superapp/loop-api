@@ -1,10 +1,13 @@
 {
   "schema_version": "loop.hyperliquid-spot.oss-lock/v1",
-  "checked_at": "2026-08-26",
+  "checked_at": "2026-08-28",
   "production_writer": {
     "enabled": false,
-    "runtime_adapter": null,
-    "status": "unselected_default_closed",
+    "runtime_adapter": {
+      "signer": "src/integrations/hyperliquid/spot-ioc-signer.ts",
+      "writer": "src/integrations/hyperliquid/spot-ioc-exchange-writer.ts"
+    },
+    "status": "implemented_uncomposed_default_closed",
     "fallback": "forbidden"
   },
   "official_reference_sdk": {
@@ -51,7 +54,7 @@
       "@std/bytes": "1.0.6",
       "@std/msgpack": "1.0.3"
     },
-    "status": "research_only_not_installed_dependency_graph_and_sbom_pending",
+    "status": "selected_low_level_runtime_only",
     "allowed_spike_surface": [
       "canonicalize",
       "createL1ActionHash",
@@ -65,6 +68,13 @@
       "handwritten_production_signer"
     ]
   },
+  "signature_recovery_dependency": {
+    "package": "viem",
+    "version": "2.44.2",
+    "license": "MIT",
+    "role": ["recover exact Hyperliquid EIP-712 signer address"],
+    "high_level_transport_authority": false
+  },
   "existing_read_only_dependency": {
     "package": "lossless-json",
     "version": "4.3.1",
@@ -72,11 +82,23 @@
     "writer_capability": false
   },
   "dependency_graph": {
-    "candidate_installed": false,
-    "runtime_graph_locked": false,
+    "candidate_installed": true,
+    "runtime_graph_locked": true,
+    "lockfile": "pnpm-lock.yaml",
+    "selected_hyperliquid_subgraph": {
+      "@nktkas/hyperliquid": "0.33.3",
+      "@nktkas/rews": "4.1.0",
+      "@noble/hashes": "2.4.0",
+      "decimal.js": "10.6.0",
+      "valibot": "1.4.2"
+    },
+    "signature_recovery_root": {
+      "viem": "2.44.2"
+    },
     "sbom_complete": false,
-    "licenses_complete": false,
-    "status": "pending"
+    "licenses_complete": true,
+    "license_evidence": "pnpm licenses list --prod --json; selected runtime packages and transitive packages report MIT",
+    "status": "offline_hash_digest_and_signature_vectors_passed_sbom_and_credentialed_testnet_pending"
   },
   "selection_gate": [
     "complete exact transitive lock, integrity, provenance, SBOM, and license register",

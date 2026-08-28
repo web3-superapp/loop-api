@@ -1,12 +1,13 @@
 {
   "schema_version": "loop.hyperliquid-spot.contract/v1",
-  "status": "approved_contract_writer_unavailable",
+  "status": "approved_contract_adapters_implemented_runtime_uncomposed",
   "decision_refs": [
     "docs/decisions/0014-hyperliquid-testnet-spot-closed-loop.md",
     "docs/decisions/0015-mainnet-spot-release-boundary.md",
     "docs/decisions/0016-spot-agent-generation-lifecycle.md",
     "docs/decisions/0017-spot-reconciliation-projection-isolation.md",
-    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md"
+    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md",
+    "docs/decisions/0019-hyperliquid-spot-ioc-adapter-selection.md"
   ],
   "implementation_inventory": {
     "path": "contracts/hyperliquid-spot/target-inventory.json",
@@ -47,8 +48,9 @@
   },
   "runtime": {
     "reads": "planned_default_off_until_composed",
-    "writer": "unavailable",
-    "signer_adapter": null,
+    "writer": "implemented_default_uncomposed",
+    "signer_adapter": "implemented_default_uncomposed",
+    "signing_conformance": "offline_official_hash_digest_and_signature_vectors_passed",
     "fixture_fallback": "forbidden",
     "credentialed_testnet_evidence": "pending"
   },

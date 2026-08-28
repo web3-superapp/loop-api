@@ -34,8 +34,10 @@ binding authority, a per-owner/binding-epoch Agent handoff, persistent nonce
 allocation, one provider write attempt, and read-only reconciliation. The route
 contracts, persistence, read-only reconciliation, and generated OpenAPI are now
 implemented, but the main HTTP runtime selects unavailable Spot services. The
-writer and signer remain unavailable until an exact Node adapter passes the
-official-Python byte-conformance and credentialed Testnet gates.
+low-level Node signer and fixed-Testnet one-attempt writer now pass offline
+official-Python-vector conformance and remain uncomposed. Credentialed Agent,
+just-before-send, Testnet write, crash, and reconciliation gates still block
+runtime enablement.
 Decision 0015 keeps Mainnet absent as a separate future release project rather
 than a URL or runtime flag.
 Decision 0018 adds an uncomposed Agent-authorization issuance coordinator. It

@@ -5,7 +5,7 @@ Spot vertical slice. It approves Development plus Hyperliquid **Testnet** only,
 one manually reviewed capped IOC buy or sell, and read-only authoritative
 reconciliation. The twelve route operations are registered in the main runtime
 and generated OpenAPI with unavailable default services; this does not claim a
-provider writer or signer is available.
+provider writer or signer is available in the main runtime.
 
 Hyperliquid is the authority for token/pair metadata, books, balances, fees,
 orders, fills, Agent authorization state, and settlement. Privy is the identity
@@ -23,8 +23,9 @@ encoder, or alternate Hyperliquid protocol implementation.
 - Order: one server-derived Spot asset, one buy or sell, one exact reviewed
   price and size, `reduceOnly=false`, `limit.tif=Ioc`, `grouping=na`, and one
   server CLOID.
-- Result: immediate strict parsing plus read-only reconciliation after any
-  ambiguous outcome.
+- Result: every bounded provider response remains unclassified and enters
+  read-only authoritative reconciliation; no immediate terminal result is
+  trusted in this slice.
 - Preparation: an uncomposed coordinator permanently claims the idempotency
   key before dependency reads, resolves short-lived wallet/Agent authority
   before and after review, generates a 16-byte server CLOID, and accepts only a
@@ -46,12 +47,15 @@ encoder, or alternate Hyperliquid protocol implementation.
   waits from that absolute deadline before every guarded SQL statement and
   commit, rechecks the prepared signing handoff before commit, and confirms a
   replay in a second database transaction after the second authority checks.
-- Writer: **unavailable**. No Node signing package is installed or composed.
-- Orchestration: an uncomposed fake-only coordinator verifies one call through
-  the minimal signer and writer ports plus unknown/reconciliation handoff after
-  the durable journal wins. The persisted DB deadline bounds fake signing and
-  writer admission. It does not prove signing conformance and is not a provider
-  implementation or runtime capability.
+- Writer: exact low-level Testnet signing and fixed-origin, one-attempt Exchange
+  writer adapters are implemented and tested but **uncomposed**. The writer
+  accepts only a bounded UTF-8 JSON response; it deliberately does not classify
+  that response as a terminal outcome.
+- Orchestration: an uncomposed coordinator verifies one call through the
+  minimal signer and writer ports plus unknown/reconciliation handoff after the
+  durable journal wins. The persisted DB deadline bounds signing and writer
+  admission. Offline hash, EIP-712 digest, and signature vectors pass, but this
+  is not a credentialed provider or runtime capability.
 - Mainnet: absent. Decision 0015 is a boundary, not an activation.
 
 The preparation coordinator is not a runtime capability. A real authority
@@ -140,8 +144,10 @@ payload because Privy must sign those exact public fields; the client cannot
 choose or edit the Agent, nonce, domain, or action. GET/status resources and
 signature-submission requests do not accept or return those authority fields.
 The issuance coordinator is behavior-tested only with injected ports and is not
-selected by `src/app.ts`. There is no real Privy Agent allocator, signature
-recovery, relay journal, Hyperliquid mutation, or Agent reconciliation handler.
+selected by `src/app.ts`. The IOC adapter recovers the signer of its own exact
+L1 payload, but there is no real Privy Agent allocator/resolver, owner-signature
+recovery, relay journal, credentialed Hyperliquid mutation, or Agent
+reconciliation handler.
 
 ## Fixtures and conformance
 
@@ -155,11 +161,13 @@ captures MessagePack bytes, hash preimages, action hashes, EIP-712 intermediate
 hashes, signatures, and recovered addresses for two Spot IOC vectors and one
 `approveAgent` vector.
 
-There is no official TypeScript SDK. `@nktkas/hyperliquid@0.33.3` is only an
-isolated conformance-spike candidate, not a selected runtime dependency. A
-future adapter must reproduce the official vectors byte-for-byte before it can
-be installed or composed. A green fixture-schema test is not a claim that a
-runtime signer passed conformance.
+There is no official TypeScript SDK. Decision 0019 selects the exact
+`@nktkas/hyperliquid@0.33.3` package only for low-level canonicalization,
+action hashing, and signing behind an uncomposed adapter. Its action hashes,
+Testnet EIP-712 digests, and recovered signatures match the pinned official
+Python vectors. Direct MessagePack/preimage byte observation, a complete SBOM,
+Privy remote-signing evidence, and credentialed Testnet evidence remain gates;
+therefore the adapter cannot be composed into the main runtime.
 
 ## Fail-closed rules
 

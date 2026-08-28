@@ -115,7 +115,8 @@ export interface SpotIocSigner {
 /**
  * Sends one already-signed Testnet IOC attempt. Resolve means that the adapter
  * discarded an unclassified response; reject means transport ambiguity. The
- * coordinator never retries either outcome. This slice provides fakes only.
+ * coordinator never retries either outcome. Production adapters remain
+ * uncomposed and the main runtime injects an unavailable service.
  */
 export interface SpotIocExchangeWriter {
   submit(input: {

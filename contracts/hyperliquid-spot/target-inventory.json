@@ -6,7 +6,8 @@
     "docs/decisions/0015-mainnet-spot-release-boundary.md",
     "docs/decisions/0016-spot-agent-generation-lifecycle.md",
     "docs/decisions/0017-spot-reconciliation-projection-isolation.md",
-    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md"
+    "docs/decisions/0018-spot-agent-authorization-issuance-boundary.md",
+    "docs/decisions/0019-hyperliquid-spot-ioc-adapter-selection.md"
   ],
   "owner_order": [
     "contracts/hyperliquid-spot/**",
@@ -42,7 +43,7 @@
     },
     {
       "surface": "src/integrations/hyperliquid/**",
-      "role": "provider-generic quota/transport plus strict Testnet Spot readers and future gated writer"
+      "role": "provider-generic quota/transport, strict Testnet Spot readers, and uncomposed gated IOC adapters"
     },
     {
       "surface": "src/database/spot-*.ts",

@@ -122,6 +122,8 @@ interface SigningFixture {
   readonly runtime_fallback: boolean;
   readonly runtime_adapter: {
     readonly status: string;
+    readonly package: string;
+    readonly version: string;
     readonly conformance: string;
     readonly production_mutation: string;
   };
@@ -149,7 +151,7 @@ const hex32Pattern = /^0x[0-9a-f]{64}$/;
 const addressPattern = /^0x[0-9a-f]{40}$/;
 
 describe("Hyperliquid Spot signing contract", () => {
-  it("records non-secret official vectors without claiming runtime conformance", async () => {
+  it("records non-secret official vectors with bounded offline adapter evidence", async () => {
     const fixture = await readJson<SigningFixture>(fixtureUrl);
 
     expect(fixture).toMatchObject({
@@ -160,8 +162,10 @@ describe("Hyperliquid Spot signing contract", () => {
       credentials: "omitted",
       runtime_fallback: false,
       runtime_adapter: {
-        status: "not_selected",
-        conformance: "not_run",
+        status: "selected_low_level_only",
+        package: "@nktkas/hyperliquid",
+        version: "0.33.3",
+        conformance: "offline_node_hash_digest_and_signature_vectors_passed",
         production_mutation: "disabled",
       },
       fixture_signer: {
@@ -288,13 +292,13 @@ describe("Hyperliquid Spot signing contract", () => {
     );
   });
 
-  it("keeps the writer absent until a selected dependency passes conformance", async () => {
+  it("keeps the selected offline-conformant adapters uncomposed until credentialed gates pass", async () => {
     const [contract, ossLock, packageManifest] = await Promise.all([
       readJson<{
         readonly status: string;
         readonly runtime: {
           readonly writer: string;
-          readonly signer_adapter: null;
+          readonly signer_adapter: string;
         };
         readonly loop_api: {
           readonly routes: readonly {
@@ -337,7 +341,10 @@ describe("Hyperliquid Spot signing contract", () => {
       readJson<{
         readonly production_writer: {
           readonly enabled: boolean;
-          readonly runtime_adapter: null;
+          readonly runtime_adapter: {
+            readonly signer: string;
+            readonly writer: string;
+          };
           readonly status: string;
         };
         readonly typescript_spike_candidate: {
@@ -348,6 +355,8 @@ describe("Hyperliquid Spot signing contract", () => {
         readonly dependency_graph: {
           readonly candidate_installed: boolean;
           readonly runtime_graph_locked: boolean;
+          readonly sbom_complete: boolean;
+          readonly licenses_complete: boolean;
         };
       }>(ossLockUrl),
       readJson<{
@@ -357,8 +366,13 @@ describe("Hyperliquid Spot signing contract", () => {
     ]);
 
     expect(contract).toMatchObject({
-      status: "approved_contract_writer_unavailable",
-      runtime: { writer: "unavailable", signer_adapter: null },
+      status: "approved_contract_adapters_implemented_runtime_uncomposed",
+      runtime: {
+        writer: "implemented_default_uncomposed",
+        signer_adapter: "implemented_default_uncomposed",
+        signing_conformance:
+          "offline_official_hash_digest_and_signature_vectors_passed",
+      },
       submission_preflight: {
         runtime_composed: false,
         provider_write: false,
@@ -413,24 +427,27 @@ describe("Hyperliquid Spot signing contract", () => {
     expect(ossLock).toMatchObject({
       production_writer: {
         enabled: false,
-        runtime_adapter: null,
-        status: "unselected_default_closed",
+        runtime_adapter: {
+          signer: "src/integrations/hyperliquid/spot-ioc-signer.ts",
+          writer: "src/integrations/hyperliquid/spot-ioc-exchange-writer.ts",
+        },
+        status: "implemented_uncomposed_default_closed",
       },
       typescript_spike_candidate: {
         package: "@nktkas/hyperliquid",
         version: "0.33.3",
-        status: "research_only_not_installed_dependency_graph_and_sbom_pending",
+        status: "selected_low_level_runtime_only",
       },
       dependency_graph: {
-        candidate_installed: false,
-        runtime_graph_locked: false,
+        candidate_installed: true,
+        runtime_graph_locked: true,
+        sbom_complete: false,
+        licenses_complete: true,
       },
     });
-    expect(
-      packageManifest.dependencies?.["@nktkas/hyperliquid"],
-    ).toBeUndefined();
-    expect(
-      packageManifest.devDependencies?.["@nktkas/hyperliquid"],
-    ).toBeUndefined();
+    expect(packageManifest.dependencies?.["@nktkas/hyperliquid"]).toBe(
+      "0.33.3",
+    );
+    expect(packageManifest.dependencies?.["viem"]).toBe("2.44.2");
   });
 });

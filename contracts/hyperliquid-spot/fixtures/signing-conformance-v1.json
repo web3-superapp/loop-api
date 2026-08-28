@@ -6,8 +6,10 @@
   "credentials": "omitted",
   "runtime_fallback": false,
   "runtime_adapter": {
-    "status": "not_selected",
-    "conformance": "not_run",
+    "status": "selected_low_level_only",
+    "package": "@nktkas/hyperliquid",
+    "version": "0.33.3",
+    "conformance": "offline_node_hash_digest_and_signature_vectors_passed",
     "production_mutation": "disabled"
   },
   "fixture_signer": {
