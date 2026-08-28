@@ -254,7 +254,12 @@
       "binding_epoch",
       "expires_at"
     ],
-    "fee_semantics": "fee_estimate is a conservative quote-denominated bound, is not below exact reviewed notional times fee_rate, and is included in maximum spend or minimum receive",
+    "fee_semantics": "fee_rate is the reviewed product ceiling proven no lower than the fresh account Spot taker-rate observation; fee_estimate is a conservative quote-denominated bound rounded upward to the quote-token atomic unit, is not below exact reviewed notional times fee_rate, and is included in maximum spend or minimum receive",
+    "settlement_bound_semantics": {
+      "buy_maximum_spend": "unconditional maximum quote debit for any IOC outcome",
+      "sell_minimum_receive": "minimum quote receive if the complete computed_base_size fills; a partial fill must preserve the same proportional net-quote-per-base floor",
+      "not_filled": "no settlement amount is promised"
+    },
     "submit_rule": "use exact persisted base size and worst price; never silently refetch or recalculate",
     "material_change": "new intent and visible review required"
   },
@@ -264,6 +269,12 @@
     "json_number": "forbidden",
     "exponent": "forbidden",
     "silent_rounding": "forbidden",
+    "minimum_quote_notional": "10",
+    "testnet_usdc_precision": {
+      "size_decimals": 8,
+      "wei_decimals": 8,
+      "drift": "fail_closed"
+    },
     "price": {
       "max_significant_figures": 5,
       "max_decimal_places": "8 - base_token.szDecimals",

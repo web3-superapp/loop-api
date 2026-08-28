@@ -98,6 +98,14 @@ order wire: derived asset, reviewed side/price/size, `reduceOnly=false`,
 `limit.tif=Ioc`, and one unique server-generated lowercase 128-bit CLOID. The
 submit path never silently refreshes or changes a reviewed value.
 
+The buy maximum-spend bound applies to every IOC outcome. The sell
+minimum-receive value is the bound for a complete fill of the reviewed base
+size; any positive partial fill must preserve the same proportional
+net-quote-per-base floor, while `not_filled` promises no settlement amount.
+Submission revalidates that the current account Spot taker rate does not exceed
+the reviewed product ceiling, and reconciliation verifies the applicable bound
+with exact cross-multiplication before finalization.
+
 ### Wallet and Agent authority
 
 One provider-neutral Hyperliquid master-wallet binding and monotonic epoch is

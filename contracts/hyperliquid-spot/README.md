@@ -40,9 +40,15 @@ encoder, or alternate Hyperliquid protocol implementation.
 
 The preparation coordinator is not a runtime capability. A real authority
 resolver and pure-read current-Agent repository path are implemented and tested
-but remain uncomposed; the metadata/book/fee reviewer does not exist.
-Composition is forbidden until the reviewer and default-deny product/legal
-decision are available and the resolver is explicitly composed. The atomic
+but remain uncomposed. A real Testnet metadata/book/fee reviewer and exact
+precision formatter are implemented and tested but likewise remain uncomposed.
+The reviewer uses best ask for buy, best bid for sell, bounded depth, directed
+Hyperliquid price quantization, the official 10-quote-token minimum, an explicit
+injected quote-notional/fee-rate policy, and a dependency deadline. It does not
+read balances or imply funds availability; a fresh balance check belongs to
+submit preflight. Composition is forbidden until a default-deny product/legal
+decision supplies the exact policy values and both adapters are explicitly
+composed. The atomic
 repository already exact-matches owner, Privy subject,
 wallet ID, address, binding epoch, and Agent under locks; it validates the
 resolver lease with the database clock after those waits and again after
@@ -56,6 +62,26 @@ quote-denominated bound: it cannot be below `price * size * fee_rate`, and it is
 included when proving the user's maximum spend or minimum receive. Changing
 these numbers or fee semantics requires a coordinated reviewer, config,
 contract, and test update.
+
+For v1, the metadata reader's `metadataVersion` is already the
+domain-separated SHA-256 of the canonical allowlisted registry projection, so
+the durable draft stores that same digest as `metadataSha256`; it is not hashed
+again as hexadecimal text. A fresh account `userSpotCrossRate` observation must
+not exceed the explicit product fee ceiling. The persisted `fee_rate` is that
+ceiling, not a claim about the final pair-adjusted rate or actual fee token; this
+keeps the immutable settlement bound safe if the account rate changes within
+the allowed policy. Buy reserves `maximum spend * rate`; sell reserves
+`best-bid notional * rate`, which upper-bounds fee at every eligible bid while
+the displayed minimum receive still uses the lower IOC limit notional. Both fee
+bounds round upward to the quote token's atomic-unit scale. Submit must
+fresh-read fees and reject if the current rate exceeds the reviewed ceiling.
+
+Because the approved action is IOC, sell `minimum_receive` is conditional on
+the complete `computed_base_size` filling. A positive partial fill must preserve
+the same proportional net-quote-per-base floor; exact cross-multiplication can
+verify that without division. `not_filled` promises no settlement amount. The
+submit/reconciliation path must enforce these semantics before this adapter can
+be composed; the reviewer alone does not prove the final settlement.
 
 The first public contract is exactly the twelve routes in `contract.json`.
 `POST /v1/spot/intents` is both the durable executable quote and the immutable

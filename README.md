@@ -56,8 +56,11 @@ implemented as independently verified slices:
   the resolver lease with the database clock after authority locks and again
   after deferred projection checks, and requires the active Agent to cover the
   review expiry; a real Testnet authority resolver and pure-read active-Agent
-  reader are implemented and tested, but the resolver remains uncomposed and
-  no metadata/book/fee reviewer exists
+  reader are implemented and tested. A real Testnet metadata/book/fee reviewer
+  and exact Hyperliquid price/lot formatter are also implemented and tested:
+  they use BBO plus bounded depth, directed price quantization, a 10-quote-token
+  minimum, an explicit injected quote/fee policy, and an internal deadline.
+  Both adapters remain uncomposed
 - three owner-bound Testnet Agent-authorization interfaces with a strict opaque
   signature input, non-reusable Agent identities, immutable digest bindings,
   and no reachable signable-payload or relay success while provider evidence is
@@ -100,14 +103,20 @@ reviewer, signer/executor, Agent authorization handoff, and every trading
 mutation remain unavailable or denied before provider writes. The Spot prepare
 and submit coordinators are ports plus fake-only behavior tests. A real Testnet
 Spot authority resolver and pure-read current-Agent repository path are
-implemented and tested, but remain uncomposed. The metadata/book/fee reviewer,
-product/legal gate, signer, and writer are absent, and neither coordinator is
-selected by the main runtime.
+implemented and tested, but remain uncomposed. The real Testnet
+metadata/book/fee reviewer and exact precision formatter are implemented and
+tested against injected strict-reader evidence, but no product policy values
+select them in the main runtime and no credentialed intent preparation has run.
+The product/legal gate, signer, and writer are absent, and neither coordinator
+is selected by the main runtime. Balance remains a separate read and a future
+fresh submit-preflight concern; the immutable quote review does not imply funds
+availability.
 The atomic prepare repository now performs those database-clock resolver-lease
 and complete Agent-lifetime checks, including a final check after deferred
-constraint waits. Runtime composition still requires the missing reviewer and
-default-deny product/legal decision, plus explicit safe composition of the
-implemented resolver. Transfer routes publish only
+constraint waits. Runtime composition still requires a default-deny
+product/legal decision with explicit quote-notional and fee-rate caps, plus
+explicit safe composition of the implemented reviewer and resolver. Transfer
+routes publish only
 their reviewed negative contract and return a sanitized 503 after
 authentication; there is still no trading execution path, Privy transfer
 execution, Firebase push path, physical-device integration, or production

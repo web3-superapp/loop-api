@@ -27,6 +27,8 @@ are candidates only and cannot override either authority.
   <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits>
 - Exchange error responses:
   <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/error-responses>
+- Account Spot taker fees and discount semantics:
+  <https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees>
 - Account abstraction modes and balance interpretation:
   <https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes>
 

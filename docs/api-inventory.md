@@ -217,10 +217,16 @@ also return an existing owner-scoped public intent resource. It is not selected
 by the main HTTP runtime: the registered routes still use unavailable services
 and stop before any claim, submission journal, nonce, signer, or provider work.
 The production Testnet authority resolver and pure-read current-Agent repository
-path are implemented and tested but remain uncomposed; the metadata/book/fee
-reviewer does not exist. Before runtime composition, the reviewer, a
-default-deny product/legal decision, and explicit safe resolver composition are
-still required. The atomic repository now
+path are implemented and tested but remain uncomposed. A real Testnet
+metadata/book/fee reviewer and exact Hyperliquid precision formatter are now
+implemented and tested but remain uncomposed as well. The reviewer binds BBO,
+bounded executable depth, directed slippage-safe price quantization, the
+10-quote-token minimum, an injected quote-notional/fee-rate policy, and a hard
+dependency deadline into the existing strict draft verifier. It deliberately
+does not read balances: funds availability is mutable account evidence for a
+future fresh submit preflight, not an immutable quote fact. Before runtime
+composition, a default-deny product/legal decision must supply the exact policy
+values and explicitly compose both adapters. The atomic repository now
 exact-matches the owner, Privy subject, wallet ID, address, binding epoch, and
 Agent under locks; it rechecks the resolver lease with the database clock after
 those waits and after deferred projection checks, and requires active Agent
@@ -229,15 +235,23 @@ uses exact arithmetic, a 25 bps default/100 bps maximum slippage, a 15-second
 review lifetime, 2-second reference freshness, and 15-second fee freshness. Its
 quote-denominated `fee_estimate` is a conservative bound: it must cover exact
 reviewed notional times `fee_rate` and is included in the displayed maximum
-spend or minimum receive.
+spend or minimum receive. The persisted `fee_rate` is the explicit product
+ceiling after a fresh `userFees` observation proves the account rate is no
+higher, and the estimate rounds upward to the quote-token atomic unit. Submit
+must re-read and reject any later ceiling breach. Buy maximum spend applies to
+every IOC result. Sell minimum receive is the complete-fill amount, and a
+partial fill must preserve its proportional net-quote-per-base floor during
+authoritative finalization. Those submit/finalization checks remain composition
+blockers; the reviewer does not implement them.
 An additional uncomposed fake-only submission coordinator now verifies the
 ordering and fields across preflight -> atomic journal/nonce -> minimal fake
 signer -> single fake writer -> normalized unknown handoff. A conservative
 DB-clock budget and the persisted absolute attempt deadline stop writer
 admission after a slow signer. These are ports and orchestration tests only:
 they do not prove a real resolver, signature conformance, or provider adapter,
-and there is no runtime implementation, SDK, network call, raw provider
-response, or main-app composition.
+and there is no signer, writer, Exchange SDK, provider write, or main-app
+composition. The strict Info reader is a real read adapter, but the new reviewer
+has only local injected-evidence verification and no credentialed prepare E2E.
 Production terminal outcomes, provider writes, and a production signer remain
 unavailable, and no Hyperliquid Node SDK has been installed.
 
