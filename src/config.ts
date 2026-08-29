@@ -125,6 +125,7 @@ const reconciliationWorkerEnvironmentSchema = z
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: booleanString,
     HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: booleanString,
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: booleanString,
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
     DATABASE_URL: z.string().trim().min(1),
@@ -211,6 +212,7 @@ export interface ReconciliationWorkerConfig {
   readonly hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly hyperliquidSpotReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly spotAgentLifecycleMaintenanceEnabled: boolean;
+  readonly issuanceRateRecordCleanupEnabled: boolean;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -403,6 +405,8 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] ?? "false",
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
       environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED:
+      environment["ISSUANCE_RATE_RECORD_CLEANUP_ENABLED"] ?? "true",
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
       environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
@@ -460,6 +464,8 @@ export function loadReconciliationWorkerConfig(
       : null,
     spotAgentLifecycleMaintenanceEnabled:
       parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
+    issuanceRateRecordCleanupEnabled:
+      parsed.data.ISSUANCE_RATE_RECORD_CLEANUP_ENABLED,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

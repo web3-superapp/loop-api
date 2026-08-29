@@ -142,6 +142,17 @@ persisted Agent validity has elapsed. It uses fresh request UUIDs, never loads a
 signer or provider credential, and can be temporarily disabled with
 `SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false`.
 
+The same process independently runs default-on issuance-quota retention. A row
+is eligible only after its own quota window ends and seven complete days have
+elapsed according to PostgreSQL time. Each run deletes at most ten 1,000-row
+batches with `SKIP LOCKED`; a successful run then waits one minute, while a
+failed run uses bounded backoff. Multiple worker replicas cannot count or delete
+the same row. Successful calls return counts only; failures log only a stable
+sanitized code, never subject HMACs. Set
+`ISSUANCE_RATE_RECORD_CLEANUP_ENABLED=false` only to pause this lane during
+explicit database maintenance; the switch cannot shorten the retention policy
+or affect active quota enforcement.
+
 To enable one of the separate narrow Testnet order readers, configure the
 shared quota and only the intended product gate in ignored `.env.local`:
 

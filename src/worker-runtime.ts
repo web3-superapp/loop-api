@@ -9,6 +9,11 @@ import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-aut
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
 import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
+import {
+  createIssuanceQuotaRetentionWorker,
+  type CreateIssuanceQuotaRetentionWorkerOptions,
+  type IssuanceQuotaRetentionWorker,
+} from "./issuance-quota-retention-worker.js";
 import { createReconciliationWorkerReaders } from "./reconciliation-worker-readers.js";
 import type {
   ReconciliationWorkerLogFields,
@@ -34,7 +39,10 @@ export interface WorkerSignalSource {
 
 export interface ReconciliationWorkerDatabase {
   readonly controlPlane: ReconciliationControlPlane &
-    Pick<ControlPlaneRepository, "consumeIssuanceQuota">;
+    Pick<
+      ControlPlaneRepository,
+      "consumeIssuanceQuota" | "deleteExpiredIssuanceQuotaRecords"
+    >;
   readonly perpReconciliation: PerpReconciliationRepository;
   readonly spotReconciliation: SpotReconciliationRepository;
   readonly spotAgentAuthorizations: Pick<
@@ -58,6 +66,10 @@ export type SpotAgentLifecycleWorkerFactory = (
   options: CreateSpotAgentLifecycleWorkerOptions,
 ) => SpotAgentLifecycleWorker;
 
+export type IssuanceQuotaRetentionWorkerFactory = (
+  options: CreateIssuanceQuotaRetentionWorkerOptions,
+) => IssuanceQuotaRetentionWorker;
+
 export interface RunReconciliationWorkerOptions {
   readonly config: ReconciliationWorkerConfig;
   readonly logger: ReconciliationWorkerLogger;
@@ -65,6 +77,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createDatabase?: ReconciliationWorkerDatabaseFactory;
   readonly createWorker?: ReconciliationWorkerFactory;
   readonly createLifecycleWorker?: SpotAgentLifecycleWorkerFactory;
+  readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -92,6 +105,8 @@ export async function runReconciliationWorker(
   const workerFactory = options.createWorker ?? createReconciliationWorker;
   const lifecycleWorkerFactory =
     options.createLifecycleWorker ?? createSpotAgentLifecycleWorker;
+  const quotaRetentionWorkerFactory =
+    options.createQuotaRetentionWorker ?? createIssuanceQuotaRetentionWorker;
   const controller = new AbortController();
   let database: ReconciliationWorkerDatabase | undefined;
   let workerId: string | undefined;
@@ -167,6 +182,17 @@ export async function runReconciliationWorker(
           },
         })
       : null;
+    const quotaRetentionWorker = options.config.issuanceRateRecordCleanupEnabled
+      ? quotaRetentionWorkerFactory({
+          maintenance: database.controlPlane,
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        })
+      : null;
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -182,6 +208,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               lifecycleWorker.run(controller.signal),
+            ),
+          ]),
+      ...(quotaRetentionWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              quotaRetentionWorker.run(controller.signal),
             ),
           ]),
     ];

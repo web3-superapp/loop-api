@@ -112,6 +112,12 @@ exhaustion is `429` without an issuer call. A missing quota HMAC capability or
 unavailable real issuer returns `503`; a partial Stream API key/secret pair is a
 startup error.
 
+The shared quota table keeps each window for seven complete days after that
+window ends. The standalone worker deletes only older rows in bounded,
+skip-locked batches and returns counts rather than capability rows or subject
+HMACs. This maintenance does not refund attempts or change active-window quota
+semantics.
+
 The reviewed Stream Source Code License Agreement has been explicitly accepted,
 and the default runtime uses exact `@stream-io/node-sdk@0.7.63` local signing
 when the complete key/secret pair and independent quota HMAC capability are

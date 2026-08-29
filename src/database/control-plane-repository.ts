@@ -167,6 +167,12 @@ const issuanceQuotaInputSchema = z
       });
     }
   });
+const deleteExpiredIssuanceQuotaRecordsInputSchema = z
+  .object({
+    requestId: uuidSchema,
+    limit: z.number().int().min(1).max(1_000),
+  })
+  .strict();
 
 const operationReturningColumns = `
   id,
@@ -312,6 +318,11 @@ export interface IssuanceQuotaConsumption {
   readonly windowStartedAt: string;
 }
 
+export interface DeleteExpiredIssuanceQuotaRecordsInput {
+  readonly requestId: string;
+  readonly limit: number;
+}
+
 export interface ControlPlaneRepository {
   prepareProviderOperation(input: PrepareProviderOperationInput): Promise<{
     readonly created: boolean;
@@ -348,6 +359,9 @@ export interface ControlPlaneRepository {
   consumeIssuanceQuota(
     input: ConsumeIssuanceQuotaInput,
   ): Promise<readonly IssuanceQuotaConsumption[]>;
+  deleteExpiredIssuanceQuotaRecords(
+    input: DeleteExpiredIssuanceQuotaRecordsInput,
+  ): Promise<Readonly<{ deletedCount: number }>>;
 }
 
 export class IdempotencyConflictError extends Error {
@@ -549,6 +563,7 @@ export function createUnavailableControlPlaneRepository(): ControlPlaneRepositor
     rescheduleProviderOperationReconciliation: unavailable,
     holdProviderOperationForOperator: unavailable,
     consumeIssuanceQuota: unavailable,
+    deleteExpiredIssuanceQuotaRecords: unavailable,
   };
 }
 
@@ -1257,6 +1272,61 @@ export function createPostgresControlPlaneRepository(
 
         return Object.freeze(consumptions);
       });
+    },
+
+    async deleteExpiredIssuanceQuotaRecords(rawInput) {
+      const input =
+        deleteExpiredIssuanceQuotaRecordsInputSchema.parse(rawInput);
+      const result = await pool.query<{ deleted_count: number }>({
+        text: `
+          with retention_cutoff as materialized (
+            select clock_timestamp() - interval '7 days' as retained_through
+          ), candidates as materialized (
+            select
+              quota.capability,
+              quota.policy_version,
+              quota.subject_kind,
+              quota.subject_hmac,
+              quota.window_started_at
+            from public.issuance_rate_records as quota
+            cross join retention_cutoff
+            where quota.window_started_at < retention_cutoff.retained_through
+              and quota.window_started_at
+                    + make_interval(
+                        secs => quota.window_duration_seconds
+                      )
+                    < retention_cutoff.retained_through
+            order by
+              quota.window_started_at,
+              quota.capability,
+              quota.policy_version,
+              quota.subject_kind,
+              quota.subject_hmac
+            for update of quota skip locked
+            limit $1
+          ), deleted as (
+            delete from public.issuance_rate_records as quota
+            using candidates
+            where quota.capability = candidates.capability
+              and quota.policy_version = candidates.policy_version
+              and quota.subject_kind = candidates.subject_kind
+              and quota.subject_hmac = candidates.subject_hmac
+              and quota.window_started_at = candidates.window_started_at
+            returning 1
+          )
+          select count(*)::integer as deleted_count
+          from deleted
+        `,
+        values: [input.limit],
+      });
+      const parsed = z
+        .object({
+          deleted_count: z.number().int().min(0).max(input.limit),
+        })
+        .strict()
+        .parse(result.rows[0]);
+
+      return Object.freeze({ deletedCount: parsed.deleted_count });
     },
   };
 }

@@ -34,6 +34,7 @@ describe("loadReconciliationWorkerConfig", () => {
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
+      issuanceRateRecordCleanupEnabled: true,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });
@@ -151,6 +152,20 @@ describe("loadReconciliationWorkerConfig", () => {
     });
 
     environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] = "malformed";
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
+      ConfigurationError,
+    );
+  });
+
+  it("allows issuance quota cleanup to be paused without changing retention", () => {
+    const environment = validEnvironment();
+    environment["ISSUANCE_RATE_RECORD_CLEANUP_ENABLED"] = "false";
+
+    expect(loadReconciliationWorkerConfig(environment)).toMatchObject({
+      issuanceRateRecordCleanupEnabled: false,
+    });
+
+    environment["ISSUANCE_RATE_RECORD_CLEANUP_ENABLED"] = "malformed";
     expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
       ConfigurationError,
     );

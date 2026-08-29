@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadReconciliationWorkerConfig } from "../src/config.js";
 import type { PerpReconciliationRepository } from "../src/features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../src/features/spot/spot-reconciliation-contract.js";
+import type { IssuanceQuotaRetentionWorker } from "../src/issuance-quota-retention-worker.js";
 import type { ReconciliationWorkerLogger } from "../src/reconciliation-worker-logger.js";
 import type { SpotAgentLifecycleWorker } from "../src/spot-agent-lifecycle-worker.js";
 import type {
@@ -26,6 +27,7 @@ function workerConfig(
   reconciliationReadsEnabled = false,
   spotAgentLifecycleMaintenanceEnabled = false,
   spotReconciliationReadsEnabled = false,
+  issuanceRateRecordCleanupEnabled = false,
 ) {
   return loadReconciliationWorkerConfig({
     NODE_ENV: "test",
@@ -39,6 +41,9 @@ function workerConfig(
       spotReconciliationReadsEnabled ? "true" : "false",
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
       spotAgentLifecycleMaintenanceEnabled ? "true" : "false",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: issuanceRateRecordCleanupEnabled
+      ? "true"
+      : "false",
     ...(reconciliationReadsEnabled || spotReconciliationReadsEnabled
       ? { HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: "q".repeat(32) }
       : {}),
@@ -117,6 +122,21 @@ function fakeLifecycleWorker(
         kind: "completed" as const,
         expiredPreparedCount: 0,
         retiredAgentIdentityCount: 0,
+      }),
+    ),
+    run,
+  };
+}
+
+function fakeQuotaRetentionWorker(
+  run: IssuanceQuotaRetentionWorker["run"],
+): IssuanceQuotaRetentionWorker {
+  return {
+    runOnce: vi.fn(() =>
+      Promise.resolve({
+        kind: "completed" as const,
+        batchCount: 1,
+        deletedCount: 0,
       }),
     ),
     run,
@@ -361,39 +381,151 @@ describe("reconciliation worker runtime", () => {
     expect(events).toEqual(["ping", "close"]);
   });
 
+  it("runs default-policy quota retention only when its worker gate is enabled", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const logger = fakeLogger();
+    const retentionRun = vi.fn(() => {
+      events.push("run-quota-retention");
+      return Promise.resolve();
+    });
+
+    await runReconciliationWorker({
+      config: workerConfig(false, false, false, true),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () =>
+        fakeWorker(
+          vi.fn(() => {
+            events.push("run-reconciliation");
+            return Promise.resolve();
+          }),
+        ),
+      createQuotaRetentionWorker: (options) => {
+        expect(options.maintenance).toBe(database.controlPlane);
+        options.onInfrastructureBackoff?.({
+          reasonCode: "issuance_quota_retention_unavailable",
+          consecutiveFailureCount: 3,
+          retryDelayMs: 4_000,
+        });
+        return fakeQuotaRetentionWorker(retentionRun);
+      },
+    });
+
+    expect(events).toEqual([
+      "ping",
+      "run-reconciliation",
+      "run-quota-retention",
+      "close",
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        reasonCode: "issuance_quota_retention_unavailable",
+        consecutiveFailureCount: 3,
+        retryDelayMs: 4_000,
+      },
+      "LOOP reconciliation worker infrastructure retry scheduled",
+    );
+  });
+
+  it("does not construct quota retention when cleanup is paused", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const createQuotaRetentionWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: workerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createQuotaRetentionWorker,
+    });
+
+    expect(createQuotaRetentionWorker).not.toHaveBeenCalled();
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("aborts and awaits reconciliation before close after quota retention fails", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    const failure = new Error("private quota row must not be logged");
+    const reconciliationRun = vi.fn(
+      (signal: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          const finish = () => {
+            events.push("reconciliation-aborted");
+            resolve();
+          };
+          if (signal.aborted) {
+            finish();
+            return;
+          }
+          signal.addEventListener("abort", finish, { once: true });
+        }),
+    );
+
+    await expect(
+      runReconciliationWorker({
+        config: workerConfig(false, false, false, true),
+        logger: fakeLogger(),
+        signalSource: fakeSignalSource(),
+        createDatabase: () => database,
+        createWorker: () => fakeWorker(reconciliationRun),
+        createQuotaRetentionWorker: () =>
+          fakeQuotaRetentionWorker(vi.fn(() => Promise.reject(failure))),
+      }),
+    ).rejects.toBe(failure);
+
+    expect(events).toEqual(["ping", "reconciliation-aborted", "close"]);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
   it("handles repeated shutdown signals once and closes after abort", async () => {
     const events: string[] = [];
     const database = fakeDatabase(events);
     const logger = fakeLogger();
     const signalSource = fakeSignalSource();
-    const run = vi.fn(
-      (signal: AbortSignal) =>
-        new Promise<void>((resolve) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              events.push("abort");
-              resolve();
-            },
-            { once: true },
-          );
-        }),
-    );
+    const runLoop = (label: "reconciliation" | "quota-retention") =>
+      vi.fn(
+        (signal: AbortSignal) =>
+          new Promise<void>((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                events.push(`${label}-aborted`);
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+      );
+    const run = runLoop("reconciliation");
+    const quotaRetentionRun = runLoop("quota-retention");
 
     const runtime = runReconciliationWorker({
-      config: workerConfig(),
+      config: workerConfig(false, false, false, true),
       logger,
       signalSource,
       createDatabase: () => database,
       createWorker: () => fakeWorker(run),
+      createQuotaRetentionWorker: () =>
+        fakeQuotaRetentionWorker(quotaRetentionRun),
     });
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledOnce();
+      expect(quotaRetentionRun).toHaveBeenCalledOnce();
+    });
 
     signalSource.emit("SIGTERM");
     signalSource.emit("SIGINT");
     await runtime;
 
-    expect(events).toEqual(["ping", "abort", "close"]);
+    expect(events[0]).toBe("ping");
+    expect(events).toContain("reconciliation-aborted");
+    expect(events).toContain("quota-retention-aborted");
+    expect(events.at(-1)).toBe("close");
     expect(logger.info).toHaveBeenCalledWith(
       { workerId, signal: "SIGTERM" },
       "LOOP reconciliation worker shutdown requested",

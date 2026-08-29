@@ -24,8 +24,10 @@ also has a durable master-wallet binding lifecycle, fresh exact Privy wallet
 resolution, and a lossless fixed-Testnet private reader guarded by a global
 weighted quota. The reader is default-off. The repository still has no
 production deployment, successful real-token physical-device evidence,
-credentialed Stream App/client connection evidence, nonempty Testnet-account
-end-to-end evidence, or private trading mutation path. Stream remains
+Stream client connection evidence, nonempty Testnet-account end-to-end
+evidence, or private trading mutation path. The configured Development Stream
+credential pair passes an official read-only App lookup locally, but no real
+phone token has exercised the token routes. Stream remains
 `blocked-provider`;
 Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
@@ -64,9 +66,12 @@ Core limit `order` through strict cloid-bound Info evidence and atomically
 finalize generic plus Perp records. Market orders and unsupported Perp actions
 are operator-held before a provider call. Decision 0016 also enables bounded,
 database-only expiry and retirement maintenance for renewable Spot Agent
-generations by default. The worker has no provider writer, replay path, transfer
-finalizer, or deployment; provider-read and local lifecycle operability are not
-provider-integration evidence.
+generations by default. Decision 0022 also adds default-on, database-only
+retention for the shared issuance quota table: every window remains for seven
+complete days after it ends, and cleanup uses bounded skip-locked batches
+without returning subject HMACs. The worker has no provider writer, replay path,
+transfer finalizer, or deployment; provider-read and local maintenance
+operability are not provider-integration evidence.
 
 ## Identity model
 

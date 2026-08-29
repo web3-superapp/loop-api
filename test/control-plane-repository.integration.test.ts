@@ -123,6 +123,38 @@ describe("PostgreSQL control-plane repository", () => {
     expect(migration.rows[0]?.name).toBe(latestMigrationName);
   });
 
+  it("installs the time-leading issuance quota cleanup index", async () => {
+    const index = await inspectionPool.query<{ indexdef: string }>({
+      text: `
+        select indexdef
+        from pg_indexes
+        where schemaname = 'public'
+          and tablename = 'issuance_rate_records'
+          and indexname = 'issuance_rate_records_cleanup_idx'
+      `,
+    });
+
+    expect(index.rows).toHaveLength(1);
+    expect(index.rows[0]?.indexdef).toMatch(
+      /\(window_started_at, capability, policy_version, subject_kind, subject_hmac\)$/,
+    );
+  });
+
+  it.each([
+    ["invalid request UUID", { requestId: "not-a-uuid", limit: 1 }],
+    ["zero limit", { requestId: randomUUID(), limit: 0 }],
+    ["oversized limit", { requestId: randomUUID(), limit: 1_001 }],
+  ] as const)("rejects %s before quota cleanup SQL", async (_name, input) => {
+    await expect(
+      database.controlPlane.deleteExpiredIssuanceQuotaRecords(input),
+    ).rejects.toHaveProperty("name", "ZodError");
+
+    const records = await inspectionPool.query<{ count: string }>({
+      text: "select count(*)::text as count from public.issuance_rate_records",
+    });
+    expect(records.rows[0]).toEqual({ count: "0" });
+  });
+
   it("creates one operation for concurrent identical idempotent requests", async () => {
     const owner = await database.internalUsers.getOrCreateByPrivyUserId(
       "did:privy:concurrent-operation",
@@ -882,6 +914,191 @@ describe("PostgreSQL control-plane repository", () => {
       { issued_count: 40, subject_kind: "global" },
       { issued_count: 40, subject_kind: "user" },
     ]);
+  });
+
+  it("deletes only quota windows retained for seven complete days", async () => {
+    await inspectionPool.query({
+      text: `
+        insert into public.issuance_rate_records (
+          capability,
+          policy_version,
+          subject_kind,
+          subject_hmac,
+          window_started_at,
+          window_duration_seconds,
+          capacity,
+          issued_count
+        )
+        values
+          (
+            'stream_chat_token', 'stream_token_v1', 'ip', $1,
+            clock_timestamp() - interval '7 days 2 minutes',
+            60, 10, 1
+          ),
+          (
+            'stream_chat_token', 'stream_token_v1', 'ip', $2,
+            clock_timestamp() - interval '7 days 30 seconds',
+            60, 10, 1
+          ),
+          (
+            'stream_video_token', 'stream_token_v1', 'user', $3,
+            clock_timestamp()
+              - interval '7 days 23 hours 59 minutes',
+            86400, 10, 1
+          ),
+          (
+            'stream_video_token', 'stream_token_v1', 'user', $4,
+            date_trunc('minute', clock_timestamp()),
+            60, 10, 1
+          )
+      `,
+      values: ["1".repeat(64), "2".repeat(64), "3".repeat(64), "4".repeat(64)],
+    });
+
+    await expect(
+      database.controlPlane.deleteExpiredIssuanceQuotaRecords({
+        requestId: randomUUID(),
+        limit: 1_000,
+      }),
+    ).resolves.toEqual({ deletedCount: 1 });
+
+    const retained = await inspectionPool.query<{ subject_hmac: string }>({
+      text: `
+        select subject_hmac
+        from public.issuance_rate_records
+        order by subject_hmac
+      `,
+    });
+    expect(retained.rows).toEqual([
+      { subject_hmac: "2".repeat(64) },
+      { subject_hmac: "3".repeat(64) },
+      { subject_hmac: "4".repeat(64) },
+    ]);
+  });
+
+  it("uses skip-locked bounded batches across concurrent cleanup replicas", async () => {
+    await inspectionPool.query({
+      text: `
+        insert into public.issuance_rate_records (
+          capability,
+          policy_version,
+          subject_kind,
+          subject_hmac,
+          window_started_at,
+          window_duration_seconds,
+          capacity,
+          issued_count
+        )
+        select
+          'stream_chat_token',
+          'stream_token_v1',
+          'ip',
+          lpad(to_hex(sequence), 64, '0'),
+          clock_timestamp() - interval '8 days',
+          60,
+          10,
+          1
+        from generate_series(1, 1005) as sequence
+      `,
+    });
+
+    const results = await Promise.all([
+      database.controlPlane.deleteExpiredIssuanceQuotaRecords({
+        requestId: randomUUID(),
+        limit: 600,
+      }),
+      database.controlPlane.deleteExpiredIssuanceQuotaRecords({
+        requestId: randomUUID(),
+        limit: 600,
+      }),
+    ]);
+    const deletedCounts = results.map(({ deletedCount }) => deletedCount);
+    expect(deletedCounts.every((deletedCount) => deletedCount <= 600)).toBe(
+      true,
+    );
+    expect(deletedCounts.reduce((total, value) => total + value, 0)).toBe(
+      1_005,
+    );
+
+    const remaining = await inspectionPool.query<{ count: string }>({
+      text: "select count(*)::text as count from public.issuance_rate_records",
+    });
+    expect(remaining.rows[0]).toEqual({ count: "0" });
+  });
+
+  it("skips a locked expired row without delaying cleanup of another row", async () => {
+    const lockedSubjectHmac = "5".repeat(64);
+    const availableSubjectHmac = "6".repeat(64);
+    await inspectionPool.query({
+      text: `
+        insert into public.issuance_rate_records (
+          capability,
+          policy_version,
+          subject_kind,
+          subject_hmac,
+          window_started_at,
+          window_duration_seconds,
+          capacity,
+          issued_count
+        )
+        values
+          (
+            'stream_chat_token', 'stream_token_v1', 'ip', $1,
+            clock_timestamp() - interval '8 days', 60, 10, 1
+          ),
+          (
+            'stream_chat_token', 'stream_token_v1', 'ip', $2,
+            clock_timestamp() - interval '8 days', 60, 10, 1
+          )
+      `,
+      values: [lockedSubjectHmac, availableSubjectHmac],
+    });
+    const lockedClient = await inspectionPool.connect();
+    let transactionOpen = false;
+
+    try {
+      await lockedClient.query("begin");
+      transactionOpen = true;
+      await lockedClient.query({
+        text: `
+          select subject_hmac
+          from public.issuance_rate_records
+          where subject_hmac = $1
+          for update
+        `,
+        values: [lockedSubjectHmac],
+      });
+
+      await expect(
+        database.controlPlane.deleteExpiredIssuanceQuotaRecords({
+          requestId: randomUUID(),
+          limit: 1_000,
+        }),
+      ).resolves.toEqual({ deletedCount: 1 });
+
+      const whileLocked = await lockedClient.query<{ subject_hmac: string }>({
+        text: `
+          select subject_hmac
+          from public.issuance_rate_records
+          order by subject_hmac
+        `,
+      });
+      expect(whileLocked.rows).toEqual([{ subject_hmac: lockedSubjectHmac }]);
+
+      await lockedClient.query("commit");
+      transactionOpen = false;
+      await expect(
+        database.controlPlane.deleteExpiredIssuanceQuotaRecords({
+          requestId: randomUUID(),
+          limit: 1_000,
+        }),
+      ).resolves.toEqual({ deletedCount: 1 });
+    } finally {
+      if (transactionOpen) {
+        await lockedClient.query("rollback");
+      }
+      lockedClient.release();
+    }
   });
 
   it("keeps a versioned append-only audit without JSON or raw payload fields", async () => {

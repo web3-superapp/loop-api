@@ -105,7 +105,10 @@ implemented as independently verified slices:
 - a standalone reconciliation worker process whose provider boundary supports
   authoritative reads only, with fenced leases, bounded retries, operator hold,
   abort-safe shutdown, and an independently buildable image; it also runs
-  default-on database-only Spot Agent expiry/retirement maintenance. A
+  default-on database-only Spot Agent expiry/retirement maintenance and
+  issuance-quota retention. Quota cleanup keeps seven complete days after each
+  window ends, deletes at most ten 1,000-row batches per maintenance run, and
+  never returns subject HMACs. A
   default-off fixed-Testnet limit-order reader can atomically finalize generic
   and Perp state. A separately gated Spot IOC reader uses its dedicated
   projection-safe lane; every unsupported or ambiguous action remains
@@ -119,9 +122,11 @@ This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
 but a real phone-issued token has not yet passed the physical-device gate. The
 Stream SDK license gate is accepted, the exact SDK is installed, and the
-credential-aware default issuer is composed. Credentialed Development App and
-physical-device Chat/Video connection evidence is still absent; missing Stream
-credentials or persistent quota continues to return a sanitized 503. The
+credential-aware default issuer is composed. The configured Development
+key/secret pair passes the official read-only App lookup locally, but no real
+phone token has reached either token route and physical-device Chat/Video
+connection evidence is still absent; missing Stream credentials or persistent
+quota continues to return a sanitized 503. The
 Hyperliquid wallet-binding lifecycle, resolver, and Testnet private
 reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
@@ -221,6 +226,9 @@ boundary are recorded in
 The uncomposed Spot Agent issuance coordinator, safe-integer typed-data nonce,
 and retained default-closed signature/relay boundary are recorded in
 [`0018`](docs/decisions/0018-spot-agent-authorization-issuance-boundary.md).
+The shared seven-day issuance-quota retention policy and bounded database-only
+cleanup worker are recorded in
+[`0022`](docs/decisions/0022-issuance-quota-retention.md).
 
 ## Quick start
 
@@ -243,8 +251,12 @@ In a separate terminal, the independently runnable control-plane worker can be
 started with `pnpm worker:dev`. With its default configuration it makes no
 provider request. It immediately runs bounded database-only maintenance, then
 every 60 seconds expires elapsed Spot signing handoffs and retires elapsed Agent
-generations. `SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false` temporarily
-disables that maintenance. Any due unsupported provider domain or action is
+generations. It also removes quota rows only after their own window has ended
+and the fixed seven-day retention has elapsed. Each completed maintenance run
+is capped at 10,000 rows and successful runs then wait one minute.
+`SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED=false` and
+`ISSUANCE_RATE_RECORD_CLEANUP_ENABLED=false` independently pause those database
+maintenance lanes. Any due unsupported provider domain or action is
 parked for an operator instead of guessed or replayed. Explicitly setting
 `HYPERLIQUID_RECONCILIATION_READS_ENABLED=true` plus the independent quota
 secret enables only the retained fixed-Testnet Perp limit-order evidence path.
