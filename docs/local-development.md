@@ -25,11 +25,13 @@ enable their atomic per-route user/IP quota boundary; raw LOOP user IDs and IPs
 are not stored as quota subjects. If this secret is absent, the routes fail
 closed with 503.
 
-Do not enable `STREAM_API_KEY` or `STREAM_API_SECRET` yet. They are an
-all-or-nothing pair, but the default issuer still returns 503 even when both are
-present: `@stream-io/node-sdk` is deliberately not installed until its reviewed
-Stream Source Code License Agreement is explicitly accepted and a real
-Development Stream App is approved. No custom JWT implementation is used.
+The reviewed Stream Source Code License Agreement has been explicitly accepted,
+and exact `@stream-io/node-sdk@0.7.63` is installed. To enable local token
+issuance, place the Development App `STREAM_API_KEY` and `STREAM_API_SECRET` in
+ignored `.env.local` as an all-or-nothing pair and configure the independent
+`STREAM_TOKEN_QUOTA_HMAC_SECRET`. Never paste those values into source, tests,
+logs, documentation, or chat. The default runtime returns 503 if either
+capability is absent. No custom JWT implementation is used.
 
 The wallet-binding lifecycle and six `GET /v1/perp/*` private-read interfaces
 also require the current Bearer identity and bootstrap mapping. Binding is
@@ -93,8 +95,10 @@ curl -i -X DELETE \
 
 These unauthenticated protected-route smoke checks must return a sanitized 401
 with a Bearer challenge and must not create a user row or reserve quota. With a
-valid bootstrapped identity and quota HMAC configured, both Stream routes still
-return a sanitized 503 while the real licensed issuer is unavailable.
+valid bootstrapped identity, complete Development Stream credentials, and quota
+HMAC configured, both Stream routes return an ordinary one-hour user token.
+Missing either Stream credentials or quota returns a sanitized 503. Local
+signing alone is not provider or physical-device connection evidence.
 The Perp routes must not reveal or accept a wallet/account address. A valid
 bootstrapped identity without a binding receives sanitized 409
 `wallet_binding_required`; a bound identity with private reads left off receives

@@ -16,15 +16,17 @@ prototype research in `contracts/integration-catalog/` and
 
 The repository now has a local Fastify runtime, the Development
 `POST /v1/bootstrap` Privy verification boundary, and implemented Stream token
-HTTP interfaces backed by persistent issuance policy. It also has six strict
+HTTP interfaces backed by persistent issuance policy and the exact licensed
+official server SDK. It also has six strict
 Hyperliquid Testnet private-read HTTP interfaces with server-owned wallet
 authority, freshness, decimal-string, Core-market, and opaque-cursor checks. It
 also has a durable master-wallet binding lifecycle, fresh exact Privy wallet
 resolution, and a lossless fixed-Testnet private reader guarded by a global
 weighted quota. The reader is default-off. The repository still has no
 production deployment, successful real-token physical-device evidence,
-licensed Stream issuer composition, nonempty Testnet-account end-to-end
-evidence, or private trading mutation path. Stream remains `blocked-provider`;
+credentialed Stream App/client connection evidence, nonempty Testnet-account
+end-to-end evidence, or private trading mutation path. Stream remains
+`blocked-provider`;
 Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
 

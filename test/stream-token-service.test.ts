@@ -216,6 +216,82 @@ describe("Stream token service", () => {
     );
   });
 
+  it("propagates a pre-existing abort before reserving quota", async () => {
+    const inputs = dependencies();
+    const controller = new AbortController();
+    const abortReason = new Error("request-aborted-before-stream-quota");
+    controller.abort(abortReason);
+
+    await expect(
+      inputs.service.issueToken({
+        ...request(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(inputs.consumeIssuanceQuota).not.toHaveBeenCalled();
+    expect(inputs.issueToken).not.toHaveBeenCalled();
+  });
+
+  it("does not issue after an abort that follows a successful quota reservation", async () => {
+    const inputs = dependencies();
+    const controller = new AbortController();
+    const abortReason = new Error("request-aborted-after-stream-quota");
+    inputs.consumeIssuanceQuota.mockImplementationOnce(() => {
+      controller.abort(abortReason);
+      return Promise.resolve([]);
+    });
+
+    await expect(
+      inputs.service.issueToken({
+        ...request(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
+    expect(inputs.issueToken).not.toHaveBeenCalled();
+  });
+
+  it("propagates an abort that occurs during issuer work", async () => {
+    const inputs = dependencies();
+    const controller = new AbortController();
+    const abortReason = new Error("request-aborted-during-stream-issuer");
+    inputs.issueToken.mockImplementationOnce(() => {
+      controller.abort(abortReason);
+      return Promise.reject(new Error("issuer-operation-interrupted"));
+    });
+
+    await expect(
+      inputs.service.issueToken({
+        ...request(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
+    expect(inputs.issueToken).toHaveBeenCalledOnce();
+  });
+
+  it("does not return an issued token when the request aborts as issuer work resolves", async () => {
+    const inputs = dependencies();
+    const controller = new AbortController();
+    const abortReason = new Error("request-aborted-as-stream-issuer-resolved");
+    inputs.issueToken.mockImplementationOnce(() => {
+      controller.abort(abortReason);
+      return Promise.resolve({
+        apiKey: "stream_public_key",
+        token: providerToken,
+      });
+    });
+
+    await expect(
+      inputs.service.issueToken({
+        ...request(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
+    expect(inputs.issueToken).toHaveBeenCalledOnce();
+  });
+
   it("maps quota exhaustion to a stable service error without calling the issuer", async () => {
     const inputs = dependencies();
     inputs.consumeIssuanceQuota.mockRejectedValueOnce(

@@ -30,6 +30,8 @@ const streamUserId = "loop_6d12a86e413447e69312c5ef75a30f55";
 const privyUserId = "did:privy:verified-user";
 const validToken = "header.payload.signature";
 const streamApiKey = "stream_public_key";
+const configuredStreamApiKey = "configured_stream_key";
+const configuredStreamApiSecret = "configured_stream_secret";
 const quotaHmacSecret = "stream-token-route-test-hmac-secret-2026";
 const requestIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -60,11 +62,42 @@ function testConfig(
       : { STREAM_TOKEN_QUOTA_HMAC_SECRET: quotaHmacSecret }),
     ...(options.streamConfigured === true
       ? {
-          STREAM_API_KEY: "configured_stream_key",
-          STREAM_API_SECRET: "configured_stream_secret",
+          STREAM_API_KEY: configuredStreamApiKey,
+          STREAM_API_SECRET: configuredStreamApiSecret,
         }
       : {}),
   });
+}
+
+function decodeStreamToken(token: string): {
+  readonly header: Record<string, unknown>;
+  readonly payload: Record<string, unknown>;
+} {
+  const segments = token.split(".");
+  expect(segments).toHaveLength(3);
+  const [encodedHeader, encodedPayload, signature] = segments;
+  if (
+    encodedHeader === undefined ||
+    encodedPayload === undefined ||
+    signature === undefined
+  ) {
+    throw new Error("Expected a three-segment Stream JWT");
+  }
+
+  expect(signature).toBe(
+    createHmac("sha256", configuredStreamApiSecret)
+      .update(`${encodedHeader}.${encodedPayload}`, "utf8")
+      .digest("base64url"),
+  );
+
+  return {
+    header: JSON.parse(
+      Buffer.from(encodedHeader, "base64url").toString("utf8"),
+    ) as Record<string, unknown>,
+    payload: JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as Record<string, unknown>,
+  };
 }
 
 function expectedSubjectHmac(
@@ -361,9 +394,16 @@ describe("Stream token routes", () => {
   });
 
   it("fails closed with 503 when persistent quota configuration is absent", async () => {
-    const inputs = await createApp(dependencies(), { quotaEnabled: false });
+    const inputs = dependencies();
+    const app = await buildApp({
+      config: testConfig({ quotaEnabled: false, streamConfigured: true }),
+      database: inputs.database,
+      privyAccessTokenVerifier: inputs.privyAccessTokenVerifier,
+      logger: false,
+    });
+    apps.push(app);
 
-    const response = await inputs.app.inject({
+    const response = await app.inject({
       method: "POST",
       url: "/v1/video/token",
       headers: { authorization: `Bearer ${validToken}` },
@@ -379,6 +419,33 @@ describe("Stream token routes", () => {
     expect(inputs.verifyAccessToken).toHaveBeenCalledOnce();
     expect(inputs.findByPrivyUserId).toHaveBeenCalledOnce();
     expect(inputs.consumeIssuanceQuota).not.toHaveBeenCalled();
+    expect(inputs.issueToken).not.toHaveBeenCalled();
+  });
+
+  it("fails closed after reserving quota when Stream credentials are absent", async () => {
+    const inputs = dependencies();
+    const app = await buildApp({
+      config: testConfig(),
+      database: inputs.database,
+      privyAccessTokenVerifier: inputs.privyAccessTokenVerifier,
+      logger: false,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/token",
+      headers: { authorization: `Bearer ${validToken}` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      code: "stream_unavailable",
+      message: "Stream token issuance is unavailable.",
+    });
+    expectOperationalHeaders(response);
+    expectErrorRequestId(response);
+    expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
     expect(inputs.issueToken).not.toHaveBeenCalled();
   });
 
@@ -430,7 +497,7 @@ describe("Stream token routes", () => {
     expect(inputs.issueToken).toHaveBeenCalledOnce();
   });
 
-  it("keeps the default issuer unavailable even when Stream credentials are complete", async () => {
+  it("composes the official issuer when Stream credentials and quota are complete", async () => {
     const inputs = dependencies();
     const app = await buildApp({
       config: testConfig({ streamConfigured: true }),
@@ -446,22 +513,67 @@ describe("Stream token routes", () => {
       headers: { authorization: `Bearer ${validToken}` },
     });
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ code: "stream_unavailable" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      readonly api_key: string;
+      readonly expires_at: string;
+      readonly token: string;
+      readonly user: { readonly id: string };
+    }>();
+    expect(body.api_key).toBe(configuredStreamApiKey);
+    expect(body.user).toEqual({ id: streamUserId });
+    expect(Object.keys(body).sort()).toEqual([
+      "api_key",
+      "expires_at",
+      "token",
+      "user",
+    ]);
+
+    const decoded = decodeStreamToken(body.token);
+    expect(decoded.header).toMatchObject({ alg: "HS256", typ: "JWT" });
+    expect(Object.keys(decoded.payload).sort()).toEqual([
+      "exp",
+      "iat",
+      "user_id",
+    ]);
+    expect(decoded.payload["user_id"]).toBe(streamUserId);
+    const issuedAt = decoded.payload["iat"];
+    const expiresAt = decoded.payload["exp"];
+    expect(issuedAt).toEqual(expect.any(Number));
+    expect(expiresAt).toEqual(expect.any(Number));
+    if (typeof issuedAt !== "number" || typeof expiresAt !== "number") {
+      throw new Error("Expected numeric Stream token timestamps");
+    }
+    expect(expiresAt - issuedAt).toBe(3_600);
+    expect(body.expires_at).toBe(new Date(expiresAt * 1_000).toISOString());
     expectOperationalHeaders(response);
-    expectErrorRequestId(response);
     expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
     expect(inputs.issueToken).not.toHaveBeenCalled();
   });
 
   it("maps an unexpected issuer error to a sanitized 500", async () => {
+    const logLines: string[] = [];
     const failingDependencies = dependencies();
     failingDependencies.issueToken.mockRejectedValueOnce(
       new Error("stream-provider-secret-and-token-response"),
     );
-    const inputs = await createApp(failingDependencies);
+    const app = await buildApp({
+      config: testConfig(),
+      database: failingDependencies.database,
+      privyAccessTokenVerifier: failingDependencies.privyAccessTokenVerifier,
+      streamTokenIssuer: failingDependencies.streamTokenIssuer,
+      logger: {
+        level: "info",
+        stream: {
+          write(line: string): void {
+            logLines.push(line);
+          },
+        },
+      },
+    });
+    apps.push(app);
 
-    const response = await inputs.app.inject({
+    const response = await app.inject({
       method: "POST",
       url: "/v1/chat/token",
       headers: { authorization: `Bearer ${validToken}` },
@@ -476,8 +588,10 @@ describe("Stream token routes", () => {
     });
     expectOperationalHeaders(response);
     expectErrorRequestId(response);
-    expect(inputs.consumeIssuanceQuota).toHaveBeenCalledOnce();
-    expect(inputs.issueToken).toHaveBeenCalledOnce();
+    expect(logLines.join("\n")).not.toContain("stream-provider-secret");
+    expect(logLines.join("\n")).not.toContain("token-response");
+    expect(failingDependencies.consumeIssuanceQuota).toHaveBeenCalledOnce();
+    expect(failingDependencies.issueToken).toHaveBeenCalledOnce();
   });
 
   it("uses separate Chat and Video capabilities with HMAC-only user and IP subjects", async () => {

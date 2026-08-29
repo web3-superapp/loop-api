@@ -287,6 +287,7 @@ export function createStreamTokenService(
       request: IssueStreamTokenInput,
     ): Promise<StreamTokenResponse> {
       assertRequest(request);
+      request.signal.throwIfAborted();
 
       const capability = STREAM_TOKEN_CAPABILITIES[request.product];
       const quotaPolicy = policy.quotaByProduct[request.product];
@@ -324,6 +325,10 @@ export function createStreamTokenService(
       try {
         await input.quota.consumeIssuanceQuota(quotaInput);
       } catch (error) {
+        if (request.signal.aborted) {
+          request.signal.throwIfAborted();
+        }
+
         if (error instanceof IssuanceQuotaExceededError) {
           throw new StreamTokenQuotaExceededError();
         }
@@ -334,6 +339,8 @@ export function createStreamTokenService(
 
         throw new StreamTokenIssuanceFailedError();
       }
+
+      request.signal.throwIfAborted();
 
       let issuedAtEpochSeconds: number;
 
@@ -358,12 +365,18 @@ export function createStreamTokenService(
           }),
         );
       } catch (error) {
+        if (request.signal.aborted) {
+          request.signal.throwIfAborted();
+        }
+
         if (error instanceof StreamTokenIssuerUnavailableError) {
           throw new StreamTokenUnavailableError();
         }
 
         throw new StreamTokenIssuanceFailedError();
       }
+
+      request.signal.throwIfAborted();
 
       return Object.freeze({
         api_key: issued.apiKey,

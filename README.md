@@ -25,7 +25,8 @@ implemented as independently verified slices:
   decimal strings; evaluation and delivery remain unavailable
 - separate `POST /v1/chat/token` and `POST /v1/video/token` interfaces that
   require an existing bootstrap mapping, derive the Stream user ID server-side,
-  and enforce a fixed 3600-second lifetime
+  enforce a fixed 3600-second lifetime, and use the exact licensed official
+  server SDK when both provider credentials and persistent quota are configured
 - six authenticated Hyperliquid Testnet private-read interfaces for strict
   config, account, position, open-order, fill, and user-funding projections;
   wallet/account authority is always resolved server-side
@@ -114,10 +115,11 @@ implemented as independently verified slices:
 This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
 but a real phone-issued token has not yet passed the physical-device gate. The
-Stream HTTP interfaces and issuance policy are present, but the default issuer
-returns a sanitized 503: the reviewed Stream SDK license has not been accepted,
-the SDK is not installed, and a real Development App key/secret pair is not
-enabled. The Hyperliquid wallet-binding lifecycle, resolver, and Testnet private
+Stream SDK license gate is accepted, the exact SDK is installed, and the
+credential-aware default issuer is composed. Credentialed Development App and
+physical-device Chat/Video connection evidence is still absent; missing Stream
+credentials or persistent quota continues to return a sanitized 503. The
+Hyperliquid wallet-binding lifecycle, resolver, and Testnet private
 reader are implemented, but private reads are default-off and have not passed a
 real Privy phone-token plus nonempty Testnet-account end-to-end gate. The Perp
 reviewer, signer/executor, Agent authorization handoff, and every trading
@@ -180,7 +182,9 @@ The canonical route surface and shared control-plane rules are in
 [`docs/api-inventory.md`](docs/api-inventory.md) and
 [`docs/decisions/0003-native-api-control-plane.md`](docs/decisions/0003-native-api-control-plane.md).
 The Stream interface and SDK license gate are recorded in
-[`docs/decisions/0004-stream-token-interface-license-gate.md`](docs/decisions/0004-stream-token-interface-license-gate.md).
+[`docs/decisions/0004-stream-token-interface-license-gate.md`](docs/decisions/0004-stream-token-interface-license-gate.md),
+and its accepted official issuer is recorded in
+[`docs/decisions/0021-official-stream-token-issuer.md`](docs/decisions/0021-official-stream-token-issuer.md).
 The Hyperliquid private-read boundary is recorded in
 [`docs/decisions/0005-hyperliquid-private-read-interface.md`](docs/decisions/0005-hyperliquid-private-read-interface.md).
 The Perp intent, idempotency, review, persistence, and default-deny boundary is
@@ -254,8 +258,9 @@ The safe default listens on `http://127.0.0.1:3000` only.
   unconfigured; returning the Stream ID does not connect Stream or mint a token.
 - `POST /v1/chat/token` and `POST /v1/video/token` require the same current
   Privy Bearer boundary plus an existing bootstrap mapping. The interfaces are
-  implemented, but return 503 while the quota HMAC capability or real licensed
-  Stream issuer is unavailable.
+  implemented and use the official one-hour user-token issuer when the Stream
+  credential pair and quota HMAC capability are configured. Missing either
+  capability returns 503.
 - `GET`/`PUT /v1/profile`, `/v1/profile/privacy`, and `/v1/watchlist` expose
   only the current owner's local presentation/preferences. PUT uses
   `expected_version`; stale different state conflicts and an identical retry
@@ -313,9 +318,10 @@ pnpm docker:build:worker
 `pnpm secrets:check` guards the current Git-tracked snapshot against forbidden
 credential files and a small set of high-confidence token patterns. It does not
 scan Git history, infer arbitrary opaque provider secrets, or read the ignored
-local `.env.local`; that file remains the only local place for the current Privy
-credentials. The three Docker commands build distinct migration, lean API
-runtime, and worker targets and do not deploy any image.
+local `.env.local`; that file remains the only local place for current local
+provider/server credentials, including Privy, Stream, and quota secrets. The
+three Docker commands build distinct migration, lean API runtime, and worker
+targets and do not deploy any image.
 
 Route schemas are the source of truth for
 [`openapi/loop-api.v1.json`](openapi/loop-api.v1.json). Do not edit the artifact

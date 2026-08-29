@@ -112,12 +112,15 @@ exhaustion is `429` without an issuer call. A missing quota HMAC capability or
 unavailable real issuer returns `503`; a partial Stream API key/secret pair is a
 startup error.
 
-The default issuer remains unavailable even when a complete key/secret pair is
-present. `@stream-io/node-sdk` is not installed and real credentials are not
-enabled until its reviewed Stream Source Code License Agreement is explicitly
-accepted and the Development App gate closes. These interfaces have not been
-exercised with Flutter or a physical device, do not authorize server Chat/Video
-mutations, and do not claim connected Stream state.
+The reviewed Stream Source Code License Agreement has been explicitly accepted,
+and the default runtime uses exact `@stream-io/node-sdk@0.7.63` local signing
+when the complete key/secret pair and independent quota HMAC capability are
+present. The signer passes only the server-derived user ID and exact
+whole-second `iat`/`exp`; it adds no product, role, call, or custom claims.
+These interfaces have not been exercised with a real phone-issued Privy token,
+Flutter, or a physical device, do not authorize server Chat/Video mutations,
+and do not claim connected Stream state. Capability therefore remains
+`blocked-provider` pending credentialed Development App and device evidence.
 
 ## Approved Hyperliquid native Spot Testnet contract
 

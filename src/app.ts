@@ -78,6 +78,7 @@ import {
   type HyperliquidPerpIntentReviewer,
 } from "./integrations/hyperliquid/perp-intent-reviewer.js";
 import {
+  createStreamTokenIssuer,
   createUnavailableStreamTokenIssuer,
   type StreamTokenIssuer,
 } from "./integrations/stream/token-issuer.js";
@@ -356,7 +357,10 @@ export async function buildApp(
   );
   const bootstrapService = createBootstrapService(database.internalUsers);
   const streamTokenIssuer =
-    options.streamTokenIssuer ?? createUnavailableStreamTokenIssuer();
+    options.streamTokenIssuer ??
+    (config.stream === null || config.streamTokenQuota === null
+      ? createUnavailableStreamTokenIssuer()
+      : createStreamTokenIssuer(config.stream));
   const streamTokenService =
     config.streamTokenQuota === null
       ? createUnavailableStreamTokenService()

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-24
+- License gate closed by: Decision 0021 on 2026-08-29
 
 ## Context
 
