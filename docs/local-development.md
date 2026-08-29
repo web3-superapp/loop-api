@@ -46,6 +46,34 @@ stable pass line or sanitized failure code. It does not start the API, inspect
 quota configuration, validate a Privy token, or prove a Chat/Video client
 connection.
 
+After a physical phone can obtain a current Privy access token, verify the
+complete deployed backend credential chain with:
+
+```sh
+pnpm identity-stream:smoke
+```
+
+The command validates `PUBLIC_BASE_URL` before requesting the token. It accepts
+no arguments and then reads the token through a hidden terminal prompt; a pipe
+is also accepted when it contains exactly one token with at most one final
+newline. Never place the token in the command line, an environment variable, a
+tracked file, shell history, documentation, or chat. The remote target is fixed
+to `https://api-dev.quant-dinger.cc`; plaintext is accepted only for literal
+`127.0.0.1` or `::1` loopback development.
+
+The command also fails before reading the token when `NODE_DEBUG` is non-empty
+or `NODE_TLS_REJECT_UNAUTHORIZED=0`. Clear those diagnostic/unsafe TLS settings
+for this one command; otherwise Node can disclose Authorization headers or
+invalidate the HTTPS evidence boundary.
+
+One run makes exactly four sequential requests: bootstrap twice, then Chat and
+Video token issuance once each. It performs no retry, follows no redirect, caps
+each response, and prints only a fixed pass line or sanitized reason code. A
+hidden terminal run first prints one fixed input prompt. A successful run
+consumes one Chat and one Video issuance-quota attempt. It proves stable backend
+identity and token contracts, but the Flutter clients must still prove Stream
+connection, reconnect, refresh, logout, and device behavior.
+
 The wallet-binding lifecycle and six `GET /v1/perp/*` private-read interfaces
 also require the current Bearer identity and bootstrap mapping. Binding is
 available whenever Privy credentials are configured. A PUT re-reads the current

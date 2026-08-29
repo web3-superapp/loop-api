@@ -32,6 +32,14 @@ phone token has exercised the token routes. Stream remains
 Hyperliquid private reads are implemented but not yet “integrated” under the
 evidence definition below.
 
+Decision 0023 adds a Development-only, non-disclosing operator smoke runner for
+the remaining Privy-to-Stream backend credential chain. It reads a current
+Privy token only from standard input and validates stable bootstrap plus Chat
+and Video token contracts without printing identities or credentials. The
+runner is implemented, but it does not close any evidence gate until a real
+phone-issued token completes it; mobile Stream connection evidence remains
+separate.
+
 Decision 0014 approves a separate twelve-route Hyperliquid native Spot Testnet
 contract for one reviewed capped IOC buy or sell, one shared master-wallet
 binding authority, a per-owner/binding-epoch Agent handoff, persistent nonce

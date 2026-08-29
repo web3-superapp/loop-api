@@ -23,6 +23,7 @@
     "docker:build:worker": "docker build --target worker --tag loop-api:worker .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "identity-stream:smoke": "node --env-file-if-exists=.env.local --import tsx scripts/identity-stream-smoke.ts",
     "lint": "eslint .",
     "openapi:check": "tsx scripts/generate-openapi.ts --check",
     "openapi:generate": "tsx scripts/generate-openapi.ts --write",

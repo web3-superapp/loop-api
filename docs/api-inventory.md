@@ -127,6 +127,10 @@ These interfaces have not been exercised with a real phone-issued Privy token,
 Flutter, or a physical device, do not authorize server Chat/Video mutations,
 and do not claim connected Stream state. Capability therefore remains
 `blocked-provider` pending credentialed Development App and device evidence.
+The Development-only `pnpm identity-stream:smoke` command can close the backend
+credential-chain portion without printing identities or tokens, but its
+existence is not evidence until an operator supplies a current phone-issued
+token and the run passes.
 
 ## Approved Hyperliquid native Spot Testnet contract
 

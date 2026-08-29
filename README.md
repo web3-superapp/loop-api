@@ -30,6 +30,10 @@ implemented as independently verified slices:
 - a read-only `pnpm stream:verify` operator check that confirms the configured
   Development Stream key/secret pair through the official SDK while emitting no
   provider response data or credential values
+- a Development-only `pnpm identity-stream:smoke` operator check that reads one
+  current Privy access token through hidden or piped standard input, verifies
+  two stable bootstraps plus Chat and Video token contracts, and emits no user
+  IDs, API keys, response bodies, or Privy/Stream tokens
 - six authenticated Hyperliquid Testnet private-read interfaces for strict
   config, account, position, open-order, fill, and user-funding projections;
   wallet/account authority is always resolved server-side
@@ -229,6 +233,9 @@ and retained default-closed signature/relay boundary are recorded in
 The shared seven-day issuance-quota retention policy and bounded database-only
 cleanup worker are recorded in
 [`0022`](docs/decisions/0022-issuance-quota-retention.md).
+The non-disclosing Development Privy-to-Stream credential smoke runner is
+recorded in
+[`0023`](docs/decisions/0023-identity-stream-credential-smoke.md).
 
 ## Quick start
 
@@ -276,6 +283,11 @@ The safe default listens on `http://127.0.0.1:3000` only.
   implemented and use the official one-hour user-token issuer when the Stream
   credential pair and quota HMAC capability are configured. Missing either
   capability returns 503.
+- `pnpm identity-stream:smoke` safely verifies the deployed Privy bootstrap and
+  both Stream token routes. It accepts no arguments, reads the temporary bearer
+  token only from hidden or piped standard input, targets only local loopback or
+  `https://api-dev.quant-dinger.cc`, and never prints returned identities or
+  credentials. A passing run is backend evidence, not a Chat/Video connection.
 - `GET`/`PUT /v1/profile`, `/v1/profile/privacy`, and `/v1/watchlist` expose
   only the current owner's local presentation/preferences. PUT uses
   `expected_version`; stale different state conflicts and an identical retry
