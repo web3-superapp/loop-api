@@ -33,6 +33,19 @@ ignored `.env.local` as an all-or-nothing pair and configure the independent
 logs, documentation, or chat. The default runtime returns 503 if either
 capability is absent. No custom JWT implementation is used.
 
+After configuring or rotating the Development Stream credential pair, verify it
+without printing provider data or either credential:
+
+```sh
+pnpm stream:verify
+```
+
+This command loads the ignored `.env.local`, performs one authenticated,
+read-only Stream App lookup with a five-second SDK timeout, and emits only a
+stable pass line or sanitized failure code. It does not start the API, inspect
+quota configuration, validate a Privy token, or prove a Chat/Video client
+connection.
+
 The wallet-binding lifecycle and six `GET /v1/perp/*` private-read interfaces
 also require the current Bearer identity and bootstrap mapping. Binding is
 available whenever Privy credentials are configured. A PUT re-reads the current

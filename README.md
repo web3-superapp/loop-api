@@ -27,6 +27,9 @@ implemented as independently verified slices:
   require an existing bootstrap mapping, derive the Stream user ID server-side,
   enforce a fixed 3600-second lifetime, and use the exact licensed official
   server SDK when both provider credentials and persistent quota are configured
+- a read-only `pnpm stream:verify` operator check that confirms the configured
+  Development Stream key/secret pair through the official SDK while emitting no
+  provider response data or credential values
 - six authenticated Hyperliquid Testnet private-read interfaces for strict
   config, account, position, open-order, fill, and user-funding projections;
   wallet/account authority is always resolved server-side

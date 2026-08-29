@@ -27,6 +27,7 @@
     "openapi:check": "tsx scripts/generate-openapi.ts --check",
     "openapi:generate": "tsx scripts/generate-openapi.ts --write",
     "secrets:check": "tsx scripts/check-tracked-secrets.ts",
+    "stream:verify": "node --env-file-if-exists=.env.local --import tsx scripts/verify-stream-credentials.ts",
     "start": "node dist/src/server.js",
     "start:local": "node --env-file-if-exists=.env.local dist/src/server.js",
     "test": "vitest run --exclude 'test/**/*.integration.test.ts'",
