@@ -104,6 +104,35 @@ only binding state, monotonic epoch, fixed-or-null account kind, and last
 verification time. Interactive selection among multiple wallets and subaccounts
 requires a separate decision.
 
+Decision 0024 approves one authenticated public-alias discovery surface and one
+immutable alias per user and Stream Chat group. A public alias is returned only
+when the owner has both a non-null profile alias and `discoverable=true`; public
+aliases may be duplicated and results expose only an opaque public-profile ID,
+alias, and opaque avatar reference. Group aliases are unique after normalized
+comparison within one group, persist across leave/rejoin, and cannot be changed
+after their first durable reservation.
+
+The group boundary resolves only an existing fixed-type `messaging` Stream
+channel after Stream verifies the caller as a current member. It does not create
+a channel or add a member. LOOP PostgreSQL is authoritative for alias
+immutability and uniqueness; Stream channel-member custom data is a
+`pending`/`confirmed` presentation projection only. Every group search verifies
+the requester and every returned candidate as current Stream members and
+returns no cross-group correlation fields. Because the same stable Stream user
+ID remains behind every persona, this is a product/UI pseudonym model, not
+strong unlinkability. Direct Stream user search and client mutation of reserved
+member fields are launch-blocking permission checks.
+
+Both public and group search use a minimum two-code-point normalized prefix,
+bounded 1-through-20 results, no result total or cursor, and independent
+user-minute, IP-minute, and user-day quotas. Quota subjects reuse the existing
+server-only quota secret under an independent HMAC domain; raw user IDs and IPs
+are not persisted. Public capacities are 30/60/300 for
+user-minute/IP-minute/user-day; group capacities are 60/120/600. Wallet/address
+search, QR lookup, alias history,
+following/followers, contacts, and a custom social graph remain outside this
+decision.
+
 ## Local personalization and inactive alerts
 
 Decision 0009 selects LOOP PostgreSQL as the narrow system of record for the
@@ -120,9 +149,11 @@ idempotency key and canonical decimal-string threshold.
 No alert can be activated in the current runtime. There is no selected price
 fact/evaluator/scheduler, no trigger writer, no Firebase device registration or
 delivery, and no notification inbox. An enabled preference records user intent
-while the API continues to report delivery unavailable. Social discovery,
-following/followers/blocklist, copy-trading authorization, account export/delete,
-and retention automation require separate decisions.
+while the API continues to report delivery unavailable. General public
+profiles, relationship discovery, following/followers/blocklist, copy-trading
+authorization, account export/delete, and retention automation require separate
+decisions. Decision 0024 approves only its exact alias-search and group-persona
+routes; it does not approve those wider capabilities.
 
 ## Stream large-group Go/No-Go
 

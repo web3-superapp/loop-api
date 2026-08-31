@@ -49,6 +49,15 @@ describe("committed OpenAPI artifact", () => {
     const bootstrap = document.paths["/v1/bootstrap"]?.["post"];
     const chatToken = document.paths["/v1/chat/token"]?.["post"];
     const videoToken = document.paths["/v1/video/token"]?.["post"];
+    const publicAliasSearch = document.paths["/v1/discovery/users"]?.["get"];
+    const resolveChatGroup =
+      document.paths["/v1/chat/groups/resolve"]?.["post"];
+    const getCurrentGroupAlias =
+      document.paths["/v1/chat/groups/{group_id}/me/alias"]?.["get"];
+    const putCurrentGroupAlias =
+      document.paths["/v1/chat/groups/{group_id}/me/alias"]?.["put"];
+    const searchGroupAliases =
+      document.paths["/v1/chat/groups/{group_id}/aliases"]?.["get"];
     const personalizationOperations = [
       [document.paths["/v1/profile"]?.["get"], "getCurrentProfile"],
       [document.paths["/v1/profile"]?.["put"], "replaceCurrentProfile"],
@@ -236,7 +245,11 @@ describe("committed OpenAPI artifact", () => {
       "/v1/alerts/history",
       "/v1/alerts/{alert_id}",
       "/v1/bootstrap",
+      "/v1/chat/groups/resolve",
+      "/v1/chat/groups/{group_id}/aliases",
+      "/v1/chat/groups/{group_id}/me/alias",
       "/v1/chat/token",
+      "/v1/discovery/users",
       "/v1/notification-preferences",
       "/v1/perp/account",
       "/v1/perp/agent-authorizations",
@@ -275,7 +288,7 @@ describe("committed OpenAPI artifact", () => {
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
-    expect(operationIds).toHaveLength(52);
+    expect(operationIds).toHaveLength(57);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapCurrentUser",
@@ -317,6 +330,85 @@ describe("committed OpenAPI artifact", () => {
         "responses.503.content.application/json.schema.properties.code.enum",
         ["authentication_unavailable", "stream_unavailable", "request_timeout"],
       );
+    }
+
+    expect(publicAliasSearch).toMatchObject({
+      operationId: "searchDiscoverableUsersByAlias",
+      security: [{ privyBearer: [] }],
+    });
+    expect(publicAliasSearch).not.toHaveProperty("requestBody");
+    expect(publicAliasSearch?.parameters?.map(({ name }) => name)).toEqual([
+      "alias_prefix",
+      "limit",
+    ]);
+    expect(publicAliasSearch).toHaveProperty(
+      "responses.200.content.application/json.schema.properties.items.items.required",
+      ["public_profile_id", "alias", "avatar_ref"],
+    );
+    expect(publicAliasSearch).toHaveProperty(
+      "responses.429.content.application/json.schema.properties.code.enum",
+      ["search_rate_limited"],
+    );
+
+    expect(resolveChatGroup).toMatchObject({
+      operationId: "resolveExistingStreamGroup",
+      security: [{ privyBearer: [] }],
+    });
+    expect(resolveChatGroup).toHaveProperty(
+      "requestBody.content.application/json.schema.required",
+      ["stream_channel_id"],
+    );
+    expect(resolveChatGroup).toHaveProperty(
+      "responses.200.content.application/json.schema.required",
+      ["group_id"],
+    );
+
+    for (const [operation, operationId] of [
+      [getCurrentGroupAlias, "getCurrentGroupAlias"],
+      [putCurrentGroupAlias, "putCurrentGroupAlias"],
+      [searchGroupAliases, "searchCurrentGroupAliases"],
+    ] as const) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(operation).toHaveProperty(
+        "responses.200.headers.cache-control.schema.const",
+        "no-store",
+      );
+    }
+    expect(getCurrentGroupAlias).not.toHaveProperty("requestBody");
+    expect(putCurrentGroupAlias).toHaveProperty(
+      "requestBody.content.application/json.schema.required",
+      ["alias"],
+    );
+    expect(searchGroupAliases).not.toHaveProperty("requestBody");
+    expect(searchGroupAliases?.parameters?.map(({ name }) => name)).toEqual([
+      "alias_prefix",
+      "limit",
+      "group_id",
+    ]);
+    expect(searchGroupAliases).toHaveProperty(
+      "responses.200.content.application/json.schema.properties.items.items.required",
+      ["group_alias_id", "alias"],
+    );
+    for (const operation of [
+      publicAliasSearch,
+      resolveChatGroup,
+      getCurrentGroupAlias,
+      putCurrentGroupAlias,
+      searchGroupAliases,
+    ]) {
+      const serializedResponses = JSON.stringify(operation?.responses ?? {});
+      for (const forbidden of [
+        "owner_user_id",
+        "privy_user_id",
+        "stream_user_id",
+        "wallet_address",
+        "stream_channel_id",
+      ]) {
+        expect(serializedResponses).not.toContain(forbidden);
+      }
     }
 
     for (const [operation, operationId] of personalizationOperations) {

@@ -97,6 +97,10 @@ describe("Profile and privacy contract", () => {
     ["unpaired surrogate", "bad\ud800name"],
     ["bidirectional override", "safe\u202ename"],
     ["bidirectional isolate", "safe\u2066name"],
+    ["zero-width separator", "safe\u200bname"],
+    ["soft hyphen", "safe\u00adname"],
+    ["deprecated bidi format control", "safe\u206aname"],
+    ["line separator", "safe\u2028name"],
   ])("rejects an alias containing %s", (_label, alias) => {
     expect(() =>
       parseReplaceProfileRequest({

@@ -152,6 +152,12 @@ describe("LOOP API foundation", () => {
     expect(document.paths).toHaveProperty("/health/live");
     expect(document.paths).toHaveProperty("/health/ready");
     expect(document.paths).toHaveProperty("/v1/perp/wallet-binding");
+    expect(document.paths).toHaveProperty("/v1/discovery/users");
+    expect(document.paths).toHaveProperty("/v1/chat/groups/resolve");
+    expect(document.paths).toHaveProperty(
+      "/v1/chat/groups/{group_id}/me/alias",
+    );
+    expect(document.paths).toHaveProperty("/v1/chat/groups/{group_id}/aliases");
     expect(document.paths).toHaveProperty("/v1/spot/config");
     expect(document.paths).toHaveProperty(
       "/v1/spot/intents/{intent_id}/submit",

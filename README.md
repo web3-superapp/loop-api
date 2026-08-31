@@ -236,6 +236,12 @@ cleanup worker are recorded in
 The non-disclosing Development Privy-to-Stream credential smoke runner is
 recorded in
 [`0023`](docs/decisions/0023-identity-stream-credential-smoke.md).
+The bounded public-alias discovery and immutable per-Stream-group persona
+contract is recorded in
+[`0024`](docs/decisions/0024-alias-discovery-and-group-personas.md). Its routes
+are implemented in the runtime and generated OpenAPI with PostgreSQL and
+behavior coverage. This local implementation does not replace the required
+real Development-channel, Stream-permission, and physical-device evidence.
 
 ## Quick start
 
@@ -288,6 +294,13 @@ The safe default listens on `http://127.0.0.1:3000` only.
   token only from hidden or piped standard input, targets only local loopback or
   `https://api-dev.quant-dinger.cc`, and never prints returned identities or
   credentials. A passing run is backend evidence, not a Chat/Video connection.
+- `GET /v1/discovery/users` implements bounded, opt-in public-alias prefix
+  search. Four `/v1/chat/groups/*` operations resolve an existing `messaging`
+  channel, reserve one immutable per-group alias, and provide group-local alias
+  search. The interfaces, migration, generated OpenAPI, behavior tests, and
+  PostgreSQL repository checks are implemented. Real Stream
+  membership/projection permissions and physical-phone behavior remain
+  unverified.
 - `GET`/`PUT /v1/profile`, `/v1/profile/privacy`, and `/v1/watchlist` expose
   only the current owner's local presentation/preferences. PUT uses
   `expected_version`; stale different state conflicts and an identical retry
@@ -369,6 +382,9 @@ runtime.
 - Validate Privy access tokens and map them to opaque internal user IDs
 - Issue short-lived Stream Chat and Stream Video user tokens for server-derived
   Stream user IDs
+- Own the narrow public-alias directory and immutable per-group alias records;
+  use Stream membership as authority and Stream member custom data only as a
+  server-written presentation projection
 - Hold server-only provider credentials and map provider failures to stable LOOP
   errors
 - Orchestrate approved Privy server operations without taking custody of user
@@ -399,8 +415,9 @@ and aggregate discovery experience.
 - No Mainnet, withdrawals, automated trading, Pay, or payment backend in the
   current phase
 - No custom matching engine, ledger, bridge, IM, RTC, or proprietary risk score
-- No custom social graph, price-alert scheduler/evaluator, notification inbox,
-  or Firebase delivery claim in the current runtime
+- No custom relationship graph, wallet/QR discovery, alias-history or
+  cross-group-correlation surface, price-alert scheduler/evaluator,
+  notification inbox, or Firebase delivery claim in the current runtime
 - No custom Chat or media transport; communication uses the selected Stream
   products through thin adapters
 - No AI Guard endorsement and no synthetic or numeric risk score

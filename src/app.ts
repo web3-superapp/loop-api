@@ -15,16 +15,29 @@ import {
   registerAuthenticationHooks,
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
+import { createUnavailableAliasDirectoryRepository } from "./database/alias-directory-repository.js";
 import {
   createAlertService,
   type AlertService,
 } from "./features/alerts/alert-service.js";
+import {
+  createChatGroupAliasService,
+  type ChatGroupAliasService,
+} from "./features/communication/chat-group-alias-service.js";
 import {
   createStreamTokenService,
   StreamTokenUnavailableError,
   type StreamTokenService,
 } from "./features/communication/stream-token-service.js";
 import { createBootstrapService } from "./features/identity/bootstrap-service.js";
+import {
+  createAliasSearchQuota,
+  createUnavailableAliasSearchQuota,
+} from "./features/identity/alias-search-quota.js";
+import {
+  createPublicAliasSearchService,
+  type PublicAliasSearchService,
+} from "./features/identity/public-alias-search-service.js";
 import {
   createProfileService,
   type ProfileService,
@@ -78,6 +91,11 @@ import {
   type HyperliquidPerpIntentReviewer,
 } from "./integrations/hyperliquid/perp-intent-reviewer.js";
 import {
+  createStreamGroupMemberGateway,
+  createUnavailableStreamGroupMemberGateway,
+  type StreamGroupMemberGateway,
+} from "./integrations/stream/group-member-gateway.js";
+import {
   createStreamTokenIssuer,
   createUnavailableStreamTokenIssuer,
   type StreamTokenIssuer,
@@ -94,6 +112,8 @@ import {
   type PrivyUserReader,
 } from "./integrations/privy/user-reader.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
+import { registerChatGroupRoutes } from "./routes/chat-groups.js";
+import { registerDiscoveryRoutes } from "./routes/discovery.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -117,6 +137,9 @@ export interface BuildAppOptions {
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
+  readonly streamGroupMemberGateway?: StreamGroupMemberGateway;
+  readonly publicAliasSearchService?: PublicAliasSearchService;
+  readonly chatGroupAliasService?: ChatGroupAliasService;
   readonly perpWalletBindingResolver?: WalletBindingResolver;
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
   readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
@@ -285,7 +308,12 @@ export async function buildApp(
         },
         {
           name: "communication",
-          description: "Authenticated Stream Chat and Video token issuance",
+          description:
+            "Authenticated Stream Chat and Video token issuance plus LOOP group-persona coordination",
+        },
+        {
+          name: "discovery",
+          description: "Opt-in public Profile alias discovery",
         },
         {
           name: "profile",
@@ -400,6 +428,35 @@ export async function buildApp(
             },
           },
         });
+  const aliasDirectory =
+    database.aliasDirectory ?? createUnavailableAliasDirectoryRepository();
+  const aliasSearchQuota =
+    config.streamTokenQuota === null
+      ? createUnavailableAliasSearchQuota()
+      : createAliasSearchQuota({
+          repository: database.controlPlane,
+          hmacSecret: new TextEncoder().encode(
+            config.streamTokenQuota.hmacSecret,
+          ),
+        });
+  const publicAliasSearchService =
+    options.publicAliasSearchService ??
+    createPublicAliasSearchService({
+      repository: aliasDirectory,
+      quota: aliasSearchQuota,
+    });
+  const streamGroupMemberGateway =
+    options.streamGroupMemberGateway ??
+    (config.stream === null
+      ? createUnavailableStreamGroupMemberGateway()
+      : createStreamGroupMemberGateway(config.stream));
+  const chatGroupAliasService =
+    options.chatGroupAliasService ??
+    createChatGroupAliasService({
+      repository: aliasDirectory,
+      gateway: streamGroupMemberGateway,
+      quota: aliasSearchQuota,
+    });
   const walletBindingResolver =
     options.perpWalletBindingResolver ??
     (config.privy === null
@@ -491,6 +548,16 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     streamTokenService,
+  );
+  registerDiscoveryRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    publicAliasSearchService,
+  );
+  registerChatGroupRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    chatGroupAliasService,
   );
   registerProfileRoutes(
     app,

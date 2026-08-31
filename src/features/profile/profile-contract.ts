@@ -3,8 +3,7 @@ import { z } from "zod";
 const maximumRecordVersion = 2_147_483_647;
 const maximumRawAliasLength = 256;
 const maximumAliasCodePoints = 40;
-const forbiddenAliasCharacters =
-  /[\p{Cc}\p{Cs}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const forbiddenAliasCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 const avatarReferencePattern = /^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$/;
 
 const expectedVersionSchema = z.number().int().min(0).max(maximumRecordVersion);

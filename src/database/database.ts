@@ -12,6 +12,10 @@ import {
   type AlertRepository,
 } from "./alert-repository.js";
 import {
+  createPostgresAliasDirectoryRepository,
+  type AliasDirectoryRepository,
+} from "./alias-directory-repository.js";
+import {
   createPostgresAgentAuthorizationRepository,
   type AgentAuthorizationRepository,
 } from "./agent-authorization-repository.js";
@@ -53,6 +57,7 @@ const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 
 export interface Database {
   readonly internalUsers: InternalUserRepository;
+  readonly aliasDirectory?: AliasDirectoryRepository;
   readonly controlPlane: ControlPlaneRepository;
   readonly perpWalletBindings: PerpWalletBindingRepository;
   readonly perpIntents: PerpIntentRepository;
@@ -180,9 +185,11 @@ export function createPostgresDatabase(
   const profiles = createPostgresProfileRepository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
+  const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
 
   return {
     internalUsers,
+    aliasDirectory,
     controlPlane,
     perpWalletBindings,
     perpIntents,

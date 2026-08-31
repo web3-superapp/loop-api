@@ -11,6 +11,12 @@ pnpm db:migrate
 pnpm dev
 ```
 
+Migration `000012_alias_discovery_and_group_personas` deliberately refuses to
+run if an existing Profile alias contains a Unicode control, formatting,
+surrogate, line-separator, or paragraph-separator code point. Replace or clear
+the affected alias through an audited maintenance step, then rerun the
+migration; it never silently rewrites a user's public name.
+
 Set `PRIVY_APP_ID` and `PRIVY_APP_SECRET` only in the ignored `.env.local` to
 enable `POST /v1/bootstrap`. Leave both blank to keep authentication disabled;
 providing only one is a startup error. The mobile client sends only its current
@@ -23,7 +29,9 @@ token lifetime at 3600 seconds. Set a unique server-only
 `STREAM_TOKEN_QUOTA_HMAC_SECRET` of at least 32 characters in `.env.local` to
 enable their atomic per-route user/IP quota boundary; raw LOOP user IDs and IPs
 are not stored as quota subjects. If this secret is absent, the routes fail
-closed with 503.
+closed with 503. The alias-discovery routes reuse this key material only under a
+separate versioned HMAC domain and separate fixed quota capabilities; the raw
+secret and raw quota subjects still remain server-only.
 
 The reviewed Stream Source Code License Agreement has been explicitly accepted,
 and exact `@stream-io/node-sdk@0.7.63` is installed. To enable local token

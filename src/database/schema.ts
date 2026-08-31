@@ -1,4 +1,4 @@
-export const latestMigrationName = "000011_issuance_quota_retention";
+export const latestMigrationName = "000012_alias_discovery_and_group_personas";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -24,6 +24,8 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.perp_agent_authorization_events",
   "public.user_profiles",
   "public.privacy_preferences",
+  "public.communication_groups",
+  "public.group_alias_reservations",
   "public.watchlist_versions",
   "public.watchlist_groups",
   "public.watchlist_items",

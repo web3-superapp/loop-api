@@ -286,6 +286,16 @@ describe("Profile routes", () => {
       {},
     ],
     [
+      "deprecated bidirectional format control",
+      "PUT",
+      "/v1/profile",
+      {
+        expected_version: 0,
+        profile: { alias: "safe\u206aunsafe", avatar_ref: null },
+      },
+      {},
+    ],
+    [
       "blank alias",
       "PUT",
       "/v1/profile",

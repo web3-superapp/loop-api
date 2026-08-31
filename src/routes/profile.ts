@@ -25,7 +25,7 @@ import {
 
 const avatarReferencePattern = "^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$";
 const aliasInputPattern =
-  "^(?![\\s\\S]*[\\p{Cc}\\p{Cs}\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069])[\\s\\S]*\\S[\\s\\S]*$";
+  "^(?![\\s\\S]*[\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}])[\\s\\S]*\\S[\\s\\S]*$";
 
 const nullableAliasSchema = {
   anyOf: [
@@ -34,7 +34,7 @@ const nullableAliasSchema = {
       minLength: 1,
       maxLength: 40,
       description:
-        "Trimmed untrusted display alias; 1-40 Unicode code points and no control or bidirectional-control characters.",
+        "Trimmed untrusted display alias; 1-40 Unicode code points with control, bidirectional-control, and invisible formatting characters rejected.",
     },
     { type: "null" },
   ],
@@ -48,7 +48,7 @@ const nullableAliasInputSchema = {
       maxLength: 256,
       pattern: aliasInputPattern,
       description:
-        "Normalized by trimming, then limited to 1-40 Unicode code points; control and bidirectional-control characters are rejected.",
+        "Normalized by trimming, then limited to 1-40 Unicode code points; control, bidirectional-control, and invisible formatting characters are rejected.",
     },
     { type: "null" },
   ],

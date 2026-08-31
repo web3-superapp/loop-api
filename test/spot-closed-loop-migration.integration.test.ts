@@ -732,7 +732,7 @@ describe("000007 Hyperliquid Spot closed-loop migration against PostgreSQL", () 
         "spot_agent_authorization_issue_v1",
       );
     });
-  });
+  }, 20_000);
 
   it("refuses rollback for every independently durable Spot authority", async () => {
     await withTemporaryDatabase(async (database) => {

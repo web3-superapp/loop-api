@@ -132,6 +132,51 @@ credential-chain portion without printing identities or tokens, but its
 existence is not evidence until an operator supplies a current phone-issued
 token and the run passes.
 
+## Implemented alias discovery and group-persona interfaces
+
+Decision 0024 approves the exact authenticated routes below. Their migrations,
+runtime schemas, generated OpenAPI, behavior tests, and PostgreSQL integration
+tests are implemented. Local implementation does not by itself close the
+separate real-Stream and physical-device evidence gates.
+
+| Method and path                           | Key contract                                                                                                                         | Interface     | Capability         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------ |
+| `GET /v1/discovery/users`                 | `alias_prefix` plus optional 1-20 `limit`; discoverable non-null public aliases; items expose only public-profile ID/alias/avatar    | `implemented` | `implemented`      |
+| `POST /v1/chat/groups/resolve`            | Resolve one existing fixed `messaging` Stream channel only after current-member verification; never create a channel or add a member | `implemented` | `blocked-provider` |
+| `GET /v1/chat/groups/{group_id}/me/alias` | Current-member-only read of the caller's retained immutable alias                                                                    | `implemented` | `blocked-provider` |
+| `PUT /v1/chat/groups/{group_id}/me/alias` | First durable reservation wins; same-value retry; normalized name unique in group; projection is `pending` or `confirmed`            | `implemented` | `blocked-provider` |
+| `GET /v1/chat/groups/{group_id}/aliases`  | Current-member-only prefix search; Stream rechecks requester and returned candidates; items expose only alias ID/alias               | `implemented` | `blocked-provider` |
+
+Both search routes require a `unicode17_nfkc_lower_ws_v1` normalized prefix of
+at least two Unicode code points, default to and cap results at 20, perform
+prefix matching only, and return neither a total nor a pagination cursor.
+Public aliases may be
+duplicated; the authenticated caller is omitted. Group results also omit the
+requester, departed members, and `pending` projections. A public item contains
+exactly `public_profile_id`, `alias`, and
+nullable `avatar_ref`; a group item contains exactly `group_alias_id` and
+`alias`. No response contains an internal/Privy/Stream user ID, wallet or
+address, provider channel ID, another alias, memberships, or a cross-group
+correlation field.
+
+Each search atomically reserves independent public- or group-search
+user-per-minute, canonical-IP-per-minute, and user-per-day buckets. Subjects use
+the existing server-only quota HMAC secret under a separate versioned domain;
+raw users and IPs are not stored. Missing quota capability fails closed, and no
+total/cursor endpoint can be used to bypass the bounded query. Public capacities
+are 30/60/300 for user-minute/IP-minute/user-day; group capacities are
+60/120/600 for the same buckets.
+
+LOOP PostgreSQL is canonical for group aliases. A group alias remains reserved
+after its owner leaves and is restored on rejoin; it is omitted from search
+while that owner is not a current member. Stream member custom data is only a
+server-written presentation projection. Before this capability can leave
+`blocked-provider`, a real Development channel and accounts must prove member
+verification, projection, leave/rejoin, candidate filtering, and permission
+behavior. Direct Stream user search and client mutation of server-reserved
+member fields must be disabled and verified before launch. Stable Stream user
+IDs mean these aliases provide UI pseudonyms, not strong unlinkability.
+
 ## Approved Hyperliquid native Spot Testnet contract
 
 Decision 0014 approves the following exact owner-scoped contract for one
@@ -453,9 +498,11 @@ withdrawals, automated trading or trading automation, HIP-3, trigger orders,
 TP/SL, TWAP, builder fees, and public Hyperliquid market proxying.
 
 Push device registration, a notification inbox, alert activation/evaluation,
-Search, Support, public profile/social graph, following/followers/blocklist, and
-interactive multiple-wallet selection have no approved complete runtime
-contract. They are unassigned or explicitly closed, not implied APIs; no guessed
-route may be added. Privy OTP/wallet creation, Stream messages/calls/moderation,
-and provider `/info`, `/exchange`, or `/ws` operations remain official
-SDK/provider surfaces rather than client-callable LOOP routes.
+Support, general public-profile detail, following/followers/blocklist, wallet or
+QR search, alias history, cross-group correlation, and interactive
+multiple-wallet selection have no approved complete runtime contract. The exact
+alias discovery and group-persona routes in Decision 0024 are the only approved
+Search/social exception; they do not imply a relationship graph. Privy
+OTP/wallet creation, Stream messages/calls/moderation, and provider `/info`,
+`/exchange`, or `/ws` operations remain official SDK/provider surfaces rather
+than client-callable LOOP routes.
