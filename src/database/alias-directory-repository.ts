@@ -17,6 +17,7 @@ const dateSchema = z.date().refine((value) => !Number.isNaN(value.getTime()));
 const avatarReferenceSchema = z
   .string()
   .regex(/^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$/);
+const profileCodeSchema = z.string().regex(/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{10}$/);
 
 interface DatabaseClient {
   query<Row extends Record<string, unknown> = Record<string, unknown>>(config: {
@@ -28,6 +29,7 @@ interface DatabaseClient {
 const publicAliasRowSchema = z
   .object({
     public_profile_id: z.string().regex(canonicalUuidPattern),
+    profile_code: profileCodeSchema,
     alias: z.string(),
     avatar_ref: avatarReferenceSchema.nullable(),
   })
@@ -55,6 +57,7 @@ const groupAliasRowSchema = z
 
 export interface PublicAliasRecord {
   readonly publicProfileId: string;
+  readonly profileCode: string;
   readonly alias: string;
   readonly avatarRef: string | null;
 }
@@ -148,6 +151,7 @@ function toPublicAliasRecord(value: unknown): PublicAliasRecord {
   const row = publicAliasRowSchema.parse(value);
   return Object.freeze({
     publicProfileId: row.public_profile_id,
+    profileCode: row.profile_code,
     alias: parseGroupAlias(row.alias),
     avatarRef: row.avatar_ref,
   });
@@ -194,15 +198,19 @@ async function readGroupAlias(
   const result = await client.query<Record<string, unknown>>({
     text: `
       select
-        group_alias_id,
-        group_id,
-        owner_user_id,
-        alias,
-        projection_state,
-        created_at,
-        confirmed_at
-      from public.group_alias_reservations
-      where group_id = $1 and owner_user_id = $2
+        reservation.group_alias_id,
+        reservation.group_id,
+        reservation.owner_user_id,
+        reservation.alias,
+        reservation.projection_state,
+        reservation.created_at,
+        reservation.confirmed_at
+      from public.group_alias_reservations as reservation
+      join public.communication_groups as group_record
+        on group_record.group_id = reservation.group_id
+      where reservation.group_id = $1
+        and reservation.owner_user_id = $2
+        and group_record.channel_state = 'active'
       limit 1
     `,
     values: [groupId, ownerUserId],
@@ -246,6 +254,7 @@ export function createPostgresAliasDirectoryRepository(
             )
             select
               profile.public_profile_id,
+              profile.profile_code,
               profile.alias,
               profile.avatar_ref
             from public.user_profiles as profile
@@ -304,6 +313,7 @@ export function createPostgresAliasDirectoryRepository(
             from public.communication_groups
             where stream_channel_type = 'messaging'
               and stream_channel_id = $1
+              and channel_state = 'active'
             limit 1
           `,
           values: [streamChannelId],
@@ -327,7 +337,9 @@ export function createPostgresAliasDirectoryRepository(
           text: `
             select group_id, stream_channel_id, created_at
             from public.communication_groups
-            where group_id = $1 and stream_channel_type = 'messaging'
+            where group_id = $1
+              and stream_channel_type = 'messaging'
+              and channel_state = 'active'
             limit 1
           `,
           values: [groupId],
@@ -366,7 +378,12 @@ export function createPostgresAliasDirectoryRepository(
               owner_user_id,
               alias
             )
-            values ($1, $2, $3)
+            select $1, $2, $3
+            where exists (
+              select 1
+              from public.communication_groups
+              where group_id = $1 and channel_state = 'active'
+            )
             on conflict do nothing
             returning
               group_alias_id,
@@ -469,8 +486,11 @@ export function createPostgresAliasDirectoryRepository(
               member.created_at,
               member.confirmed_at
             from public.group_alias_reservations as member
+            join public.communication_groups as group_record
+              on group_record.group_id = member.group_id
             cross join search_input
             where member.group_id = $1
+              and group_record.channel_state = 'active'
               and member.owner_user_id <> $2
               and member.projection_state = 'confirmed'
               and member.alias_search_key collate "C" like

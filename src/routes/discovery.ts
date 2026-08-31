@@ -58,9 +58,15 @@ const successResponseSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["public_profile_id", "alias", "avatar_ref"],
+        required: ["public_profile_id", "profile_code", "alias", "avatar_ref"],
         properties: {
           public_profile_id: { type: "string", format: "uuid" },
+          profile_code: {
+            type: "string",
+            pattern: "^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{10}$",
+            description:
+              "Immutable globally unique display discriminator. It is not accepted as an authorization or command target.",
+          },
           alias: { type: "string", minLength: 1, maxLength: 40 },
           avatar_ref: {
             anyOf: [
@@ -160,7 +166,7 @@ export function registerDiscoveryRoutes(
         operationId: "searchDiscoverableUsersByAlias",
         summary: "Search discoverable LOOP users by public alias prefix",
         description:
-          "Returns other users' opt-in public Profile presentation fields. Group aliases, LOOP IDs, Stream IDs, wallets, group memberships, total counts, and deep pagination are never exposed.",
+          "Returns other users' opt-in public Profile presentation fields, including an immutable profile code for distinguishing duplicate aliases. The complete public_profile_id remains the only command target. Group aliases, LOOP IDs, Stream IDs, wallets, group memberships, total counts, and deep pagination are never exposed.",
         tags: ["discovery"],
         security: [{ privyBearer: [] }],
         querystring: searchQuerySchema,

@@ -154,10 +154,23 @@ describe("LOOP API foundation", () => {
     expect(document.paths).toHaveProperty("/v1/perp/wallet-binding");
     expect(document.paths).toHaveProperty("/v1/discovery/users");
     expect(document.paths).toHaveProperty("/v1/chat/groups/resolve");
+    expect(document.paths).toHaveProperty("/v1/chat/groups");
+    expect(document.paths).toHaveProperty("/v1/chat/direct-channels");
+    expect(document.paths).toHaveProperty("/v1/chat/operations/{operation_id}");
     expect(document.paths).toHaveProperty(
       "/v1/chat/groups/{group_id}/me/alias",
     );
     expect(document.paths).toHaveProperty("/v1/chat/groups/{group_id}/aliases");
+    expect(document.paths).toHaveProperty("/v1/profile/social-privacy");
+    expect(document.paths).toHaveProperty("/v1/friends");
+    expect(document.paths).toHaveProperty("/v1/friends/search");
+    expect(document.paths).toHaveProperty("/v1/friend-requests");
+    expect(document.paths).toHaveProperty(
+      "/v1/friend-requests/{friend_request_id}/decision",
+    );
+    expect(document.paths).toHaveProperty(
+      "/v1/social/operations/{operation_id}",
+    );
     expect(document.paths).toHaveProperty("/v1/spot/config");
     expect(document.paths).toHaveProperty(
       "/v1/spot/intents/{intent_id}/submit",
@@ -200,6 +213,43 @@ describe("LOOP API foundation", () => {
     expect(database.internalUsers.findByPrivyUserId).toHaveBeenCalledWith(
       "did:privy:transfer-app-user",
     );
+  });
+
+  it("mounts social and backend-created Chat channels as authenticated and default-closed", async () => {
+    const { database } = fakeDatabase();
+    const verifyAccessToken = vi.fn(() =>
+      Promise.resolve({ privyUserId: "did:privy:social-app-user" }),
+    );
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      privyAccessTokenVerifier: { verifyAccessToken },
+      logger: false,
+    });
+    apps.push(app);
+
+    const social = await app.inject({
+      method: "GET",
+      url: "/v1/profile/social-privacy",
+      headers: { authorization: "Bearer header.payload.signature" },
+    });
+    const chat = await app.inject({
+      method: "POST",
+      url: "/v1/chat/direct-channels",
+      headers: {
+        authorization: "Bearer header.payload.signature",
+        "idempotency-key": "55555555-5555-4555-8555-555555555555",
+      },
+      payload: {
+        target_public_profile_id: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+
+    expect(social.statusCode).toBe(503);
+    expect(social.json<{ code: string }>().code).toBe("social_unavailable");
+    expect(chat.statusCode).toBe(503);
+    expect(chat.json<{ code: string }>().code).toBe("chat_unavailable");
+    expect(verifyAccessToken).toHaveBeenCalledTimes(2);
   });
 
   it("composes the exact Spot surface as authenticated and default-closed", async () => {

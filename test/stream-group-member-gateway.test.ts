@@ -36,6 +36,20 @@ function member(
   };
 }
 
+function groupChannelState(
+  custom: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    duration: "1ms",
+    channel: {
+      id: channelId,
+      type: "messaging",
+      cid: `messaging:${channelId}`,
+      custom,
+    },
+  };
+}
+
 function jsonResponse(
   body: unknown,
   status = 200,
@@ -72,8 +86,8 @@ function projectionInput(
   };
 }
 
-function requestedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
-  const call: unknown = fetchMock.mock.calls[0];
+function requestedUrl(fetchMock: ReturnType<typeof vi.fn>, index = 0): URL {
+  const call: unknown = fetchMock.mock.calls[index];
   const value: unknown = Array.isArray(call) ? call[0] : undefined;
   if (typeof value !== "string") {
     throw new Error("Expected the Stream SDK to call fetch with a URL string");
@@ -81,8 +95,11 @@ function requestedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
   return new URL(value);
 }
 
-function requestInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-  const call: unknown = fetchMock.mock.calls[0];
+function requestInit(
+  fetchMock: ReturnType<typeof vi.fn>,
+  index = 0,
+): RequestInit {
+  const call: unknown = fetchMock.mock.calls[index];
   const value: unknown = Array.isArray(call) ? call[1] : undefined;
   if (typeof value !== "object" || value === null) {
     throw new Error("Expected the Stream SDK to call fetch with request init");
@@ -114,11 +131,12 @@ describe("Stream group member gateway", () => {
   });
 
   it("queries only the exact member in a fixed messaging channel", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(
         jsonResponse({ duration: "1ms", members: [member(streamUserId)] }),
-      ),
-    );
+      );
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -126,8 +144,16 @@ describe("Stream group member gateway", () => {
       undefined,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = requestedUrl(fetchMock);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const stateUrl = requestedUrl(fetchMock);
+    expect(stateUrl.pathname).toBe(
+      `/api/v2/chat/channels/messaging/${channelId}`,
+    );
+    expect(stateUrl.searchParams.get("state")).toBe("false");
+    expect(stateUrl.searchParams.get("members_limit")).toBe("0");
+    expect(stateUrl.searchParams.get("messages_limit")).toBe("0");
+    expect(stateUrl.searchParams.get("watchers_limit")).toBe("0");
+    const url = requestedUrl(fetchMock, 1);
     expect(url.pathname).toBe("/api/v2/chat/members");
     expect(url.searchParams.get("api_key")).toBe(apiKey);
     expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
@@ -136,13 +162,15 @@ describe("Stream group member gateway", () => {
       filter_conditions: { user_id: streamUserId, joined: true },
       limit: 1,
     });
-    expect(requestInit(fetchMock).method).toBe("GET");
+    expect(requestInit(fetchMock, 1).method).toBe("GET");
   });
 
   it("maps a joined-only query with no result, including an unaccepted invite, and provider 404 to not-found", async () => {
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
       .mockResolvedValueOnce(jsonResponse({ duration: "1ms", members: [] }))
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
       .mockResolvedValueOnce(
         jsonResponse(
           { code: 4, message: "provider detail must not escape" },
@@ -162,14 +190,15 @@ describe("Stream group member gateway", () => {
   });
 
   it("accepts the SDK's direct user_id member shape without weakening identity checks", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(
         jsonResponse({
           duration: "1ms",
           members: [{ user_id: streamUserId, custom: {} }],
         }),
-      ),
-    );
+      );
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -178,15 +207,95 @@ describe("Stream group member gateway", () => {
     );
   });
 
-  it("filters a bounded deduplicated set through an exact user_id $in query", async () => {
+  it("accepts a versioned LOOP group channel before proving joined membership", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          groupChannelState({
+            loop_channel_kind: "group",
+            loop_channel_schema_version: 1,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ duration: "1ms", members: [member(streamUserId)] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
+
+    await expect(gateway.assertCurrentMember(assertInput())).resolves.toBe(
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a LOOP direct channel from every group-only operation", async () => {
+    const directState = groupChannelState({
+      loop_channel_kind: "direct",
+      loop_channel_schema_version: 1,
+    });
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(directState)));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
+
+    await expect(gateway.assertCurrentMember(assertInput())).rejects.toEqual(
+      new StreamGroupMemberNotFoundError(),
+    );
+    await expect(
+      gateway.filterCurrentMembers({
+        channelId,
+        streamUserIds: [streamUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamGroupMemberNotFoundError());
+    await expect(gateway.projectAlias(projectionInput())).rejects.toEqual(
+      new StreamGroupMemberNotFoundError(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(
+      fetchMock.mock.calls.every((_call, index) => {
+        return (
+          requestedUrl(fetchMock, index).pathname ===
+          `/api/v2/chat/channels/messaging/${channelId}`
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["a partially marked legacy channel", { loop_channel_schema_version: 1 }],
+    [
+      "an unsupported group schema",
+      { loop_channel_kind: "group", loop_channel_schema_version: 2 },
+    ],
+    [
+      "an unknown channel kind",
+      { loop_channel_kind: "broadcast", loop_channel_schema_version: 1 },
+    ],
+  ])("fails closed on %s", async (_name, custom) => {
     const fetchMock = vi.fn(() =>
-      Promise.resolve(
+      Promise.resolve(jsonResponse(groupChannelState(custom))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
+
+    await expect(gateway.assertCurrentMember(assertInput())).rejects.toEqual(
+      new StreamGroupMemberGatewayUnavailableError(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters a bounded deduplicated set through an exact user_id $in query", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(
         jsonResponse({
           duration: "1ms",
           members: [member(secondStreamUserId), member(streamUserId)],
         }),
-      ),
-    );
+      );
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -197,7 +306,7 @@ describe("Stream group member gateway", () => {
     });
 
     expect([...result]).toEqual([secondStreamUserId, streamUserId]);
-    const url = requestedUrl(fetchMock);
+    const url = requestedUrl(fetchMock, 1);
     expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
       id: channelId,
       type: "messaging",
@@ -237,9 +346,10 @@ describe("Stream group member gateway", () => {
       [member(streamUserId, { cid: "messaging:another_group" })],
     ],
   ])("fails closed on %s", async (_name, members) => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(jsonResponse({ duration: "1ms", members })),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms", members }));
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -258,14 +368,15 @@ describe("Stream group member gateway", () => {
       loop_group_alias: alias,
       loop_group_alias_version: 1,
     };
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(
         jsonResponse({
           duration: "1ms",
           channel_member: member(streamUserId, { custom: projectedCustom }),
         }),
-      ),
-    );
+      );
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -273,13 +384,13 @@ describe("Stream group member gateway", () => {
       undefined,
     );
 
-    const url = requestedUrl(fetchMock);
+    const url = requestedUrl(fetchMock, 1);
     expect(url.pathname).toBe(
       `/api/v2/chat/channels/messaging/${channelId}/member`,
     );
     expect(url.searchParams.get("user_id")).toBe(streamUserId);
     expect(url.searchParams.get("api_key")).toBe(apiKey);
-    const init = requestInit(fetchMock);
+    const init = requestInit(fetchMock, 1);
     expect(init.method).toBe("PATCH");
     if (typeof init.body !== "string") {
       throw new Error("Expected the Stream SDK to send a JSON request body");
@@ -290,8 +401,10 @@ describe("Stream group member gateway", () => {
   });
 
   it("does not confirm an alias projection from a malformed provider response", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockResolvedValueOnce(
         jsonResponse({
           duration: "1ms",
           channel_member: member(streamUserId, {
@@ -302,8 +415,7 @@ describe("Stream group member gateway", () => {
             },
           }),
         }),
-      ),
-    );
+      );
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 
@@ -337,7 +449,10 @@ describe("Stream group member gateway", () => {
       },
     ],
   ])("sanitizes %s as gateway unavailable", async (_name, response) => {
-    const fetchMock = vi.fn(response);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(groupChannelState()))
+      .mockImplementationOnce(response);
     vi.stubGlobal("fetch", fetchMock);
     const gateway = createStreamGroupMemberGateway({ apiKey, apiSecret });
 

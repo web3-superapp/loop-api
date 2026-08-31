@@ -16,6 +16,7 @@ import {
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
 import { createUnavailableAliasDirectoryRepository } from "./database/alias-directory-repository.js";
+import { createUnavailableSocialRepository } from "./database/social-repository.js";
 import {
   createAlertService,
   type AlertService,
@@ -24,6 +25,12 @@ import {
   createChatGroupAliasService,
   type ChatGroupAliasService,
 } from "./features/communication/chat-group-alias-service.js";
+import {
+  createChatChannelService,
+  createUnavailableChatChannelService,
+  type ChatChannelService,
+} from "./features/communication/chat-channel-service.js";
+import { createUnavailableChatChannelRepository } from "./features/communication/chat-channel-repository.js";
 import {
   createStreamTokenService,
   StreamTokenUnavailableError,
@@ -42,6 +49,13 @@ import {
   createProfileService,
   type ProfileService,
 } from "./features/profile/profile-service.js";
+import { createSocialCursorCodec } from "./features/social/social-cursor.js";
+import { createSocialMutationQuota } from "./features/social/social-mutation-quota.js";
+import {
+  createSocialService,
+  createUnavailableSocialService,
+  type SocialService,
+} from "./features/social/social-service.js";
 import {
   createUnavailableSpotAgentAuthorizationService,
   type SpotAgentAuthorizationService,
@@ -91,6 +105,11 @@ import {
   type HyperliquidPerpIntentReviewer,
 } from "./integrations/hyperliquid/perp-intent-reviewer.js";
 import {
+  createStreamChannelGateway,
+  createUnavailableStreamChannelGateway,
+  type StreamChannelGateway,
+} from "./integrations/stream/channel-gateway.js";
+import {
   createStreamGroupMemberGateway,
   createUnavailableStreamGroupMemberGateway,
   type StreamGroupMemberGateway,
@@ -112,6 +131,7 @@ import {
   type PrivyUserReader,
 } from "./integrations/privy/user-reader.js";
 import { registerBootstrapRoute } from "./routes/bootstrap.js";
+import { registerChatChannelRoutes } from "./routes/chat-channels.js";
 import { registerChatGroupRoutes } from "./routes/chat-groups.js";
 import { registerDiscoveryRoutes } from "./routes/discovery.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
@@ -126,6 +146,7 @@ import { registerSpotAgentAuthorizationRoutes } from "./routes/spot-agent-author
 import { registerSpotIntentRoutes } from "./routes/spot-intents.js";
 import { registerSpotMarketDataRoutes } from "./routes/spot-market-data.js";
 import { registerSpotWalletBindingRoutes } from "./routes/spot-wallet-binding.js";
+import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 
@@ -138,8 +159,11 @@ export interface BuildAppOptions {
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
   readonly streamGroupMemberGateway?: StreamGroupMemberGateway;
+  readonly streamChannelGateway?: StreamChannelGateway;
   readonly publicAliasSearchService?: PublicAliasSearchService;
   readonly chatGroupAliasService?: ChatGroupAliasService;
+  readonly socialService?: SocialService;
+  readonly chatChannelService?: ChatChannelService;
   readonly perpWalletBindingResolver?: WalletBindingResolver;
   readonly hyperliquidPrivateReader?: HyperliquidPrivateReader;
   readonly hyperliquidPerpIntentReviewer?: HyperliquidPerpIntentReviewer;
@@ -208,6 +232,12 @@ function loggerOptions(
         "streamTokenQuota.hmacSecret",
         "config.streamTokenQuota.hmacSecret",
         "STREAM_TOKEN_QUOTA_HMAC_SECRET",
+        "social.cursorHmacSecret",
+        "config.social.cursorHmacSecret",
+        "SOCIAL_CURSOR_HMAC_SECRET",
+        "social.quotaHmacSecret",
+        "config.social.quotaHmacSecret",
+        "SOCIAL_QUOTA_HMAC_SECRET",
         "perpReadCursor.hmacSecret",
         "config.perpReadCursor.hmacSecret",
         "PERP_READ_CURSOR_HMAC_SECRET",
@@ -314,6 +344,11 @@ export async function buildApp(
         {
           name: "discovery",
           description: "Opt-in public Profile alias discovery",
+        },
+        {
+          name: "social",
+          description:
+            "Owner-bound social privacy, explicit friend requests, and accepted-friend lists",
         },
         {
           name: "profile",
@@ -457,6 +492,39 @@ export async function buildApp(
       gateway: streamGroupMemberGateway,
       quota: aliasSearchQuota,
     });
+  const socialRepository =
+    database.social ?? createUnavailableSocialRepository();
+  const socialService =
+    options.socialService ??
+    (config.social === null
+      ? createUnavailableSocialService()
+      : createSocialService({
+          repository: socialRepository,
+          searchQuota: aliasSearchQuota,
+          mutationQuota: createSocialMutationQuota({
+            repository: database.controlPlane,
+            hmacSecret: new TextEncoder().encode(config.social.quotaHmacSecret),
+          }),
+          cursorCodec: createSocialCursorCodec({
+            secret: new TextEncoder().encode(config.social.cursorHmacSecret),
+            ttlSeconds: config.social.cursorTtlSeconds,
+          }),
+        }));
+  const streamChannelGateway =
+    options.streamChannelGateway ??
+    (config.stream === null
+      ? createUnavailableStreamChannelGateway()
+      : createStreamChannelGateway(config.stream));
+  const chatChannelService =
+    options.chatChannelService ??
+    (database.chatChannels === undefined ||
+    (config.stream === null && options.streamChannelGateway === undefined)
+      ? createUnavailableChatChannelService()
+      : createChatChannelService({
+          repository:
+            database.chatChannels ?? createUnavailableChatChannelRepository(),
+          gateway: streamChannelGateway,
+        }));
   const walletBindingResolver =
     options.perpWalletBindingResolver ??
     (config.privy === null
@@ -558,6 +626,16 @@ export async function buildApp(
     app,
     authenticationHooks.authenticateLoopBearer,
     chatGroupAliasService,
+  );
+  registerSocialRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    socialService,
+  );
+  registerChatChannelRoutes(
+    app,
+    authenticationHooks.authenticateLoopBearer,
+    chatChannelService,
   );
   registerProfileRoutes(
     app,

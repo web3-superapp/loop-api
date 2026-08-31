@@ -83,6 +83,7 @@ export function createPublicAliasSearchService(input: {
         const items = records.slice(0, limit).map((record) =>
           Object.freeze({
             public_profile_id: record.publicProfileId,
+            profile_code: record.profileCode,
             alias: record.alias,
             avatar_ref: record.avatarRef,
           }),

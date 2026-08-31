@@ -144,12 +144,15 @@ describe("PostgreSQL Alias directory repository", () => {
       [publicProfileIdA, publicProfileIdB].sort(),
     );
     expect(first.map((item) => item.alias)).toEqual(["Alice", "Alice"]);
+    expect(new Set(first.map((item) => item.profileCode)).size).toBe(2);
     for (const item of first) {
       expect(Object.keys(item).sort()).toEqual([
         "alias",
         "avatarRef",
+        "profileCode",
         "publicProfileId",
       ]);
+      expect(item.profileCode).toMatch(/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{10}$/);
       expect(item.publicProfileId).not.toBe(requesterUserId);
       expect(item.publicProfileId).not.toBe(duplicateOwnerA);
       expect(item.publicProfileId).not.toBe(duplicateOwnerB);
@@ -236,7 +239,7 @@ describe("PostgreSQL Alias directory repository", () => {
         aliasPrefix: "꟱a",
         limit: 20,
       }),
-    ).resolves.toEqual([
+    ).resolves.toMatchObject([
       {
         publicProfileId,
         alias: "꟱am",
@@ -249,7 +252,7 @@ describe("PostgreSQL Alias directory repository", () => {
         aliasPrefix: "¨sam",
         limit: 20,
       }),
-    ).resolves.toEqual([
+    ).resolves.toMatchObject([
       {
         publicProfileId: spacingMarkPublicProfileId,
         alias: "¨sam",

@@ -18,6 +18,9 @@ implemented as independently verified slices:
   server-derived Stream user ID
 - owner-bound Profile/privacy reads and replacements with non-writing defaults,
   optimistic versions, bounded display fields, and fail-closed privacy defaults
+- immutable globally unique public Profile codes, separate fail-closed social
+  privacy, accepted-friend and pending-request reads, and UUID-idempotent
+  friend-request/decision operations with owner-bound encrypted cursors
 - atomic grouped Watchlist reads and replacements with server-derived order,
   snapshot versions, and bounded owner-local asset references
 - inactive price-alert definition CRUD, notification-preference persistence,
@@ -27,6 +30,10 @@ implemented as independently verified slices:
   require an existing bootstrap mapping, derive the Stream user ID server-side,
   enforce a fixed 3600-second lifetime, and use the exact licensed official
   server SDK when both provider credentials and persistent quota are configured
+- durable backend-created Stream group/direct operations with fixed explicit
+  channel IDs, exact friend/privacy rechecks, one provider attempt, and
+  owner-bound polling/reconciliation; real Development Stream evidence remains
+  a separate gate
 - a read-only `pnpm stream:verify` operator check that confirms the configured
   Development Stream key/secret pair through the official SDK while emitting no
   provider response data or credential values
@@ -171,10 +178,11 @@ their reviewed negative contract and return a sanitized 503 after
 authentication; there is still no trading execution path, Privy transfer
 execution, Firebase push path, physical-device integration, or production
 deployment. Interfaces, control-plane records, and quota primitives do not by
-themselves prove a live provider integration. Profile/Watchlist and inactive
-alert records are local PostgreSQL capabilities, but there is no price evaluator
-or scheduler, Firebase device-token/delivery path, notification inbox, or social
-graph.
+themselves prove a live provider integration. Profile/Watchlist, the narrow
+accepted-friend graph, and inactive alert records are local PostgreSQL
+capabilities, but there is no price evaluator or scheduler, Firebase
+device-token/delivery path, notification inbox, unfriend/block lifecycle, or
+complete external-launch social abuse control.
 
 The standalone worker makes bounded lifecycle updates in PostgreSQL, but its
 provider boundary remains read-only. Its retained Perp limit-order and dedicated
@@ -242,6 +250,12 @@ contract is recorded in
 are implemented in the runtime and generated OpenAPI with PostgreSQL and
 behavior coverage. This local implementation does not replace the required
 real Development-channel, Stream-permission, and physical-device evidence.
+The explicit friend-consent graph, social privacy, public Profile code, and
+backend-created fixed Stream channel contract is recorded in
+[`0025`](docs/decisions/0025-friend-graph-and-backend-created-stream-channels.md).
+The frontend-facing request, response, polling, and Stream SDK handoff contract
+is collected in
+[`docs/frontend-social-chat-api.md`](docs/frontend-social-chat-api.md).
 
 ## Quick start
 
@@ -295,12 +309,18 @@ The safe default listens on `http://127.0.0.1:3000` only.
   `https://api-dev.quant-dinger.cc`, and never prints returned identities or
   credentials. A passing run is backend evidence, not a Chat/Video connection.
 - `GET /v1/discovery/users` implements bounded, opt-in public-alias prefix
-  search. Four `/v1/chat/groups/*` operations resolve an existing `messaging`
-  channel, reserve one immutable per-group alias, and provide group-local alias
-  search. The interfaces, migration, generated OpenAPI, behavior tests, and
-  PostgreSQL repository checks are implemented. Real Stream
+  search. The existing group-persona operations resolve a `messaging` channel,
+  reserve one immutable per-group alias, and provide group-local alias search.
+  The interfaces, migration, generated OpenAPI, behavior tests, and PostgreSQL
+  repository checks are implemented. Real Stream
   membership/projection permissions and physical-phone behavior remain
   unverified.
+- `/v1/profile/social-privacy`, `/v1/friends`, `/v1/friend-requests`, and
+  `/v1/social/operations/*` expose the fail-closed consent and accepted-friend
+  slice. `/v1/chat/groups`, `/v1/chat/direct-channels`, and
+  `/v1/chat/operations/*` durably coordinate fixed Stream channels. Missing
+  social secrets or Stream provider inputs fail closed; local interfaces do not
+  prove the two-phone Development flow.
 - `GET`/`PUT /v1/profile`, `/v1/profile/privacy`, and `/v1/watchlist` expose
   only the current owner's local presentation/preferences. PUT uses
   `expected_version`; stale different state conflicts and an identical retry
@@ -385,6 +405,9 @@ runtime.
 - Own the narrow public-alias directory and immutable per-group alias records;
   use Stream membership as authority and Stream member custom data only as a
   server-written presentation projection
+- Own explicit friend-request consent, the accepted-friend projection, social
+  privacy, and durable fixed-ID group/direct channel coordination without
+  becoming a message or membership truth source
 - Hold server-only provider credentials and map provider failures to stable LOOP
   errors
 - Orchestrate approved Privy server operations without taking custody of user
@@ -415,8 +438,9 @@ and aggregate discovery experience.
 - No Mainnet, withdrawals, automated trading, Pay, or payment backend in the
   current phase
 - No custom matching engine, ledger, bridge, IM, RTC, or proprietary risk score
-- No custom relationship graph, wallet/QR discovery, alias-history or
-  cross-group-correlation surface, price-alert scheduler/evaluator,
+- No social surface beyond the narrow accepted-friend graph: no unfriend,
+  blocking, wallet/QR discovery, alias history, cross-group correlation, or
+  backend group-member management; no price-alert scheduler/evaluator,
   notification inbox, or Firebase delivery claim in the current runtime
 - No custom Chat or media transport; communication uses the selected Stream
   products through thin adapters

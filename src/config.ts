@@ -48,6 +48,8 @@ const environmentSchema = z
     STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     STREAM_TOKEN_USER_LIMIT_PER_MINUTE: positiveIntegerString(1, 10_000),
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE: positiveIntegerString(1, 100_000),
+    SOCIAL_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    SOCIAL_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     PERP_READ_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_PRIVATE_READS_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
@@ -79,6 +81,18 @@ const environmentSchema = z
         message:
           "STREAM_API_KEY and STREAM_API_SECRET must be configured together",
         path: ["STREAM_API_KEY"],
+      });
+    }
+
+    const hasSocialCursorSecret = value.SOCIAL_CURSOR_HMAC_SECRET !== undefined;
+    const hasSocialQuotaSecret = value.SOCIAL_QUOTA_HMAC_SECRET !== undefined;
+
+    if (hasSocialCursorSecret !== hasSocialQuotaSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "SOCIAL_CURSOR_HMAC_SECRET and SOCIAL_QUOTA_HMAC_SECRET must be configured together",
+        path: ["SOCIAL_CURSOR_HMAC_SECRET"],
       });
     }
 
@@ -167,6 +181,12 @@ export interface StreamTokenQuotaConfig {
   readonly ipCapacity: number;
 }
 
+export interface SocialConfig {
+  readonly cursorHmacSecret: string;
+  readonly quotaHmacSecret: string;
+  readonly cursorTtlSeconds: 600;
+}
+
 export interface PerpReadCursorConfig {
   readonly hmacSecret: string;
   readonly ttlSeconds: 600;
@@ -195,6 +215,7 @@ export interface AppConfig {
   readonly privy: PrivyConfig | null;
   readonly stream: StreamConfig | null;
   readonly streamTokenQuota: StreamTokenQuotaConfig | null;
+  readonly social: SocialConfig | null;
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
   readonly serviceName: "loop-api";
@@ -288,6 +309,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] ?? "10",
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE:
       environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] ?? "60",
+    SOCIAL_CURSOR_HMAC_SECRET: environment["SOCIAL_CURSOR_HMAC_SECRET"],
+    SOCIAL_QUOTA_HMAC_SECRET: environment["SOCIAL_QUOTA_HMAC_SECRET"],
     PERP_READ_CURSOR_HMAC_SECRET: environment["PERP_READ_CURSOR_HMAC_SECRET"],
     HYPERLIQUID_PRIVATE_READS_ENABLED:
       environment["HYPERLIQUID_PRIVATE_READS_ENABLED"] ?? "false",
@@ -343,6 +366,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
           userCapacity: parsed.data.STREAM_TOKEN_USER_LIMIT_PER_MINUTE,
           ipCapacity: parsed.data.STREAM_TOKEN_IP_LIMIT_PER_MINUTE,
         });
+  const social =
+    parsed.data.SOCIAL_CURSOR_HMAC_SECRET !== undefined &&
+    parsed.data.SOCIAL_QUOTA_HMAC_SECRET !== undefined
+      ? Object.freeze({
+          cursorHmacSecret: parsed.data.SOCIAL_CURSOR_HMAC_SECRET,
+          quotaHmacSecret: parsed.data.SOCIAL_QUOTA_HMAC_SECRET,
+          cursorTtlSeconds: 600 as const,
+        })
+      : null;
   const perpReadCursor =
     parsed.data.PERP_READ_CURSOR_HMAC_SECRET === undefined
       ? null
@@ -381,6 +413,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     privy,
     stream,
     streamTokenQuota,
+    social,
     perpReadCursor,
     hyperliquidPrivateReads,
     serviceName: "loop-api",

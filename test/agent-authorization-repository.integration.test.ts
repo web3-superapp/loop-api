@@ -30,6 +30,15 @@ const agentAddress = "0x3333333333333333333333333333333333333333";
 
 const truncateAll = `
   truncate table
+    public.chat_operation_events,
+    public.communication_group_members,
+    public.direct_channels,
+    public.social_operation_events,
+    public.social_operations,
+    public.friendships,
+    public.friend_requests,
+    public.social_privacy_preferences,
+    public.chat_operations,
     public.price_alert_events,
     public.notification_preferences,
     public.notification_preference_versions,

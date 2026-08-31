@@ -58,6 +58,39 @@ describe("committed OpenAPI artifact", () => {
       document.paths["/v1/chat/groups/{group_id}/me/alias"]?.["put"];
     const searchGroupAliases =
       document.paths["/v1/chat/groups/{group_id}/aliases"]?.["get"];
+    const socialAndChatOperations = [
+      [
+        document.paths["/v1/profile/social-privacy"]?.["get"],
+        "getCurrentSocialPrivacy",
+      ],
+      [
+        document.paths["/v1/profile/social-privacy"]?.["put"],
+        "replaceCurrentSocialPrivacy",
+      ],
+      [document.paths["/v1/friends"]?.["get"], "listFriends"],
+      [document.paths["/v1/friends/search"]?.["get"], "searchFriendsByAlias"],
+      [document.paths["/v1/friend-requests"]?.["post"], "sendFriendRequest"],
+      [document.paths["/v1/friend-requests"]?.["get"], "listFriendRequests"],
+      [
+        document.paths["/v1/friend-requests/{friend_request_id}/decision"]?.[
+          "post"
+        ],
+        "decideFriendRequest",
+      ],
+      [
+        document.paths["/v1/social/operations/{operation_id}"]?.["get"],
+        "getSocialOperation",
+      ],
+      [document.paths["/v1/chat/groups"]?.["post"], "createChatGroup"],
+      [
+        document.paths["/v1/chat/direct-channels"]?.["post"],
+        "getOrCreateDirectChatChannel",
+      ],
+      [
+        document.paths["/v1/chat/operations/{operation_id}"]?.["get"],
+        "getChatOperation",
+      ],
+    ] as const;
     const personalizationOperations = [
       [document.paths["/v1/profile"]?.["get"], "getCurrentProfile"],
       [document.paths["/v1/profile"]?.["put"], "replaceCurrentProfile"],
@@ -245,11 +278,18 @@ describe("committed OpenAPI artifact", () => {
       "/v1/alerts/history",
       "/v1/alerts/{alert_id}",
       "/v1/bootstrap",
+      "/v1/chat/direct-channels",
+      "/v1/chat/groups",
       "/v1/chat/groups/resolve",
       "/v1/chat/groups/{group_id}/aliases",
       "/v1/chat/groups/{group_id}/me/alias",
+      "/v1/chat/operations/{operation_id}",
       "/v1/chat/token",
       "/v1/discovery/users",
+      "/v1/friend-requests",
+      "/v1/friend-requests/{friend_request_id}/decision",
+      "/v1/friends",
+      "/v1/friends/search",
       "/v1/notification-preferences",
       "/v1/perp/account",
       "/v1/perp/agent-authorizations",
@@ -266,6 +306,8 @@ describe("committed OpenAPI artifact", () => {
       "/v1/perp/wallet-binding",
       "/v1/profile",
       "/v1/profile/privacy",
+      "/v1/profile/social-privacy",
+      "/v1/social/operations/{operation_id}",
       "/v1/spot/agent-authorizations",
       "/v1/spot/agent-authorizations/{authorization_id}",
       "/v1/spot/agent-authorizations/{authorization_id}/signatures",
@@ -288,7 +330,7 @@ describe("committed OpenAPI artifact", () => {
     expect(operationIds.every((operationId) => operationId !== undefined)).toBe(
       true,
     );
-    expect(operationIds).toHaveLength(57);
+    expect(operationIds).toHaveLength(68);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapCurrentUser",
@@ -343,7 +385,7 @@ describe("committed OpenAPI artifact", () => {
     ]);
     expect(publicAliasSearch).toHaveProperty(
       "responses.200.content.application/json.schema.properties.items.items.required",
-      ["public_profile_id", "alias", "avatar_ref"],
+      ["public_profile_id", "profile_code", "alias", "avatar_ref"],
     );
     expect(publicAliasSearch).toHaveProperty(
       "responses.429.content.application/json.schema.properties.code.enum",
@@ -392,6 +434,38 @@ describe("committed OpenAPI artifact", () => {
       "responses.200.content.application/json.schema.properties.items.items.required",
       ["group_alias_id", "alias"],
     );
+    for (const [operation, operationId] of socialAndChatOperations) {
+      expect(operation).toMatchObject({
+        operationId,
+        security: [{ privyBearer: [] }],
+      });
+      expect(operation).toHaveProperty(
+        "responses.200.headers.cache-control.schema.const",
+        "no-store",
+      );
+      const serialized = JSON.stringify(operation);
+      for (const forbidden of [
+        "owner_user_id",
+        "privy_user_id",
+        "stream_user_id",
+        "wallet_address",
+        "api_secret",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+    for (const operation of [
+      document.paths["/v1/friend-requests"]?.["post"],
+      document.paths["/v1/friend-requests/{friend_request_id}/decision"]?.[
+        "post"
+      ],
+      document.paths["/v1/chat/groups"]?.["post"],
+      document.paths["/v1/chat/direct-channels"]?.["post"],
+    ]) {
+      expect(operation?.parameters?.map(({ name }) => name)).toContain(
+        "idempotency-key",
+      );
+    }
     for (const operation of [
       publicAliasSearch,
       resolveChatGroup,

@@ -21,6 +21,7 @@ import { registerDiscoveryRoutes } from "../src/routes/discovery.js";
 
 const ownerUserId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const resultProfileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const resultProfileCode = "0000000001";
 const privyUserId = "did:privy:discovery-route-user";
 const streamUserId = "loop_6d12a86e413447e69312c5ef75a30f55";
 const validAccessToken = "header.payload.signature";
@@ -31,6 +32,7 @@ const safeResource = Object.freeze({
   items: Object.freeze([
     Object.freeze({
       public_profile_id: resultProfileId,
+      profile_code: resultProfileCode,
       alias: "小鹿",
       avatar_ref: "avatar:profiles/deer",
     }),
@@ -157,7 +159,7 @@ describe("Discovery routes", () => {
     ]);
     expect(
       Object.keys(response.json<{ items: object[] }>().items[0]!).sort(),
-    ).toEqual(["alias", "avatar_ref", "public_profile_id"]);
+    ).toEqual(["alias", "avatar_ref", "profile_code", "public_profile_id"]);
     expectOperationalHeaders(response);
     expect(input.verifyAccessToken).toHaveBeenCalledWith(validAccessToken);
     expect(input.findByPrivyUserId).toHaveBeenCalledWith(privyUserId);
@@ -195,6 +197,7 @@ describe("Discovery routes", () => {
       items: [
         {
           public_profile_id: resultProfileId,
+          profile_code: resultProfileCode,
           alias: "Alias",
           avatar_ref: null,
           internal_user_id: ownerUserId,
@@ -218,6 +221,7 @@ describe("Discovery routes", () => {
       items: [
         {
           public_profile_id: resultProfileId,
+          profile_code: resultProfileCode,
           alias: "Alias",
           avatar_ref: null,
         },

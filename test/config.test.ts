@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     expect(config.privy).toBeNull();
     expect(config.stream).toBeNull();
     expect(config.streamTokenQuota).toBeNull();
+    expect(config.social).toBeNull();
     expect(config.perpReadCursor).toBeNull();
     expect(config.hyperliquidPrivateReads).toBeNull();
     expect(config.serviceName).toBe("loop-api");
@@ -124,6 +125,55 @@ describe("loadConfig", () => {
       loadConfig(environment);
     } catch (error) {
       expect(String(error)).not.toContain("weak-secret");
+    }
+  });
+
+  it("enables social cursors and mutation quotas only as a strong pair", () => {
+    const environment = validEnvironment();
+    environment["SOCIAL_CURSOR_HMAC_SECRET"] = "c".repeat(32);
+    environment["SOCIAL_QUOTA_HMAC_SECRET"] = "q".repeat(32);
+
+    const config = loadConfig(environment);
+
+    expect(config.social).toEqual({
+      cursorHmacSecret: "c".repeat(32),
+      quotaHmacSecret: "q".repeat(32),
+      cursorTtlSeconds: 600,
+    });
+    expect(Object.isFrozen(config.social)).toBe(true);
+  });
+
+  it.each([
+    ["SOCIAL_CURSOR_HMAC_SECRET", "c".repeat(32)],
+    ["SOCIAL_QUOTA_HMAC_SECRET", "q".repeat(32)],
+  ] as const)(
+    "rejects a partial social secret pair without leaking %s",
+    (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+
+      expect(() => loadConfig(environment)).toThrowError(
+        /SOCIAL_CURSOR_HMAC_SECRET and SOCIAL_QUOTA_HMAC_SECRET must be configured together/,
+      );
+      try {
+        loadConfig(environment);
+      } catch (error) {
+        expect(String(error)).not.toContain(value);
+      }
+    },
+  );
+
+  it("rejects weak social secrets without echoing them", () => {
+    const environment = validEnvironment();
+    environment["SOCIAL_CURSOR_HMAC_SECRET"] = "weak-cursor";
+    environment["SOCIAL_QUOTA_HMAC_SECRET"] = "weak-quota";
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+    try {
+      loadConfig(environment);
+    } catch (error) {
+      expect(String(error)).not.toContain("weak-cursor");
+      expect(String(error)).not.toContain("weak-quota");
     }
   });
 

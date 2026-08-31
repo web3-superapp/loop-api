@@ -61,6 +61,7 @@ export type GroupAliasProjectionState = "pending" | "confirmed";
 
 export interface PublicAliasSearchItem {
   readonly public_profile_id: string;
+  readonly profile_code: string;
   readonly alias: string;
   readonly avatar_ref: string | null;
 }

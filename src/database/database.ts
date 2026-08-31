@@ -5,8 +5,10 @@ import type {
   InternalUser,
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
+import type { ChatChannelRepository } from "../features/communication/chat-channel-repository.js";
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
+import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
 import {
   createPostgresAlertRepository,
   type AlertRepository,
@@ -36,6 +38,10 @@ import {
   createPostgresProfileRepository,
   type ProfileRepository,
 } from "./profile-repository.js";
+import {
+  createPostgresSocialRepository,
+  type SocialRepository,
+} from "./social-repository.js";
 import { latestMigrationName, requiredDatabaseRelations } from "./schema.js";
 import {
   createPostgresSpotAgentAuthorizationRepository,
@@ -58,6 +64,8 @@ const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 export interface Database {
   readonly internalUsers: InternalUserRepository;
   readonly aliasDirectory?: AliasDirectoryRepository;
+  readonly social?: SocialRepository;
+  readonly chatChannels?: ChatChannelRepository;
   readonly controlPlane: ControlPlaneRepository;
   readonly perpWalletBindings: PerpWalletBindingRepository;
   readonly perpIntents: PerpIntentRepository;
@@ -186,10 +194,14 @@ export function createPostgresDatabase(
   const watchlists = createPostgresWatchlistRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
+  const social = createPostgresSocialRepository(pool);
+  const chatChannels = createPostgresChatChannelRepository(pool);
 
   return {
     internalUsers,
     aliasDirectory,
+    social,
+    chatChannels,
     controlPlane,
     perpWalletBindings,
     perpIntents,

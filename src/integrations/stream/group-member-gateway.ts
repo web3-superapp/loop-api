@@ -185,6 +185,49 @@ function isProviderNotFound(error: unknown): boolean {
   return error["metadata"]["responseCode"] === 404;
 }
 
+function validateGroupChannelState(value: unknown, channelId: string): void {
+  if (!isRecord(value) || !isRecord(value["channel"])) {
+    return unavailable();
+  }
+  const channel = value["channel"];
+  if (
+    channel["id"] !== channelId ||
+    channel["type"] !== streamChannelType ||
+    channel["cid"] !== `${streamChannelType}:${channelId}` ||
+    !isRecord(channel["custom"])
+  ) {
+    return unavailable();
+  }
+  const custom = channel["custom"];
+  const kind = custom["loop_channel_kind"];
+  const schemaVersion = custom["loop_channel_schema_version"];
+  if (kind === undefined && schemaVersion === undefined) {
+    return;
+  }
+  if ((kind !== "group" && kind !== "direct") || schemaVersion !== 1) {
+    return unavailable();
+  }
+  if (kind === "direct") {
+    throw new StreamGroupMemberNotFoundError();
+  }
+}
+
+async function assertGroupChannelState(
+  client: StreamClient,
+  channelId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const response = await client.chat.channel(streamChannelType, channelId).get({
+    state: false,
+    members_limit: 0,
+    messages_limit: 0,
+    watchers_limit: 0,
+  });
+  signal.throwIfAborted();
+  validateGroupChannelState(response, channelId);
+}
+
 function sanitizeProviderFailure(error: unknown, signal: AbortSignal): never {
   signal.throwIfAborted();
   if (isProviderNotFound(error)) {
@@ -293,6 +336,8 @@ export function createStreamGroupMemberGateway(
     ): Promise<void> {
       const input = parseMemberInput(rawInput);
       try {
+        await assertGroupChannelState(client, input.channelId, input.signal);
+        input.signal.throwIfAborted();
         const response = await client.chat
           .channel(streamChannelType, input.channelId)
           .queryMembers({
@@ -332,6 +377,8 @@ export function createStreamGroupMemberGateway(
         return new Set<string>();
       }
       try {
+        await assertGroupChannelState(client, input.channelId, input.signal);
+        input.signal.throwIfAborted();
         const response = await client.chat
           .channel(streamChannelType, input.channelId)
           .queryMembers({
@@ -363,6 +410,9 @@ export function createStreamGroupMemberGateway(
         }
         return current;
       } catch (error) {
+        if (error instanceof StreamGroupMemberNotFoundError) {
+          throw error;
+        }
         return sanitizeProviderFailure(error, input.signal);
       }
     },
@@ -370,6 +420,8 @@ export function createStreamGroupMemberGateway(
     async projectAlias(rawInput: ProjectStreamGroupAliasInput): Promise<void> {
       const input = parseProjectionInput(rawInput);
       try {
+        await assertGroupChannelState(client, input.channelId, input.signal);
+        input.signal.throwIfAborted();
         const response = await client.chat
           .channel(streamChannelType, input.channelId)
           .updateMemberPartial({
@@ -383,6 +435,9 @@ export function createStreamGroupMemberGateway(
         input.signal.throwIfAborted();
         validateProjectionResponse(response, input);
       } catch (error) {
+        if (error instanceof StreamGroupMemberNotFoundError) {
+          throw error;
+        }
         return sanitizeProviderFailure(error, input.signal);
       }
     },

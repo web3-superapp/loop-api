@@ -24,11 +24,13 @@ function dependencies() {
     Promise.resolve([
       {
         publicProfileId: "28f34597-8bbd-4835-bff7-f7db654333b5",
+        profileCode: "0000000001",
         alias: "Alice",
         avatarRef: "avatar:alice/main",
       },
       {
         publicProfileId: "10a420b6-5812-4574-a914-a126417d55af",
+        profileCode: "0000000002",
         alias: "Alicia",
         avatarRef: null,
       },
@@ -65,6 +67,7 @@ describe("public alias search service", () => {
       items: [
         {
           public_profile_id: "28f34597-8bbd-4835-bff7-f7db654333b5",
+          profile_code: "0000000001",
           alias: "Alice",
           avatar_ref: "avatar:alice/main",
         },

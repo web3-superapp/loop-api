@@ -26,6 +26,7 @@ describe("database schema readiness contract", () => {
   it("requires every relation introduced through the current migration head", () => {
     expect(requiredDatabaseRelations).toEqual([
       "public.loop_users",
+      "public.profile_code_sequence",
       "public.provider_operations",
       "public.idempotency_records",
       "public.audit_events",
@@ -50,6 +51,15 @@ describe("database schema readiness contract", () => {
       "public.privacy_preferences",
       "public.communication_groups",
       "public.group_alias_reservations",
+      "public.social_privacy_preferences",
+      "public.friend_requests",
+      "public.friendships",
+      "public.social_operations",
+      "public.social_operation_events",
+      "public.chat_operations",
+      "public.chat_operation_events",
+      "public.communication_group_members",
+      "public.direct_channels",
       "public.watchlist_versions",
       "public.watchlist_groups",
       "public.watchlist_items",

@@ -132,50 +132,107 @@ credential-chain portion without printing identities or tokens, but its
 existence is not evidence until an operator supplies a current phone-issued
 token and the run passes.
 
-## Implemented alias discovery and group-persona interfaces
+## Implemented alias, friend, and Chat coordination interfaces
 
-Decision 0024 approves the exact authenticated routes below. Their migrations,
-runtime schemas, generated OpenAPI, behavior tests, and PostgreSQL integration
-tests are implemented. Local implementation does not by itself close the
-separate real-Stream and physical-device evidence gates.
+Decisions 0024 and 0025 approve the authenticated routes below. Their additive
+PostgreSQL state, runtime schemas, generated OpenAPI, behavior tests, and
+repository integration tests establish the local interface. They do not close
+the separate real-Stream, Stream-permission, or physical-device evidence gates.
 
-| Method and path                           | Key contract                                                                                                                         | Interface     | Capability         |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------ |
-| `GET /v1/discovery/users`                 | `alias_prefix` plus optional 1-20 `limit`; discoverable non-null public aliases; items expose only public-profile ID/alias/avatar    | `implemented` | `implemented`      |
-| `POST /v1/chat/groups/resolve`            | Resolve one existing fixed `messaging` Stream channel only after current-member verification; never create a channel or add a member | `implemented` | `blocked-provider` |
-| `GET /v1/chat/groups/{group_id}/me/alias` | Current-member-only read of the caller's retained immutable alias                                                                    | `implemented` | `blocked-provider` |
-| `PUT /v1/chat/groups/{group_id}/me/alias` | First durable reservation wins; same-value retry; normalized name unique in group; projection is `pending` or `confirmed`            | `implemented` | `blocked-provider` |
-| `GET /v1/chat/groups/{group_id}/aliases`  | Current-member-only prefix search; Stream rechecks requester and returned candidates; items expose only alias ID/alias               | `implemented` | `blocked-provider` |
+### Public Alias and immutable group persona
 
-Both search routes require a `unicode17_nfkc_lower_ws_v1` normalized prefix of
-at least two Unicode code points, default to and cap results at 20, perform
-prefix matching only, and return neither a total nor a pagination cursor.
-Public aliases may be
-duplicated; the authenticated caller is omitted. Group results also omit the
-requester, departed members, and `pending` projections. A public item contains
-exactly `public_profile_id`, `alias`, and
-nullable `avatar_ref`; a group item contains exactly `group_alias_id` and
-`alias`. No response contains an internal/Privy/Stream user ID, wallet or
-address, provider channel ID, another alias, memberships, or a cross-group
-correlation field.
+| Method and path                           | Key contract                                                                                                                                  | Interface     | Capability         |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
+| `GET /v1/discovery/users`                 | `alias_prefix` plus optional 1-20 `limit`; discoverable non-null public aliases; items expose public-profile ID/code, alias, and avatar       | `implemented` | `implemented`      |
+| `POST /v1/chat/groups/resolve`            | Resolve one existing fixed `messaging` Stream channel only after current-member verification; reject marked direct; never create/add a member | `implemented` | `blocked-provider` |
+| `GET /v1/chat/groups/{group_id}/me/alias` | Current-member-only read of the caller's retained immutable group Alias                                                                       | `implemented` | `blocked-provider` |
+| `PUT /v1/chat/groups/{group_id}/me/alias` | First durable reservation wins; same-value retry; normalized name unique in group; Stream projection is `pending` or `confirmed`              | `implemented` | `blocked-provider` |
+| `GET /v1/chat/groups/{group_id}/aliases`  | Current-member-only prefix search; Stream rechecks requester and returned candidates; items expose only group Alias ID/Alias                  | `implemented` | `blocked-provider` |
+
+Public and group searches require a `unicode17_nfkc_lower_ws_v1` normalized
+prefix of at least two Unicode code points, default to and cap results at 20,
+perform prefix matching only, and return neither a total nor a pagination
+cursor. Public aliases may be duplicated; the authenticated caller is omitted.
+The immutable ten-character `profile_code` distinguishes duplicate public
+aliases but is never accepted as a command target or projected into Stream.
+Group results omit the requester, departed members, and `pending` projections,
+and expose no public-profile/code, internal/Privy/Stream user, wallet, channel,
+membership, or cross-group correlation field.
 
 Each search atomically reserves independent public- or group-search
-user-per-minute, canonical-IP-per-minute, and user-per-day buckets. Subjects use
+user-per-minute, canonical-IP-per-minute, and user-per-day buckets. Public Alias
+discovery and friend search share the same public-search budget. Subjects use
 the existing server-only quota HMAC secret under a separate versioned domain;
-raw users and IPs are not stored. Missing quota capability fails closed, and no
-total/cursor endpoint can be used to bypass the bounded query. Public capacities
-are 30/60/300 for user-minute/IP-minute/user-day; group capacities are
-60/120/600 for the same buckets.
+raw users and IPs are not stored. Missing quota capability fails closed. Public
+capacities are 30/60/300 for user-minute/IP-minute/user-day; group capacities
+are 60/120/600.
 
-LOOP PostgreSQL is canonical for group aliases. A group alias remains reserved
-after its owner leaves and is restored on rejoin; it is omitted from search
-while that owner is not a current member. Stream member custom data is only a
-server-written presentation projection. Before this capability can leave
-`blocked-provider`, a real Development channel and accounts must prove member
-verification, projection, leave/rejoin, candidate filtering, and permission
-behavior. Direct Stream user search and client mutation of server-reserved
-member fields must be disabled and verified before launch. Stable Stream user
-IDs mean these aliases provide UI pseudonyms, not strong unlinkability.
+LOOP PostgreSQL is canonical for group aliases. A group Alias remains reserved
+after its owner leaves and is restored on rejoin; Stream member custom data is
+only a server-written presentation projection. Stable Stream user IDs make
+these aliases UI pseudonyms, not strong unlinkability.
+
+### Social privacy, friends, and durable local commands
+
+| Method and path                                         | Key contract                                                                                                                          | Interface     | Capability    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------- |
+| `GET /v1/profile/social-privacy`                        | Owner-only version; missing row is version 0 with friend requests, group invites, and direct messages all disabled                    | `implemented` | `implemented` |
+| `PUT /v1/profile/social-privacy`                        | Full CAS replacement; no `Idempotency-Key`; exact enabled/disabled and friends/disabled preferences                                   | `implemented` | `implemented` |
+| `GET /v1/friends`                                       | Accepted friends with public-profile ID/code, nullable current presentation, acceptance time, and encrypted owner-bound keyset cursor | `implemented` | `implemented` |
+| `GET /v1/friends/search`                                | Shared-quota public Alias prefix search plus none, outgoing-pending, incoming-pending, or friend relationship state                   | `implemented` | `implemented` |
+| `POST /v1/friend-requests`                              | UUIDv4 command key equals operation ID; target only by public-profile ID; explicit pending request, no reverse-request auto-accept    | `implemented` | `implemented` |
+| `GET /v1/friend-requests`                               | Incoming or outgoing pending requests only, with owner/filter/page-size-bound encrypted cursor                                        | `implemented` | `implemented` |
+| `POST /v1/friend-requests/{friend_request_id}/decision` | Recipient-only idempotent accept/reject; first decision wins; only accept creates the friendship                                      | `implemented` | `implemented` |
+| `GET /v1/social/operations/{operation_id}`              | Owner-bound terminal local result; unknown/wrong owner is the same 404                                                                | `implemented` | `implemented` |
+
+`public_profile_id` remains the only command target. `profile_code` is immutable
+presentation data, while Alias stays mutable and non-unique. Missing social
+privacy is fail closed. Pending friend requests expire after seven days;
+rejection applies a 24-hour pair cooldown. Cursors currently expire after ten
+minutes and are bound to owner, route, direction/status filter, and original
+page size. A cursor request cannot also choose a new `limit`.
+
+Social command POSTs require exactly one raw lowercase UUIDv4
+`Idempotency-Key`. That UUID is the public operation ID. An exact replay returns
+the original result; reuse with a different digest conflicts. Local business
+failures can also be journaled as terminal failed operations, while failures
+before the durable claim (authentication, quota, or unavailable service) need
+not produce an operation.
+
+### Backend-created fixed Stream channels
+
+| Method and path                          | Key contract                                                                                                                           | Interface     | Capability         |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
+| `POST /v1/chat/groups`                   | Two through twenty-nine unique accepted friends plus caller; fixed persisted group channel ID; exact target privacy/friendship recheck | `implemented` | `blocked-provider` |
+| `POST /v1/chat/direct-channels`          | One accepted friend; unordered pair converges on one fixed direct CID; exact target privacy/friendship recheck                         | `implemented` | `blocked-provider` |
+| `GET /v1/chat/operations/{operation_id}` | Owner-bound status/reconciliation for group or direct; nonterminal 202 with `Location`/`Retry-After`, terminal 200                     | `implemented` | `blocked-provider` |
+
+Both POSTs use a UUIDv4 `Idempotency-Key` equal to `operation_id`. LOOP persists
+the operation, intended membership, and explicit Stream ID before the one
+channel-creation attempt. The required bounded `{id}`-only Stream user upsert is
+a separate provider mutation and never carries LOOP profile data. Ambiguous
+channel results read the same ID and never allocate a second channel. Public
+states are `pending`, `submitting`, `reconciling`, `succeeded`, `failed`, and
+`operator_required`. Success returns a complete
+`messaging:<fixed-id>` CID; group success additionally returns the opaque LOOP
+`group_id` required by the group-Alias APIs.
+
+Immediately before the provider call, every target must still be an accepted
+friend and must allow `group_invites=friends` or `direct_messages=friends` as
+appropriate. A failed final recheck atomically terminates the persisted
+operation as `failed/target_unavailable`, marks its still-local mapping
+cancelled, and records zero provider attempts. A later restored target requires
+a new operation key; exact replay retains the original failure. Stream receives
+only server-derived user IDs, fixed channel kind and schema fields, and the
+group name. It receives no Alias, Profile code, public-profile ID, wallet, or
+Privy subject. No group Alias is preclaimed.
+
+Before this capability can leave `blocked-provider`, real Development accounts
+must prove exact membership, direct convergence, group creation, reconciliation,
+group Alias projection/leave/rejoin, and client permission denial. Message,
+history, read, typing, presence, membership, moderation, and call truth stays in
+the official Stream SDK. The detailed frontend contract and polling flow are in
+[`frontend-social-chat-api.md`](frontend-social-chat-api.md).
 
 ## Approved Hyperliquid native Spot Testnet contract
 
@@ -498,11 +555,13 @@ withdrawals, automated trading or trading automation, HIP-3, trigger orders,
 TP/SL, TWAP, builder fees, and public Hyperliquid market proxying.
 
 Push device registration, a notification inbox, alert activation/evaluation,
-Support, general public-profile detail, following/followers/blocklist, wallet or
-QR search, alias history, cross-group correlation, and interactive
-multiple-wallet selection have no approved complete runtime contract. The exact
-alias discovery and group-persona routes in Decision 0024 are the only approved
-Search/social exception; they do not imply a relationship graph. Privy
-OTP/wallet creation, Stream messages/calls/moderation, and provider `/info`,
-`/exchange`, or `/ws` operations remain official SDK/provider surfaces rather
-than client-callable LOOP routes.
+Support, general public-profile detail, following/followers, blocklist,
+unfriend, wallet or QR search, alias history, cross-group correlation,
+backend-managed group membership, and interactive multiple-wallet selection
+have no approved complete runtime contract. Decisions 0024 and 0025 approve
+only the exact Alias, explicit friend-consent, accepted-friend, and
+backend-created group/direct surfaces above; they do not imply follow/block,
+relationship revocation, contacts, or arbitrary social lookup. Privy OTP/wallet
+creation, Stream messages/calls/moderation, and provider `/info`, `/exchange`,
+or `/ws` operations remain official SDK/provider surfaces rather than
+client-callable LOOP routes.
