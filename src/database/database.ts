@@ -5,10 +5,12 @@ import type {
   InternalUser,
   InternalUserRepository,
 } from "../features/identity/internal-user-repository.js";
+import type { DeviceSessionRepository } from "../features/session/device-session-repository.js";
 import type { ChatChannelRepository } from "../features/communication/chat-channel-repository.js";
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
+import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
 import {
   createPostgresAlertRepository,
   type AlertRepository,
@@ -63,6 +65,7 @@ const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 
 export interface Database {
   readonly internalUsers: InternalUserRepository;
+  readonly deviceSessions: DeviceSessionRepository;
   readonly aliasDirectory?: AliasDirectoryRepository;
   readonly social?: SocialRepository;
   readonly chatChannels?: ChatChannelRepository;
@@ -179,6 +182,7 @@ export function createPostgresDatabase(
     },
   };
   const controlPlane = createPostgresControlPlaneRepository(pool);
+  const deviceSessions = createPostgresDeviceSessionRepository(pool);
   const perpWalletBindings = createPostgresPerpWalletBindingRepository(pool);
   const perpIntents = createPostgresPerpIntentRepository(pool);
   const perpReconciliation = createPostgresPerpReconciliationRepository(pool);
@@ -199,6 +203,7 @@ export function createPostgresDatabase(
 
   return {
     internalUsers,
+    deviceSessions,
     aliasDirectory,
     social,
     chatChannels,

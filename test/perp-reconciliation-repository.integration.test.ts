@@ -77,6 +77,9 @@ const truncateAll = `
     public.provider_operations,
     public.idempotency_records,
     public.issuance_rate_records,
+    public.device_session_events,
+    public.device_session_commands,
+    public.device_sessions,
     public.loop_users
 `;
 

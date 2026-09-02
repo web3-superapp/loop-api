@@ -26,6 +26,9 @@ describe("database schema readiness contract", () => {
   it("requires every relation introduced through the current migration head", () => {
     expect(requiredDatabaseRelations).toEqual([
       "public.loop_users",
+      "public.device_sessions",
+      "public.device_session_commands",
+      "public.device_session_events",
       "public.profile_code_sequence",
       "public.provider_operations",
       "public.idempotency_records",

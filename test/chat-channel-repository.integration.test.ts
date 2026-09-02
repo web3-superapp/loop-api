@@ -41,7 +41,10 @@ describe("PostgreSQL Chat channel repository", () => {
         public.social_operation_events,
         public.social_operations,
         public.friendships,
-        public.friend_requests
+        public.friend_requests,
+        public.device_session_events,
+        public.device_session_commands,
+        public.device_sessions
     `);
     const ids = [...ownedUserIds];
     if (ids.length === 0) {

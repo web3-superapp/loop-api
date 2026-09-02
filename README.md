@@ -8,6 +8,9 @@ The runtime foundation and currently approved backend-only HTTP interfaces are
 implemented as independently verified slices:
 
 - Node.js 24 LTS, TypeScript, Fastify, and generated OpenAPI 3.1
+- a frozen `/v1` compatibility contract plus an independent camelCase `/v2`
+  contract, error envelope, client policy, capability projection, and generated
+  OpenAPI artifact
 - fail-closed environment validation and redacted structured logs
 - process liveness and PostgreSQL-backed readiness endpoints
 - PostgreSQL 17 local development through Docker Compose
@@ -16,6 +19,10 @@ implemented as independently verified slices:
 - a reusable Native Privy Bearer principal boundary for protected routes
 - idempotent `POST /v1/bootstrap` mapping to an opaque internal UUID and a
   server-derived Stream user ID
+- Privy-authoritative V2 registration/session routes: idempotent
+  `POST /v2/session/bootstrap`, `GET /v2/account/me`, and owner-bound
+  `POST /v2/session/logout`; device sessions are durable audit projections and
+  never replace a current Privy Bearer token
 - owner-bound Profile/privacy reads and replacements with non-writing defaults,
   optimistic versions, bounded display fields, and fail-closed privacy defaults
 - immutable globally unique public Profile codes, separate fail-closed social
@@ -132,6 +139,9 @@ implemented as independently verified slices:
 This is still **not a complete live provider integration**. The Privy server
 verification boundary is implemented and can be enabled with local credentials,
 but a real phone-issued token has not yet passed the physical-device gate. The
+V2 account/session slice is implemented and PostgreSQL-backed, but its four
+Privy entry methods and logout sequence likewise remain pending physical-device
+evidence; a local device-session record never authenticates a request. The
 Stream SDK license gate is accepted, the exact SDK is installed, and the
 credential-aware default issuer is composed. The configured Development
 key/secret pair passes the official read-only App lookup locally, but no real
@@ -256,6 +266,13 @@ backend-created fixed Stream channel contract is recorded in
 The frontend-facing request, response, polling, and Stream SDK handoff contract
 is collected in
 [`docs/frontend-social-chat-api.md`](docs/frontend-social-chat-api.md).
+The V2 compatibility freeze, BSC product boundary, and Privy device-session
+contract are recorded in Decisions
+[`0026`](docs/decisions/0026-v2-bsc-product-baseline.md) and
+[`0027`](docs/decisions/0027-v2-privy-account-device-sessions.md). The shared V2
+wire rules are in [`docs/api-v2-conventions.md`](docs/api-v2-conventions.md),
+and the first frontend integration handoff is
+[`docs/frontend-v2-session-api.md`](docs/frontend-v2-session-api.md).
 
 ## Quick start
 
@@ -295,6 +312,13 @@ The safe default listens on `http://127.0.0.1:3000` only.
 
 - `GET /health/live` proves that the HTTP process is alive.
 - `GET /health/ready` proves that required PostgreSQL access is working.
+- `GET /v2/meta/client-policy` and `GET /v2/meta/capabilities` expose the
+  versioned V2 navigation and truthful availability/evidence projections.
+- `POST /v2/session/bootstrap`, `GET /v2/account/me`, and
+  `POST /v2/session/logout` are the V2 login/registration handoff. They require
+  contract/client headers; writes additionally require canonical UUIDv4
+  idempotency and device headers. Enable this slice explicitly in production
+  with `V2_SESSION_ENABLED=true` only after migration and Privy configuration.
 - `POST /v1/bootstrap` verifies a current Privy Bearer token and returns the
   server-derived LOOP and Stream user IDs. It returns 503 when Privy is
   unconfigured; returning the Stream ID does not connect Stream or mint a token.
@@ -383,9 +407,10 @@ provider/server credentials, including Privy, Stream, and quota secrets. The
 three Docker commands build distinct migration, lean API runtime, and worker
 targets and do not deploy any image.
 
-Route schemas are the source of truth for
-[`openapi/loop-api.v1.json`](openapi/loop-api.v1.json). Do not edit the artifact
-by hand:
+Route schemas are the source of truth for the independently generated
+[`openapi/loop-api.v1.json`](openapi/loop-api.v1.json) and
+[`openapi/loop-api.v2.json`](openapi/loop-api.v2.json) artifacts. Do not edit
+either artifact by hand:
 
 ```sh
 pnpm openapi:generate

@@ -14,6 +14,7 @@ import {
 } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 
 function testConfig(apiDocsEnabled = true) {
   return loadConfig({
@@ -37,6 +38,7 @@ function fakeDatabase(ping: Database["ping"] = vi.fn(() => Promise.resolve())) {
       controlPlane: createUnavailableControlPlaneRepository(),
       perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
       perpIntents: createUnavailablePerpIntentRepository(),
+      deviceSessions: createUnavailableDeviceSessionRepository(),
       profiles: createUnavailableProfileRepository(),
       watchlists: createUnavailableWatchlistRepository(),
       internalUsers: {
@@ -359,6 +361,73 @@ describe("LOOP API foundation", () => {
       message: "The requested resource does not exist.",
     });
     expect(response.headers["x-request-id"]).toBe(payload.request_id);
+  });
+
+  it("sanitizes malformed V2 URLs through the V2 error contract", async () => {
+    const { database } = fakeDatabase();
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      logger: false,
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/v2/%GG" });
+    const payload = response.json<Record<string, unknown>>();
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-request-id"]).toBe(payload["correlationId"]);
+    expect(Object.keys(payload).sort()).toEqual(
+      [
+        "category",
+        "code",
+        "correlationId",
+        "detailsSafe",
+        "providerReferenceSafe",
+        "retryable",
+        "userMessageKey",
+      ].sort(),
+    );
+    const correlationId = payload["correlationId"];
+    if (typeof correlationId !== "string") {
+      throw new TypeError("Expected a string V2 correlation ID");
+    }
+    expect(correlationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(payload).toEqual({
+      code: "INVALID_REQUEST",
+      category: "validation",
+      retryable: false,
+      userMessageKey: "errors.request.invalid",
+      correlationId,
+      detailsSafe: null,
+      providerReferenceSafe: null,
+    });
+    expect(response.body).not.toContain("%GG");
+    expect(response.body).not.toContain("FST_ERR_BAD_URL");
+  });
+
+  it("preserves the existing V1 malformed URL response shape", async () => {
+    const { database } = fakeDatabase();
+    const app = await buildApp({
+      config: testConfig(),
+      database,
+      logger: false,
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/v1/%GG" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "Bad Request",
+      code: "FST_ERR_BAD_URL",
+      message: "'/v1/%GG' is not a valid url component",
+      statusCode: 400,
+    });
   });
 
   it("preserves non-bootstrap client error status codes", async () => {

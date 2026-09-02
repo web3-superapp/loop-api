@@ -5,11 +5,17 @@ import swagger from "@fastify/swagger";
 import Fastify, {
   LogController,
   type FastifyInstance,
+  type FastifyReply,
   type FastifyServerOptions,
 } from "fastify";
 
 import type { AppConfig } from "./config.js";
 import { ApiError } from "./core/http/api-error.js";
+import {
+  isV2RequestPath,
+  projectV2Error,
+  V2ApiError,
+} from "./core/http/v2-error.js";
 import {
   createAuthenticationService,
   registerAuthenticationHooks,
@@ -56,6 +62,10 @@ import {
   createUnavailableSocialService,
   type SocialService,
 } from "./features/social/social-service.js";
+import {
+  createV2SessionService,
+  type V2SessionService,
+} from "./features/session/session-service.js";
 import {
   createUnavailableSpotAgentAuthorizationService,
   type SpotAgentAuthorizationService,
@@ -149,11 +159,54 @@ import { registerSpotWalletBindingRoutes } from "./routes/spot-wallet-binding.js
 import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
+import { registerV2MetaRoutes } from "./routes/v2-meta.js";
+import { registerV2SessionRoutes } from "./routes/v2-session.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
+const defaultContentSecurityPolicy =
+  "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests";
+
+function applyFrameworkSecurityHeaders(
+  reply: FastifyReply,
+  requestId: string,
+): void {
+  const headers = {
+    "cache-control": "no-store",
+    "content-security-policy": defaultContentSecurityPolicy,
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "SAMEORIGIN",
+    "x-permitted-cross-domain-policies": "none",
+    "x-request-id": requestId,
+    "x-xss-protection": "0",
+  } as const;
+  for (const [name, value] of Object.entries(headers)) {
+    reply.raw.setHeader(name, value);
+  }
+}
+
+function sendFrameworkJson(
+  reply: FastifyReply,
+  statusCode: number,
+  payload: unknown,
+  contentType = "application/json",
+): void {
+  const body = JSON.stringify(payload);
+  reply.raw.statusCode = statusCode;
+  reply.raw.setHeader("content-type", contentType);
+  reply.raw.setHeader("content-length", Buffer.byteLength(body));
+  reply.raw.end(body);
+}
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
+  readonly contractSurface?: "runtime" | "v1" | "v2";
   readonly database?: Database;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
@@ -176,6 +229,7 @@ export interface BuildAppOptions {
   readonly spotIntentService?: SpotIntentService;
   readonly spotWalletBindingService?: SpotWalletBindingService;
   readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
+  readonly v2SessionService?: V2SessionService;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -273,6 +327,9 @@ export async function buildApp(
   options: BuildAppOptions,
 ): Promise<FastifyInstance> {
   const { config } = options;
+  const contractSurface = options.contractSurface ?? "runtime";
+  const includeV1 = contractSurface !== "v2";
+  const includeV2 = contractSurface !== "v1";
   const fastifyOptions: FastifyServerOptions = {
     ajv: {
       customOptions: {
@@ -282,6 +339,53 @@ export async function buildApp(
     bodyLimit: 1_048_576,
     connectionTimeout: 10_000,
     exposeHeadRoutes: false,
+    frameworkErrors(error, request, reply): void {
+      if (isV2RequestPath(request.raw.url)) {
+        const projection = projectV2Error(error, request.id);
+        request.log.warn(
+          {
+            requestId: request.id,
+            responseCode: projection.response.code,
+            statusCode: projection.statusCode,
+          },
+          "Framework request failed",
+        );
+        applyFrameworkSecurityHeaders(reply, request.id);
+        sendFrameworkJson(
+          reply,
+          projection.statusCode,
+          projection.response,
+          "application/json; charset=utf-8",
+        );
+        return;
+      }
+
+      if (error.code === "FST_ERR_BAD_URL") {
+        sendFrameworkJson(reply, 400, {
+          error: "Bad Request",
+          code: error.code,
+          message: error.message,
+          statusCode: 400,
+        });
+        return;
+      }
+
+      if (error.code === "FST_ERR_MAX_PARAM_LENGTH") {
+        sendFrameworkJson(reply, 414, {
+          error: "Bad Request",
+          code: error.code,
+          message: error.message,
+          statusCode: 414,
+        });
+        return;
+      }
+
+      sendFrameworkJson(reply, 500, {
+        error: "Internal Server Error",
+        message: "Unexpected error from async constraint",
+        statusCode: 500,
+      });
+    },
     genReqId: () => randomUUID(),
     handlerTimeout: 15_000,
     keepAliveTimeout: 72_000,
@@ -319,6 +423,68 @@ export async function buildApp(
     done();
   });
 
+  const v1OpenApiTags = [
+    { name: "health", description: "Process and dependency health" },
+    {
+      name: "identity",
+      description: "Authenticated internal identity bootstrap",
+    },
+    {
+      name: "communication",
+      description:
+        "Authenticated Stream Chat and Video token issuance plus LOOP group-persona coordination",
+    },
+    {
+      name: "discovery",
+      description: "Opt-in public Profile alias discovery",
+    },
+    {
+      name: "social",
+      description:
+        "Owner-bound social privacy, explicit friend requests, and accepted-friend lists",
+    },
+    {
+      name: "profile",
+      description: "Owner-bound Profile and privacy preferences",
+    },
+    {
+      name: "watchlist",
+      description: "Owner-bound grouped Watchlist preferences",
+    },
+    {
+      name: "alerts",
+      description:
+        "Owner-bound inactive alert definitions, preferences, and real history",
+    },
+    {
+      name: "perp",
+      description:
+        "Authenticated Hyperliquid Testnet Core perpetual interfaces",
+    },
+    {
+      name: "spot",
+      description:
+        "Authenticated Hyperliquid Testnet Spot interfaces; provider capabilities remain default-closed",
+    },
+    {
+      name: "transfer",
+      description:
+        "Authenticated Privy same-chain transfer interfaces; capability remains unavailable",
+    },
+  ] as const;
+  const v2OpenApiTags = [
+    { name: "health", description: "Process and dependency health" },
+    {
+      name: "meta",
+      description: "Versioned client policy and capability projections",
+    },
+    {
+      name: "identity",
+      description: "Privy-authenticated LOOP account and device sessions",
+    },
+  ] as const;
+  const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
+
   await app.register(swagger, {
     hideUntagged: true,
     openapi: {
@@ -330,55 +496,12 @@ export async function buildApp(
         version: config.serviceVersion,
       },
       servers: [{ url: config.publicBaseUrl.replace(/\/$/, "") }],
-      tags: [
-        { name: "health", description: "Process and dependency health" },
-        {
-          name: "identity",
-          description: "Authenticated internal identity bootstrap",
-        },
-        {
-          name: "communication",
-          description:
-            "Authenticated Stream Chat and Video token issuance plus LOOP group-persona coordination",
-        },
-        {
-          name: "discovery",
-          description: "Opt-in public Profile alias discovery",
-        },
-        {
-          name: "social",
-          description:
-            "Owner-bound social privacy, explicit friend requests, and accepted-friend lists",
-        },
-        {
-          name: "profile",
-          description: "Owner-bound Profile and privacy preferences",
-        },
-        {
-          name: "watchlist",
-          description: "Owner-bound grouped Watchlist preferences",
-        },
-        {
-          name: "alerts",
-          description:
-            "Owner-bound inactive alert definitions, preferences, and real history",
-        },
-        {
-          name: "perp",
-          description:
-            "Authenticated Hyperliquid Testnet Core perpetual interfaces",
-        },
-        {
-          name: "spot",
-          description:
-            "Authenticated Hyperliquid Testnet Spot interfaces; provider capabilities remain default-closed",
-        },
-        {
-          name: "transfer",
-          description:
-            "Authenticated Privy same-chain transfer interfaces; capability remains unavailable",
-        },
-      ],
+      tags:
+        contractSurface === "v1"
+          ? [...v1OpenApiTags]
+          : contractSurface === "v2"
+            ? [...v2OpenApiTags]
+            : [...runtimeOpenApiTags],
       components: {
         securitySchemes: {
           privyBearer: {
@@ -419,6 +542,14 @@ export async function buildApp(
     authenticationService,
   );
   const bootstrapService = createBootstrapService(database.internalUsers);
+  const v2SessionRuntimeAvailable =
+    config.v2SessionEnabled && config.privy !== null;
+  const v2SessionService =
+    options.v2SessionService ??
+    createV2SessionService({
+      enabled: v2SessionRuntimeAvailable,
+      sessions: database.deviceSessions,
+    });
   const streamTokenIssuer =
     options.streamTokenIssuer ??
     (config.stream === null || config.streamTokenQuota === null
@@ -607,96 +738,108 @@ export async function buildApp(
   });
 
   registerHealthRoutes(app, config, database);
-  registerBootstrapRoute(
-    app,
-    authenticationHooks.authenticatePrivyBearer,
-    bootstrapService,
-  );
-  registerStreamTokenRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    streamTokenService,
-  );
-  registerDiscoveryRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    publicAliasSearchService,
-  );
-  registerChatGroupRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    chatGroupAliasService,
-  );
-  registerSocialRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    socialService,
-  );
-  registerChatChannelRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    chatChannelService,
-  );
-  registerProfileRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    profileService,
-  );
-  registerWatchlistRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    watchlistService,
-  );
-  registerAlertRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    alertService,
-  );
-  registerSpotMarketDataRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    spotMarketService,
-  );
-  registerSpotIntentRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    spotIntentService,
-  );
-  registerSpotWalletBindingRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    spotWalletBindingService,
-  );
-  registerSpotAgentAuthorizationRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    spotAgentAuthorizationService,
-  );
-  registerPerpWalletBindingRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    perpWalletBindingService,
-  );
-  registerPerpPrivateReadRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    perpPrivateReadService,
-  );
-  registerPerpIntentRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    perpIntentService,
-  );
-  registerAgentAuthorizationRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    agentAuthorizationService,
-  );
-  registerTransferRoutes(
-    app,
-    authenticationHooks.authenticateLoopBearer,
-    transferService,
-  );
+  if (includeV1) {
+    registerBootstrapRoute(
+      app,
+      authenticationHooks.authenticatePrivyBearer,
+      bootstrapService,
+    );
+    registerStreamTokenRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      streamTokenService,
+    );
+    registerDiscoveryRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      publicAliasSearchService,
+    );
+    registerChatGroupRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      chatGroupAliasService,
+    );
+    registerSocialRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      socialService,
+    );
+    registerChatChannelRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      chatChannelService,
+    );
+    registerProfileRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      profileService,
+    );
+    registerWatchlistRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      watchlistService,
+    );
+    registerAlertRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      alertService,
+    );
+    registerSpotMarketDataRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      spotMarketService,
+    );
+    registerSpotIntentRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      spotIntentService,
+    );
+    registerSpotWalletBindingRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      spotWalletBindingService,
+    );
+    registerSpotAgentAuthorizationRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      spotAgentAuthorizationService,
+    );
+    registerPerpWalletBindingRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      perpWalletBindingService,
+    );
+    registerPerpPrivateReadRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      perpPrivateReadService,
+    );
+    registerPerpIntentRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      perpIntentService,
+    );
+    registerAgentAuthorizationRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      agentAuthorizationService,
+    );
+    registerTransferRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      transferService,
+    );
+  }
+
+  if (includeV2) {
+    registerV2MetaRoutes(app, config, v2SessionRuntimeAvailable);
+    registerV2SessionRoutes(
+      app,
+      authenticationHooks.authenticatePrivyBearer,
+      authenticationHooks.authenticateLoopBearer,
+      v2SessionService,
+    );
+  }
 
   if (config.apiDocsEnabled) {
     app.get(
@@ -715,6 +858,11 @@ export async function buildApp(
 
   app.setNotFoundHandler(async (request, reply) => {
     reply.header("cache-control", "no-store");
+    if (isV2RequestPath(request.raw.url)) {
+      const projection = projectV2Error(V2ApiError.notFound(), request.id);
+      return reply.code(projection.statusCode).send(projection.response);
+    }
+
     return reply.code(404).send({
       code: "not_found",
       message: "The requested resource does not exist.",
@@ -723,6 +871,23 @@ export async function buildApp(
   });
 
   app.setErrorHandler(async (error, request, reply) => {
+    if (isV2RequestPath(request.raw.url)) {
+      const projection = projectV2Error(error, request.id);
+      request.log.warn(
+        {
+          requestId: request.id,
+          responseCode: projection.response.code,
+          statusCode: projection.statusCode,
+        },
+        "Request failed",
+      );
+      reply.header("cache-control", "no-store");
+      if (projection.includeBearerChallenge) {
+        reply.header("www-authenticate", 'Bearer realm="loop-api"');
+      }
+      return reply.code(projection.statusCode).send(projection.response);
+    }
+
     const details = classifyRequestError(error);
     const apiError = error instanceof ApiError ? error : undefined;
     const isHandlerTimeout = details.code === "FST_ERR_HANDLER_TIMEOUT";

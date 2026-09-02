@@ -18,6 +18,7 @@ import { createUnavailablePerpWalletBindingRepository } from "../src/database/pe
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import { STREAM_TOKEN_CAPABILITIES } from "../src/features/communication/stream-token-service.js";
+import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import {
   StreamTokenIssuerUnavailableError,
   type StreamTokenIssuer,
@@ -146,6 +147,7 @@ function dependencies() {
     },
     perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
     perpIntents: createUnavailablePerpIntentRepository(),
+    deviceSessions: createUnavailableDeviceSessionRepository(),
     profiles: createUnavailableProfileRepository(),
     watchlists: createUnavailableWatchlistRepository(),
     internalUsers: { findByPrivyUserId, getOrCreateByPrivyUserId },

@@ -5,9 +5,10 @@ native Flutter client. Route schemas in `src/routes/` remain the OpenAPI source
 for implemented behavior. Provider REST/WebSocket paths, SDK methods, historical
 prototype routes, and unassigned product ideas are not LOOP APIs.
 
-The committed implemented contract is `openapi/loop-api.v1.json`, generated
-from those route schemas by `pnpm openapi:generate` and checked for drift by
-`pnpm openapi:check`.
+The committed implemented contracts are `openapi/loop-api.v1.json` and
+`openapi/loop-api.v2.json`. They are generated independently from route schemas
+by `pnpm openapi:generate` and checked for drift by `pnpm openapi:check`. V1 is
+the frozen compatibility surface; new product modules use V2.
 
 ## Status model
 
@@ -28,7 +29,7 @@ Hyperliquid private-read capability below is implemented but default-off;
 credentialed Privy, nonempty Testnet account, physical-device, shared-egress,
 and deployed-environment evidence remain unverified.
 
-## Common native contract
+## Frozen V1 common native contract
 
 - All `/v1` routes below require exactly one current Privy Bearer token, except
   that bootstrap may create the internal mapping while every other protected
@@ -51,6 +52,42 @@ and deployed-environment evidence remain unverified.
   most one pre-response transport/5xx retry inside the total deadline. Provider
   write attempt: 10 seconds, with no generic retry; ambiguous outcomes become
   durable `unknown`/`reconciling` state.
+
+## V2 common native contract and first delivery
+
+- New product routes use camelCase fields and require
+  `X-Loop-Contract-Version: 2.0`. Protected calls also require a bounded
+  `X-Loop-Client-Version` and one current Privy Bearer token.
+- Bootstrap and logout require canonical lowercase UUIDv4 values for
+  `Idempotency-Key` and `X-Loop-Device-ID`, plus
+  `X-Loop-Platform: ios|android`. Logout additionally requires the opaque
+  `X-Loop-Session-ID` returned by bootstrap.
+- Every V2 error has exactly `code`, `category`, `retryable`, `userMessageKey`,
+  `correlationId`, `detailsSafe`, and `providerReferenceSafe`. The correlation
+  ID equals the response `X-Request-ID`; raw Provider/database errors are never
+  projected.
+- A device session is a durable audit projection, not a credential. Every
+  protected call re-verifies Privy. Email, Apple, Google, and external-wallet
+  login share this one backend path; distinct Privy subjects are never merged
+  by email, wallet, Alias, or device.
+- The complete wire contract and frontend sequence are documented in
+  `docs/api-v2-conventions.md` and `docs/frontend-v2-session-api.md`.
+
+| Method and path              | Request                                                                 | Success projection                                             | Interface     | Capability                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
+| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab and fail-closed version/region/terms gates | `implemented` | `implemented`; unavailable policy gates are not approval                          |
+| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence          | `implemented` | `implemented`; deferred capabilities remain unavailable                           |
+| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID      | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified               |
+| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection         | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping    |
+| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`      | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external |
+
+V2 bootstrap has bounded session-creation quotas, exact durable replay, and
+owner/device/contract-bound request digests. Logout durably records either one
+monotonic revocation result or the same non-enumerating `SESSION_NOT_FOUND`
+result. The first delivery intentionally continues to mint Chat and Video
+tokens through frozen `POST /v1/chat/token` and `POST /v1/video/token`; both
+resolve the same internal account created by V2 bootstrap. It does not create a
+second message API or claim a connected Stream client.
 
 ## Implemented routes
 
@@ -565,3 +602,9 @@ relationship revocation, contacts, or arbitrary social lookup. Privy OTP/wallet
 creation, Stream messages/calls/moderation, and provider `/info`, `/exchange`,
 or `/ws` operations remain official SDK/provider surfaces rather than
 client-callable LOOP routes.
+
+For V2, BSC chain facts, verified USD1/PancakeSwap configuration, Asset
+Registry/Indexer, Market, Wallet, ordinary Privy Swap, Send/Approvals, Launch,
+Mining, Firebase delivery, Pay, Bridge, DApp execution, and Community AI remain
+deferred or unavailable. The metadata capability projection reports that state;
+it does not create an executable contract for any of those modules.

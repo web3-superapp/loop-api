@@ -41,6 +41,7 @@ const environmentSchema = z
       "trace",
       "silent",
     ]),
+    V2_SESSION_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     STREAM_API_KEY: optionalCredential(255),
@@ -208,6 +209,7 @@ export interface AppConfig {
   readonly trustProxy: boolean;
   readonly logLevel:
     "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+  readonly v2SessionEnabled: boolean;
   readonly databaseUrl: string;
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
@@ -299,6 +301,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       (rawNodeEnv === "production" ? "false" : "true"),
     TRUST_PROXY: environment["TRUST_PROXY"] ?? "false",
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    V2_SESSION_ENABLED:
+      environment["V2_SESSION_ENABLED"] ??
+      (rawNodeEnv === "production" ? "false" : "true"),
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     STREAM_API_KEY: environment["STREAM_API_KEY"],
@@ -406,6 +411,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     apiDocsEnabled: parsed.data.API_DOCS_ENABLED,
     trustProxy: parsed.data.TRUST_PROXY,
     logLevel: parsed.data.LOG_LEVEL,
+    v2SessionEnabled: parsed.data.V2_SESSION_ENABLED,
     databaseUrl: databaseUrl.toString(),
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,

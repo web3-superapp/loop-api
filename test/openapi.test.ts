@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
 import {
   openApiArtifactPath,
+  openApiV2ArtifactPath,
   renderOpenApiArtifact,
+  renderOpenApiV2Artifact,
 } from "../scripts/generate-openapi.js";
 
 interface OpenApiDocument {
@@ -35,6 +38,57 @@ describe("committed OpenAPI artifact", () => {
 
     expect(first).toBe(second);
     expect(committed).toBe(first);
+  });
+
+  it("keeps the frozen V1 artifact byte-for-byte compatible", async () => {
+    const committed = await readFile(openApiArtifactPath);
+
+    expect(createHash("sha256").update(committed).digest("hex")).toBe(
+      "e0e8accdf2ac161f1c2f0bc2b02d95e467028e8c1e2356dc5f37783fd018f2e1",
+    );
+  });
+
+  it("generates a separate deterministic V2 surface without V1 routes", async () => {
+    const [first, second, committed] = await Promise.all([
+      renderOpenApiV2Artifact(),
+      renderOpenApiV2Artifact(),
+      readFile(openApiV2ArtifactPath, "utf8"),
+    ]);
+    const document = JSON.parse(committed) as OpenApiDocument;
+    const paths = Object.keys(document.paths).sort();
+    const operationIds = Object.values(document.paths).flatMap((path) =>
+      Object.values(path).map((operation) => operation.operationId),
+    );
+    const bootstrap = document.paths["/v2/session/bootstrap"]?.["post"];
+    const bootstrapHeaders = bootstrap?.parameters?.map(
+      (parameter) => parameter.name,
+    );
+
+    expect(committed).toBe(first);
+    expect(first).toBe(second);
+    expect(paths).toEqual([
+      "/health/live",
+      "/health/ready",
+      "/v2/account/me",
+      "/v2/meta/capabilities",
+      "/v2/meta/client-policy",
+      "/v2/session/bootstrap",
+      "/v2/session/logout",
+    ]);
+    expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
+    expect(operationIds).toHaveLength(7);
+    expect(new Set(operationIds).size).toBe(operationIds.length);
+    expect(bootstrap).toMatchObject({
+      operationId: "bootstrapV2Session",
+      security: [{ privyBearer: [] }],
+    });
+    expect(bootstrapHeaders).toEqual([
+      "x-loop-client-version",
+      "x-loop-contract-version",
+      "x-loop-device-id",
+      "idempotency-key",
+      "x-loop-platform",
+    ]);
   });
 
   it("contains only the implemented canonical route surface", async () => {

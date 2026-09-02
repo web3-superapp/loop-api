@@ -1271,6 +1271,9 @@ describe("PostgreSQL Spot reconciliation repository", () => {
     truncate table
       public.hyperliquid_signer_nonce_allocations,
       public.hyperliquid_signer_nonce_state,
+      public.device_session_events,
+      public.device_session_commands,
+      public.device_sessions,
       public.loop_users
     cascade
   `;

@@ -49,6 +49,20 @@ async function migrate(
   });
 }
 
+async function latestMigration(
+  pool: InstanceType<typeof Pool>,
+): Promise<string | undefined> {
+  const result = await pool.query<{ name: string }>({
+    text: `
+      select name
+      from public.pgmigrations
+      order by run_on desc, id desc
+      limit 1
+    `,
+  });
+  return result.rows[0]?.name;
+}
+
 async function dropTemporaryDatabase(databaseName: string): Promise<void> {
   const admin = new Client({
     connectionString: databaseConnectionUrl(databaseUrl, "postgres"),
@@ -76,12 +90,28 @@ async function createTemporaryDatabase(): Promise<TemporaryDatabase> {
   const targetDatabaseUrl = databaseConnectionUrl(databaseUrl, databaseName);
   try {
     await migrate(targetDatabaseUrl, "up");
-    await migrate(targetDatabaseUrl, "down", 2);
-    return {
-      databaseName,
-      databaseUrl: targetDatabaseUrl,
-      pool: new Pool({ connectionString: targetDatabaseUrl }),
-    };
+    const pool = new Pool({ connectionString: targetDatabaseUrl });
+    try {
+      for (;;) {
+        const latest = await latestMigration(pool);
+        if (latest === "000011_issuance_quota_retention") {
+          return {
+            databaseName,
+            databaseUrl: targetDatabaseUrl,
+            pool,
+          };
+        }
+        if (latest === undefined) {
+          throw new Error(
+            "Migration 000011_issuance_quota_retention was not found",
+          );
+        }
+        await migrate(targetDatabaseUrl, "down", 1);
+      }
+    } catch (error) {
+      await pool.end();
+      throw error;
+    }
   } catch (error) {
     await dropTemporaryDatabase(databaseName);
     throw error;

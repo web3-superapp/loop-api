@@ -15,12 +15,17 @@ import { createUnavailablePerpIntentRepository } from "../src/database/perp-inte
 import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import { createUnavailablePrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const openApiArtifactPath = resolve(
   repositoryRoot,
   "openapi/loop-api.v1.json",
+);
+export const openApiV2ArtifactPath = resolve(
+  repositoryRoot,
+  "openapi/loop-api.v2.json",
 );
 
 function schemaOnlyDependencyInvoked(): never {
@@ -34,6 +39,7 @@ function createSchemaOnlyDatabase(): Database {
     controlPlane: createUnavailableControlPlaneRepository(),
     perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
     perpIntents: createUnavailablePerpIntentRepository(),
+    deviceSessions: createUnavailableDeviceSessionRepository(),
     profiles: createUnavailableProfileRepository(),
     watchlists: createUnavailableWatchlistRepository(),
     internalUsers: {
@@ -45,7 +51,9 @@ function createSchemaOnlyDatabase(): Database {
   };
 }
 
-export async function renderOpenApiArtifact(): Promise<string> {
+async function renderContractSurface(
+  contractSurface: "v1" | "v2",
+): Promise<string> {
   const config = loadConfig({
     NODE_ENV: "production",
     HOST: "127.0.0.1",
@@ -58,6 +66,7 @@ export async function renderOpenApiArtifact(): Promise<string> {
   });
   const app = await buildApp({
     config,
+    contractSurface,
     database: createSchemaOnlyDatabase(),
     privyAccessTokenVerifier: createUnavailablePrivyAccessTokenVerifier(),
     logger: false,
@@ -71,9 +80,17 @@ export async function renderOpenApiArtifact(): Promise<string> {
   }
 }
 
-async function writeArtifact(contents: string): Promise<void> {
-  await mkdir(dirname(openApiArtifactPath), { recursive: true });
-  const temporaryPath = `${openApiArtifactPath}.${process.pid}.${randomUUID()}.tmp`;
+export function renderOpenApiArtifact(): Promise<string> {
+  return renderContractSurface("v1");
+}
+
+export function renderOpenApiV2Artifact(): Promise<string> {
+  return renderContractSurface("v2");
+}
+
+async function writeArtifact(path: string, contents: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
 
   try {
     await writeFile(temporaryPath, contents, {
@@ -81,17 +98,17 @@ async function writeArtifact(contents: string): Promise<void> {
       flag: "wx",
       mode: 0o600,
     });
-    await rename(temporaryPath, openApiArtifactPath);
+    await rename(temporaryPath, path);
   } finally {
     await rm(temporaryPath, { force: true });
   }
 }
 
-async function checkArtifact(contents: string): Promise<void> {
+async function checkArtifact(path: string, contents: string): Promise<void> {
   let committed: string;
 
   try {
-    committed = await readFile(openApiArtifactPath, "utf8");
+    committed = await readFile(path, "utf8");
   } catch (error) {
     if (
       typeof error === "object" &&
@@ -100,7 +117,7 @@ async function checkArtifact(contents: string): Promise<void> {
       error.code === "ENOENT"
     ) {
       throw new Error(
-        "OpenAPI artifact is missing. Run pnpm openapi:generate.",
+        `OpenAPI artifact ${path} is missing. Run pnpm openapi:generate.`,
         { cause: error },
       );
     }
@@ -110,7 +127,7 @@ async function checkArtifact(contents: string): Promise<void> {
 
   if (committed !== contents) {
     throw new Error(
-      "OpenAPI artifact is stale. Run pnpm openapi:generate and commit the result.",
+      `OpenAPI artifact ${path} is stale. Run pnpm openapi:generate and commit the result.`,
     );
   }
 }
@@ -126,16 +143,27 @@ async function main(): Promise<void> {
     throw new Error("Unexpected OpenAPI generator arguments");
   }
 
-  const contents = await renderOpenApiArtifact();
+  const [v1Contents, v2Contents] = await Promise.all([
+    renderOpenApiArtifact(),
+    renderOpenApiV2Artifact(),
+  ]);
 
   if (mode === "--write") {
-    await writeArtifact(contents);
-    process.stdout.write("Generated openapi/loop-api.v1.json\n");
+    await Promise.all([
+      writeArtifact(openApiArtifactPath, v1Contents),
+      writeArtifact(openApiV2ArtifactPath, v2Contents),
+    ]);
+    process.stdout.write(
+      "Generated openapi/loop-api.v1.json and openapi/loop-api.v2.json\n",
+    );
     return;
   }
 
-  await checkArtifact(contents);
-  process.stdout.write("OpenAPI artifact is current\n");
+  await Promise.all([
+    checkArtifact(openApiArtifactPath, v1Contents),
+    checkArtifact(openApiV2ArtifactPath, v2Contents),
+  ]);
+  process.stdout.write("OpenAPI artifacts are current\n");
 }
 
 const directEntryPoint = process.argv[1];

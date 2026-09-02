@@ -52,7 +52,10 @@ describe("PostgreSQL Perp wallet-binding repository", () => {
     await pool.query(`
       truncate table
         public.perp_wallet_binding_events,
-        public.perp_wallet_bindings
+        public.perp_wallet_bindings,
+        public.device_session_events,
+        public.device_session_commands,
+        public.device_sessions
     `);
     await pool.query({
       text: `

@@ -29,6 +29,7 @@ describe("loadConfig", () => {
     expect(config.social).toBeNull();
     expect(config.perpReadCursor).toBeNull();
     expect(config.hyperliquidPrivateReads).toBeNull();
+    expect(config.v2SessionEnabled).toBe(true);
     expect(config.serviceName).toBe("loop-api");
   });
 
@@ -309,5 +310,13 @@ describe("loadConfig", () => {
     delete environment["API_DOCS_ENABLED"];
 
     expect(loadConfig(environment).apiDocsEnabled).toBe(false);
+    expect(loadConfig(environment).v2SessionEnabled).toBe(false);
+  });
+
+  it("allows the v2 session slice to be explicitly gated", () => {
+    const environment = validEnvironment();
+    environment["V2_SESSION_ENABLED"] = "false";
+
+    expect(loadConfig(environment).v2SessionEnabled).toBe(false);
   });
 });

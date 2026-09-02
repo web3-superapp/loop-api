@@ -13,6 +13,7 @@ import { createUnavailablePerpIntentRepository } from "../src/database/perp-inte
 import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import {
   InvalidAccessTokenError,
   type PrivyAccessTokenVerifier,
@@ -46,6 +47,7 @@ function fakes() {
     controlPlane: createUnavailableControlPlaneRepository(),
     perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
     perpIntents: createUnavailablePerpIntentRepository(),
+    deviceSessions: createUnavailableDeviceSessionRepository(),
     profiles: createUnavailableProfileRepository(),
     watchlists: createUnavailableWatchlistRepository(),
     internalUsers: { findByPrivyUserId, getOrCreateByPrivyUserId },
