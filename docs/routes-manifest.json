@@ -1,0 +1,497 @@
+{
+  "frozenAt": "2026-09-01",
+  "source": "https://cliview.org/loop-v2.html",
+  "sha256": "bdbe183286c2d77c0de7f731818d5a8da9702ef08ed9a558a5189609c8b33c1a",
+  "defaultRoute": "community",
+  "tabs": [
+    "community",
+    "mining",
+    "launch",
+    "market",
+    "wallet"
+  ],
+  "count": 93,
+  "modules": {
+    "0-global-account": [
+      {
+        "slug": "splash",
+        "tab": false,
+        "prototypeOrder": 0
+      },
+      {
+        "slug": "auth",
+        "tab": false,
+        "prototypeOrder": 1
+      },
+      {
+        "slug": "auth-otp",
+        "tab": false,
+        "prototypeOrder": 2
+      },
+      {
+        "slug": "auth-wallet",
+        "tab": false,
+        "prototypeOrder": 3
+      },
+      {
+        "slug": "wallet-create",
+        "tab": false,
+        "prototypeOrder": 4
+      },
+      {
+        "slug": "wallet-recovery",
+        "tab": false,
+        "prototypeOrder": 5
+      },
+      {
+        "slug": "security-setup",
+        "tab": false,
+        "prototypeOrder": 6
+      },
+      {
+        "slug": "loop-id-setup",
+        "tab": false,
+        "prototypeOrder": 7
+      },
+      {
+        "slug": "force-update",
+        "tab": false,
+        "prototypeOrder": 8
+      },
+      {
+        "slug": "region-blocked",
+        "tab": false,
+        "prototypeOrder": 9
+      }
+    ],
+    "2-community": [
+      {
+        "slug": "search",
+        "tab": false,
+        "prototypeOrder": 11
+      },
+      {
+        "slug": "community",
+        "tab": true,
+        "prototypeOrder": 13
+      },
+      {
+        "slug": "community-discover",
+        "tab": false,
+        "prototypeOrder": 14
+      },
+      {
+        "slug": "community-profile",
+        "tab": false,
+        "prototypeOrder": 15
+      },
+      {
+        "slug": "community-chat",
+        "tab": false,
+        "prototypeOrder": 16
+      },
+      {
+        "slug": "community-ai",
+        "tab": false,
+        "prototypeOrder": 17
+      },
+      {
+        "slug": "community-members",
+        "tab": false,
+        "prototypeOrder": 18
+      },
+      {
+        "slug": "voiceroom",
+        "tab": false,
+        "prototypeOrder": 19
+      },
+      {
+        "slug": "voiceroom-full",
+        "tab": false,
+        "prototypeOrder": 20
+      },
+      {
+        "slug": "dm",
+        "tab": false,
+        "prototypeOrder": 21
+      },
+      {
+        "slug": "dm-requests",
+        "tab": false,
+        "prototypeOrder": 22
+      },
+      {
+        "slug": "group",
+        "tab": false,
+        "prototypeOrder": 23
+      },
+      {
+        "slug": "group-info",
+        "tab": false,
+        "prototypeOrder": 24
+      },
+      {
+        "slug": "chat-search",
+        "tab": false,
+        "prototypeOrder": 25
+      },
+      {
+        "slug": "chat-forward",
+        "tab": false,
+        "prototypeOrder": 90
+      },
+      {
+        "slug": "chat-merge-preview",
+        "tab": false,
+        "prototypeOrder": 91
+      }
+    ],
+    "3-market": [
+      {
+        "slug": "market",
+        "tab": true,
+        "prototypeOrder": 26
+      },
+      {
+        "slug": "token",
+        "tab": false,
+        "prototypeOrder": 27
+      },
+      {
+        "slug": "chart-full",
+        "tab": false,
+        "prototypeOrder": 28
+      },
+      {
+        "slug": "token-holders",
+        "tab": false,
+        "prototypeOrder": 29
+      },
+      {
+        "slug": "token-trades",
+        "tab": false,
+        "prototypeOrder": 30
+      },
+      {
+        "slug": "watchlist-edit",
+        "tab": false,
+        "prototypeOrder": 31
+      },
+      {
+        "slug": "alerts",
+        "tab": false,
+        "prototypeOrder": 32
+      },
+      {
+        "slug": "new-pairs",
+        "tab": false,
+        "prototypeOrder": 33
+      },
+      {
+        "slug": "smart-money",
+        "tab": false,
+        "prototypeOrder": 34
+      }
+    ],
+    "4-launch": [
+      {
+        "slug": "launch",
+        "tab": true,
+        "prototypeOrder": 35
+      },
+      {
+        "slug": "launch-detail",
+        "tab": false,
+        "prototypeOrder": 36
+      },
+      {
+        "slug": "launch-tier",
+        "tab": false,
+        "prototypeOrder": 37
+      },
+      {
+        "slug": "loop-stake",
+        "tab": false,
+        "prototypeOrder": 38
+      },
+      {
+        "slug": "launch-trade",
+        "tab": false,
+        "prototypeOrder": 39
+      },
+      {
+        "slug": "launch-holders",
+        "tab": false,
+        "prototypeOrder": 40
+      },
+      {
+        "slug": "launch-graduation",
+        "tab": false,
+        "prototypeOrder": 41
+      },
+      {
+        "slug": "launch-history",
+        "tab": false,
+        "prototypeOrder": 42
+      },
+      {
+        "slug": "launch-rounds",
+        "tab": false,
+        "prototypeOrder": 43
+      },
+      {
+        "slug": "loop-economy",
+        "tab": false,
+        "prototypeOrder": 44
+      },
+      {
+        "slug": "launch-apply",
+        "tab": false,
+        "prototypeOrder": 45
+      }
+    ],
+    "5-mining": [
+      {
+        "slug": "mining",
+        "tab": true,
+        "prototypeOrder": 46
+      },
+      {
+        "slug": "mining-assets",
+        "tab": false,
+        "prototypeOrder": 47
+      },
+      {
+        "slug": "mining-rewards",
+        "tab": false,
+        "prototypeOrder": 48
+      },
+      {
+        "slug": "mining-rank",
+        "tab": false,
+        "prototypeOrder": 49
+      },
+      {
+        "slug": "mining-community",
+        "tab": false,
+        "prototypeOrder": 50
+      },
+      {
+        "slug": "mining-rules",
+        "tab": false,
+        "prototypeOrder": 51
+      }
+    ],
+    "6-wallet": [
+      {
+        "slug": "wallet",
+        "tab": true,
+        "prototypeOrder": 52
+      },
+      {
+        "slug": "networth",
+        "tab": false,
+        "prototypeOrder": 10
+      },
+      {
+        "slug": "pay",
+        "tab": false,
+        "prototypeOrder": 12
+      },
+      {
+        "slug": "asset",
+        "tab": false,
+        "prototypeOrder": 53
+      },
+      {
+        "slug": "send",
+        "tab": false,
+        "prototypeOrder": 54
+      },
+      {
+        "slug": "send-to",
+        "tab": false,
+        "prototypeOrder": 55
+      },
+      {
+        "slug": "send-confirm",
+        "tab": false,
+        "prototypeOrder": 56
+      },
+      {
+        "slug": "receive",
+        "tab": false,
+        "prototypeOrder": 57
+      },
+      {
+        "slug": "swap",
+        "tab": false,
+        "prototypeOrder": 58
+      },
+      {
+        "slug": "swap-route",
+        "tab": false,
+        "prototypeOrder": 59
+      },
+      {
+        "slug": "bridge",
+        "tab": false,
+        "prototypeOrder": 60
+      },
+      {
+        "slug": "bridge-status",
+        "tab": false,
+        "prototypeOrder": 61
+      },
+      {
+        "slug": "tx-result",
+        "tab": false,
+        "prototypeOrder": 62
+      },
+      {
+        "slug": "tx-history",
+        "tab": false,
+        "prototypeOrder": 63
+      },
+      {
+        "slug": "wallets",
+        "tab": false,
+        "prototypeOrder": 64
+      },
+      {
+        "slug": "dapp",
+        "tab": false,
+        "prototypeOrder": 65
+      },
+      {
+        "slug": "approval-guard",
+        "tab": false,
+        "prototypeOrder": 66
+      },
+      {
+        "slug": "approvals",
+        "tab": false,
+        "prototypeOrder": 67
+      },
+      {
+        "slug": "networks",
+        "tab": false,
+        "prototypeOrder": 68
+      }
+    ],
+    "7-profile": [
+      {
+        "slug": "profile",
+        "tab": false,
+        "prototypeOrder": 69
+      },
+      {
+        "slug": "profile-edit",
+        "tab": false,
+        "prototypeOrder": 70
+      },
+      {
+        "slug": "privacy",
+        "tab": false,
+        "prototypeOrder": 71
+      },
+      {
+        "slug": "security",
+        "tab": false,
+        "prototypeOrder": 72
+      },
+      {
+        "slug": "devices",
+        "tab": false,
+        "prototypeOrder": 73
+      },
+      {
+        "slug": "key-export",
+        "tab": false,
+        "prototypeOrder": 74
+      },
+      {
+        "slug": "social-recovery",
+        "tab": false,
+        "prototypeOrder": 75
+      },
+      {
+        "slug": "notif-settings",
+        "tab": false,
+        "prototypeOrder": 76
+      },
+      {
+        "slug": "connections",
+        "tab": false,
+        "prototypeOrder": 77
+      },
+      {
+        "slug": "referral",
+        "tab": false,
+        "prototypeOrder": 92
+      },
+      {
+        "slug": "blocklist",
+        "tab": false,
+        "prototypeOrder": 78
+      },
+      {
+        "slug": "settings",
+        "tab": false,
+        "prototypeOrder": 79
+      },
+      {
+        "slug": "about",
+        "tab": false,
+        "prototypeOrder": 80
+      },
+      {
+        "slug": "support",
+        "tab": false,
+        "prototypeOrder": 81
+      }
+    ],
+    "8-system": [
+      {
+        "slug": "offline",
+        "tab": false,
+        "prototypeOrder": 82
+      },
+      {
+        "slug": "server-error",
+        "tab": false,
+        "prototypeOrder": 83
+      },
+      {
+        "slug": "maintenance",
+        "tab": false,
+        "prototypeOrder": 84
+      },
+      {
+        "slug": "permission-notice",
+        "tab": false,
+        "prototypeOrder": 85
+      },
+      {
+        "slug": "toast-states",
+        "tab": false,
+        "prototypeOrder": 86
+      },
+      {
+        "slug": "skeleton-states",
+        "tab": false,
+        "prototypeOrder": 87
+      },
+      {
+        "slug": "token-card-states",
+        "tab": false,
+        "prototypeOrder": 88
+      },
+      {
+        "slug": "sign-sheet-states",
+        "tab": false,
+        "prototypeOrder": 89
+      }
+    ]
+  }
+}
