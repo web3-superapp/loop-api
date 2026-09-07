@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
+import { LoopIdAllocationExhaustedError } from "../identity/loop-id.js";
 import { deriveStreamUserId } from "../identity/loop-identifiers.js";
 import type { V2SessionWriteMetadata } from "./session-contract.js";
 import {
@@ -135,6 +136,11 @@ async function mapRepositoryFailure<T>(
     }
     if (error instanceof DeviceSessionRateLimitedError) {
       throw V2ApiError.rateLimited();
+    }
+    if (error instanceof LoopIdAllocationExhaustedError) {
+      // Five random LOOP ID candidates collided: fail closed, never fall
+      // back to a sequential or client-supplied identifier.
+      throw V2ApiError.fromCode("INTERNAL_ERROR");
     }
     throw error;
   }

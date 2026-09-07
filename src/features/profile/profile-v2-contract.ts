@@ -317,6 +317,9 @@ export function privacyV2ValuesEqual(
  * Canonical SHA-256 request digest for `POST /v2/profile/loop-id`. It binds
  * the operation kind, contract version, and normalized body so a replayed
  * `Idempotency-Key` with different intent is rejected as IDEMPOTENCY_CONFLICT.
+ * Interests are deduplicated and sorted inside the digest only, so the same
+ * selection in a different order replays instead of conflicting; the stored
+ * order remains the client's first-occurrence order.
  */
 export function profileActivationDigest(
   values: ProfileV2ActivationValues,
@@ -329,7 +332,7 @@ export function profileActivationDigest(
     contractVersion,
     values.alias,
     values.avatarRef ?? "",
-    values.interests.join(","),
+    [...new Set(values.interests)].sort().join(","),
   ]) {
     hash.update("\0", "utf8");
     hash.update(part, "utf8");

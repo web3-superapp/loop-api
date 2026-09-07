@@ -17,6 +17,7 @@ import {
   DeviceSessionRateLimitedError,
   type DeviceSessionRepository,
 } from "../src/features/session/device-session-repository.js";
+import { LoopIdAllocationExhaustedError } from "../src/features/identity/loop-id.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
@@ -503,6 +504,41 @@ describe("LOOP API V2 account sessions", () => {
       category: "conflict",
       retryable: false,
     });
+  });
+
+  it("fails closed with the seven-field INTERNAL_ERROR when LOOP ID allocation is exhausted", async () => {
+    const dependencies = fakes();
+    dependencies.bootstrapSession.mockRejectedValueOnce(
+      new LoopIdAllocationExhaustedError(),
+    );
+    const { app } = await createApp(dependencies);
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/session/bootstrap",
+      headers: requestHeaders(),
+    });
+    const body = response.json<Record<string, unknown>>();
+
+    expect(response.statusCode).toBe(500);
+    expect(Object.keys(body).sort()).toEqual([
+      "category",
+      "code",
+      "correlationId",
+      "detailsSafe",
+      "providerReferenceSafe",
+      "retryable",
+      "userMessageKey",
+    ]);
+    expect(body).toMatchObject({
+      code: "INTERNAL_ERROR",
+      category: "internal",
+      retryable: false,
+      correlationId: response.headers["x-request-id"],
+      detailsSafe: null,
+      providerReferenceSafe: null,
+    });
+    expect(response.body).not.toContain("LOOP ID");
+    expect(response.body).not.toContain("exhausted");
   });
 
   it("maps the persistent-session creation bound to RATE_LIMITED", async () => {

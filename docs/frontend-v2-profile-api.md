@@ -151,7 +151,8 @@ body：
 - 成功 `200`，响应与 `GET /v2/profile` 同构，`profileStatus` 为 `active`。
 - 幂等：生成并持久化本次逻辑激活的 `Idempotency-Key` 与 body；超时/断网只能
   用同一 key + 同一 body 重试，返回当前资源。同一 key 配不同 body →
-  `409 IDEMPOTENCY_CONFLICT`。key 与 device/platform/client version 无关。
+  `409 IDEMPOTENCY_CONFLICT`。key 与 device/platform/client version 无关；
+  `interests` 在 digest 内去重并排序，同一组赛道换顺序重试不会冲突。
 - 已激活账号再次调用（任意 key）→ `200` 当前资源，不修改任何字段，也不重置
   `activatedAt`。要改别名请走 `PUT /v2/profile`。
 - 通知开关本步只在前端本地保存，不发给后端。
@@ -227,14 +228,21 @@ body：
 ## 别名规则与错误码
 
 - 字符安全：拒绝控制字符、双向控制、零宽/不可见格式字符、行/段分隔符；
-  两端空白会被 trim；trim 后 1–40 码点。
-- 保留词（大小写与前后缀变体均命中）：`loop admin official support system
-mod moderator team`。规则：NFKC + 小写后，按非字母数字拆分出的任一 token 去掉
-  数字后等于保留词（`Admin`、`admin123`、`x_admin`、`LOOP Team`），或去掉分隔符
-  和数字后的整体是保留词的拼接（`loopadmin`、`official-loop`）。`loopy`、
-  `modern`、`administrator` 不命中。命中返回 `422 ALIAS_RESERVED`。
-- 敏感词：后端 `V2_ALIAS_BLOCKED_TERMS`（默认空），NFKC + 小写后子串匹配，
-  命中返回 `422 ALIAS_BLOCKED`。
+  两端空白会被 trim。空白/纯空格的别名或简介是请求形状错误 →
+  `400 INVALID_REQUEST`；trim 后超过 40（别名）/ 160（简介）码点 →
+  `422 VALIDATION_FAILED`。
+- 保留词：`loop admin official support system mod moderator team`。规则：
+  NFKC + 小写后，按非字母数字拆分出的任一 token 去掉数字后等于保留词
+  （`Admin`、`admin123`、`x_admin`、`LOOP Team`）；长度 ≥5 的保留词
+  （`admin official support system moderator`）作为 token 的前缀或后缀也命中，
+  且先剥掉 token 两端的其他保留词再判断
+  （`AdminAlice`、`superadmin`、`LoopSupportBot`、`administrator`）；去掉分隔符
+  和数字后的整体是保留词拼接也命中（`loopadmin`、`official-loop`）。短词
+  `loop`/`team`/`mod` 只做整 token 匹配，`loopy`、`teams`、`modern` 允许。
+  命中返回 `422 ALIAS_RESERVED`。
+- 敏感词：后端 `V2_ALIAS_BLOCKED_TERMS`（默认空），term 与别名都做 NFKC +
+  小写，并额外比较去掉空白与分隔符的 compact 形式（`rug pull` 命中 `rugpull`、
+  `rug-pull`、`Rug_Pull`），命中返回 `422 ALIAS_BLOCKED`。
 - 别名允许重复；前端的"换一个"只是本地随机建议，不需要查重。
 
 本模块可能返回的错误码与建议行为：
@@ -248,7 +256,7 @@ mod moderator team`。规则：NFKC + 小写后，按非字母数字拆分出的
 | `ACCOUNT_BOOTSTRAP_REQUIRED` | 409  | `authentication` | no        | 用同一 token 调 `POST /v2/session/bootstrap`                      |
 | `VERSION_CONFLICT`           | 409  | `conflict`       | no        | 重新 `GET` 取最新 `version` 后再提交；contract 版本不符也返回此码 |
 | `IDEMPOTENCY_CONFLICT`       | 409  | `conflict`       | no        | 停止重试，记录 `correlationId`，重新生成 key 与 body 提交         |
-| `VALIDATION_FAILED`          | 422  | `validation`     | no        | 别名/简介长度或空白不合规；提示用户修改                           |
+| `VALIDATION_FAILED`          | 422  | `validation`     | no        | 别名/简介 trim 后超长；提示用户修改                               |
 | `ALIAS_RESERVED`             | 422  | `validation`     | no        | 提示"该名称为系统保留"                                            |
 | `ALIAS_BLOCKED`              | 422  | `validation`     | no        | 提示"该名称包含不允许的词"                                        |
 | `INTERNAL_ERROR`             | 500  | `internal`       | no        | 通用错误并记录 `correlationId`                                    |

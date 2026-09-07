@@ -105,6 +105,8 @@ describe("000015 V2 LOOP ID profile migration contract", () => {
     expect(guardIndex).toBeGreaterThan(lockIndex);
     expect(dropIndex).toBeGreaterThan(guardIndex);
     expect(statement).toContain("refusing destructive rollback");
+    expect(statement).toContain("if exists (select 1 from public.loop_users)");
+    expect(statement).toContain("an assigned LOOP ID is immutable");
     expect(statement).toContain("using errcode = '55000'");
     expect(statement).toContain("drop column loop_id");
   });

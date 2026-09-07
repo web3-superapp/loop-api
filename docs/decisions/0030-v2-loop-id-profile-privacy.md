@@ -45,7 +45,8 @@ mutable alias, opaque avatar reference, and a compare-and-swap version in
   session bootstrap) generates the ID in Node with `crypto.randomBytes` and
   retries a fresh candidate on `loop_users_loop_id_unique` violations
   (savepoint rollback) at most 5 times, then fails closed
-  (`LoopIdAllocationExhaustedError` → `INTERNAL_ERROR`). No sequential or
+  (`LoopIdAllocationExhaustedError`, mapped explicitly by the V2 session
+  service to the seven-field `INTERNAL_ERROR`). No sequential or
   client-supplied value is ever accepted.
 - `user_profiles` gains `profile_status` (`pending|active`, default
   `pending`), `activated_at`, `bio`, `interests text[]` (default `{}`) with
@@ -59,22 +60,22 @@ mutable alias, opaque avatar reference, and a compare-and-swap version in
 - `profile_activation_commands`: permanent (`command_kind='activate'`,
   `idempotency_key`) records binding owner, `profile_activation_v1` digest,
   contract version, request ID, and result (`activated|already_active`).
-- Rollback refuses while any activation command, V2 privacy row, active
-  profile, bio, or interest exists.
+- Rollback refuses while any `loop_users` row exists (an assigned LOOP ID is
+  immutable) or any activation command / V2 privacy row exists.
 
 ### Routes (`src/routes/v2/profile.ts`, module gate `profile`)
 
 Registered only when `V2_MODULES_ENABLED` contains `profile`; otherwise every
 path is the V2 `NOT_FOUND` envelope (tested). Public fields are camelCase.
 
-| Route                      | Auth / headers                                                 | Semantics                                                                                                                                                                                                                                                     |
-| -------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v2/profile/avatars`  | public; no body/query                                          | Preset catalog `{avatarRef, atlas, slot, label}`.                                                                                                                                                                                                             |
-| `GET /v2/profile`          | Bearer + `X-Loop-Contract-Version` + `X-Loop-Client-Version`   | `{profile:{loopId,alias,avatarRef,bio,interests,profileStatus,activatedAt}, version, updatedAt, contractVersion}`; no row → version 0, `pending`, LOOP ID still present; nothing is written.                                                                  |
-| `PUT /v2/profile`          | same; `Idempotency-Key` rejected                               | CAS on `expectedVersion` shared with V1 (identical retry returns the committed resource; stale → `VERSION_CONFLICT`). Does not change `profileStatus`.                                                                                                        |
-| `POST /v2/profile/loop-id` | bootstrap header set incl. `Idempotency-Key`, device, platform | Activation. Key is bound to owner + route + SHA-256 of (`activate`, contract version, alias, avatarRef, interests). Same key + same body → current resource; different body → `IDEMPOTENCY_CONFLICT`; already active → 200 current resource without mutation. |
-| `GET /v2/profile/privacy`  | as `GET /v2/profile`                                           | Version-0 fail-closed defaults (`false`, `false`, all `self`) without writing.                                                                                                                                                                                |
-| `PUT /v2/profile/privacy`  | as `PUT /v2/profile`                                           | CAS on its own version; unknown fields (including any copy-trade field) are `INVALID_REQUEST`.                                                                                                                                                                |
+| Route                      | Auth / headers                                                 | Semantics                                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v2/profile/avatars`  | public; no body/query                                          | Preset catalog `{avatarRef, atlas, slot, label}`.                                                                                                                                                                                                                                     |
+| `GET /v2/profile`          | Bearer + `X-Loop-Contract-Version` + `X-Loop-Client-Version`   | `{profile:{loopId,alias,avatarRef,bio,interests,profileStatus,activatedAt}, version, updatedAt, contractVersion}`; no row → version 0, `pending`, LOOP ID still present; nothing is written.                                                                                          |
+| `PUT /v2/profile`          | same; `Idempotency-Key` rejected                               | CAS on `expectedVersion` shared with V1 (identical retry returns the committed resource; stale → `VERSION_CONFLICT`). Does not change `profileStatus`.                                                                                                                                |
+| `POST /v2/profile/loop-id` | bootstrap header set incl. `Idempotency-Key`, device, platform | Activation. Key is bound to owner + route + SHA-256 of (`activate`, contract version, alias, avatarRef, interests deduplicated and sorted). Same key + same body → current resource; different body → `IDEMPOTENCY_CONFLICT`; already active → 200 current resource without mutation. |
+| `GET /v2/profile/privacy`  | as `GET /v2/profile`                                           | Version-0 fail-closed defaults (`false`, `false`, all `self`) without writing.                                                                                                                                                                                                        |
+| `PUT /v2/profile/privacy`  | as `PUT /v2/profile`                                           | CAS on its own version; unknown fields (including any copy-trade field) are `INVALID_REQUEST`.                                                                                                                                                                                        |
 
 The activation digest deliberately excludes device ID, platform, and client
 version (main-agent ruling, 2026-09-07): activation is an account-level fact,
@@ -89,15 +90,21 @@ binding. The same ruling confirms that the CAS routes reject a client
 ### Validation and error codes
 
 - JSON-schema shape failures (unknown field, wrong type, non-preset avatar,
-  unknown interest, more than 6 interests, raw control characters) →
-  `INVALID_REQUEST` (400).
-- Normalized-content failures (alias/bio trimmed length outside 1–40 / 1–160
-  code points, blank bio) → `VALIDATION_FAILED` (422).
+  unknown interest, more than 6 interests, raw control characters, blank or
+  whitespace-only alias/bio) → `INVALID_REQUEST` (400).
+- Normalized-content failures (alias/bio trimmed length above 40 / 160 code
+  points) → `VALIDATION_FAILED` (422).
 - Alias policy (`src/features/profile/alias-policy.ts`): after NFKC +
   lower-case normalization, an alias is reserved when any alphanumeric token
-  with digits stripped equals a reserved word, or when the separator-free,
-  digit-free string is a concatenation of reserved words. Blocked terms match
-  as substrings of the normalized alias (with and without whitespace).
+  with digits stripped equals a reserved word, starts or ends with a reserved
+  word of at least five letters (`admin`, `official`, `support`, `system`,
+  `moderator`) after any surrounding reserved words are stripped
+  (`AdminAlice`, `superadmin`, `LoopSupportBot`, `administrator`), or when the separator-free, digit-free string is a
+  concatenation of reserved words. The short words `loop`, `team`, and `mod`
+  match only a whole token (`loopy`, `teams`, `modern` stay allowed). Blocked
+  terms match as substrings of the normalized alias and of its compact form
+  (both sides NFKC + lower-case with whitespace and separators removed, so
+  `rug pull` catches `rugpull`, `rug-pull`, `Rug_Pull`).
   Reserved is evaluated first. New catalog entries (both `validation`, 422,
   not retryable): `ALIAS_RESERVED` (`errors.alias.reserved`) and
   `ALIAS_BLOCKED` (`errors.alias.blocked`). The catalog now has 28 codes;

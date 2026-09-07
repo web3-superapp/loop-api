@@ -49,6 +49,17 @@ describe("V2 alias policy", () => {
     "ｌｏｏｐ",
     "  admin  ",
     "loop team",
+    "Loop 😀 Fan",
+    "LoopSupportBot",
+    "AdminAlice",
+    "OfficialLoopHelp",
+    "superadmin",
+    "adminx",
+    "administrator",
+    "supporter",
+    "systematic",
+    "Officially Alice",
+    "admins",
   ])("treats %j as reserved", (alias) => {
     expect(isReservedAlias(alias)).toBe(true);
   });
@@ -58,13 +69,12 @@ describe("V2 alias policy", () => {
     "loopy",
     "looper",
     "modern",
-    "systematic",
     "teams",
-    "administrator",
-    "supporter",
-    "Officially Alice",
+    "Alice Adm",
     "hoop",
-    "admins",
+    "badminton",
+    "unsupported",
+    "loopyteam",
     "Alice 😀 Fan",
     "mod3rn",
   ])("allows %j", (alias) => {
@@ -81,6 +91,10 @@ describe("V2 alias policy", () => {
     expect(findBlockedTerm("s c a m", ["scam"])).toBe("scam");
     expect(findBlockedTerm("Alice", ["scam"])).toBeNull();
     expect(findBlockedTerm("Alice", [])).toBeNull();
+    for (const alias of ["rugpull", "rug-pull", "Rug_Pull", "RUG  PULL"]) {
+      expect(findBlockedTerm(alias, ["rug pull"])).toBe("rug pull");
+    }
+    expect(findBlockedTerm("rug", ["rug pull"])).toBeNull();
   });
 
   it("evaluates reserved before blocked and allows ordinary aliases", () => {

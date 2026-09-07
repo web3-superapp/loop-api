@@ -28,9 +28,25 @@ export interface AliasPolicy {
 }
 
 const reservedWordSet: ReadonlySet<string> = new Set(aliasReservedWords);
+/**
+ * Reserved words of at least five letters also match as a token prefix or
+ * suffix (`AdminAlice`, `superadmin`, `LoopSupportBot`); the short words
+ * `loop`, `team`, and `mod` match only a whole token so `loopy`, `teams`, and
+ * `modern` stay allowed.
+ */
+const affixMinimumLength = 5;
+const affixReservedWords = aliasReservedWords.filter(
+  (word) => word.length >= affixMinimumLength,
+);
 const tokenSeparatorPattern = /[^\p{L}\p{N}]+/u;
 const digitPattern = /\p{Nd}/gu;
 const whitespacePattern = /\s+/gu;
+const nonAlphanumericPattern = /[^\p{L}\p{N}]+/gu;
+
+/** NFKC + lower-case with every separator removed; used for blocked-term matching. */
+export function compactAliasForPolicy(alias: string): string {
+  return normalizeAliasForPolicy(alias).replace(nonAlphanumericPattern, "");
+}
 
 /** NFKC + lower-case + trim + single-space fold; shared by reserved and blocked matching. */
 export function normalizeAliasForPolicy(alias: string): string {
@@ -65,11 +81,53 @@ function canSegmentIntoReservedWords(compact: string): boolean {
   return reachable[compact.length] === true;
 }
 
+function hasReservedAffix(token: string): boolean {
+  return affixReservedWords.some(
+    (word) => token.startsWith(word) || token.endsWith(word),
+  );
+}
+
+/** Remove one reserved word from the start or end of a token, if any. */
+function stripOneReservedAffix(token: string): string {
+  for (const word of aliasReservedWords) {
+    if (token.length > word.length && token.startsWith(word)) {
+      return token.slice(word.length);
+    }
+    if (token.length > word.length && token.endsWith(word)) {
+      return token.slice(0, -word.length);
+    }
+  }
+  return token;
+}
+
+/**
+ * A token is reserved when it is a reserved word, carries a five-plus-letter
+ * reserved word as prefix or suffix, or does so after surrounding reserved
+ * words are peeled off one at a time (`loopsupportbot` → `supportbot`).
+ */
+function tokenIsReserved(token: string): boolean {
+  let current = token;
+  for (;;) {
+    if (reservedWordSet.has(current) || hasReservedAffix(current)) {
+      return true;
+    }
+    const stripped = stripOneReservedAffix(current);
+    if (stripped === current) {
+      return false;
+    }
+    current = stripped;
+  }
+}
+
 /**
  * Reserved when, after NFKC/lower-case normalization, any alphanumeric token
  * with digits stripped equals a reserved word (`Admin`, `admin123`,
- * `x_official`, `LOOP Team`), or when the separator-free, digit-free form is
- * a concatenation of reserved words (`loopadmin`, `official-loop`).
+ * `x_official`, `LOOP Team`), starts or ends with a reserved word of at least
+ * five letters after any surrounding reserved words are stripped
+ * (`AdminAlice`, `superadmin`, `LoopSupportBot`), or when the separator-free,
+ * digit-free form is a concatenation of reserved words (`loopadmin`,
+ * `official-loop`). Short words only match whole tokens or as stripped
+ * affixes, so `loopy`, `teams`, `modern`, and `badminton` stay allowed.
  */
 export function isReservedAlias(alias: string): boolean {
   const normalized = normalizeAliasForPolicy(alias);
@@ -77,21 +135,32 @@ export function isReservedAlias(alias: string): boolean {
     .split(tokenSeparatorPattern)
     .map((token) => token.replace(digitPattern, ""))
     .filter((token) => token.length > 0);
-  if (tokens.some((token) => reservedWordSet.has(token))) {
+  if (tokens.some(tokenIsReserved)) {
     return true;
   }
   return canSegmentIntoReservedWords(tokens.join(""));
 }
 
+/**
+ * A term matches as a substring of the normalized alias, and also in compact
+ * form (both sides NFKC + lower-case with whitespace and every separator
+ * removed) so `rug pull` catches `rugpull`, `rug-pull`, and `Rug_Pull`.
+ */
 export function findBlockedTerm(
   alias: string,
   blockedTerms: readonly string[],
 ): string | null {
   const normalized = normalizeAliasForPolicy(alias);
-  const compact = normalized.replace(whitespacePattern, "");
+  const compact = compactAliasForPolicy(alias);
   for (const term of blockedTerms) {
-    if (normalized.includes(term) || compact.includes(term)) {
-      return term;
+    const normalizedTerm = normalizeAliasForPolicy(term);
+    const compactTerm = compactAliasForPolicy(term);
+    if (
+      normalizedTerm.length === 0 ||
+      normalized.includes(normalizedTerm) ||
+      (compactTerm.length > 0 && compact.includes(compactTerm))
+    ) {
+      return normalizedTerm.length === 0 ? null : term;
     }
   }
   return null;

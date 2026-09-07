@@ -247,17 +247,12 @@ export function down(pgm: MigrationBuilder): void {
 
     do $guard$
     begin
-      if exists (select 1 from public.profile_activation_commands)
+      if exists (select 1 from public.loop_users)
+        or exists (select 1 from public.profile_activation_commands)
         or exists (select 1 from public.privacy_preferences_v2)
-        or exists (
-          select 1 from public.user_profiles
-          where profile_status <> 'pending'
-             or bio is not null
-             or cardinality(interests) > 0
-        )
       then
         raise exception
-          'refusing destructive rollback of v2 LOOP ID profile data'
+          'refusing destructive rollback of v2 LOOP ID profile data: an assigned LOOP ID is immutable'
           using errcode = '55000';
       end if;
     end;

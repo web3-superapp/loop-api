@@ -58,11 +58,12 @@ function databaseConnectionUrl(source: string, databaseName: string): string {
 async function migrate(
   targetDatabaseUrl: string,
   count?: number,
+  direction: "up" | "down" = "up",
 ): Promise<void> {
   await runner({
     databaseUrl: targetDatabaseUrl,
     dir: migrationsDirectory,
-    direction: "up",
+    direction,
     ...(count === undefined ? {} : { count }),
     migrationsTable: "pgmigrations",
     log: () => undefined,
@@ -248,6 +249,19 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
       "select count(*)::text as count from public.loop_users where loop_id is null",
     );
     expect(nullCount.rows[0]?.count).toBe("0");
+  });
+
+  it("refuses to roll back 000015 while any account holds a LOOP ID", async () => {
+    await expect(migrate(temporaryDatabaseUrl, 1, "down")).rejects.toThrow(
+      /an assigned LOOP ID is immutable/,
+    );
+    const head = await pool.query<{ name: string }>(
+      "select name from public.pgmigrations order by run_on desc, id desc limit 1",
+    );
+    expect(head.rows[0]?.name).toBe("000015_v2_loop_id_profile");
+    await expect(
+      readLoopId(await createOwner("after-rollback")),
+    ).resolves.toMatch(loopIdPattern);
   });
 
   it("enforces LOOP ID uniqueness, format, and immutability in PostgreSQL", async () => {

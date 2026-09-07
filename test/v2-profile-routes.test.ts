@@ -626,6 +626,12 @@ describe("LOOP API V2 profile module", () => {
     });
     expect(input?.requestSha256).toBe(profileActivationDigest(values, "2.0"));
     expect(input?.requestId).toMatch(requestIdPattern);
+    expect(
+      profileActivationDigest({ ...values, interests: ["AI", "MEME"] }, "2.0"),
+    ).toBe(input?.requestSha256);
+    expect(
+      profileActivationDigest({ ...values, interests: ["AI"] }, "2.0"),
+    ).not.toBe(input?.requestSha256);
   });
 
   it("returns the current resource on replay and conflicts on a different body", async () => {
