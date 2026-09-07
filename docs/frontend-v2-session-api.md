@@ -52,7 +52,7 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
 - `regionGate` 目前恒为 `unavailable`：服务端尚未选定地区判定源。客户端不得
   用 locale / SIM / IP 自判地区，也不得把 `unavailable` 当作允许。
 
-未配置时（与 D0 基线逐字节一致）：
+未配置时：
 
 ```json
 {
@@ -66,7 +66,6 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
   "versionGate": {
     "status": "unavailable",
     "minimumSupportedVersions": { "ios": null, "android": null },
-    "forceUpdate": null,
     "storeUrls": { "ios": null, "android": null },
     "reasonCode": "CLIENT_VERSION_POLICY_UNAVAILABLE"
   },
@@ -116,14 +115,17 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
 | `>= minimumSupportedVersions[platform]`               | 正常进入                         |
 | `versionGate.status = "unavailable"`                  | 不做版本判断，也不显示“已是最新” |
 
-`available` 分支中 `forceUpdateBelow` 永不为 null（未配置硬下限时等于
-`minimumSupportedVersions`）；`unavailable` 分支保留 `forceUpdate: null`
-占位字段，`available` 分支不含该字段。`termsGate.requiredVersion` 只说明
+两个分支键集各自精确：`unavailable` 为 `status/minimumSupportedVersions/
+storeUrls/reasonCode`；`available` 为 `status/minimumSupportedVersions/
+forceUpdateBelow/storeUrls/reasonCode`。`forceUpdateBelow` 永不为 null（未
+配置硬下限时等于 `minimumSupportedVersions`）。D0 的 `forceUpdate: null`
+占位字段已删除。`termsGate.requiredVersion` 只说明
 必须接受的条款版本；用户是否已接受属于后续认证模块。
 
 **loop-mobile 现有解析器需同步修改**：`loop_v2_meta_repository.dart` 目前
 把 `configVersion`/`effectiveAt` 与常量比较、只识别 `active`/`accepted`/
-`required`、并对 `versionGate` 做精确键集校验（不认识 `forceUpdateBelow`）。
+`required`、并对 `versionGate` 做精确键集校验（要求已删除的 `forceUpdate`，
+不认识 `forceUpdateBelow`）。
 
 ### `GET /v2/meta/capabilities`
 

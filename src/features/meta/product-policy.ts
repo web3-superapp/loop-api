@@ -17,7 +17,6 @@ export interface V2VersionGateUnavailable {
     readonly ios: null;
     readonly android: null;
   };
-  readonly forceUpdate: null;
   readonly storeUrls: {
     readonly ios: null;
     readonly android: null;
@@ -132,7 +131,6 @@ const primaryTabs = Object.freeze([
 const unavailableVersionGate = Object.freeze({
   status: "unavailable",
   minimumSupportedVersions: Object.freeze({ ios: null, android: null }),
-  forceUpdate: null,
   storeUrls: Object.freeze({ ios: null, android: null }),
   reasonCode: "CLIENT_VERSION_POLICY_UNAVAILABLE",
 } as const satisfies V2VersionGateUnavailable);

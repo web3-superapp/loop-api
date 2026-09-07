@@ -69,24 +69,17 @@ const configVersionSchema = {
 } as const;
 
 /**
- * Version gate variants. The unavailable variant is byte-for-byte the D0
- * baseline projection. The available variant is emitted only when the
- * complete fail-closed version policy is configured (Decision 0029).
+ * Version gate variants with exact, disjoint key sets (Decision 0029). The
+ * available variant is emitted only when the complete fail-closed version
+ * policy is configured.
  */
 const versionGateUnavailableSchema = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "status",
-    "minimumSupportedVersions",
-    "forceUpdate",
-    "storeUrls",
-    "reasonCode",
-  ],
+  required: ["status", "minimumSupportedVersions", "storeUrls", "reasonCode"],
   properties: {
     status: { type: "string", const: "unavailable" },
     minimumSupportedVersions: platformValuesSchema({ type: "null" }),
-    forceUpdate: { type: "null" },
     storeUrls: platformValuesSchema({ type: "null" }),
     reasonCode: {
       type: "string",

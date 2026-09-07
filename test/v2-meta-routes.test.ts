@@ -33,7 +33,6 @@ const baselineClientPolicy = {
   versionGate: {
     status: "unavailable",
     minimumSupportedVersions: { ios: null, android: null },
-    forceUpdate: null,
     storeUrls: { ios: null, android: null },
     reasonCode: "CLIENT_VERSION_POLICY_UNAVAILABLE",
   },
@@ -108,7 +107,7 @@ describe("LOOP API V2 meta policy gates", () => {
     return app;
   }
 
-  it("keeps every gate unavailable and byte-identical when no policy is configured", async () => {
+  it("keeps every gate unavailable with exact key sets when no policy is configured", async () => {
     const app = await createApp();
     const response = await app.inject({
       method: "GET",

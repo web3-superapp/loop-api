@@ -292,7 +292,6 @@
                           "required": [
                             "status",
                             "minimumSupportedVersions",
-                            "forceUpdate",
                             "storeUrls",
                             "reasonCode"
                           ],
@@ -310,7 +309,6 @@
                                 "android": { "type": "null" }
                               }
                             },
-                            "forceUpdate": { "type": "null" },
                             "storeUrls": {
                               "type": "object",
                               "additionalProperties": false,

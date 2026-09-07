@@ -30,8 +30,9 @@ gate, the complete 03 §13.3 error code family, and two shared primitives
 - **Version gate.** All four required keys valid → `versionGate.status =
 "available"` with `minimumSupportedVersions`, `forceUpdateBelow`, and
   `storeUrls` per platform and `reasonCode: null`. None configured → the
-  unchanged D0 `unavailable` projection (`forceUpdate: null`,
-  `CLIENT_VERSION_POLICY_UNAVAILABLE`). Any partial set, malformed SemVer,
+  `unavailable` projection (`status`, null `minimumSupportedVersions` and
+  `storeUrls`, `reasonCode: CLIENT_VERSION_POLICY_UNAVAILABLE`). Any partial
+  set, malformed SemVer,
   non-https URL, hard floor without a policy, or hard floor above the minimum
   is a `ConfigurationError` at startup; the service never guesses.
 - **Two floors.** A client below `forceUpdateBelow[platform]` must update
@@ -59,9 +60,11 @@ gate, the complete 03 §13.3 error code family, and two shared primitives
 ### Contract shape
 
 `versionGate` and `termsGate` are `oneOf` discriminated unions on `status`
-(`"available" | "unavailable"`). The `unavailable` variants are byte-identical
-to the D0 baseline; the `available` variants replace nullable placeholders with
-required values:
+(`"available" | "unavailable"`) with exact, disjoint key sets. The
+`unavailable` `versionGate` variant has exactly `status`,
+`minimumSupportedVersions`, `storeUrls`, `reasonCode`; the `available` variant
+has exactly `status`, `minimumSupportedVersions`, `forceUpdateBelow`,
+`storeUrls`, `reasonCode`:
 
 ```json
 "versionGate": {
@@ -75,10 +78,11 @@ required values:
 ```
 
 The former `versionGate.status` value `active` and the former `termsGate`
-values `accepted`/`required` are removed; they were never emitted. The
-`forceUpdate: null` placeholder survives only in the `unavailable` variant for
-byte compatibility and is superseded by `forceUpdateBelow` in the `available`
-variant.
+values `accepted`/`required` are removed; they were never emitted. The D0
+`forceUpdate: null` placeholder is removed from the `unavailable` variant in
+the same one-time contract revision (main-agent ruling, 2026-09-07), because
+the mobile parser must be updated for the new statuses anyway; `forceUpdateBelow`
+exists only in the `available` variant.
 
 ### Single V2 registration point and module gate
 
@@ -175,16 +179,16 @@ challenge flag; routes only narrow the codes they may return.
 - The mobile client's current V2 meta parser (`loop_v2_meta.dart`,
   `loop_v2_meta_repository.dart`) must be updated in D0/D1 frontend work: it
   pins `configVersion`/`effectiveAt` to constants, knows only
-  `active|unavailable` and `accepted|required|unavailable` gate statuses, and
-  rejects the `forceUpdateBelow` key. Until it is updated it can only parse
-  the unconfigured projection.
+  `active|unavailable` and `accepted|required|unavailable` gate statuses,
+  requires the removed `forceUpdate` key, and rejects `forceUpdateBelow`.
+  Until it is updated it cannot parse either variant.
 - Region policy, real store URLs, and the terms version are operator inputs
   recorded outside Git. Nothing in this decision proves a physical-device
   force-update flow.
 
 ## Rollback
 
-Remove the new environment keys to restore the D0 unavailable projection
-byte-for-byte; the OpenAPI `oneOf` still validates it. Disabling
+Remove the new environment keys to restore the unavailable projection; the
+OpenAPI `oneOf` still validates it. Disabling
 `V2_MODULES_ENABLED` returns every gated capability to `deferred`. No
 persistence was added.
