@@ -78,6 +78,8 @@ describe("V2 error code catalog", () => {
       "errors.account.bootstrapRequired",
       false,
     ],
+    ALIAS_BLOCKED: [422, "validation", false, "errors.alias.blocked", false],
+    ALIAS_RESERVED: [422, "validation", false, "errors.alias.reserved", false],
     AUTH_INVALID: [401, "authentication", false, "errors.auth.invalid", true],
     AUTH_REQUIRED: [401, "authentication", false, "errors.auth.required", true],
     AUTH_STEP_UP_REQUIRED: [
@@ -223,7 +225,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(26);
+    expect(v2ErrorCodes).toHaveLength(28);
   });
 
   it("keeps the category enum at exactly eight values", () => {

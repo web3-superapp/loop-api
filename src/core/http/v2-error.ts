@@ -39,6 +39,20 @@ export const v2ErrorCatalog = Object.freeze({
     userMessageKey: "errors.account.bootstrapRequired",
     includeBearerChallenge: false,
   },
+  ALIAS_BLOCKED: {
+    statusCode: 422,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.alias.blocked",
+    includeBearerChallenge: false,
+  },
+  ALIAS_RESERVED: {
+    statusCode: 422,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.alias.reserved",
+    includeBearerChallenge: false,
+  },
   AUTH_INVALID: {
     statusCode: 401,
     category: "authentication",

@@ -322,6 +322,8 @@ describe("loadConfig", () => {
 
   describe("V2 policy gates, module gate, and cursor secret", () => {
     const versionPolicy = {
+      V2_CLIENT_POLICY_CONFIG_VERSION: "productPolicyV2.2026-09-07",
+      V2_CLIENT_POLICY_EFFECTIVE_AT: "2026-09-07T00:00:00Z",
       V2_CLIENT_POLICY_MIN_VERSION_IOS: "1.4.0",
       V2_CLIENT_POLICY_MIN_VERSION_ANDROID: "1.3.2",
       V2_CLIENT_POLICY_STORE_URL_IOS: "https://apps.apple.com/app/id1",
@@ -441,9 +443,34 @@ describe("loadConfig", () => {
         { ...validEnvironment(), V2_CURSOR_HMAC_SECRET: "short" },
         /V2_CURSOR_HMAC_SECRET/,
       ],
+      [
+        "version gate without the policy snapshot identity",
+        withPolicy({ V2_CLIENT_POLICY_EFFECTIVE_AT: "" }),
+        /V2_CLIENT_POLICY_CONFIG_VERSION and V2_CLIENT_POLICY_EFFECTIVE_AT are required/,
+      ],
+      [
+        "terms gate without the policy snapshot identity",
+        { ...validEnvironment(), V2_TERMS_REQUIRED_VERSION: "terms-2026-09" },
+        /V2_CLIENT_POLICY_CONFIG_VERSION and V2_CLIENT_POLICY_EFFECTIVE_AT are required/,
+      ],
+      [
+        "alias blocked term with a control character",
+        { ...validEnvironment(), V2_ALIAS_BLOCKED_TERMS: "ok,bad\u0007term" },
+        /V2_ALIAS_BLOCKED_TERMS/,
+      ],
     ])("fails closed on %s", (_name, environment, message) => {
       expect(() => loadConfig(environment)).toThrow(ConfigurationError);
       expect(() => loadConfig(environment)).toThrow(message);
+    });
+
+    it("normalises the alias blocklist and defaults it to empty", () => {
+      expect(loadConfig(validEnvironment()).v2AliasBlockedTerms).toEqual([]);
+      const config = loadConfig({
+        ...validEnvironment(),
+        V2_ALIAS_BLOCKED_TERMS: " Scam , ,\uFF2Cegit , scam ,rug-pull",
+      });
+      expect(config.v2AliasBlockedTerms).toEqual(["scam", "legit", "rug-pull"]);
+      expect(Object.isFrozen(config.v2AliasBlockedTerms)).toBe(true);
     });
 
     it("does not echo a rejected cursor secret", () => {

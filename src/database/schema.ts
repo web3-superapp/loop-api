@@ -1,10 +1,12 @@
-export const latestMigrationName = "000014_v2_device_sessions";
+export const latestMigrationName = "000015_v2_loop_id_profile";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
   "public.device_sessions",
   "public.device_session_commands",
   "public.device_session_events",
+  "public.privacy_preferences_v2",
+  "public.profile_activation_commands",
   "public.profile_code_sequence",
   "public.provider_operations",
   "public.idempotency_records",

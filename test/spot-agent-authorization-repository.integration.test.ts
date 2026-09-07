@@ -55,6 +55,8 @@ const truncateAll = `
     public.watchlist_versions,
     public.group_alias_reservations,
     public.communication_groups,
+    public.privacy_preferences_v2,
+    public.profile_activation_commands,
     public.privacy_preferences,
     public.user_profiles,
     public.spot_agent_authorization_events,

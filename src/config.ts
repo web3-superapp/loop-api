@@ -81,6 +81,7 @@ const environmentSchema = z
     V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: optionalCredential(64),
     V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: optionalCredential(64),
     V2_TERMS_REQUIRED_VERSION: optionalCredential(128),
+    V2_ALIAS_BLOCKED_TERMS: optionalCredential(8_192),
     V2_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
@@ -168,6 +169,24 @@ const environmentSchema = z
           path: [key],
         });
       }
+    }
+
+    const anyGateConfigured =
+      configuredVersionPolicyKeys.length > 0 ||
+      value.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS !== undefined ||
+      value.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID !== undefined ||
+      value.V2_TERMS_REQUIRED_VERSION !== undefined;
+    if (
+      anyGateConfigured &&
+      (value.V2_CLIENT_POLICY_CONFIG_VERSION === undefined ||
+        value.V2_CLIENT_POLICY_EFFECTIVE_AT === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "V2_CLIENT_POLICY_CONFIG_VERSION and V2_CLIENT_POLICY_EFFECTIVE_AT are required whenever a client policy gate is configured",
+        path: ["V2_CLIENT_POLICY_CONFIG_VERSION"],
+      });
     }
 
     for (const key of [
@@ -354,6 +373,8 @@ export interface AppConfig {
   readonly v2ModulesEnabled: ReadonlySet<V2ModuleId>;
   readonly v2ClientPolicy: V2ClientPolicyConfig;
   readonly v2Cursor: V2CursorConfig | null;
+  /** NFKC lower-cased operator-blocked alias substrings; empty by default. */
+  readonly v2AliasBlockedTerms: readonly string[];
   readonly databaseUrl: string;
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
@@ -451,6 +472,45 @@ function parseV2ModulesEnabled(value: string | undefined): Set<V2ModuleId> {
     modules.add(moduleId);
   }
   return modules;
+}
+
+const maximumAliasBlockedTerms = 256;
+const maximumAliasBlockedTermLength = 64;
+const forbiddenAliasTermCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Comma-separated operator blocklist for V2 aliases. Each term is trimmed,
+ * NFKC-normalised, lower-cased, and matched as a substring of the normalised
+ * alias. Blank entries are ignored; control characters are a startup error.
+ */
+function parseV2AliasBlockedTerms(
+  value: string | undefined,
+): readonly string[] {
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  const terms = new Set<string>();
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim().normalize("NFKC").toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (
+      Array.from(entry).length > maximumAliasBlockedTermLength ||
+      forbiddenAliasTermCharacters.test(entry)
+    ) {
+      throw new ConfigurationError([
+        `V2_ALIAS_BLOCKED_TERMS: each term must be 1-${maximumAliasBlockedTermLength} code points without control characters`,
+      ]);
+    }
+    terms.add(entry);
+  }
+  if (terms.size > maximumAliasBlockedTerms) {
+    throw new ConfigurationError([
+      `V2_ALIAS_BLOCKED_TERMS: at most ${maximumAliasBlockedTerms} terms are supported`,
+    ]);
+  }
+  return Object.freeze([...terms]);
 }
 
 function parseV2ClientPolicy(data: {
@@ -566,6 +626,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID:
       environment["V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID"],
     V2_TERMS_REQUIRED_VERSION: environment["V2_TERMS_REQUIRED_VERSION"],
+    V2_ALIAS_BLOCKED_TERMS: environment["V2_ALIAS_BLOCKED_TERMS"],
     V2_CURSOR_HMAC_SECRET: environment["V2_CURSOR_HMAC_SECRET"],
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
@@ -612,6 +673,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     parsed.data.V2_MODULES_ENABLED,
   );
   const v2ClientPolicy = parseV2ClientPolicy(parsed.data);
+  const v2AliasBlockedTerms = parseV2AliasBlockedTerms(
+    parsed.data.V2_ALIAS_BLOCKED_TERMS,
+  );
   const v2Cursor =
     parsed.data.V2_CURSOR_HMAC_SECRET === undefined
       ? null
@@ -689,6 +753,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     v2ModulesEnabled,
     v2ClientPolicy,
     v2Cursor,
+    v2AliasBlockedTerms,
     databaseUrl: databaseUrl.toString(),
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,

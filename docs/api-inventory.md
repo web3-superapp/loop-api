@@ -71,7 +71,8 @@ and deployed-environment evidence remain unverified.
   login share this one backend path; distinct Privy subjects are never merged
   by email, wallet, Alias, or device.
 - The complete wire contract and frontend sequence are documented in
-  `docs/api-v2-conventions.md` and `docs/frontend-v2-session-api.md`.
+  `docs/api-v2-conventions.md` and `docs/frontend-v2-session-api.md`; the
+  `profile` module contract is in `docs/frontend-v2-profile-api.md`.
 
 | Method and path              | Request                                                                 | Success projection                                            | Interface     | Capability                                                                               |
 | ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
@@ -81,12 +82,27 @@ and deployed-environment evidence remain unverified.
 | `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection        | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping           |
 | `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`     | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external        |
 
+### V2 profile module (Decision 0030, `V2_MODULES_ENABLED=profile`)
+
+| Method and path            | Request                                                                              | Success projection                                                                        | Interface     | Capability                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------- |
+| `GET /v2/profile/avatars`  | Public; no input                                                                     | Preset avatar catalog (`people-01..12`, `monogram`)                                       | `implemented` | `implemented`; upload stays `unavailable` (`AVATAR_STORAGE_NOT_SELECTED`) |
+| `GET /v2/profile`          | Bearer + contract/client headers; no payload                                         | `loopId`, alias, avatarRef, bio, interests, `profileStatus`, `activatedAt`, CAS `version` | `implemented` | `implemented`; version-0 pending default without a write                  |
+| `PUT /v2/profile`          | Same headers, no `Idempotency-Key`; `{expectedVersion, profile}`                     | Committed resource; version shared with `/v1/profile`                                     | `implemented` | `implemented`; `ALIAS_RESERVED` / `ALIAS_BLOCKED` policy applied          |
+| `POST /v2/profile/loop-id` | Bootstrap header set incl. UUIDv4 `Idempotency-Key`; `{alias, avatarRef, interests}` | One-time activation `pending → active`; replay returns the current resource               | `implemented` | `implemented`; key bound to owner/route/body digest                       |
+| `GET /v2/profile/privacy`  | Bearer + contract/client headers; no payload                                         | `discoverable`, `anonymousMode`, four `self\|everyone` visibilities, CAS `version`        | `implemented` | `implemented`; fail-closed version-0 default                              |
+| `PUT /v2/profile/privacy`  | Same headers, no `Idempotency-Key`; `{expectedVersion, privacy}`                     | Committed resource, independent from V1 privacy                                           | `implemented` | `implemented`; no copy-trade field exists                                 |
+
+The LOOP ID (`LOOP-` + 8 Crockford Base32) is assigned at account creation
+by both V1 and V2 bootstrap, backfilled for existing accounts, immutable, and
+never an authorization key. `GET /v2/account/me` is unchanged.
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
-point. `V2_MODULES_ENABLED` selects which module routes may register; every
-module below currently has no delivered registrar, so enabling it registers no
-route and only changes its capability projection.
+point. `V2_MODULES_ENABLED` selects which module routes may register. `profile`
+ships its registrar (Decision 0030); every other module below has none yet, so
+enabling it registers no route and only changes its capability projection.
 
 | Module ID       | Capability projected | Registrar   | Status                                                     |
 | --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
@@ -99,10 +115,12 @@ route and only changes its capability projection.
 | `launch`        | `launch`             | not shipped | gate `implemented`; routes pending D17/D18 and 02 document |
 | `mining`        | `mining`             | not shipped | gate `implemented`; routes pending D19 formula freeze      |
 | `notifications` | `pushNotifications`  | not shipped | gate `implemented`; routes pending D16                     |
-| `profile`       | none yet             | not shipped | gate `implemented`; capability and routes pending D2       |
+| `profile`       | `profile`            | shipped     | routes and capability `implemented` (Decision 0030)        |
 
 An enabled module without a registrar reports
-`availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`.
+`availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The
+`avatarUpload` capability is not module-gated and stays `unavailable` with
+`AVATAR_STORAGE_NOT_SELECTED` until a storage Provider decision exists.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one

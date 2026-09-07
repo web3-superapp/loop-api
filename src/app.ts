@@ -52,10 +52,16 @@ import {
   createPublicAliasSearchService,
   type PublicAliasSearchService,
 } from "./features/identity/public-alias-search-service.js";
+import { createAliasPolicy } from "./features/profile/alias-policy.js";
 import {
   createProfileService,
   type ProfileService,
 } from "./features/profile/profile-service.js";
+import { createUnavailableProfileV2Repository } from "./features/profile/profile-v2-repository.js";
+import {
+  createProfileV2Service,
+  type ProfileV2Service,
+} from "./features/profile/profile-v2-service.js";
 import { createSocialCursorCodec } from "./features/social/social-cursor.js";
 import { createSocialMutationQuota } from "./features/social/social-mutation-quota.js";
 import {
@@ -160,7 +166,7 @@ import { registerSpotWalletBindingRoutes } from "./routes/spot-wallet-binding.js
 import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
-import { registerV2Routes } from "./routes/v2/index.js";
+import { registeredV2ModuleIds, registerV2Routes } from "./routes/v2/index.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 const defaultContentSecurityPolicy =
@@ -223,6 +229,7 @@ export interface BuildAppOptions {
   readonly perpMutationGate?: PerpMutationGate;
   readonly agentAuthorizationMutationGate?: AgentAuthorizationMutationGate;
   readonly profileService?: ProfileService;
+  readonly profileV2Service?: ProfileV2Service;
   readonly watchlistService?: WatchlistService;
   readonly alertService?: AlertService;
   readonly spotMarketService?: SpotMarketService;
@@ -485,6 +492,11 @@ export async function buildApp(
       name: "identity",
       description: "Privy-authenticated LOOP account and device sessions",
     },
+    {
+      name: "profile",
+      description:
+        "Server-assigned LOOP ID, owner-bound profile, preset avatars, and V2 privacy preferences",
+    },
   ] as const;
   const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
 
@@ -716,6 +728,18 @@ export async function buildApp(
   const transferService = createUnavailableTransferService();
   const profileService =
     options.profileService ?? createProfileService(database.profiles);
+  const profileV2RuntimeAvailable =
+    registeredV2ModuleIds(config).includes("profile") &&
+    (options.profileV2Service !== undefined ||
+      database.profilesV2 !== undefined);
+  const profileV2Service =
+    options.profileV2Service ??
+    createProfileV2Service({
+      repository: database.profilesV2 ?? createUnavailableProfileV2Repository(),
+      aliasPolicy: createAliasPolicy({
+        blockedTerms: config.v2AliasBlockedTerms,
+      }),
+    });
   const watchlistService =
     options.watchlistService ??
     createWatchlistService({ repository: database.watchlists });
@@ -837,10 +861,14 @@ export async function buildApp(
   if (includeV2) {
     registerV2Routes(app, {
       config,
-      sessionRuntimeAvailable: v2SessionRuntimeAvailable,
+      runtime: Object.freeze({
+        sessionRuntimeAvailable: v2SessionRuntimeAvailable,
+        profileRuntimeAvailable: profileV2RuntimeAvailable,
+      }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
+      profileService: profileV2Service,
       cursorCodec:
         config.v2Cursor === null
           ? null

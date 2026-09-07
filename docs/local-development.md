@@ -155,6 +155,35 @@ bootstrapped identity without a binding receives sanitized 409
 fixed Testnet adapter. Real phone-issued Privy, nonempty Testnet-account, and
 Flutter end-to-end evidence remain unverified.
 
+## V2 profile module (Decision 0030)
+
+The `/v2/profile*` routes register only when the module gate lists them:
+
+```sh
+V2_MODULES_ENABLED=profile
+```
+
+Set it in the ignored `.env.local` (or export it for one run, e.g.
+`V2_MODULES_ENABLED=profile PORT=3010 pnpm dev`). Without it every
+`/v2/profile*` path is the V2 `NOT_FOUND` envelope and
+`GET /v2/meta/capabilities` reports `profile` as `deferred`. The module needs
+migration `000015_v2_loop_id_profile` (`pnpm db:migrate`), which backfills a
+LOOP ID for existing local accounts. `GET /v2/profile/avatars` is public and is
+the quickest smoke check; the protected routes additionally need working Privy
+credentials and a bootstrapped account.
+
+Optional operator alias blocklist:
+
+```sh
+V2_ALIAS_BLOCKED_TERMS=scam,rug pull
+```
+
+Comma-separated, NFKC-normalised and lower-cased, matched as substrings of the
+normalised alias (`ALIAS_BLOCKED`). Leave it blank to disable; the compiled
+reserved words (`loop admin official support system mod moderator team`) apply
+regardless (`ALIAS_RESERVED`). Avatar upload stays unavailable
+(`AVATAR_STORAGE_NOT_SELECTED`); only the preset references are accepted.
+
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server
 secrets must never be placed in tracked files or command examples.

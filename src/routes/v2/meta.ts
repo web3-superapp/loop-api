@@ -8,10 +8,14 @@ import {
 } from "../../core/http/schemas.js";
 import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
 import {
-  createV2ProductPolicyProjection,
+  createV2CapabilitiesProjection,
+  createV2ClientPolicyProjection,
+  v2CapabilityIds,
   v2ContractVersion,
+  v2PolicyNotYetEffectiveReasonCode,
   v2ProductConfigVersion,
   v2ProductEffectiveAt,
+  type V2ProductPolicyRuntime,
 } from "../../features/meta/product-policy.js";
 import {
   clientVersionMaximumLength,
@@ -83,7 +87,12 @@ const versionGateUnavailableSchema = {
     storeUrls: platformValuesSchema({ type: "null" }),
     reasonCode: {
       type: "string",
-      const: "CLIENT_VERSION_POLICY_UNAVAILABLE",
+      enum: [
+        "CLIENT_VERSION_POLICY_UNAVAILABLE",
+        v2PolicyNotYetEffectiveReasonCode,
+      ],
+      description:
+        "POLICY_NOT_YET_EFFECTIVE means a complete policy exists but its effectiveAt is still in the future.",
     },
   },
 } as const;
@@ -114,7 +123,10 @@ const termsGateUnavailableSchema = {
   properties: {
     status: { type: "string", const: "unavailable" },
     requiredVersion: { type: "null" },
-    reasonCode: { type: "string", const: "TERMS_POLICY_UNAVAILABLE" },
+    reasonCode: {
+      type: "string",
+      enum: ["TERMS_POLICY_UNAVAILABLE", v2PolicyNotYetEffectiveReasonCode],
+    },
   },
 } as const;
 
@@ -205,8 +217,8 @@ const capabilitiesResponseSchema = {
     },
     capabilities: {
       type: "array",
-      minItems: 16,
-      maxItems: 16,
+      minItems: v2CapabilityIds.length,
+      maxItems: v2CapabilityIds.length,
       items: {
         type: "object",
         additionalProperties: false,
@@ -214,24 +226,7 @@ const capabilitiesResponseSchema = {
         properties: {
           capabilityId: {
             type: "string",
-            enum: [
-              "privyAuthentication",
-              "accountSession",
-              "streamChatToken",
-              "streamVideoToken",
-              "community",
-              "bscRead",
-              "walletRead",
-              "privySwap",
-              "sendApprovals",
-              "launch",
-              "mining",
-              "pushNotifications",
-              "pay",
-              "bridge",
-              "dappExecution",
-              "communityAi",
-            ],
+            enum: [...v2CapabilityIds],
           },
           availability: {
             type: "string",
@@ -265,12 +260,9 @@ const metaErrorResponses = {
 export function registerV2MetaRoutes(
   app: FastifyInstance,
   config: AppConfig,
-  sessionRuntimeAvailable: boolean,
+  runtime: V2ProductPolicyRuntime,
 ): void {
-  const projection = createV2ProductPolicyProjection(
-    config,
-    sessionRuntimeAvailable,
-  );
+  const capabilities = createV2CapabilitiesProjection(config, runtime);
 
   app.get(
     "/v2/meta/client-policy",
@@ -291,7 +283,9 @@ export function registerV2MetaRoutes(
     },
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
-      return reply.code(200).send(projection.clientPolicy);
+      return reply
+        .code(200)
+        .send(createV2ClientPolicyProjection(config, new Date()));
     },
   );
 
@@ -314,7 +308,7 @@ export function registerV2MetaRoutes(
     },
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
-      return reply.code(200).send(projection.capabilities);
+      return reply.code(200).send(capabilities);
     },
   );
 }

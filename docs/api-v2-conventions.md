@@ -63,6 +63,13 @@ sensitive inputs. The server still generates a new request ID for every replay.
   immutable intent/version inputs.
 - The same key and identical canonical input returns the original operation or
   result. The same key with different input returns `IDEMPOTENCY_CONFLICT`.
+- Versioned compare-and-swap replacements (`PUT /v2/profile`,
+  `PUT /v2/profile/privacy`, and any later `expectedVersion` resource) do not
+  accept an `Idempotency-Key`: they are idempotent through `expectedVersion`
+  (an identical retry returns the committed resource, a stale version is
+  `VERSION_CONFLICT`), and a client-supplied key is rejected with
+  `INVALID_REQUEST` so a lost-response retry is never mistaken for a durable
+  command replay (main-agent ruling, Decision 0030).
 - A timeout or lost response does not authorize a blind replay with a new key.
   The client uses the operation/status endpoint named by that module or the
   exact-key replay explicitly defined by a synchronous module such as D1
@@ -114,6 +121,8 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | Code                         | Status | Category         | Retryable | userMessageKey                     |
 | ---------------------------- | ------ | ---------------- | --------- | ---------------------------------- |
 | `ACCOUNT_BOOTSTRAP_REQUIRED` | 409    | `authentication` | no        | `errors.account.bootstrapRequired` |
+| `ALIAS_BLOCKED`              | 422    | `validation`     | no        | `errors.alias.blocked`             |
+| `ALIAS_RESERVED`             | 422    | `validation`     | no        | `errors.alias.reserved`            |
 | `AUTH_INVALID`               | 401    | `authentication` | no        | `errors.auth.invalid`              |
 | `AUTH_REQUIRED`              | 401    | `authentication` | no        | `errors.auth.required`             |
 | `AUTH_STEP_UP_REQUIRED`      | 403    | `authentication` | no        | `errors.auth.stepUpRequired`       |
@@ -139,6 +148,10 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `SUBMISSION_UNKNOWN`         | 409    | `conflict`       | no        | `errors.submission.unknown`        |
 | `VALIDATION_FAILED`          | 422    | `validation`     | no        | `errors.validation.failed`         |
 | `VERSION_CONFLICT`           | 409    | `conflict`       | no        | `errors.version.conflict`          |
+
+`ALIAS_RESERVED` and `ALIAS_BLOCKED` (Decision 0030) are alias-policy
+rejections for V2 profile writes; the client shows the specific message and
+never retries the same alias.
 
 `SUBMISSION_UNKNOWN`, `QUOTE_EXPIRED`, and `DATA_STALE` are never retried
 blindly: the client reconciles through the module's status endpoint or fetches
@@ -166,6 +179,13 @@ operation needs a stronger, module-defined authentication step.
   cursors from `src/core/http/v2-cursor.ts` keyed by `V2_CURSOR_HMAC_SECRET`.
   A cursor cannot be replayed across accounts, routes, or filters, expires
   after 600 seconds, and is `CAPABILITY_UNAVAILABLE` when the secret is absent.
+- The `filter` string bound into a cursor must be the module's canonical form:
+  deterministic key order (sorted), normalized values, no whitespace, and the
+  same string on encode and decode. A module that builds it from raw query
+  order will reject its own cursors.
+- `InvalidV2CursorError` (malformed, foreign, expired, or tampered cursor) is
+  a client input error: the route maps it to `INVALID_REQUEST`; it is never
+  surfaced as `INTERNAL_ERROR` or retried.
 - New public resource IDs are generated and validated with
   `src/core/ids/opaque-id.ts` (canonical lowercase UUIDv4).
 - Stable ordering includes a unique tie-breaker. Page totals are omitted unless
@@ -185,7 +205,11 @@ operation needs a stronger, module-defined authentication step.
   `status: "available" | "unavailable"`. They become `available` only from the
   complete fail-closed configuration in Decision 0029
   (`V2_CLIENT_POLICY_*`, `V2_TERMS_REQUIRED_VERSION`); a partial version policy
-  is a startup error, never a half-published gate. `regionGate` stays
+  is a startup error, never a half-published gate. Configuring any gate also
+  requires `V2_CLIENT_POLICY_CONFIG_VERSION` and
+  `V2_CLIENT_POLICY_EFFECTIVE_AT`; while `effectiveAt` is still in the future
+  the configured gates report `unavailable` with
+  `reasonCode: POLICY_NOT_YET_EFFECTIVE` (evaluated per request). `regionGate` stays
   `unavailable` until a server-side region determination source is selected.
   Unavailable is not approval.
 - An available version gate carries two per-platform floors: below
@@ -218,8 +242,11 @@ operation needs a stronger, module-defined authentication step.
   `reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. Module → capability:
   `community→community`, `wallet→walletRead`, `swap→privySwap`,
   `sendApprovals→sendApprovals`, `launch→launch`, `mining→mining`,
-  `notifications→pushNotifications`; `search`, `market`, and `profile` gain a
-  capability entry with their module after consumer review.
+  `notifications→pushNotifications`, `profile→profile` (delivered by
+  Decision 0030; `available` only when the module is enabled and its
+  repository is composed); `search` and `market` gain a capability entry with
+  their module after consumer review. `avatarUpload` is not module-gated and
+  remains `unavailable` (`AVATAR_STORAGE_NOT_SELECTED`).
 - Module registrars receive shared dependencies (config, authentication hooks,
   session service, and the optional `cursorCodec`) and never compose their
   own authentication or cursor boundary.

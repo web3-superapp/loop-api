@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 
 import { buildApp } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, v2ModuleIds } from "../src/config.js";
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
@@ -62,6 +62,9 @@ async function renderContractSurface(
     API_DOCS_ENABLED: "false",
     TRUST_PROXY: "false",
     LOG_LEVEL: "silent",
+    // Every module ID is enabled so each delivered registrar contributes its
+    // routes to the V2 artifact; modules without a registrar add nothing.
+    V2_MODULES_ENABLED: v2ModuleIds.join(","),
     DATABASE_URL: "postgres://schema_only@127.0.0.1:5432/loop_api_schema",
   });
   const app = await buildApp({

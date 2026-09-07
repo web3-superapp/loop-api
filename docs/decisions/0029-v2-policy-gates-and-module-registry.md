@@ -102,7 +102,8 @@ market, wallet, swap, sendApprovals, launch, mining, notifications, profile`
   `swap→privySwap`, `sendApprovals→sendApprovals`, `launch→launch`,
   `mining→mining`, `notifications→pushNotifications`. `search`, `market`, and
   `profile` have no capability entry yet; adding one is a consumer-reviewed
-  contract change delivered with the module. `bscRead`, `pay`, `bridge`,
+  contract change delivered with the module (`profile→profile` and
+  `avatarUpload` were added by Decision 0030). `bscRead`, `pay`, `bridge`,
   `dappExecution`, and `communityAi` are not module-gated and remain deferred.
 - Only a module's own delivered registrar, in its own numbered decision, may
   report `available`. The gate is not evidence of Provider, chain, or device
@@ -117,6 +118,8 @@ challenge flag; routes only narrow the codes they may return.
 | Code                         | Status | Category         | Retryable | userMessageKey                     |
 | ---------------------------- | ------ | ---------------- | --------- | ---------------------------------- |
 | `ACCOUNT_BOOTSTRAP_REQUIRED` | 409    | `authentication` | no        | `errors.account.bootstrapRequired` |
+| `ALIAS_BLOCKED` (0030)       | 422    | `validation`     | no        | `errors.alias.blocked`             |
+| `ALIAS_RESERVED` (0030)      | 422    | `validation`     | no        | `errors.alias.reserved`            |
 | `AUTH_INVALID`               | 401    | `authentication` | no        | `errors.auth.invalid`              |
 | `AUTH_REQUIRED`              | 401    | `authentication` | no        | `errors.auth.required`             |
 | `AUTH_STEP_UP_REQUIRED`      | 403    | `authentication` | no        | `errors.auth.stepUpRequired`       |

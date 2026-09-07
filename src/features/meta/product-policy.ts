@@ -11,6 +11,13 @@ export type V2CapabilityAvailability = "available" | "deferred" | "unavailable";
 
 export type V2CapabilityEvidenceStatus = "notApplicable" | "pending";
 
+/**
+ * A configured gate whose `V2_CLIENT_POLICY_EFFECTIVE_AT` is still in the
+ * future stays unavailable with this reason until the clock passes it.
+ */
+export const v2PolicyNotYetEffectiveReasonCode =
+  "POLICY_NOT_YET_EFFECTIVE" as const;
+
 export interface V2VersionGateUnavailable {
   readonly status: "unavailable";
   readonly minimumSupportedVersions: {
@@ -21,7 +28,9 @@ export interface V2VersionGateUnavailable {
     readonly ios: null;
     readonly android: null;
   };
-  readonly reasonCode: "CLIENT_VERSION_POLICY_UNAVAILABLE";
+  readonly reasonCode:
+    | "CLIENT_VERSION_POLICY_UNAVAILABLE"
+    | typeof v2PolicyNotYetEffectiveReasonCode;
 }
 
 export interface V2VersionGateAvailable {
@@ -53,7 +62,8 @@ export interface V2RegionGateUnavailable {
 export interface V2TermsGateUnavailable {
   readonly status: "unavailable";
   readonly requiredVersion: null;
-  readonly reasonCode: "TERMS_POLICY_UNAVAILABLE";
+  readonly reasonCode:
+    "TERMS_POLICY_UNAVAILABLE" | typeof v2PolicyNotYetEffectiveReasonCode;
 }
 
 export interface V2TermsGateAvailable {
@@ -99,13 +109,31 @@ export interface V2ProductPolicyProjection {
   readonly capabilities: V2CapabilitiesProjection;
 }
 
+/**
+ * Runtime facts that only `buildApp` can establish. They are separate from
+ * configuration so the projection cannot claim a delivered module or a
+ * reachable database it has not been handed.
+ */
+export interface V2ProductPolicyRuntime {
+  readonly sessionRuntimeAvailable: boolean;
+  /** `profile` module enabled, registrar delivered, and repository composed. */
+  readonly profileRuntimeAvailable: boolean;
+}
+
 export const v2ModuleRuntimeNotRegisteredReasonCode =
   "MODULE_RUNTIME_NOT_REGISTERED" as const;
+export const v2ProfileModuleDeferredReasonCode =
+  "PROFILE_MODULE_NOT_ENABLED" as const;
+export const v2ProfileRuntimeUnavailableReasonCode =
+  "PROFILE_RUNTIME_UNAVAILABLE" as const;
+export const v2AvatarUploadUnavailableReasonCode =
+  "AVATAR_STORAGE_NOT_SELECTED" as const;
 
 /**
  * Capability projected by each V2 module gate. A module without a capability
- * entry (search, market, profile) is still gated for route registration; its
+ * entry (search, market) is still gated for route registration; its
  * capability is introduced with consumer review when the module is delivered.
+ * `profile` was delivered by Decision 0030.
  */
 export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
@@ -117,8 +145,29 @@ export const v2ModuleCapabilityIds = Object.freeze({
   launch: "launch",
   mining: "mining",
   notifications: "pushNotifications",
-  profile: null,
+  profile: "profile",
 } as const satisfies Readonly<Record<V2ModuleId, string | null>>);
+
+export const v2CapabilityIds = Object.freeze([
+  "privyAuthentication",
+  "accountSession",
+  "streamChatToken",
+  "streamVideoToken",
+  "community",
+  "bscRead",
+  "walletRead",
+  "privySwap",
+  "sendApprovals",
+  "launch",
+  "mining",
+  "pushNotifications",
+  "profile",
+  "avatarUpload",
+  "pay",
+  "bridge",
+  "dappExecution",
+  "communityAi",
+] as const);
 
 const primaryTabs = Object.freeze([
   "community",
@@ -148,10 +197,32 @@ const unavailableTermsGate = Object.freeze({
   reasonCode: "TERMS_POLICY_UNAVAILABLE",
 } as const satisfies V2TermsGateUnavailable);
 
-function versionGate(config: AppConfig): V2VersionGate {
+const notYetEffectiveVersionGate = Object.freeze({
+  ...unavailableVersionGate,
+  reasonCode: v2PolicyNotYetEffectiveReasonCode,
+} as const satisfies V2VersionGateUnavailable);
+
+const notYetEffectiveTermsGate = Object.freeze({
+  ...unavailableTermsGate,
+  reasonCode: v2PolicyNotYetEffectiveReasonCode,
+} as const satisfies V2TermsGateUnavailable);
+
+function policyNotYetEffective(config: AppConfig, now: Date): boolean {
+  const effectiveAt = config.v2ClientPolicy.effectiveAt;
+  if (effectiveAt === null) {
+    return false;
+  }
+  const effectiveAtMs = Date.parse(effectiveAt);
+  return Number.isFinite(effectiveAtMs) && effectiveAtMs > now.getTime();
+}
+
+function versionGate(config: AppConfig, now: Date): V2VersionGate {
   const policy = config.v2ClientPolicy.versionPolicy;
   if (policy === null) {
     return unavailableVersionGate;
+  }
+  if (policyNotYetEffective(config, now)) {
+    return notYetEffectiveVersionGate;
   }
   return Object.freeze({
     status: "available",
@@ -171,10 +242,13 @@ function versionGate(config: AppConfig): V2VersionGate {
   });
 }
 
-function termsGate(config: AppConfig): V2TermsGate {
+function termsGate(config: AppConfig, now: Date): V2TermsGate {
   const requiredVersion = config.v2ClientPolicy.termsRequiredVersion;
   if (requiredVersion === null) {
     return unavailableTermsGate;
+  }
+  if (policyNotYetEffective(config, now)) {
+    return notYetEffectiveTermsGate;
   }
   return Object.freeze({
     status: "available",
@@ -183,7 +257,14 @@ function termsGate(config: AppConfig): V2TermsGate {
   });
 }
 
-function createClientPolicy(config: AppConfig): V2ClientPolicyProjection {
+/**
+ * The client policy is evaluated per request against the current clock so a
+ * gate whose `effectiveAt` lies in the future switches on without a restart.
+ */
+export function createV2ClientPolicyProjection(
+  config: AppConfig,
+  now: Date = new Date(),
+): V2ClientPolicyProjection {
   return Object.freeze({
     contractVersion: v2ContractVersion,
     configVersion:
@@ -191,9 +272,9 @@ function createClientPolicy(config: AppConfig): V2ClientPolicyProjection {
     effectiveAt: config.v2ClientPolicy.effectiveAt ?? v2ProductEffectiveAt,
     defaultRoute: "community",
     navigation: Object.freeze({ primaryTabs }),
-    versionGate: versionGate(config),
+    versionGate: versionGate(config, now),
     regionGate: unavailableRegionGate,
-    termsGate: termsGate(config),
+    termsGate: termsGate(config, now),
   });
 }
 
@@ -254,10 +335,54 @@ function moduleGatedCapability(
   });
 }
 
-export function createV2ProductPolicyProjection(
+/**
+ * The `profile` module is delivered (Decision 0030). Its capability is
+ * `available` only when the module is enabled and `buildApp` composed the
+ * PostgreSQL profile repository; otherwise it reports why.
+ */
+function profileCapability(
   config: AppConfig,
-  sessionRuntimeAvailable: boolean,
-): V2ProductPolicyProjection {
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  if (!config.v2ModulesEnabled.has("profile")) {
+    return deferredCapability(
+      v2ModuleCapabilityIds.profile,
+      v2ProfileModuleDeferredReasonCode,
+    );
+  }
+  return Object.freeze({
+    capabilityId: v2ModuleCapabilityIds.profile,
+    availability: runtime.profileRuntimeAvailable ? "available" : "unavailable",
+    reasonCode: runtime.profileRuntimeAvailable
+      ? null
+      : v2ProfileRuntimeUnavailableReasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable",
+      reasonCode: null,
+    }),
+  });
+}
+
+function unavailableCapability(
+  capabilityId: string,
+  reasonCode: string,
+): V2CapabilityProjection {
+  return Object.freeze({
+    capabilityId,
+    availability: "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable",
+      reasonCode: null,
+    }),
+  });
+}
+
+export function createV2CapabilitiesProjection(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilitiesProjection {
+  const { sessionRuntimeAvailable } = runtime;
   const privyConfigured = config.privy !== null;
   const streamCredentialsConfigured = config.stream !== null;
   const streamQuotaConfigured = config.streamTokenQuota !== null;
@@ -338,6 +463,8 @@ export function createV2ProductPolicyProjection(
       v2ModuleCapabilityIds.notifications,
       "PUSH_RUNTIME_DEFERRED",
     ),
+    profileCapability(config, runtime),
+    unavailableCapability("avatarUpload", v2AvatarUploadUnavailableReasonCode),
     deferredCapability("pay", "PAY_RUNTIME_DEFERRED"),
     deferredCapability("bridge", "BRIDGE_RUNTIME_DEFERRED"),
     deferredCapability("dappExecution", "DAPP_EXECUTION_RUNTIME_DEFERRED"),
@@ -345,12 +472,20 @@ export function createV2ProductPolicyProjection(
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({
-    clientPolicy: createClientPolicy(config),
-    capabilities: Object.freeze({
-      contractVersion: v2ContractVersion,
-      configVersion: v2ProductConfigVersion,
-      effectiveAt: v2ProductEffectiveAt,
-      capabilities,
-    }),
+    contractVersion: v2ContractVersion,
+    configVersion: v2ProductConfigVersion,
+    effectiveAt: v2ProductEffectiveAt,
+    capabilities,
+  });
+}
+
+export function createV2ProductPolicyProjection(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+  now: Date = new Date(),
+): V2ProductPolicyProjection {
+  return Object.freeze({
+    clientPolicy: createV2ClientPolicyProjection(config, now),
+    capabilities: createV2CapabilitiesProjection(config, runtime),
   });
 }

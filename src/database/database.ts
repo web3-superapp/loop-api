@@ -36,10 +36,13 @@ import {
   createPostgresPerpWalletBindingRepository,
   type PerpWalletBindingRepository,
 } from "./perp-wallet-binding-repository.js";
+import { getOrCreateLoopUserInTransaction } from "./loop-user-insert.js";
 import {
   createPostgresProfileRepository,
   type ProfileRepository,
 } from "./profile-repository.js";
+import { createPostgresProfileV2Repository } from "./profile-v2-repository.js";
+import type { ProfileV2Repository } from "../features/profile/profile-v2-repository.js";
 import {
   createPostgresSocialRepository,
   type SocialRepository,
@@ -74,6 +77,8 @@ export interface Database {
   readonly perpIntents: PerpIntentRepository;
   readonly agentAuthorizations: AgentAuthorizationRepository;
   readonly profiles: ProfileRepository;
+  /** V2 LOOP ID profile and privacy (Decision 0030); absent means unavailable. */
+  readonly profilesV2?: ProfileV2Repository;
   readonly watchlists: WatchlistRepository;
   readonly alerts: AlertRepository;
   ping(): Promise<void>;
@@ -157,28 +162,21 @@ export function createPostgresDatabase(
       rawPrivyUserId: string,
     ): Promise<InternalUser> {
       const privyUserId = privyUserIdSchema.parse(rawPrivyUserId);
-      const inserted = await pool.query<{ id: string }>({
-        text: `
-          insert into public.loop_users (privy_user_id)
-          values ($1)
-          on conflict (privy_user_id) do nothing
-          returning id
-        `,
-        values: [privyUserId],
-      });
-      const insertedRow = inserted.rows[0];
-
-      if (insertedRow !== undefined) {
-        return internalUserRowSchema.parse(insertedRow);
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const user = await getOrCreateLoopUserInTransaction(
+          client,
+          privyUserId,
+        );
+        await client.query("commit");
+        return user;
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
       }
-
-      const existingUser = await internalUsers.findByPrivyUserId(privyUserId);
-
-      if (existingUser === null) {
-        throw new Error("Internal user conflict winner was not found");
-      }
-
-      return existingUser;
     },
   };
   const controlPlane = createPostgresControlPlaneRepository(pool);
@@ -195,6 +193,7 @@ export function createPostgresDatabase(
     spotIntents,
   );
   const profiles = createPostgresProfileRepository(pool);
+  const profilesV2 = createPostgresProfileV2Repository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
@@ -216,6 +215,7 @@ export function createPostgresDatabase(
     spotIntents,
     spotReconciliation,
     profiles,
+    profilesV2,
     watchlists,
     alerts,
     async ping(): Promise<void> {

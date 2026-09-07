@@ -14,6 +14,7 @@ import {
   type DeviceSession,
   type DeviceSessionRepository,
 } from "../features/session/device-session-repository.js";
+import { getOrCreateLoopUserInTransaction } from "./loop-user-insert.js";
 
 const canonicalUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -28,7 +29,6 @@ const uuidSchema = z.string().regex(canonicalUuidPattern);
 const uuidV4Schema = z.string().regex(canonicalUuidV4Pattern);
 const privyUserIdSchema = z.string().min(1).max(255);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
-const internalUserRowSchema = z.object({ id: uuidSchema }).strict();
 const clientVersionSchema = z
   .string()
   .min(clientVersionMinimumLength)
@@ -253,40 +253,6 @@ async function resolveReplayedCommand(
   });
 }
 
-async function getOrCreateInternalUser(
-  client: PoolClient,
-  privyUserId: string,
-): Promise<{ readonly id: string }> {
-  const inserted = await client.query<Record<string, unknown>>({
-    text: `
-      insert into public.loop_users (privy_user_id)
-      values ($1)
-      on conflict (privy_user_id) do nothing
-      returning id
-    `,
-    values: [privyUserId],
-  });
-  const insertedRow = inserted.rows[0];
-  if (insertedRow !== undefined) {
-    return Object.freeze(internalUserRowSchema.parse(insertedRow));
-  }
-
-  const existing = await client.query<Record<string, unknown>>({
-    text: `
-      select id
-      from public.loop_users
-      where privy_user_id = $1
-      limit 1
-    `,
-    values: [privyUserId],
-  });
-  const existingRow = existing.rows[0];
-  if (existingRow === undefined) {
-    throw new Error("Internal user conflict winner was not found");
-  }
-  return Object.freeze(internalUserRowSchema.parse(existingRow));
-}
-
 async function createSessionInTransaction(
   client: PoolClient,
   input: z.infer<typeof createInputSchema>,
@@ -423,18 +389,29 @@ async function createSessionInTransaction(
   return session;
 }
 
+export interface PostgresDeviceSessionRepositoryOptions {
+  /** Test seam for LOOP ID allocation; production uses the crypto generator. */
+  readonly generateLoopId?: () => string;
+}
+
 export function createPostgresDeviceSessionRepository(
   pool: Pool,
+  options: PostgresDeviceSessionRepositoryOptions = {},
 ): DeviceSessionRepository {
+  const loopUserOptions =
+    options.generateLoopId === undefined
+      ? {}
+      : { generateLoopId: options.generateLoopId };
   return {
     async bootstrapVerifiedPrivyUser(rawInput) {
       const input = bootstrapVerifiedPrivyUserInputSchema.parse(rawInput);
       return withTransaction(
         pool,
         async (client): Promise<BootstrapVerifiedPrivyUserResult> => {
-          const account = await getOrCreateInternalUser(
+          const account = await getOrCreateLoopUserInTransaction(
             client,
             input.privyUserId,
+            loopUserOptions,
           );
           const session = await createSessionInTransaction(client, {
             ownerUserId: account.id,
