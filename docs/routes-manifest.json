@@ -3,13 +3,7 @@
   "source": "https://cliview.org/loop-v2.html",
   "sha256": "bdbe183286c2d77c0de7f731818d5a8da9702ef08ed9a558a5189609c8b33c1a",
   "defaultRoute": "community",
-  "tabs": [
-    "community",
-    "mining",
-    "launch",
-    "market",
-    "wallet"
-  ],
+  "tabs": ["community", "mining", "launch", "market", "wallet"],
   "count": 93,
   "modules": {
     "0-global-account": [
