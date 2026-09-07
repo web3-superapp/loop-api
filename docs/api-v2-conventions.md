@@ -104,6 +104,47 @@ Every V2 error body has exactly these fields:
 - Validation includes unknown query/body/header fields; malformed input is not
   echoed in the response.
 
+### Error code family
+
+`src/core/http/v2-error.ts` exports the frozen `v2ErrorCatalog`
+(Decision 0029). Every code has exactly one HTTP status, category, `retryable`
+value, and `userMessageKey`; a route schema may only narrow the codes it can
+return. Modules raise errors with `V2ApiError.fromCode(code)`.
+
+| Code                         | Status | Category         | Retryable | userMessageKey                     |
+| ---------------------------- | ------ | ---------------- | --------- | ---------------------------------- |
+| `ACCOUNT_BOOTSTRAP_REQUIRED` | 409    | `authentication` | no        | `errors.account.bootstrapRequired` |
+| `AUTH_INVALID`               | 401    | `authentication` | no        | `errors.auth.invalid`              |
+| `AUTH_REQUIRED`              | 401    | `authentication` | no        | `errors.auth.required`             |
+| `AUTH_STEP_UP_REQUIRED`      | 403    | `authentication` | no        | `errors.auth.stepUpRequired`       |
+| `CAPABILITY_UNAVAILABLE`     | 503    | `availability`   | yes       | `errors.capability.unavailable`    |
+| `CHAIN_MISMATCH`             | 422    | `validation`     | no        | `errors.chain.mismatch`            |
+| `DATA_STALE`                 | 409    | `stale`          | no        | `errors.data.stale`                |
+| `IDEMPOTENCY_CONFLICT`       | 409    | `conflict`       | no        | `errors.idempotency.conflict`      |
+| `INDEXING_DELAYED`           | 503    | `availability`   | yes       | `errors.indexing.delayed`          |
+| `INSUFFICIENT_BALANCE`       | 409    | `conflict`       | no        | `errors.balance.insufficient`      |
+| `INTERNAL_ERROR`             | 500    | `internal`       | no        | `errors.internal`                  |
+| `INVALID_REQUEST`            | 400    | `validation`     | no        | `errors.request.invalid`           |
+| `MAINTENANCE`                | 503    | `availability`   | yes       | `errors.service.maintenance`       |
+| `NOT_FOUND`                  | 404    | `validation`     | no        | `errors.resource.notFound`         |
+| `PERMISSION_DENIED`          | 403    | `authorization`  | no        | `errors.permission.denied`         |
+| `POLICY_BLOCKED`             | 403    | `authorization`  | no        | `errors.policy.blocked`            |
+| `PROVIDER_DISCONNECTED`      | 503    | `availability`   | yes       | `errors.provider.disconnected`     |
+| `QUOTE_EXPIRED`              | 409    | `stale`          | no        | `errors.quote.expired`             |
+| `RATE_LIMITED`               | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`        |
+| `REGION_BLOCKED`             | 403    | `authorization`  | no        | `errors.region.blocked`            |
+| `REQUEST_TIMEOUT`            | 503    | `availability`   | yes       | `errors.request.timeout`           |
+| `SESSION_NOT_FOUND`          | 404    | `validation`     | no        | `errors.session.notFound`          |
+| `SIMULATION_FAILED`          | 409    | `conflict`       | no        | `errors.simulation.failed`         |
+| `SUBMISSION_UNKNOWN`         | 409    | `conflict`       | no        | `errors.submission.unknown`        |
+| `VALIDATION_FAILED`          | 422    | `validation`     | no        | `errors.validation.failed`         |
+| `VERSION_CONFLICT`           | 409    | `conflict`       | no        | `errors.version.conflict`          |
+
+`SUBMISSION_UNKNOWN`, `QUOTE_EXPIRED`, and `DATA_STALE` are never retried
+blindly: the client reconciles through the module's status endpoint or fetches
+fresh inputs. `AUTH_STEP_UP_REQUIRED` means the Bearer token is valid but the
+operation needs a stronger, module-defined authentication step.
+
 ## Data representation
 
 - Timestamps are server-generated RFC 3339 date-time strings with an explicit
@@ -122,7 +163,11 @@ Every V2 error body has exactly these fields:
 ## Lists, cursors, and search
 
 - Lists have an explicit maximum `limit` and use opaque, owner/route/filter-bound
-  cursors. A cursor cannot be replayed across accounts or filters.
+  cursors from `src/core/http/v2-cursor.ts` keyed by `V2_CURSOR_HMAC_SECRET`.
+  A cursor cannot be replayed across accounts, routes, or filters, expires
+  after 600 seconds, and is `CAPABILITY_UNAVAILABLE` when the secret is absent.
+- New public resource IDs are generated and validated with
+  `src/core/ids/opaque-id.ts` (canonical lowercase UUIDv4).
 - Stable ordering includes a unique tie-breaker. Page totals are omitted unless
   the authoritative source can provide a consistent value.
 - Search results carry a result type, stable opaque ID, display snapshot, and
@@ -136,8 +181,19 @@ Every V2 error body has exactly these fields:
   read-only bootstrap metadata. They accept no body or query.
 - Client policy establishes `community` as the post-login route and fixes the
   primary tab order to Community, Mining, Launch, Market, Wallet.
-- Version, region, and terms gates report `unavailable` while their authoritative
-  policy source is absent. Unavailable is not approval.
+- `versionGate` and `termsGate` are discriminated unions on
+  `status: "available" | "unavailable"`. They become `available` only from the
+  complete fail-closed configuration in Decision 0029
+  (`V2_CLIENT_POLICY_*`, `V2_TERMS_REQUIRED_VERSION`); a partial version policy
+  is a startup error, never a half-published gate. `regionGate` stays
+  `unavailable` until a server-side region determination source is selected.
+  Unavailable is not approval.
+- An available version gate carries two per-platform floors: below
+  `forceUpdateBelow` the client must update before continuing; between that
+  and `minimumSupportedVersions` it shows a dismissible prompt. The client
+  compares its own version; the endpoint accepts no input.
+- `configVersion` and `effectiveAt` on the client policy are the current policy
+  snapshot from configuration and must not be pinned by consumers.
 - A capability's `availability` describes the selected backend route/configuration
   state. Its `evidence` field separately records whether required external or
   physical-device evidence is still pending.
@@ -146,6 +202,27 @@ Every V2 error body has exactly these fields:
 - Deferred Community, BSC, Wallet, Swap, Send/Approvals, Launch, Mining, push,
   Pay, Bridge, DApp execution, and Community AI capabilities must remain visible
   as deferred/unavailable; a fixture cannot change their state.
+
+## Module registry and feature gate
+
+- `src/routes/v2/index.ts` is the only V2 registration point;
+  `registerV2Routes(app, deps)` is called once by `buildApp`. Meta and session
+  routes are always registered.
+- `V2_MODULES_ENABLED` is a comma-separated subset of `community`, `search`,
+  `market`, `wallet`, `swap`, `sendApprovals`, `launch`, `mining`,
+  `notifications`, `profile`. Unknown or duplicate IDs fail startup. A module
+  not listed is not registered even if its code exists.
+- Each module ships a registrar in `v2ModuleRegistrars` with its own decision.
+  Until then the entry is `null`: enabling the module registers no route and
+  moves its capability from `deferred` to `unavailable` with
+  `reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. Module → capability:
+  `community→community`, `wallet→walletRead`, `swap→privySwap`,
+  `sendApprovals→sendApprovals`, `launch→launch`, `mining→mining`,
+  `notifications→pushNotifications`; `search`, `market`, and `profile` gain a
+  capability entry with their module after consumer review.
+- Module registrars receive shared dependencies (config, authentication hooks,
+  session service, and the optional `cursorCodec`) and never compose their
+  own authentication or cursor boundary.
 
 ## Provider and funds boundaries
 

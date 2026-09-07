@@ -1,6 +1,35 @@
 import { z } from "zod";
 
+import {
+  compareClientVersions,
+  isValidClientVersion,
+} from "./features/session/client-version.js";
+
 const serviceVersion = "0.1.0";
+
+/**
+ * V2 module IDs accepted by V2_MODULES_ENABLED. The order is the registration
+ * order used by `registerV2Routes`. Adding an ID requires a numbered decision.
+ */
+export const v2ModuleIds = Object.freeze([
+  "community",
+  "search",
+  "market",
+  "wallet",
+  "swap",
+  "sendApprovals",
+  "launch",
+  "mining",
+  "notifications",
+  "profile",
+] as const);
+
+export type V2ModuleId = (typeof v2ModuleIds)[number];
+
+const v2ModuleIdSet: ReadonlySet<string> = new Set(v2ModuleIds);
+const v2ConfigVersionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const rfc3339WithOffsetPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const booleanString = z
   .enum(["true", "false"])
@@ -42,6 +71,17 @@ const environmentSchema = z
       "silent",
     ]),
     V2_SESSION_ENABLED: booleanString,
+    V2_MODULES_ENABLED: optionalCredential(1_024),
+    V2_CLIENT_POLICY_CONFIG_VERSION: optionalCredential(128),
+    V2_CLIENT_POLICY_EFFECTIVE_AT: optionalCredential(64),
+    V2_CLIENT_POLICY_MIN_VERSION_IOS: optionalCredential(64),
+    V2_CLIENT_POLICY_MIN_VERSION_ANDROID: optionalCredential(64),
+    V2_CLIENT_POLICY_STORE_URL_IOS: optionalCredential(2_048),
+    V2_CLIENT_POLICY_STORE_URL_ANDROID: optionalCredential(2_048),
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: optionalCredential(64),
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: optionalCredential(64),
+    V2_TERMS_REQUIRED_VERSION: optionalCredential(128),
+    V2_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     STREAM_API_KEY: optionalCredential(255),
@@ -94,6 +134,78 @@ const environmentSchema = z
         message:
           "SOCIAL_CURSOR_HMAC_SECRET and SOCIAL_QUOTA_HMAC_SECRET must be configured together",
         path: ["SOCIAL_CURSOR_HMAC_SECRET"],
+      });
+    }
+
+    const versionPolicyKeys = [
+      "V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      "V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      "V2_CLIENT_POLICY_STORE_URL_IOS",
+      "V2_CLIENT_POLICY_STORE_URL_ANDROID",
+    ] as const;
+    const configuredVersionPolicyKeys = versionPolicyKeys.filter(
+      (key) => value[key] !== undefined,
+    );
+    const versionPolicyConfigured =
+      configuredVersionPolicyKeys.length === versionPolicyKeys.length;
+
+    if (configuredVersionPolicyKeys.length > 0 && !versionPolicyConfigured) {
+      context.addIssue({
+        code: "custom",
+        message: `${versionPolicyKeys.join(", ")} must be configured together`,
+        path: ["V2_CLIENT_POLICY_MIN_VERSION_IOS"],
+      });
+    }
+
+    for (const key of [
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID",
+    ] as const) {
+      if (value[key] !== undefined && !versionPolicyConfigured) {
+        context.addIssue({
+          code: "custom",
+          message: "requires the complete V2 client version policy",
+          path: [key],
+        });
+      }
+    }
+
+    for (const key of [
+      "V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      "V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID",
+    ] as const) {
+      const candidate = value[key];
+      if (candidate !== undefined && !isValidClientVersion(candidate)) {
+        context.addIssue({
+          code: "custom",
+          message: "must be a valid SemVer 2.0 version",
+          path: [key],
+        });
+      }
+    }
+
+    if (
+      value.V2_CLIENT_POLICY_CONFIG_VERSION !== undefined &&
+      !v2ConfigVersionPattern.test(value.V2_CLIENT_POLICY_CONFIG_VERSION)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        path: ["V2_CLIENT_POLICY_CONFIG_VERSION"],
+      });
+    }
+
+    if (
+      value.V2_CLIENT_POLICY_EFFECTIVE_AT !== undefined &&
+      (!rfc3339WithOffsetPattern.test(value.V2_CLIENT_POLICY_EFFECTIVE_AT) ||
+        !Number.isFinite(Date.parse(value.V2_CLIENT_POLICY_EFFECTIVE_AT)))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "must be an RFC 3339 date-time with an explicit timezone",
+        path: ["V2_CLIENT_POLICY_EFFECTIVE_AT"],
       });
     }
 
@@ -200,6 +312,35 @@ export interface HyperliquidPrivateReadsConfig {
   readonly weightCapacity: number;
 }
 
+export interface V2PlatformValues<T> {
+  readonly ios: T;
+  readonly android: T;
+}
+
+/**
+ * Two version floors per platform. A client below `forceUpdateBelow` must
+ * update before continuing; a client below `minimumSupportedVersions` but at
+ * or above `forceUpdateBelow` sees a dismissible update prompt. When no
+ * explicit hard floor is configured, both floors are the same value.
+ */
+export interface V2ClientVersionPolicyConfig {
+  readonly minimumSupportedVersions: V2PlatformValues<string>;
+  readonly forceUpdateBelow: V2PlatformValues<string>;
+  readonly storeUrls: V2PlatformValues<string>;
+}
+
+export interface V2ClientPolicyConfig {
+  readonly configVersion: string | null;
+  readonly effectiveAt: string | null;
+  readonly versionPolicy: V2ClientVersionPolicyConfig | null;
+  readonly termsRequiredVersion: string | null;
+}
+
+export interface V2CursorConfig {
+  readonly hmacSecret: string;
+  readonly ttlSeconds: 600;
+}
+
 export interface AppConfig {
   readonly nodeEnv: "development" | "test" | "production";
   readonly host: string;
@@ -210,6 +351,9 @@ export interface AppConfig {
   readonly logLevel:
     "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
   readonly v2SessionEnabled: boolean;
+  readonly v2ModulesEnabled: ReadonlySet<V2ModuleId>;
+  readonly v2ClientPolicy: V2ClientPolicyConfig;
+  readonly v2Cursor: V2CursorConfig | null;
   readonly databaseUrl: string;
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
@@ -275,6 +419,107 @@ function assertPublicBaseUrl(nodeEnv: AppConfig["nodeEnv"], url: URL): void {
   }
 }
 
+function parseStoreUrl(fieldName: string, value: string): string {
+  const url = parseUrl(fieldName, value);
+  if (url.protocol !== "https:") {
+    throw new ConfigurationError([`${fieldName}: protocol must be https`]);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([`${fieldName}: credentials are not allowed`]);
+  }
+  return url.toString();
+}
+
+function parseV2ModulesEnabled(value: string | undefined): Set<V2ModuleId> {
+  const modules = new Set<V2ModuleId>();
+  if (value === undefined) {
+    return modules;
+  }
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim();
+    if (!v2ModuleIdSet.has(entry)) {
+      throw new ConfigurationError([
+        `V2_MODULES_ENABLED: unknown module ID; allowed values are ${v2ModuleIds.join(", ")}`,
+      ]);
+    }
+    const moduleId = entry as V2ModuleId;
+    if (modules.has(moduleId)) {
+      throw new ConfigurationError([
+        `V2_MODULES_ENABLED: duplicate module ID ${moduleId}`,
+      ]);
+    }
+    modules.add(moduleId);
+  }
+  return modules;
+}
+
+function parseV2ClientPolicy(data: {
+  readonly V2_CLIENT_POLICY_CONFIG_VERSION?: string | undefined;
+  readonly V2_CLIENT_POLICY_EFFECTIVE_AT?: string | undefined;
+  readonly V2_CLIENT_POLICY_MIN_VERSION_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_MIN_VERSION_ANDROID?: string | undefined;
+  readonly V2_CLIENT_POLICY_STORE_URL_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_STORE_URL_ANDROID?: string | undefined;
+  readonly V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID?: string | undefined;
+  readonly V2_TERMS_REQUIRED_VERSION?: string | undefined;
+}): V2ClientPolicyConfig {
+  let versionPolicy: V2ClientVersionPolicyConfig | null = null;
+  const minimumIos = data.V2_CLIENT_POLICY_MIN_VERSION_IOS;
+  const minimumAndroid = data.V2_CLIENT_POLICY_MIN_VERSION_ANDROID;
+  const storeIos = data.V2_CLIENT_POLICY_STORE_URL_IOS;
+  const storeAndroid = data.V2_CLIENT_POLICY_STORE_URL_ANDROID;
+
+  if (
+    minimumIos !== undefined &&
+    minimumAndroid !== undefined &&
+    storeIos !== undefined &&
+    storeAndroid !== undefined
+  ) {
+    const forceUpdateBelowIos =
+      data.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS ?? minimumIos;
+    const forceUpdateBelowAndroid =
+      data.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID ?? minimumAndroid;
+    if (compareClientVersions(forceUpdateBelowIos, minimumIos) > 0) {
+      throw new ConfigurationError([
+        "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: must not exceed V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      ]);
+    }
+    if (compareClientVersions(forceUpdateBelowAndroid, minimumAndroid) > 0) {
+      throw new ConfigurationError([
+        "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: must not exceed V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      ]);
+    }
+    versionPolicy = Object.freeze({
+      minimumSupportedVersions: Object.freeze({
+        ios: minimumIos,
+        android: minimumAndroid,
+      }),
+      forceUpdateBelow: Object.freeze({
+        ios: forceUpdateBelowIos,
+        android: forceUpdateBelowAndroid,
+      }),
+      storeUrls: Object.freeze({
+        ios: parseStoreUrl("V2_CLIENT_POLICY_STORE_URL_IOS", storeIos),
+        android: parseStoreUrl(
+          "V2_CLIENT_POLICY_STORE_URL_ANDROID",
+          storeAndroid,
+        ),
+      }),
+    });
+  }
+
+  return Object.freeze({
+    configVersion: data.V2_CLIENT_POLICY_CONFIG_VERSION ?? null,
+    effectiveAt:
+      data.V2_CLIENT_POLICY_EFFECTIVE_AT === undefined
+        ? null
+        : new Date(data.V2_CLIENT_POLICY_EFFECTIVE_AT).toISOString(),
+    versionPolicy,
+    termsRequiredVersion: data.V2_TERMS_REQUIRED_VERSION ?? null,
+  });
+}
+
 function assertDatabaseUrl(url: URL): void {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new ConfigurationError([
@@ -304,6 +549,24 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     V2_SESSION_ENABLED:
       environment["V2_SESSION_ENABLED"] ??
       (rawNodeEnv === "production" ? "false" : "true"),
+    V2_MODULES_ENABLED: environment["V2_MODULES_ENABLED"],
+    V2_CLIENT_POLICY_CONFIG_VERSION:
+      environment["V2_CLIENT_POLICY_CONFIG_VERSION"],
+    V2_CLIENT_POLICY_EFFECTIVE_AT: environment["V2_CLIENT_POLICY_EFFECTIVE_AT"],
+    V2_CLIENT_POLICY_MIN_VERSION_IOS:
+      environment["V2_CLIENT_POLICY_MIN_VERSION_IOS"],
+    V2_CLIENT_POLICY_MIN_VERSION_ANDROID:
+      environment["V2_CLIENT_POLICY_MIN_VERSION_ANDROID"],
+    V2_CLIENT_POLICY_STORE_URL_IOS:
+      environment["V2_CLIENT_POLICY_STORE_URL_IOS"],
+    V2_CLIENT_POLICY_STORE_URL_ANDROID:
+      environment["V2_CLIENT_POLICY_STORE_URL_ANDROID"],
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS:
+      environment["V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS"],
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID:
+      environment["V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID"],
+    V2_TERMS_REQUIRED_VERSION: environment["V2_TERMS_REQUIRED_VERSION"],
+    V2_CURSOR_HMAC_SECRET: environment["V2_CURSOR_HMAC_SECRET"],
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     STREAM_API_KEY: environment["STREAM_API_KEY"],
@@ -345,6 +608,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
   assertPublicBaseUrl(parsed.data.NODE_ENV, publicBaseUrl);
   assertDatabaseUrl(databaseUrl);
+  const v2ModulesEnabled = parseV2ModulesEnabled(
+    parsed.data.V2_MODULES_ENABLED,
+  );
+  const v2ClientPolicy = parseV2ClientPolicy(parsed.data);
+  const v2Cursor =
+    parsed.data.V2_CURSOR_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.V2_CURSOR_HMAC_SECRET,
+          ttlSeconds: 600 as const,
+        });
   const privy =
     parsed.data.PRIVY_APP_ID !== undefined &&
     parsed.data.PRIVY_APP_SECRET !== undefined
@@ -412,6 +686,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     trustProxy: parsed.data.TRUST_PROXY,
     logLevel: parsed.data.LOG_LEVEL,
     v2SessionEnabled: parsed.data.V2_SESSION_ENABLED,
+    v2ModulesEnabled,
+    v2ClientPolicy,
+    v2Cursor,
     databaseUrl: databaseUrl.toString(),
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,

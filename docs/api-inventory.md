@@ -73,13 +73,36 @@ and deployed-environment evidence remain unverified.
 - The complete wire contract and frontend sequence are documented in
   `docs/api-v2-conventions.md` and `docs/frontend-v2-session-api.md`.
 
-| Method and path              | Request                                                                 | Success projection                                             | Interface     | Capability                                                                        |
-| ---------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
-| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab and fail-closed version/region/terms gates | `implemented` | `implemented`; unavailable policy gates are not approval                          |
-| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence          | `implemented` | `implemented`; deferred capabilities remain unavailable                           |
-| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID      | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified               |
-| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection         | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping    |
-| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`      | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external |
+| Method and path              | Request                                                                 | Success projection                                            | Interface     | Capability                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab; configuration-driven version/terms gates | `implemented` | `implemented`; gates are `available` only from complete config, region stays unavailable |
+| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence         | `implemented` | `implemented`; deferred capabilities remain unavailable                                  |
+| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID     | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified                      |
+| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection        | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping           |
+| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`     | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external        |
+
+### V2 module gate (Decision 0029)
+
+`registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
+point. `V2_MODULES_ENABLED` selects which module routes may register; every
+module below currently has no delivered registrar, so enabling it registers no
+route and only changes its capability projection.
+
+| Module ID       | Capability projected | Registrar   | Status                                                     |
+| --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
+| `community`     | `community`          | not shipped | gate `implemented`; routes pending D3 decision             |
+| `search`        | none yet             | not shipped | gate `implemented`; capability and routes pending D7       |
+| `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
+| `wallet`        | `walletRead`         | not shipped | gate `implemented`; routes pending D12                     |
+| `swap`          | `privySwap`          | not shipped | gate `implemented`; routes pending D13 Go/No-Go            |
+| `sendApprovals` | `sendApprovals`      | not shipped | gate `implemented`; routes pending D14                     |
+| `launch`        | `launch`             | not shipped | gate `implemented`; routes pending D17/D18 and 02 document |
+| `mining`        | `mining`             | not shipped | gate `implemented`; routes pending D19 formula freeze      |
+| `notifications` | `pushNotifications`  | not shipped | gate `implemented`; routes pending D16                     |
+| `profile`       | none yet             | not shipped | gate `implemented`; capability and routes pending D2       |
+
+An enabled module without a registrar reports
+`availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one

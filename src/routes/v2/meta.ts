@@ -1,35 +1,23 @@
 import type { FastifyInstance } from "fastify";
 
-import type { AppConfig } from "../config.js";
-import { v2ErrorResponseSchema } from "../core/http/v2-error.js";
+import type { AppConfig } from "../../config.js";
+import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   emptyQueryStringSchema,
   noStoreResponseHeaders,
-} from "../core/http/schemas.js";
-import { assertNoBodyOrQuery } from "../core/http/request-input.js";
+} from "../../core/http/schemas.js";
+import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
 import {
   createV2ProductPolicyProjection,
   v2ContractVersion,
   v2ProductConfigVersion,
   v2ProductEffectiveAt,
-} from "../features/meta/product-policy.js";
+} from "../../features/meta/product-policy.js";
 import {
   clientVersionMaximumLength,
   clientVersionMinimumLength,
   clientVersionSemver2PatternSource,
-} from "../features/session/client-version.js";
-
-const nullableSemverSchema = {
-  anyOf: [
-    {
-      type: "string",
-      minLength: clientVersionMinimumLength,
-      maxLength: clientVersionMaximumLength,
-      pattern: clientVersionSemver2PatternSource,
-    },
-    { type: "null" },
-  ],
-} as const;
+} from "../../features/session/client-version.js";
 
 const nullableUrlSchema = {
   anyOf: [
@@ -50,6 +38,104 @@ const nullableReasonCodeSchema = {
   ],
 } as const;
 
+const semverSchema = {
+  type: "string",
+  minLength: clientVersionMinimumLength,
+  maxLength: clientVersionMaximumLength,
+  pattern: clientVersionSemver2PatternSource,
+} as const;
+
+const httpsUrlSchema = {
+  type: "string",
+  format: "uri",
+  minLength: 9,
+  maxLength: 2_048,
+  pattern: "^https://",
+} as const;
+
+const platformValuesSchema = <T>(value: T) =>
+  ({
+    type: "object",
+    additionalProperties: false,
+    required: ["ios", "android"],
+    properties: { ios: value, android: value },
+  }) as const;
+
+const configVersionSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+} as const;
+
+/**
+ * Version gate variants. The unavailable variant is byte-for-byte the D0
+ * baseline projection. The available variant is emitted only when the
+ * complete fail-closed version policy is configured (Decision 0029).
+ */
+const versionGateUnavailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "minimumSupportedVersions",
+    "forceUpdate",
+    "storeUrls",
+    "reasonCode",
+  ],
+  properties: {
+    status: { type: "string", const: "unavailable" },
+    minimumSupportedVersions: platformValuesSchema({ type: "null" }),
+    forceUpdate: { type: "null" },
+    storeUrls: platformValuesSchema({ type: "null" }),
+    reasonCode: {
+      type: "string",
+      const: "CLIENT_VERSION_POLICY_UNAVAILABLE",
+    },
+  },
+} as const;
+
+const versionGateAvailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "minimumSupportedVersions",
+    "forceUpdateBelow",
+    "storeUrls",
+    "reasonCode",
+  ],
+  properties: {
+    status: { type: "string", const: "available" },
+    minimumSupportedVersions: platformValuesSchema(semverSchema),
+    forceUpdateBelow: platformValuesSchema(semverSchema),
+    storeUrls: platformValuesSchema(httpsUrlSchema),
+    reasonCode: { type: "null" },
+  },
+} as const;
+
+const termsGateUnavailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "requiredVersion", "reasonCode"],
+  properties: {
+    status: { type: "string", const: "unavailable" },
+    requiredVersion: { type: "null" },
+    reasonCode: { type: "string", const: "TERMS_POLICY_UNAVAILABLE" },
+  },
+} as const;
+
+const termsGateAvailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "requiredVersion", "reasonCode"],
+  properties: {
+    status: { type: "string", const: "available" },
+    requiredVersion: { type: "string", minLength: 1, maxLength: 128 },
+    reasonCode: { type: "null" },
+  },
+} as const;
+
 const clientPolicyResponseSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -66,12 +152,8 @@ const clientPolicyResponseSchema = {
   ],
   properties: {
     contractVersion: { type: "string", const: v2ContractVersion },
-    configVersion: { type: "string", const: v2ProductConfigVersion },
-    effectiveAt: {
-      type: "string",
-      format: "date-time",
-      const: v2ProductEffectiveAt,
-    },
+    configVersion: configVersionSchema,
+    effectiveAt: { type: "string", format: "date-time" },
     defaultRoute: { type: "string", const: "community" },
     navigation: {
       type: "object",
@@ -91,40 +173,7 @@ const clientPolicyResponseSchema = {
       },
     },
     versionGate: {
-      type: "object",
-      additionalProperties: false,
-      required: [
-        "status",
-        "minimumSupportedVersions",
-        "forceUpdate",
-        "storeUrls",
-        "reasonCode",
-      ],
-      properties: {
-        status: { type: "string", enum: ["active", "unavailable"] },
-        minimumSupportedVersions: {
-          type: "object",
-          additionalProperties: false,
-          required: ["ios", "android"],
-          properties: {
-            ios: nullableSemverSchema,
-            android: nullableSemverSchema,
-          },
-        },
-        forceUpdate: {
-          anyOf: [{ type: "boolean" }, { type: "null" }],
-        },
-        storeUrls: {
-          type: "object",
-          additionalProperties: false,
-          required: ["ios", "android"],
-          properties: {
-            ios: nullableUrlSchema,
-            android: nullableUrlSchema,
-          },
-        },
-        reasonCode: nullableReasonCodeSchema,
-      },
+      oneOf: [versionGateUnavailableSchema, versionGateAvailableSchema],
     },
     regionGate: {
       type: "object",
@@ -143,22 +192,7 @@ const clientPolicyResponseSchema = {
       },
     },
     termsGate: {
-      type: "object",
-      additionalProperties: false,
-      required: ["status", "requiredVersion", "reasonCode"],
-      properties: {
-        status: {
-          type: "string",
-          enum: ["accepted", "required", "unavailable"],
-        },
-        requiredVersion: {
-          anyOf: [
-            { type: "string", minLength: 1, maxLength: 128 },
-            { type: "null" },
-          ],
-        },
-        reasonCode: nullableReasonCodeSchema,
-      },
+      oneOf: [termsGateUnavailableSchema, termsGateAvailableSchema],
     },
   },
 } as const;

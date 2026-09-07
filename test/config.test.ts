@@ -319,4 +319,170 @@ describe("loadConfig", () => {
 
     expect(loadConfig(environment).v2SessionEnabled).toBe(false);
   });
+
+  describe("V2 policy gates, module gate, and cursor secret", () => {
+    const versionPolicy = {
+      V2_CLIENT_POLICY_MIN_VERSION_IOS: "1.4.0",
+      V2_CLIENT_POLICY_MIN_VERSION_ANDROID: "1.3.2",
+      V2_CLIENT_POLICY_STORE_URL_IOS: "https://apps.apple.com/app/id1",
+      V2_CLIENT_POLICY_STORE_URL_ANDROID:
+        "https://play.google.com/store/apps/details?id=app.loop",
+    } as const;
+
+    function withPolicy(
+      overrides: Readonly<Record<string, string>> = {},
+    ): NodeJS.ProcessEnv {
+      return { ...validEnvironment(), ...versionPolicy, ...overrides };
+    }
+
+    it("defaults every V2 gate to unconfigured", () => {
+      const config = loadConfig({
+        ...validEnvironment(),
+        V2_MODULES_ENABLED: "  ",
+        V2_TERMS_REQUIRED_VERSION: "",
+      });
+
+      expect(config.v2ModulesEnabled.size).toBe(0);
+      expect(config.v2ClientPolicy).toEqual({
+        configVersion: null,
+        effectiveAt: null,
+        versionPolicy: null,
+        termsRequiredVersion: null,
+      });
+      expect(config.v2Cursor).toBeNull();
+    });
+
+    it("parses a complete version policy with the hard floor defaulting to the minimum", () => {
+      const config = loadConfig(withPolicy());
+
+      expect(config.v2ClientPolicy.versionPolicy).toEqual({
+        minimumSupportedVersions: { ios: "1.4.0", android: "1.3.2" },
+        forceUpdateBelow: { ios: "1.4.0", android: "1.3.2" },
+        storeUrls: {
+          ios: "https://apps.apple.com/app/id1",
+          android: "https://play.google.com/store/apps/details?id=app.loop",
+        },
+      });
+      expect(Object.isFrozen(config.v2ClientPolicy.versionPolicy)).toBe(true);
+    });
+
+    it("accepts explicit hard floors at or below the minimum", () => {
+      const config = loadConfig(
+        withPolicy({
+          V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: "1.4.0-rc.1",
+          V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: "1.0.0",
+        }),
+      );
+
+      expect(config.v2ClientPolicy.versionPolicy?.forceUpdateBelow).toEqual({
+        ios: "1.4.0-rc.1",
+        android: "1.0.0",
+      });
+    });
+
+    it.each([
+      [
+        "partial policy",
+        { ...validEnvironment(), V2_CLIENT_POLICY_MIN_VERSION_IOS: "1.4.0" },
+        /must be configured together/,
+      ],
+      [
+        "hard floor without a policy",
+        {
+          ...validEnvironment(),
+          V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: "1.0.0",
+        },
+        /requires the complete V2 client version policy/,
+      ],
+      [
+        "invalid semver",
+        withPolicy({ V2_CLIENT_POLICY_MIN_VERSION_ANDROID: "1.3" }),
+        /V2_CLIENT_POLICY_MIN_VERSION_ANDROID: must be a valid SemVer/,
+      ],
+      [
+        "http store URL",
+        withPolicy({ V2_CLIENT_POLICY_STORE_URL_IOS: "http://example.com/a" }),
+        /V2_CLIENT_POLICY_STORE_URL_IOS: protocol must be https/,
+      ],
+      [
+        "store URL with credentials",
+        withPolicy({
+          V2_CLIENT_POLICY_STORE_URL_ANDROID: "https://user:pw@example.com/a",
+        }),
+        /V2_CLIENT_POLICY_STORE_URL_ANDROID: credentials are not allowed/,
+      ],
+      [
+        "hard floor above the minimum",
+        withPolicy({ V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: "1.5.0" }),
+        /FORCE_UPDATE_BELOW_IOS: must not exceed/,
+      ],
+      [
+        "malformed config version",
+        withPolicy({ V2_CLIENT_POLICY_CONFIG_VERSION: "-bad" }),
+        /V2_CLIENT_POLICY_CONFIG_VERSION/,
+      ],
+      [
+        "effectiveAt without timezone",
+        withPolicy({ V2_CLIENT_POLICY_EFFECTIVE_AT: "2026-09-07T00:00:00" }),
+        /V2_CLIENT_POLICY_EFFECTIVE_AT/,
+      ],
+      [
+        "unknown module",
+        { ...validEnvironment(), V2_MODULES_ENABLED: "wallet,perp" },
+        /V2_MODULES_ENABLED: unknown module ID/,
+      ],
+      [
+        "duplicate module",
+        { ...validEnvironment(), V2_MODULES_ENABLED: "launch,launch" },
+        /V2_MODULES_ENABLED: duplicate module ID/,
+      ],
+      [
+        "weak cursor secret",
+        { ...validEnvironment(), V2_CURSOR_HMAC_SECRET: "short" },
+        /V2_CURSOR_HMAC_SECRET/,
+      ],
+    ])("fails closed on %s", (_name, environment, message) => {
+      expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+      expect(() => loadConfig(environment)).toThrow(message);
+    });
+
+    it("does not echo a rejected cursor secret", () => {
+      const environment = validEnvironment();
+      environment["V2_CURSOR_HMAC_SECRET"] = "short-secret-value";
+
+      try {
+        loadConfig(environment);
+        expect.fail("expected a configuration error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigurationError);
+        expect((error as Error).message).not.toContain("short-secret-value");
+      }
+    });
+
+    it("parses terms, policy snapshot metadata, modules, and the cursor secret", () => {
+      const secret = "c".repeat(48);
+      const config = loadConfig({
+        ...validEnvironment(),
+        V2_TERMS_REQUIRED_VERSION: " terms-2026-09 ",
+        V2_CLIENT_POLICY_CONFIG_VERSION: "productPolicyV2.2026-09-07",
+        V2_CLIENT_POLICY_EFFECTIVE_AT: "2026-09-07T08:00:00+08:00",
+        V2_MODULES_ENABLED: "profile, wallet ,community",
+        V2_CURSOR_HMAC_SECRET: secret,
+      });
+
+      expect(config.v2ClientPolicy.termsRequiredVersion).toBe("terms-2026-09");
+      expect(config.v2ClientPolicy.configVersion).toBe(
+        "productPolicyV2.2026-09-07",
+      );
+      expect(config.v2ClientPolicy.effectiveAt).toBe(
+        "2026-09-07T00:00:00.000Z",
+      );
+      expect([...config.v2ModulesEnabled]).toEqual([
+        "profile",
+        "wallet",
+        "community",
+      ]);
+      expect(config.v2Cursor).toEqual({ hmacSecret: secret, ttlSeconds: 600 });
+    });
+  });
 });

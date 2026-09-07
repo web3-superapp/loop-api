@@ -11,6 +11,7 @@ import Fastify, {
 
 import type { AppConfig } from "./config.js";
 import { ApiError } from "./core/http/api-error.js";
+import { createV2CursorCodec } from "./core/http/v2-cursor.js";
 import {
   isV2RequestPath,
   projectV2Error,
@@ -159,8 +160,7 @@ import { registerSpotWalletBindingRoutes } from "./routes/spot-wallet-binding.js
 import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
-import { registerV2MetaRoutes } from "./routes/v2-meta.js";
-import { registerV2SessionRoutes } from "./routes/v2-session.js";
+import { registerV2Routes } from "./routes/v2/index.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 const defaultContentSecurityPolicy =
@@ -295,6 +295,9 @@ function loggerOptions(
         "perpReadCursor.hmacSecret",
         "config.perpReadCursor.hmacSecret",
         "PERP_READ_CURSOR_HMAC_SECRET",
+        "v2Cursor.hmacSecret",
+        "config.v2Cursor.hmacSecret",
+        "V2_CURSOR_HMAC_SECRET",
         "quotaHmacSecret",
         "hyperliquidPrivateReads.quotaHmacSecret",
         "config.hyperliquidPrivateReads.quotaHmacSecret",
@@ -832,13 +835,20 @@ export async function buildApp(
   }
 
   if (includeV2) {
-    registerV2MetaRoutes(app, config, v2SessionRuntimeAvailable);
-    registerV2SessionRoutes(
-      app,
-      authenticationHooks.authenticatePrivyBearer,
-      authenticationHooks.authenticateLoopBearer,
-      v2SessionService,
-    );
+    registerV2Routes(app, {
+      config,
+      sessionRuntimeAvailable: v2SessionRuntimeAvailable,
+      authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
+      authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
+      sessionService: v2SessionService,
+      cursorCodec:
+        config.v2Cursor === null
+          ? null
+          : createV2CursorCodec({
+              secret: new TextEncoder().encode(config.v2Cursor.hmacSecret),
+              ttlSeconds: config.v2Cursor.ttlSeconds,
+            }),
+    });
   }
 
   if (config.apiDocsEnabled) {

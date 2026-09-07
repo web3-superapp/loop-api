@@ -7,15 +7,15 @@ import type {
 import {
   requireAuthenticatedLoopPrincipal,
   requireAuthenticatedPrivyPrincipal,
-} from "../core/http/authentication.js";
-import { v2ErrorResponseSchema } from "../core/http/v2-error.js";
+} from "../../core/http/authentication.js";
+import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   emptyQueryStringSchema,
   noStoreResponseHeaders,
   streamUserIdPattern,
-} from "../core/http/schemas.js";
-import { assertNoBodyOrQuery } from "../core/http/request-input.js";
-import { v2ContractVersion } from "../features/meta/product-policy.js";
+} from "../../core/http/schemas.js";
+import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
+import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
   parseV2CommonRequestMetadata,
   parseV2SessionLogoutMetadata,
@@ -23,8 +23,8 @@ import {
   v2CommonHeadersSchema,
   v2SessionLogoutHeadersSchema,
   v2SessionWriteHeadersSchema,
-} from "../features/session/session-contract.js";
-import type { V2SessionService } from "../features/session/session-service.js";
+} from "../../features/session/session-contract.js";
+import type { V2SessionService } from "../../features/session/session-service.js";
 
 const uuidPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";

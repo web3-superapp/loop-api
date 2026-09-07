@@ -40,15 +40,102 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
 
 ### `GET /v2/meta/client-policy`
 
-无需 Bearer、body 或 query。当前返回登录后默认路由 `community`、五个
-主 Tab 顺序，以及 version/region/terms 的 fail-closed 状态。`unavailable`
-不能解释为“允许”。
+无需 Bearer、body 或 query。返回登录后默认路由 `community`、五个主 Tab
+顺序，以及 version/region/terms 三个门禁。`unavailable` 不能解释为“允许”。
+
+- `configVersion` / `effectiveAt` 是服务端当前策略快照，来自配置，**客户端
+  不得写死为常量**（只校验格式：`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` 与
+  RFC 3339 UTC）。
+- `versionGate` 与 `termsGate` 是按 `status` 区分的联合类型：
+  `"available" | "unavailable"`。旧枚举值 `active`、`accepted`、`required`
+  已删除（从未下发过）。
+- `regionGate` 目前恒为 `unavailable`：服务端尚未选定地区判定源。客户端不得
+  用 locale / SIM / IP 自判地区，也不得把 `unavailable` 当作允许。
+
+未配置时（与 D0 基线逐字节一致）：
+
+```json
+{
+  "contractVersion": "2.0",
+  "configVersion": "productPolicyV2.2026-09-01",
+  "effectiveAt": "2026-09-01T00:00:00.000Z",
+  "defaultRoute": "community",
+  "navigation": {
+    "primaryTabs": ["community", "mining", "launch", "market", "wallet"]
+  },
+  "versionGate": {
+    "status": "unavailable",
+    "minimumSupportedVersions": { "ios": null, "android": null },
+    "forceUpdate": null,
+    "storeUrls": { "ios": null, "android": null },
+    "reasonCode": "CLIENT_VERSION_POLICY_UNAVAILABLE"
+  },
+  "regionGate": {
+    "status": "unavailable",
+    "reasonCode": "REGION_POLICY_UNAVAILABLE",
+    "supportUrl": null,
+    "readOnlyAssetAccess": null
+  },
+  "termsGate": {
+    "status": "unavailable",
+    "requiredVersion": null,
+    "reasonCode": "TERMS_POLICY_UNAVAILABLE"
+  }
+}
+```
+
+配置完整时的 `available` 分支（其余字段不变）：
+
+```json
+{
+  "versionGate": {
+    "status": "available",
+    "minimumSupportedVersions": { "ios": "1.4.0", "android": "1.3.2" },
+    "forceUpdateBelow": { "ios": "1.2.0", "android": "1.3.2" },
+    "storeUrls": {
+      "ios": "https://apps.apple.com/app/id0000000000",
+      "android": "https://play.google.com/store/apps/details?id=app.loop"
+    },
+    "reasonCode": null
+  },
+  "termsGate": {
+    "status": "available",
+    "requiredVersion": "terms-2026-09",
+    "reasonCode": null
+  }
+}
+```
+
+版本门禁语义（客户端用自身版本按 SemVer 2.0 比较，本接口不接收平台或
+版本输入）：
+
+| 客户端版本                                            | 行为                             |
+| ----------------------------------------------------- | -------------------------------- |
+| `< forceUpdateBelow[platform]`                        | `force-update` 页阻断，不可跳过  |
+| `>= forceUpdateBelow` 且 `< minimumSupportedVersions` | 可关闭的更新提示                 |
+| `>= minimumSupportedVersions[platform]`               | 正常进入                         |
+| `versionGate.status = "unavailable"`                  | 不做版本判断，也不显示“已是最新” |
+
+`available` 分支中 `forceUpdateBelow` 永不为 null（未配置硬下限时等于
+`minimumSupportedVersions`）；`unavailable` 分支保留 `forceUpdate: null`
+占位字段，`available` 分支不含该字段。`termsGate.requiredVersion` 只说明
+必须接受的条款版本；用户是否已接受属于后续认证模块。
+
+**loop-mobile 现有解析器需同步修改**：`loop_v2_meta_repository.dart` 目前
+把 `configVersion`/`effectiveAt` 与常量比较、只识别 `active`/`accepted`/
+`required`、并对 `versionGate` 做精确键集校验（不认识 `forceUpdateBelow`）。
 
 ### `GET /v2/meta/capabilities`
 
 无需 Bearer、body 或 query。`availability` 表示当前后端配置/运行时状态，
 `evidence` 单独表示真机或外部 Provider 验证是否完成。即使
 `availability=available`，也不等于生产验收已经通过。
+
+后端 `V2_MODULES_ENABLED` 启用了某模块但该模块尚未交付运行时时，对应
+capability 从 `deferred` 变为
+`{"availability": "unavailable", "reasonCode": "MODULE_RUNTIME_NOT_REGISTERED"}`，
+客户端应按 unavailable 展示，不得视为即将可用。capability 列表仍固定 16
+项，ID 集合不变。
 
 ## Bootstrap / 注册
 
@@ -198,6 +285,15 @@ V2 错误固定只有以下字段：
 | `CAPABILITY_UNAVAILABLE` / `PROVIDER_DISCONNECTED` | 展示暂不可用，不伪装成功                        |
 | `REQUEST_TIMEOUT`                                  | 同一逻辑操作保留原 idempotency key 查询/重试    |
 | `INTERNAL_ERROR`                                   | 展示通用错误并记录 `correlationId`              |
+
+完整错误码族（含 `AUTH_STEP_UP_REQUIRED`、`PERMISSION_DENIED`、
+`REGION_BLOCKED`、`DATA_STALE`、`CHAIN_MISMATCH`、`QUOTE_EXPIRED`、
+`INSUFFICIENT_BALANCE`、`SIMULATION_FAILED`、`POLICY_BLOCKED`、
+`SUBMISSION_UNKNOWN`、`INDEXING_DELAYED`、`MAINTENANCE`、
+`VALIDATION_FAILED`、`NOT_FOUND`）及每个 code 固定的 HTTP 状态、
+`category`、`retryable`、`userMessageKey` 见
+`docs/api-v2-conventions.md` 的 “Error code family” 表；`category` 枚举固定
+八个值。本批接口只会返回上表列出的 code。
 
 ## 当前验收状态
 

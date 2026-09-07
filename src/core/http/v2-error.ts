@@ -1,33 +1,226 @@
 import { ApiError, type ApiErrorCode } from "./api-error.js";
 import { noStoreResponseHeaders } from "./schemas.js";
 
-export type V2ErrorCategory =
-  | "authentication"
-  | "authorization"
-  | "availability"
-  | "conflict"
-  | "internal"
-  | "rateLimit"
-  | "stale"
-  | "validation";
+export const v2ErrorCategories = Object.freeze([
+  "authentication",
+  "authorization",
+  "availability",
+  "conflict",
+  "internal",
+  "rateLimit",
+  "stale",
+  "validation",
+] as const);
 
-export type V2ErrorCode =
-  | "ACCOUNT_BOOTSTRAP_REQUIRED"
-  | "AUTH_INVALID"
-  | "AUTH_REQUIRED"
-  | "CAPABILITY_UNAVAILABLE"
-  | "DATA_STALE"
-  | "IDEMPOTENCY_CONFLICT"
-  | "INTERNAL_ERROR"
-  | "INVALID_REQUEST"
-  | "NOT_FOUND"
-  | "PERMISSION_DENIED"
-  | "POLICY_BLOCKED"
-  | "PROVIDER_DISCONNECTED"
-  | "RATE_LIMITED"
-  | "REQUEST_TIMEOUT"
-  | "SESSION_NOT_FOUND"
-  | "VERSION_CONFLICT";
+export type V2ErrorCategory = (typeof v2ErrorCategories)[number];
+
+export type V2ErrorStatusCode =
+  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503;
+
+export interface V2ErrorCatalogEntry {
+  readonly statusCode: V2ErrorStatusCode;
+  readonly category: V2ErrorCategory;
+  readonly retryable: boolean;
+  readonly userMessageKey: string;
+  readonly includeBearerChallenge: boolean;
+}
+
+/**
+ * The complete V2 machine error code family (03 §13.3 plus the codes already
+ * used by the session slice). Each code has exactly one category, retryable
+ * flag, and localization key; a route may only narrow the set of codes it can
+ * return, never redefine an entry.
+ */
+export const v2ErrorCatalog = Object.freeze({
+  ACCOUNT_BOOTSTRAP_REQUIRED: {
+    statusCode: 409,
+    category: "authentication",
+    retryable: false,
+    userMessageKey: "errors.account.bootstrapRequired",
+    includeBearerChallenge: false,
+  },
+  AUTH_INVALID: {
+    statusCode: 401,
+    category: "authentication",
+    retryable: false,
+    userMessageKey: "errors.auth.invalid",
+    includeBearerChallenge: true,
+  },
+  AUTH_REQUIRED: {
+    statusCode: 401,
+    category: "authentication",
+    retryable: false,
+    userMessageKey: "errors.auth.required",
+    includeBearerChallenge: true,
+  },
+  AUTH_STEP_UP_REQUIRED: {
+    statusCode: 403,
+    category: "authentication",
+    retryable: false,
+    userMessageKey: "errors.auth.stepUpRequired",
+    includeBearerChallenge: false,
+  },
+  CAPABILITY_UNAVAILABLE: {
+    statusCode: 503,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.capability.unavailable",
+    includeBearerChallenge: false,
+  },
+  CHAIN_MISMATCH: {
+    statusCode: 422,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.chain.mismatch",
+    includeBearerChallenge: false,
+  },
+  DATA_STALE: {
+    statusCode: 409,
+    category: "stale",
+    retryable: false,
+    userMessageKey: "errors.data.stale",
+    includeBearerChallenge: false,
+  },
+  IDEMPOTENCY_CONFLICT: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.idempotency.conflict",
+    includeBearerChallenge: false,
+  },
+  INDEXING_DELAYED: {
+    statusCode: 503,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.indexing.delayed",
+    includeBearerChallenge: false,
+  },
+  INSUFFICIENT_BALANCE: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.balance.insufficient",
+    includeBearerChallenge: false,
+  },
+  INTERNAL_ERROR: {
+    statusCode: 500,
+    category: "internal",
+    retryable: false,
+    userMessageKey: "errors.internal",
+    includeBearerChallenge: false,
+  },
+  INVALID_REQUEST: {
+    statusCode: 400,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.request.invalid",
+    includeBearerChallenge: false,
+  },
+  MAINTENANCE: {
+    statusCode: 503,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.service.maintenance",
+    includeBearerChallenge: false,
+  },
+  NOT_FOUND: {
+    statusCode: 404,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.resource.notFound",
+    includeBearerChallenge: false,
+  },
+  PERMISSION_DENIED: {
+    statusCode: 403,
+    category: "authorization",
+    retryable: false,
+    userMessageKey: "errors.permission.denied",
+    includeBearerChallenge: false,
+  },
+  POLICY_BLOCKED: {
+    statusCode: 403,
+    category: "authorization",
+    retryable: false,
+    userMessageKey: "errors.policy.blocked",
+    includeBearerChallenge: false,
+  },
+  PROVIDER_DISCONNECTED: {
+    statusCode: 503,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.provider.disconnected",
+    includeBearerChallenge: false,
+  },
+  QUOTE_EXPIRED: {
+    statusCode: 409,
+    category: "stale",
+    retryable: false,
+    userMessageKey: "errors.quote.expired",
+    includeBearerChallenge: false,
+  },
+  RATE_LIMITED: {
+    statusCode: 429,
+    category: "rateLimit",
+    retryable: true,
+    userMessageKey: "errors.rateLimit.exceeded",
+    includeBearerChallenge: false,
+  },
+  REGION_BLOCKED: {
+    statusCode: 403,
+    category: "authorization",
+    retryable: false,
+    userMessageKey: "errors.region.blocked",
+    includeBearerChallenge: false,
+  },
+  REQUEST_TIMEOUT: {
+    statusCode: 503,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.request.timeout",
+    includeBearerChallenge: false,
+  },
+  SESSION_NOT_FOUND: {
+    statusCode: 404,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.session.notFound",
+    includeBearerChallenge: false,
+  },
+  SIMULATION_FAILED: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.simulation.failed",
+    includeBearerChallenge: false,
+  },
+  SUBMISSION_UNKNOWN: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.submission.unknown",
+    includeBearerChallenge: false,
+  },
+  VALIDATION_FAILED: {
+    statusCode: 422,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.validation.failed",
+    includeBearerChallenge: false,
+  },
+  VERSION_CONFLICT: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.version.conflict",
+    includeBearerChallenge: false,
+  },
+} as const satisfies Readonly<Record<string, V2ErrorCatalogEntry>>);
+
+export type V2ErrorCode = keyof typeof v2ErrorCatalog;
+
+export const v2ErrorCodes = Object.freeze(
+  Object.keys(v2ErrorCatalog).sort() as V2ErrorCode[],
+);
 
 export interface V2ErrorResponse {
   readonly code: V2ErrorCode;
@@ -38,8 +231,6 @@ export interface V2ErrorResponse {
   readonly detailsSafe: null;
   readonly providerReferenceSafe: null;
 }
-
-type V2ErrorStatusCode = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503;
 
 interface V2ErrorDescriptor {
   readonly code: V2ErrorCode;
@@ -59,173 +250,54 @@ export interface V2ErrorProjection {
   readonly response: V2ErrorResponse;
 }
 
-const invalidRequestDescriptor = Object.freeze({
-  code: "INVALID_REQUEST",
-  category: "validation",
-  retryable: false,
-  userMessageKey: "errors.request.invalid",
-} satisfies V2ErrorDescriptor);
+function descriptor(code: V2ErrorCode): V2ErrorDescriptor {
+  const entry = v2ErrorCatalog[code];
+  return {
+    code,
+    category: entry.category,
+    retryable: entry.retryable,
+    userMessageKey: entry.userMessageKey,
+  };
+}
 
-const notFoundDescriptor = Object.freeze({
-  code: "NOT_FOUND",
-  category: "validation",
-  retryable: false,
-  userMessageKey: "errors.resource.notFound",
-} satisfies V2ErrorDescriptor);
-
-const apiErrorDescriptors = Object.freeze({
-  agent_authorization_expired: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.authorization.expired",
-  },
-  agent_authorization_not_found: notFoundDescriptor,
-  agent_authorization_unavailable: {
-    code: "CAPABILITY_UNAVAILABLE",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.capability.unavailable",
-  },
-  alert_not_found: notFoundDescriptor,
-  authentication_required: {
-    code: "AUTH_REQUIRED",
-    category: "authentication",
-    retryable: false,
-    userMessageKey: "errors.auth.required",
-  },
-  authentication_unavailable: {
-    code: "PROVIDER_DISCONNECTED",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.provider.disconnected",
-  },
-  bootstrap_required: {
-    code: "ACCOUNT_BOOTSTRAP_REQUIRED",
-    category: "authentication",
-    retryable: false,
-    userMessageKey: "errors.account.bootstrapRequired",
-  },
-  invalid_access_token: {
-    code: "AUTH_INVALID",
-    category: "authentication",
-    retryable: false,
-    userMessageKey: "errors.auth.invalid",
-  },
-  invalid_request: invalidRequestDescriptor,
-  idempotency_conflict: {
-    code: "IDEMPOTENCY_CONFLICT",
-    category: "conflict",
-    retryable: false,
-    userMessageKey: "errors.idempotency.conflict",
-  },
-  idempotency_resource_deleted: {
-    code: "IDEMPOTENCY_CONFLICT",
-    category: "conflict",
-    retryable: false,
-    userMessageKey: "errors.idempotency.resourceUnavailable",
-  },
-  perp_intent_claim_rate_limited: {
-    code: "RATE_LIMITED",
-    category: "rateLimit",
-    retryable: true,
-    userMessageKey: "errors.rateLimit.exceeded",
-  },
-  perp_intent_expired: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.intent.expired",
-  },
-  perp_intent_not_found: notFoundDescriptor,
-  perp_intent_stale: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.intent.stale",
-  },
-  perp_mutation_disabled: {
-    code: "POLICY_BLOCKED",
-    category: "authorization",
-    retryable: false,
-    userMessageKey: "errors.policy.blocked",
-  },
-  perp_unavailable: {
-    code: "CAPABILITY_UNAVAILABLE",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.capability.unavailable",
-  },
-  rate_limit_exceeded: {
-    code: "RATE_LIMITED",
-    category: "rateLimit",
-    retryable: true,
-    userMessageKey: "errors.rateLimit.exceeded",
-  },
-  request_timeout: {
-    code: "REQUEST_TIMEOUT",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.request.timeout",
-  },
-  spot_agent_authorization_expired: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.authorization.expired",
-  },
-  spot_agent_authorization_not_found: notFoundDescriptor,
-  spot_intent_claim_rate_limited: {
-    code: "RATE_LIMITED",
-    category: "rateLimit",
-    retryable: true,
-    userMessageKey: "errors.rateLimit.exceeded",
-  },
-  spot_intent_expired: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.intent.expired",
-  },
-  spot_intent_not_found: notFoundDescriptor,
-  spot_intent_stale: {
-    code: "DATA_STALE",
-    category: "stale",
-    retryable: false,
-    userMessageKey: "errors.intent.stale",
-  },
-  spot_market_not_found: notFoundDescriptor,
-  spot_unavailable: {
-    code: "CAPABILITY_UNAVAILABLE",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.capability.unavailable",
-  },
-  stream_unavailable: {
-    code: "CAPABILITY_UNAVAILABLE",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.capability.unavailable",
-  },
-  transfer_unavailable: {
-    code: "CAPABILITY_UNAVAILABLE",
-    category: "availability",
-    retryable: true,
-    userMessageKey: "errors.capability.unavailable",
-  },
-  version_conflict: {
-    code: "VERSION_CONFLICT",
-    category: "conflict",
-    retryable: false,
-    userMessageKey: "errors.version.conflict",
-  },
-  wallet_binding_required: {
-    code: "POLICY_BLOCKED",
-    category: "authorization",
-    retryable: false,
-    userMessageKey: "errors.wallet.bindingRequired",
-  },
-} satisfies Readonly<Record<ApiErrorCode, V2ErrorDescriptor>>);
+/**
+ * Frozen V1 `ApiError` codes thrown inside a V2 request are projected onto
+ * the V2 catalog. The HTTP status and Bearer challenge come from the thrown
+ * error; category, retryable, and localization key come from the catalog.
+ */
+const apiErrorCodeMap = Object.freeze({
+  agent_authorization_expired: "DATA_STALE",
+  agent_authorization_not_found: "NOT_FOUND",
+  agent_authorization_unavailable: "CAPABILITY_UNAVAILABLE",
+  alert_not_found: "NOT_FOUND",
+  authentication_required: "AUTH_REQUIRED",
+  authentication_unavailable: "PROVIDER_DISCONNECTED",
+  bootstrap_required: "ACCOUNT_BOOTSTRAP_REQUIRED",
+  invalid_access_token: "AUTH_INVALID",
+  invalid_request: "INVALID_REQUEST",
+  idempotency_conflict: "IDEMPOTENCY_CONFLICT",
+  idempotency_resource_deleted: "IDEMPOTENCY_CONFLICT",
+  perp_intent_claim_rate_limited: "RATE_LIMITED",
+  perp_intent_expired: "DATA_STALE",
+  perp_intent_not_found: "NOT_FOUND",
+  perp_intent_stale: "DATA_STALE",
+  perp_mutation_disabled: "POLICY_BLOCKED",
+  perp_unavailable: "CAPABILITY_UNAVAILABLE",
+  rate_limit_exceeded: "RATE_LIMITED",
+  request_timeout: "REQUEST_TIMEOUT",
+  spot_agent_authorization_expired: "DATA_STALE",
+  spot_agent_authorization_not_found: "NOT_FOUND",
+  spot_intent_claim_rate_limited: "RATE_LIMITED",
+  spot_intent_expired: "DATA_STALE",
+  spot_intent_not_found: "NOT_FOUND",
+  spot_intent_stale: "DATA_STALE",
+  spot_market_not_found: "NOT_FOUND",
+  spot_unavailable: "CAPABILITY_UNAVAILABLE",
+  stream_unavailable: "CAPABILITY_UNAVAILABLE",
+  transfer_unavailable: "CAPABILITY_UNAVAILABLE",
+  version_conflict: "VERSION_CONFLICT",
+  wallet_binding_required: "POLICY_BLOCKED",
+} as const satisfies Readonly<Record<ApiErrorCode, V2ErrorCode>>);
 
 export class V2ApiError extends Error {
   readonly statusCode: V2ErrorStatusCode;
@@ -246,68 +318,42 @@ export class V2ApiError extends Error {
     this.includeBearerChallenge = options.includeBearerChallenge ?? false;
   }
 
-  static invalidRequest(): V2ApiError {
+  /** Create the canonical error for a catalog code. */
+  static fromCode(code: V2ErrorCode): V2ApiError {
+    const entry = v2ErrorCatalog[code];
     return new V2ApiError({
-      statusCode: 400,
-      ...invalidRequestDescriptor,
+      statusCode: entry.statusCode,
+      includeBearerChallenge: entry.includeBearerChallenge,
+      ...descriptor(code),
     });
+  }
+
+  static invalidRequest(): V2ApiError {
+    return V2ApiError.fromCode("INVALID_REQUEST");
   }
 
   static idempotencyConflict(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 409,
-      code: "IDEMPOTENCY_CONFLICT",
-      category: "conflict",
-      retryable: false,
-      userMessageKey: "errors.idempotency.conflict",
-    });
+    return V2ApiError.fromCode("IDEMPOTENCY_CONFLICT");
   }
 
   static notFound(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 404,
-      ...notFoundDescriptor,
-    });
+    return V2ApiError.fromCode("NOT_FOUND");
   }
 
   static sessionNotFound(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 404,
-      code: "SESSION_NOT_FOUND",
-      category: "validation",
-      retryable: false,
-      userMessageKey: "errors.session.notFound",
-    });
+    return V2ApiError.fromCode("SESSION_NOT_FOUND");
   }
 
   static rateLimited(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 429,
-      code: "RATE_LIMITED",
-      category: "rateLimit",
-      retryable: true,
-      userMessageKey: "errors.rateLimit.exceeded",
-    });
+    return V2ApiError.fromCode("RATE_LIMITED");
   }
 
   static versionConflict(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 409,
-      code: "VERSION_CONFLICT",
-      category: "conflict",
-      retryable: false,
-      userMessageKey: "errors.version.conflict",
-    });
+    return V2ApiError.fromCode("VERSION_CONFLICT");
   }
 
   static capabilityUnavailable(): V2ApiError {
-    return new V2ApiError({
-      statusCode: 503,
-      code: "CAPABILITY_UNAVAILABLE",
-      category: "availability",
-      retryable: true,
-      userMessageKey: "errors.capability.unavailable",
-    });
+    return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE");
   }
 }
 
@@ -346,8 +392,8 @@ function descriptorForGenericError(error: unknown): {
 
   if (details.code === "FST_ERR_HANDLER_TIMEOUT") {
     return {
-      statusCode: 503,
-      descriptor: apiErrorDescriptors.request_timeout,
+      statusCode: v2ErrorCatalog.REQUEST_TIMEOUT.statusCode,
+      descriptor: descriptor("REQUEST_TIMEOUT"),
       includeBearerChallenge: false,
     };
   }
@@ -357,27 +403,22 @@ function descriptorForGenericError(error: unknown): {
     fastifyInvalidRequestCodes.has(details.code)
   ) {
     return {
-      statusCode: 400,
-      descriptor: invalidRequestDescriptor,
+      statusCode: v2ErrorCatalog.INVALID_REQUEST.statusCode,
+      descriptor: descriptor("INVALID_REQUEST"),
       includeBearerChallenge: false,
     };
   }
 
   return {
-    statusCode: 500,
-    descriptor: {
-      code: "INTERNAL_ERROR",
-      category: "internal",
-      retryable: false,
-      userMessageKey: "errors.internal",
-    },
+    statusCode: v2ErrorCatalog.INTERNAL_ERROR.statusCode,
+    descriptor: descriptor("INTERNAL_ERROR"),
     includeBearerChallenge: false,
   };
 }
 
 function createProjection(
   statusCode: V2ErrorStatusCode,
-  descriptor: V2ErrorDescriptor,
+  errorDescriptor: V2ErrorDescriptor,
   correlationId: string,
   includeBearerChallenge: boolean,
 ): V2ErrorProjection {
@@ -385,10 +426,10 @@ function createProjection(
     statusCode,
     includeBearerChallenge,
     response: Object.freeze({
-      code: descriptor.code,
-      category: descriptor.category,
-      retryable: descriptor.retryable,
-      userMessageKey: descriptor.userMessageKey,
+      code: errorDescriptor.code,
+      category: errorDescriptor.category,
+      retryable: errorDescriptor.retryable,
+      userMessageKey: errorDescriptor.userMessageKey,
       correlationId,
       detailsSafe: null,
       providerReferenceSafe: null,
@@ -412,7 +453,7 @@ export function projectV2Error(
   if (error instanceof ApiError) {
     return createProjection(
       error.statusCode,
-      apiErrorDescriptors[error.code],
+      descriptor(apiErrorCodeMap[error.code]),
       correlationId,
       error.includeBearerChallenge,
     );
@@ -458,16 +499,7 @@ export function v2ErrorResponseSchema(
       code: { type: "string", enum: codes },
       category: {
         type: "string",
-        enum: [
-          "authentication",
-          "authorization",
-          "availability",
-          "conflict",
-          "internal",
-          "rateLimit",
-          "stale",
-          "validation",
-        ],
+        enum: [...v2ErrorCategories],
       },
       retryable: { type: "boolean" },
       userMessageKey: {

@@ -255,13 +255,11 @@
                     "contractVersion": { "type": "string", "enum": ["2.0"] },
                     "configVersion": {
                       "type": "string",
-                      "enum": ["productPolicyV2.2026-09-01"]
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
                     },
-                    "effectiveAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "enum": ["2026-09-01T00:00:00.000Z"]
-                    },
+                    "effectiveAt": { "type": "string", "format": "date-time" },
                     "defaultRoute": { "type": "string", "enum": ["community"] },
                     "navigation": {
                       "type": "object",
@@ -287,93 +285,125 @@
                       }
                     },
                     "versionGate": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "status",
-                        "minimumSupportedVersions",
-                        "forceUpdate",
-                        "storeUrls",
-                        "reasonCode"
-                      ],
-                      "properties": {
-                        "status": {
-                          "type": "string",
-                          "enum": ["active", "unavailable"]
-                        },
-                        "minimumSupportedVersions": {
+                      "oneOf": [
+                        {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["ios", "android"],
+                          "required": [
+                            "status",
+                            "minimumSupportedVersions",
+                            "forceUpdate",
+                            "storeUrls",
+                            "reasonCode"
+                          ],
                           "properties": {
-                            "ios": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "minLength": 5,
-                                  "maxLength": 64,
-                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
-                                },
-                                { "type": "null" }
-                              ]
-                            },
-                            "android": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "minLength": 5,
-                                  "maxLength": 64,
-                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
-                                },
-                                { "type": "null" }
-                              ]
-                            }
-                          }
-                        },
-                        "forceUpdate": {
-                          "anyOf": [{ "type": "boolean" }, { "type": "null" }]
-                        },
-                        "storeUrls": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["ios", "android"],
-                          "properties": {
-                            "ios": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "format": "uri",
-                                  "minLength": 1,
-                                  "maxLength": 2048
-                                },
-                                { "type": "null" }
-                              ]
-                            },
-                            "android": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "format": "uri",
-                                  "minLength": 1,
-                                  "maxLength": 2048
-                                },
-                                { "type": "null" }
-                              ]
-                            }
-                          }
-                        },
-                        "reasonCode": {
-                          "anyOf": [
-                            {
+                            "status": {
                               "type": "string",
-                              "minLength": 1,
-                              "maxLength": 128,
-                              "pattern": "^[A-Z][A-Z0-9_]*$"
+                              "enum": ["unavailable"]
                             },
-                            { "type": "null" }
-                          ]
+                            "minimumSupportedVersions": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["ios", "android"],
+                              "properties": {
+                                "ios": { "type": "null" },
+                                "android": { "type": "null" }
+                              }
+                            },
+                            "forceUpdate": { "type": "null" },
+                            "storeUrls": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["ios", "android"],
+                              "properties": {
+                                "ios": { "type": "null" },
+                                "android": { "type": "null" }
+                              }
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": ["CLIENT_VERSION_POLICY_UNAVAILABLE"]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "minimumSupportedVersions",
+                            "forceUpdateBelow",
+                            "storeUrls",
+                            "reasonCode"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "minimumSupportedVersions": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["ios", "android"],
+                              "properties": {
+                                "ios": {
+                                  "type": "string",
+                                  "minLength": 5,
+                                  "maxLength": 64,
+                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+                                },
+                                "android": {
+                                  "type": "string",
+                                  "minLength": 5,
+                                  "maxLength": 64,
+                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+                                }
+                              }
+                            },
+                            "forceUpdateBelow": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["ios", "android"],
+                              "properties": {
+                                "ios": {
+                                  "type": "string",
+                                  "minLength": 5,
+                                  "maxLength": 64,
+                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+                                },
+                                "android": {
+                                  "type": "string",
+                                  "minLength": 5,
+                                  "maxLength": 64,
+                                  "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+                                }
+                              }
+                            },
+                            "storeUrls": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["ios", "android"],
+                              "properties": {
+                                "ios": {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "minLength": 9,
+                                  "maxLength": 2048,
+                                  "pattern": "^https://"
+                                },
+                                "android": {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "minLength": 9,
+                                  "maxLength": 2048,
+                                  "pattern": "^https://"
+                                }
+                              }
+                            },
+                            "reasonCode": { "type": "null" }
+                          }
                         }
-                      }
+                      ]
                     },
                     "regionGate": {
                       "type": "object",
@@ -417,36 +447,49 @@
                       }
                     },
                     "termsGate": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "requiredVersion", "reasonCode"],
-                      "properties": {
-                        "status": {
-                          "type": "string",
-                          "enum": ["accepted", "required", "unavailable"]
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "requiredVersion",
+                            "reasonCode"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "requiredVersion": { "type": "null" },
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": ["TERMS_POLICY_UNAVAILABLE"]
+                            }
+                          }
                         },
-                        "requiredVersion": {
-                          "anyOf": [
-                            {
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "requiredVersion",
+                            "reasonCode"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "requiredVersion": {
                               "type": "string",
                               "minLength": 1,
                               "maxLength": 128
                             },
-                            { "type": "null" }
-                          ]
-                        },
-                        "reasonCode": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 128,
-                              "pattern": "^[A-Z][A-Z0-9_]*$"
-                            },
-                            { "type": "null" }
-                          ]
+                            "reasonCode": { "type": "null" }
+                          }
                         }
-                      }
+                      ]
                     }
                   }
                 }
