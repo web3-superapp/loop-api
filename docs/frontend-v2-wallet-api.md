@@ -123,6 +123,11 @@ X-Loop-Client-Version: 1.0.0
 - 只列 BSC 一条网络。自定义 RPC 与测试网**不显示**（不是 unavailable 占位）。
 - `indexer[]` 自 S5b 起有两条 lane：`erc20_transfer`（钱包活动）与 `pool_event`
   （行情成交/派生 K 线）；`lane` 字段是枚举，不要写死为常量。
+- lane 的 `status` **只有两态**：`unavailable`（从未运行，`BSC_INDEXER_NOT_STARTED`）
+  与 `available`（存在 checkpoint）。后端没有"落后阈值"：S5 联调实测 lane 落后
+  1456–1936 块时仍是 `available`。`networks` 页不要把 `available` 当成"数据是
+  新的"，必须用 `lagBlocks`（head − checkpoint；head 读不到时为 `null`）显示
+  "落后 N 块"。
 
 ## 4. `GET /v2/assets/{assetId}` → `asset` 页头部
 
@@ -183,6 +188,11 @@ X-Loop-Client-Version: 1.0.0
 
 - 首次调用会把 Privy 报告的钱包写入 LOOP 并分配 `walletId`；Privy 不再报告的
   钱包变成 `status: "archived"`（不会删除），`isActive` 强制为 `false`。
+- **首次同步即自动选中活跃钱包**（S5 联调发现 2）：账号没有任何活跃钱包时，
+  同步末尾按 `kind asc, firstSeenAt asc, walletId asc` 选第一条，即最早的
+  `embedded` 钱包。因此全新账号第一次 `GET /v2/wallets` 的 `activeWalletId`
+  就已经是那个嵌入式钱包，**不是 `null`**；`wallets` 页切换时必须把这个值作为
+  `expectedActiveWalletId`，传 `null` 会得到 `409 VERSION_CONFLICT`。
 - `kind` 是原型里"Privy 嵌入式钱包 / 已连接的外部钱包"两段的依据。
 - `address` 是完整小写地址（主代理裁决 2026-09-08）。`wallets` 页的截断显示
   由前端处理；不要把地址当 key 或路由参数。
@@ -297,7 +307,8 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   ——**"读不到"和"这个钱包没有该资产"必须区分**，不要把它当 0。
 - `crossCheck` 只是与 Privy 对账：`matched` / `unaligned`（数值不一致，但
   Privy 不下发它读的区块，无法归因）/ `disputed`（保留给会上报区块的来源）/
-  `unavailable`（外部钱包无 Privy wallet ID、代币无法映射、精度无法对齐）。
+  `unavailable`（外部钱包无 Privy wallet ID、代币无法映射、精度无法对齐、
+  或 Privy 余额读取失败/超时 → `PRIVY_BALANCE_CROSS_CHECK_FAILED`）。
   `blockDelta` 为两次观测的区块差，来源不上报区块时为 `null`。
   **任何 crossCheck 结果都不改变 `balance` 里的 RPC 数值**，UI 最多给一个
   "数据源尚未对齐"的提示。
@@ -365,8 +376,11 @@ query：`cursor`（不透明）或 `limit`（1–50，默认 25），二者互�
   `reorged` 的行会保留并下发，前端应把之前显示过的该条标记为已回滚。
 - indexer 从未运行 → `503 INDEXING_DELAYED`（不是空列表）。`freshness.lagBlocks`
   很大时应显示"数据落后 N 块"。
-- `nextCursor` 与 `limit` 互斥：翻页只传 `cursor`。cursor 绑定账号/路由/钱包，
-  过期或跨账号使用返回 `400 INVALID_REQUEST`。
+- `nextCursor` 与 `limit` 互斥：翻页只传 `cursor`。cursor 绑定账号/路由/钱包：
+  过期、篡改、或把 A 钱包的 cursor 用到**自己**的另一个 `walletId` 上 →
+  `400 INVALID_REQUEST`；**跨账号**（账号 B 拿账号 A 的 cursor 打 A 的
+  `walletId`）→ `404 NOT_FOUND`，因为 `walletId` 先做不可枚举校验（S5 联调
+  发现 4）。两种都不要重试，重新从 `limit` 拉第一页。
 
 ## 8. `GET /v2/wallets/{walletId}/receive` → `receive` 页
 
@@ -459,16 +473,17 @@ PUT /v2/watchlist
 
 ## 11. 本步明确 unavailable 的产品项
 
-| 项目                           | reasonCode                             |
-| ------------------------------ | -------------------------------------- |
-| 估值、净值、美元总额、24h 涨跌 | `MARKET_PRICE_PROVIDER_NOT_CONFIGURED` |
-| 原生 BNB 转账历史              | `NATIVE_TRANSFER_SCAN_NOT_SUPPORTED`   |
-| 跨链活动、挖矿领取记录         | `CROSS_CHAIN_ACTIVITY_NOT_SUPPORTED`   |
-| 待确认金额（indexer 未跑）     | `BSC_INDEXER_NOT_STARTED`              |
-| 代币余额与 Privy 的交叉核对    | `PRIVY_ASSET_MAPPING_UNAVAILABLE`      |
-| 外部钱包的 Privy 余额交叉核对  | `PRIVY_WALLET_ID_UNAVAILABLE`          |
-| Swap 入口                      | `SWAP_MODULE_NOT_DELIVERED`            |
-| Pay、Bridge、DApp、smart-money | 各自 capability 的 `deferred`          |
+| 项目                              | reasonCode                             |
+| --------------------------------- | -------------------------------------- |
+| 估值、净值、美元总额、24h 涨跌    | `MARKET_PRICE_PROVIDER_NOT_CONFIGURED` |
+| 原生 BNB 转账历史                 | `NATIVE_TRANSFER_SCAN_NOT_SUPPORTED`   |
+| 跨链活动、挖矿领取记录            | `CROSS_CHAIN_ACTIVITY_NOT_SUPPORTED`   |
+| 待确认金额（indexer 未跑）        | `BSC_INDEXER_NOT_STARTED`              |
+| 代币余额与 Privy 的交叉核对       | `PRIVY_ASSET_MAPPING_UNAVAILABLE`      |
+| 外部钱包的 Privy 余额交叉核对     | `PRIVY_WALLET_ID_UNAVAILABLE`          |
+| Privy 余额读取失败/超时的交叉核对 | `PRIVY_BALANCE_CROSS_CHECK_FAILED`     |
+| Swap 入口                         | `SWAP_MODULE_NOT_DELIVERED`            |
+| Pay、Bridge、DApp、smart-money    | 各自 capability 的 `deferred`          |
 
 原型 `wallet` 页的"安全中心 / 授权盘点 / DApp 浏览器"三行副标题（MFA 状态、
 授权数量、已启用链数）在本步没有后端，属于 D16/D20，必须显示 unavailable 或

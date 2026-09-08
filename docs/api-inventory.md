@@ -72,7 +72,9 @@ and deployed-environment evidence remain unverified.
   by email, wallet, Alias, or device.
 - The complete wire contract and frontend sequence are documented in
   `docs/api-v2-conventions.md` and `docs/frontend-v2-session-api.md`; the
-  `profile` module contract is in `docs/frontend-v2-profile-api.md`.
+  `profile` module contract is in `docs/frontend-v2-profile-api.md`; the
+  D20 security/settings/support contract is in
+  `docs/frontend-v2-security-settings-api.md`.
 
 | Method and path              | Request                                                                 | Success projection                                            | Interface     | Capability                                                                               |
 | ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
@@ -332,14 +334,29 @@ LOOP endpoint: the first two are client-side Stream SDK calls and the last is
 `unavailable` (`COMMUNITY_AI_RUNTIME_DEFERRED`). Chat content never enters
 `GET /v2/search`. End-to-end encryption is not claimed anywhere.
 
+### V2 security, settings, and support modules (Decision 0037, `V2_MODULES_ENABLED=security,settings,support`)
+
+| Method and path                       | Request                                                                       | Success projection                                                                                                           | Interface     | Capability                                                                               |
+| ------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `GET /v2/devices`                     | Bearer + contract/client headers; optional `X-Loop-Session-ID`                | Owner's device sessions (newest first, ≤100), `isCurrent`, `riskSignals` (≥2 new sessions in 24h), `revokeAll` unavailable   | `implemented` | `implemented`; `lastSeenAt` is the bootstrap time                                        |
+| `POST /v2/devices/{sessionId}/revoke` | Logout header set incl. `Idempotency-Key`, `X-Loop-Session-ID`; no body       | `{session: {sessionId, status: revoked, revokedAt}}`; durable `revoke` command                                               | `implemented` | `implemented`; own session → `AUTH_STEP_UP_REQUIRED` (MFA not connected)                 |
+| `POST /v2/devices/revoke-all`         | Same header set; no body                                                      | Always `403 AUTH_STEP_UP_REQUIRED`; nothing persisted                                                                        | `implemented` | `blocked-provider`; needs Privy MFA evidence                                             |
+| `GET /v2/security/capabilities`       | Bearer + contract/client headers                                              | Six items (`mfa`, `passkey`, `recoveryPassword`, `autoRecovery`, `socialRecovery`, `keyExport`) all `unavailable` + evidence | `implemented` | `blocked-provider`; `PRIVY_<X>_EVIDENCE_PENDING`                                         |
+| `GET /v2/security/summary`            | Bearer + contract/client headers                                              | Devices block, approvals summary of the active wallet, locked `security.event`, last 10 security notifications; no score     | `implemented` | `implemented`; approvals block `unavailable` without `sendApprovals` runtime/RPC/indexer |
+| `GET /v2/settings`                    | Bearer + contract/client headers                                              | `{settings: {displayCurrency: USD, language: zh-CN}, version, updatedAt, policy}`; version 0 without a write                 | `implemented` | `implemented`                                                                            |
+| `PUT /v2/settings`                    | Same headers, no `Idempotency-Key`; `{expectedVersion, settings}`             | Committed resource; CAS on `expectedVersion`; non-fixed value is `VALIDATION_FAILED`                                         | `implemented` | `implemented`; both values are product constants in this step                            |
+| `POST /v2/support/tickets`            | Command headers incl. `Idempotency-Key`; `{category, body ≤2000 code points}` | `201` ticket envelope (`200` on exact replay); events, `attachments` unavailable, `policy`                                   | `implemented` | `implemented`; 20 tickets per owner per 24h; attachments `explicitly-disabled`           |
+| `GET /v2/support/tickets`             | `cursor` or `limit` (1–50)                                                    | Newest-first tickets with lifecycle events                                                                                   | `implemented` | `implemented`; status advances only via `pnpm support:answer`                            |
+| `GET /v2/meta/about`                  | Public; no input                                                              | `contractVersion`, every published `configVersion`, `termsGate`, open-source attribution summary, `clientBuild: local`       | `implemented` | `implemented`; terms document URLs are not published                                     |
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
 point. `V2_MODULES_ENABLED` selects which module routes may register.
 `profile` (Decision 0030), `community` and `search` (0031), `communication`
 (0032), `chain`, `wallet`, and `watchlist` (0033), and `market` and
-`notifications` (0034), and `swap` and `sendApprovals` (0035) ship their
-registrars;
+`notifications` (0034), `swap` and `sendApprovals` (0035), and `security`,
+`settings`, and `support` (0037) ship their registrars;
 every other module below has none yet, so enabling it registers no route and
 only changes its capability projection.
 
@@ -358,6 +375,9 @@ only changes its capability projection.
 | `notifications` | `priceAlerts`, `notificationsFeed`; `pushNotifications` stays `unavailable` | shipped     | alerts, feed, and preferences `implemented` (Decision 0034); push `explicitly-disabled`                                                     |
 | `profile`       | `profile`                                                                   | shipped     | routes and capability `implemented` (Decision 0030)                                                                                         |
 | `watchlist`     | `watchlist`                                                                 | shipped     | routes and capability `implemented` (Decision 0033)                                                                                         |
+| `security`      | `security`                                                                  | shipped     | routes and capability `implemented` (Decision 0037); MFA/passkey/recovery/key export stay `blocked-provider`                                |
+| `settings`      | `settings`                                                                  | shipped     | routes and capability `implemented` (Decision 0037)                                                                                         |
+| `support`       | `support`                                                                   | shipped     | routes and capability `implemented` (Decision 0037); attachments `explicitly-disabled`                                                      |
 
 An enabled module without a registrar reports
 `availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The

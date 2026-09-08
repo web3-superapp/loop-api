@@ -86,6 +86,11 @@
   → `422 VALIDATION_FAILED`；`expiresAt` 不在未来 → `422 VALIDATION_FAILED`；
   非 56 链 → `422 CHAIN_MISMATCH`。
 - PUT/DELETE `expectedVersion` 不符 → `409 VERSION_CONFLICT`（重新 GET 后再试）。
+- **同内容重放短路在 CAS 之前**（S5 联调发现 3）：`PUT /v2/alerts/{id}` 的 body
+  与当前定义完全一致且 alert 仍是 `active` 时，无论 `expectedVersion` 是多少都
+  返回 `200` 与已提交的 alert（不重新 arm、版本不变）；只有 body 不同时才比较
+  `expectedVersion`。这与 watchlist / 通知设置的幂等重放语义一致，前端不要把
+  "同内容 + 旧版本 → 200" 当成异常。
 
 ## 4. 触发与上下文通知
 

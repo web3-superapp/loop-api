@@ -68,7 +68,8 @@ sensitive inputs. The server still generates a new request ID for every replay.
 - The same key and identical canonical input returns the original operation or
   result. The same key with different input returns `IDEMPOTENCY_CONFLICT`.
 - Versioned compare-and-swap replacements (`PUT /v2/profile`,
-  `PUT /v2/profile/privacy`, and any later `expectedVersion` resource) do not
+  `PUT /v2/profile/privacy`, `PUT /v2/settings`, and any later
+  `expectedVersion` resource) do not
   accept an `Idempotency-Key`: they are idempotent through `expectedVersion`
   (an identical retry returns the committed resource, a stale version is
   `VERSION_CONFLICT`), and a client-supplied key is rejected with
@@ -255,10 +256,11 @@ operation needs a stronger, module-defined authentication step.
 - `src/routes/v2/index.ts` is the only V2 registration point;
   `registerV2Routes(app, deps)` is called once by `buildApp`. Meta and session
   routes are always registered.
-- `V2_MODULES_ENABLED` is a comma-separated subset of `community`, `search`,
-  `market`, `wallet`, `swap`, `sendApprovals`, `launch`, `mining`,
-  `notifications`, `profile`. Unknown or duplicate IDs fail startup. A module
-  not listed is not registered even if its code exists.
+- `V2_MODULES_ENABLED` is a comma-separated subset of `community`,
+  `communication`, `search`, `market`, `chain`, `wallet`, `swap`,
+  `sendApprovals`, `launch`, `mining`, `notifications`, `profile`,
+  `watchlist`, `security`, `settings`, `support`. Unknown or duplicate IDs
+  fail startup. A module not listed is not registered even if its code exists.
 - Each module ships a registrar in `v2ModuleRegistrars` with its own decision.
   Until then the entry is `null`: enabling the module registers no route and
   moves its capability from `deferred` to `unavailable` with
@@ -271,6 +273,13 @@ operation needs a stronger, module-defined authentication step.
   `community` and `search` are `available` only when the module is enabled and
   `buildApp` composed both the PostgreSQL community repository and the
   `cursorCodec`; `search` additionally needs the shared public-search quota.
+  `security→security`, `settings→settings`, `support→support` (Decision 0037):
+  `security` needs the session runtime (device-session repository plus Privy
+  credentials), `settings` the account-settings repository, `support` the
+  support-ticket repository and the `cursorCodec`. The six Privy security
+  methods (MFA, passkey, recovery password, automatic recovery, social
+  recovery, key export) are not capabilities here; `GET /v2/security/capabilities`
+  reports each as `unavailable` with pending evidence.
   `market` gains a capability entry with its module after consumer review.
   `communityMining` and `communityPresence` are not module-gated and stay
   `unavailable` (`MINING_FORMULA_BASELINE_PENDING`,
