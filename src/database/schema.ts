@@ -1,4 +1,4 @@
-export const latestMigrationName = "000015_v2_loop_id_profile";
+export const latestMigrationName = "000016_v2_community_social";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -6,6 +6,12 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.device_session_commands",
   "public.device_session_events",
   "public.privacy_preferences_v2",
+  "public.communities",
+  "public.community_memberships",
+  "public.community_role_events",
+  "public.follow_edges",
+  "public.user_blocks",
+  "public.social_graph_events",
   "public.profile_activation_commands",
   "public.profile_code_sequence",
   "public.provider_operations",

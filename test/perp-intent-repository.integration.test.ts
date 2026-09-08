@@ -47,6 +47,12 @@ const generatedClientOrderId = "0x11111111111111111111111111111111";
 
 const truncateAll = `
   truncate table
+    public.social_graph_events,
+    public.user_blocks,
+    public.follow_edges,
+    public.community_role_events,
+    public.community_memberships,
+    public.communities,
     public.chat_operation_events,
     public.communication_group_members,
     public.direct_channels,
