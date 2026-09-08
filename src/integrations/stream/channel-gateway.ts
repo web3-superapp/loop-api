@@ -88,6 +88,21 @@ export class StreamChannelProjectionMismatchError extends Error {
   }
 }
 
+/**
+ * A deterministic provider rejection: Stream answered with a client error that
+ * the identical request will keep producing (a malformed member, an unknown
+ * channel, a revoked permission). It is terminal, so the caller must not spend
+ * its retry budget on it.
+ */
+export class StreamChannelRequestRejectedError extends Error {
+  readonly code = "stream_channel_request_rejected";
+
+  constructor() {
+    super("Stream rejected the channel request deterministically");
+    this.name = "StreamChannelRequestRejectedError";
+  }
+}
+
 function unavailable(): never {
   throw new StreamChannelGatewayUnavailableError();
 }
@@ -536,6 +551,44 @@ export interface StreamCommunityChannelGateway {
 
 const maximumCommunityChannelMemberBatch = 100;
 
+/**
+ * Status codes Stream returns for a client error that is worth retrying: a
+ * quota window (429), a request timeout (408), and the "too early" replay
+ * hint (425). Every other 4xx is deterministic.
+ */
+const retryableClientStatusCodes: readonly number[] = Object.freeze([
+  408, 425, 429,
+]);
+
+function isDeterministicProviderRejection(error: unknown): boolean {
+  if (!isRecord(error) || !isRecord(error["metadata"])) {
+    return false;
+  }
+  const responseCode = error["metadata"]["responseCode"];
+  return (
+    typeof responseCode === "number" &&
+    responseCode >= 400 &&
+    responseCode < 500 &&
+    !retryableClientStatusCodes.includes(responseCode)
+  );
+}
+
+/**
+ * Community-channel failure classification. An aborted request stays an abort,
+ * a deterministic 4xx becomes terminal, and everything else (5xx, timeout,
+ * transport failure, quota) stays "unavailable" so the outbox retries it.
+ */
+function sanitizeCommunityProviderFailure(
+  error: unknown,
+  signal: AbortSignal,
+): never {
+  signal.throwIfAborted();
+  if (isDeterministicProviderRejection(error)) {
+    throw new StreamChannelRequestRejectedError();
+  }
+  return unavailable();
+}
+
 function isCommunityChannelId(value: unknown): value is string {
   return typeof value === "string" && communityChannelIdPattern.test(value);
 }
@@ -694,6 +747,19 @@ export function createStreamCommunityChannelGateway(
     const input = parseCommunityMemberInput(rawInput);
     try {
       input.signal.throwIfAborted();
+      if (direction === "add") {
+        // Stream rejects `add_members` for a user object it has never seen
+        // ("users ... don't exist"), which is exactly the account that joins a
+        // community before it ever connects to Stream. The joiner is upserted
+        // with the same `{id}`-only shape used when the channel is created:
+        // LOOP publishes no profile facts to Stream.
+        const usersResponse = await client.upsertUsers(
+          input.memberStreamUserIds.map((id) => ({ id })),
+        );
+        input.signal.throwIfAborted();
+        validateUpsertedUsers(usersResponse, input.memberStreamUserIds);
+        input.signal.throwIfAborted();
+      }
       const response = await client.chat
         .channel(streamChannelType, input.channelId)
         .update(
@@ -715,7 +781,7 @@ export function createStreamCommunityChannelGateway(
       if (error instanceof StreamChannelProjectionMismatchError) {
         throw error;
       }
-      return sanitizeProviderFailure(error, input.signal);
+      return sanitizeCommunityProviderFailure(error, input.signal);
     }
   }
 
@@ -756,7 +822,7 @@ export function createStreamCommunityChannelGateway(
         if (error instanceof StreamChannelProjectionMismatchError) {
           throw error;
         }
-        return sanitizeProviderFailure(error, input.signal);
+        return sanitizeCommunityProviderFailure(error, input.signal);
       }
     },
 

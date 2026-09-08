@@ -6,6 +6,7 @@ import type {
 } from "./features/communication/communication-repository.js";
 import {
   StreamChannelProjectionMismatchError,
+  StreamChannelRequestRejectedError,
   type StreamCommunityChannelGateway,
 } from "./integrations/stream/channel-gateway.js";
 
@@ -195,6 +196,18 @@ export function createCommunityChannelSyncWorker(
           ownerUserId: job.ownerUserId,
           workerId,
           errorCode: "stream_channel_projection_mismatch",
+        });
+        return "failed";
+      }
+      // A deterministic provider rejection is terminal: the identical request
+      // would be rejected again, so the job records the reason instead of
+      // spending its ten attempts and the provider quota behind them.
+      if (error instanceof StreamChannelRequestRejectedError) {
+        await options.repository.failJob({
+          communityId: job.communityId,
+          ownerUserId: job.ownerUserId,
+          workerId,
+          errorCode: "stream_channel_request_rejected",
         });
         return "failed";
       }

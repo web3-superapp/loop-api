@@ -8,6 +8,7 @@ import type {
 import {
   StreamChannelGatewayUnavailableError,
   StreamChannelProjectionMismatchError,
+  StreamChannelRequestRejectedError,
   type StreamCommunityChannelGateway,
 } from "../src/integrations/stream/channel-gateway.js";
 
@@ -312,6 +313,26 @@ describe("community channel sync worker lane", () => {
         errorCode: "stream_channel_projection_mismatch",
       }),
     );
+  });
+
+  it("fails the job terminally on a deterministic provider rejection", async () => {
+    const { repository, failJob, retryJob } = repositoryFake([
+      job({ attempts: 0 }),
+    ]);
+    const { gateway } = gatewayMocks({
+      addMembers: vi.fn(() =>
+        Promise.reject(new StreamChannelRequestRejectedError()),
+      ),
+    });
+    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ failedCount: 1, retriedCount: 0 });
+    expect(failJob).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "stream_channel_request_rejected" }),
+    );
+    expect(retryJob).not.toHaveBeenCalled();
   });
 
   it("performs no work and no provider call once aborted", async () => {
