@@ -113,6 +113,20 @@ describe("launch request parsing", () => {
     });
   });
 
+  it("treats an omitted officialLinks object as four null links", () => {
+    const withoutLinks = {
+      name: valid.name,
+      ticker: valid.ticker,
+      narrative: valid.narrative,
+    };
+    expect(parseLaunchProjectValues(withoutLinks).officialLinks).toEqual({
+      website: null,
+      x: null,
+      telegram: null,
+      discord: null,
+    });
+  });
+
   it("rejects a lowercase ticker, a non-https link, credentials in a link, control characters, and unknown keys", () => {
     for (const body of [
       { ...valid, ticker: "mcat" },

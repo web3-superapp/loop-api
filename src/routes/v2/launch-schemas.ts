@@ -90,7 +90,7 @@ const officialLinksRequestSchema = {
 const projectValuesRequestSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "ticker", "narrative", "officialLinks"],
+  required: ["name", "ticker", "narrative"],
   properties: {
     name: {
       type: "string",
@@ -661,7 +661,14 @@ export const milestonesResourceSchema = {
           "updatedAt",
         ],
         properties: {
-          venueMilestoneId: { type: "string", pattern: opaqueIdPatternSource },
+          venueMilestoneId: {
+            anyOf: [
+              { type: "string", pattern: opaqueIdPatternSource },
+              { type: "null" },
+            ],
+            description:
+              "null for an implicit PREPARING row: the track has no stored record yet.",
+          },
           venue: { type: "string", enum: [...venueMilestoneVenues] },
           marketType: { type: "string", enum: [...venueMilestoneMarketTypes] },
           state: { type: "string", enum: [...venueMilestoneStates] },
@@ -694,8 +701,15 @@ export const milestonesResourceSchema = {
               },
             },
           },
-          version: { type: "integer", minimum: 1 },
-          updatedAt: { type: "string", format: "date-time" },
+          version: {
+            type: "integer",
+            minimum: 0,
+            description: "0 for an implicit PREPARING row.",
+          },
+          updatedAt: {
+            ...nullableDateTimeSchema,
+            description: "null for an implicit PREPARING row.",
+          },
         },
       },
     },

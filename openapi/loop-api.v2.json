@@ -69829,7 +69829,7 @@
         "operationId": "listV2Approvals",
         "summary": "List the wallet's ERC-20 allowances",
         "tags": ["approvals"],
-        "description": "Spenders observed through indexed Approval events for registry assets, each with the current allowance() read at one block. Rows whose current allowance is zero are omitted; an unreadable allowance is reported as unavailable, never as zero. INDEXING_DELAYED until the transfer lane has a checkpoint.",
+        "description": "Spenders observed through indexed Approval events for registry assets, each with the current allowance() read at one block. Rows whose current allowance is zero are omitted; an unreadable allowance is reported as unavailable, never as zero. INDEXING_DELAYED until the transfer lane has a checkpoint whose Approval coverage reaches back to the wallet's earliest indexed activity.",
         "parameters": [
           {
             "schema": {
@@ -70066,6 +70066,7 @@
                       "additionalProperties": false,
                       "required": [
                         "indexerBlockNumber",
+                        "approvalCoverageFromBlockNumber",
                         "headBlockNumber",
                         "observedAt"
                       ],
@@ -70073,6 +70074,11 @@
                         "indexerBlockNumber": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,19})$"
+                        },
+                        "approvalCoverageFromBlockNumber": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,19})$",
+                          "description": "First block from which Approval logs are stored contiguously up to indexerBlockNumber. The list is INDEXING_DELAYED while this is unknown or above the wallet's earliest indexed activity."
                         },
                         "headBlockNumber": {
                           "type": "string",
@@ -73318,7 +73324,7 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "ticker", "narrative", "officialLinks"],
+                "required": ["name", "ticker", "narrative"],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -74946,12 +74952,7 @@
                   "project": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "name",
-                      "ticker",
-                      "narrative",
-                      "officialLinks"
-                    ],
+                    "required": ["name", "ticker", "narrative"],
                     "properties": {
                       "name": {
                         "type": "string",
@@ -76800,8 +76801,14 @@
                         ],
                         "properties": {
                           "venueMilestoneId": {
-                            "type": "string",
-                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "null for an implicit PREPARING row: the track has no stored record yet."
                           },
                           "venue": {
                             "type": "string",
@@ -76869,10 +76876,17 @@
                               }
                             }
                           },
-                          "version": { "type": "integer", "minimum": 1 },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "0 for an implicit PREPARING row."
+                          },
                           "updatedAt": {
-                            "type": "string",
-                            "format": "date-time"
+                            "anyOf": [
+                              { "type": "string", "format": "date-time" },
+                              { "type": "null" }
+                            ],
+                            "description": "null for an implicit PREPARING row."
                           }
                         }
                       }
@@ -101160,11 +101174,16 @@
                               "additionalProperties": false,
                               "required": [
                                 "indexerBlockNumber",
+                                "approvalCoverageFromBlockNumber",
                                 "headBlockNumber",
                                 "observedAt"
                               ],
                               "properties": {
                                 "indexerBlockNumber": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                },
+                                "approvalCoverageFromBlockNumber": {
                                   "type": "string",
                                   "pattern": "^(0|[1-9][0-9]{0,19})$"
                                 },

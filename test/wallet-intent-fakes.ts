@@ -185,6 +185,10 @@ export function walletsFake(
 export function indexerFake(
   options: {
     readonly checkpoint?: boolean;
+    /** Approval coverage start; `null` models a lane indexed before 000021. */
+    readonly approvalCoverageFromBlockNumber?: string | null;
+    /** Earliest indexed transfer block of the wallet (`null` = never seen). */
+    readonly earliestActivityBlockNumber?: string | null;
     readonly approvals?: readonly IndexedApprovalRecord[];
     readonly sentBefore?: boolean;
   } = {},
@@ -198,12 +202,22 @@ export function indexerFake(
               lastBlockNumber: (headNumber - 5n).toString(10),
               lastBlockHash: `0x${"3".repeat(64)}`,
               startedFromBlockNumber: "43000000",
+              approvalCoverageFromBlockNumber:
+                options.approvalCoverageFromBlockNumber === undefined
+                  ? "43000000"
+                  : options.approvalCoverageFromBlockNumber,
               reorgCount: 0,
               updatedAt: observedAt,
             },
       ),
     ),
     commitTransferSegment: vi.fn(() => Promise.reject(new Error("not used"))),
+    commitApprovalCoverageSegment: vi.fn(() =>
+      Promise.reject(new Error("not used")),
+    ),
+    earliestWalletActivityBlockNumber: vi.fn(() =>
+      Promise.resolve(options.earliestActivityBlockNumber ?? null),
+    ),
     listLatestApprovals: vi.fn(() => Promise.resolve(options.approvals ?? [])),
     hasOutgoingTransferTo: vi.fn(() =>
       Promise.resolve(options.sentBefore === true),

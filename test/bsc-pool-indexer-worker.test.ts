@@ -71,6 +71,9 @@ function repositoryFake() {
         new Error("the pool lane must never touch the transfer lane"),
       );
     },
+    commitApprovalCoverageSegment: () =>
+      Promise.reject(new Error("the pool lane never covers approvals")),
+    earliestWalletActivityBlockNumber: () => Promise.resolve(null),
     listWalletTransfers: () => Promise.resolve({ items: [], hasMore: false }),
     sumPendingIncoming: () => Promise.resolve([]),
     listLatestApprovals: () => Promise.resolve([]),
@@ -96,6 +99,7 @@ function repositoryFake() {
         lastBlockNumber: input.checkpoint.lastBlockNumber,
         lastBlockHash: input.checkpoint.lastBlockHash,
         startedFromBlockNumber: input.checkpoint.startedFromBlockNumber,
+        approvalCoverageFromBlockNumber: null,
         reorgCount:
           (checkpoint?.reorgCount ?? 0) + (rewind === undefined ? 0 : 1),
         updatedAt: "2026-09-08T00:00:00.000Z",

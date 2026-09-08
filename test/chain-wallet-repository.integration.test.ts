@@ -11,6 +11,7 @@ import {
   type AccountWalletRepository,
 } from "../src/database/account-wallet-repository.js";
 import {
+  BscIndexerUnavailableError,
   createPostgresBscIndexerRepository,
   indexedTransferInsertBatchSize,
   type BscIndexerRepository,
@@ -325,6 +326,126 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       limit: 10,
     });
     expect(afterReorg.items[0]?.removed).toBe(true);
+  });
+
+  it("tracks Approval coverage on the transfer lane: null until declared, min of every segment, lowered by a coverage backfill", async () => {
+    await registry.upsertAsset({
+      assetId: wbnbAssetId,
+      chainId: bscChainId,
+      address: wbnb,
+      symbol: "WBNB",
+      name: "Wrapped BNB",
+      decimals: 18,
+      status: "pending",
+      sourceBlockNumber: "43000000",
+    });
+    const transfer = {
+      transactionHash: `0x${"5".repeat(64)}`,
+      logIndex: 0,
+      blockNumber: "950",
+      blockHash: `0x${"a".repeat(64)}`,
+      assetId: wbnbAssetId,
+      fromAddress: counterparty,
+      toAddress: walletA,
+      rawValue: "1",
+    };
+    // A segment committed without a coverage start (pre-000025 code path)
+    // leaves coverage unknown even though the checkpoint exists.
+    const legacy = await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers: [transfer],
+      checkpoint: {
+        lastBlockNumber: "1000",
+        lastBlockHash: `0x${"a".repeat(64)}`,
+        startedFromBlockNumber: "900",
+      },
+    });
+    expect(legacy.approvalCoverageFromBlockNumber).toBeNull();
+    expect(
+      await indexer.earliestWalletActivityBlockNumber({
+        chainId: bscChainId,
+        address: walletA,
+      }),
+    ).toBe("950");
+    expect(
+      await indexer.earliestWalletActivityBlockNumber({
+        chainId: bscChainId,
+        address: walletB,
+      }),
+    ).toBeNull();
+
+    // The first approval-aware segment declares coverage from its own start.
+    const covered = await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers: [],
+      approvals: [],
+      checkpoint: {
+        lastBlockNumber: "1200",
+        lastBlockHash: `0x${"b".repeat(64)}`,
+        startedFromBlockNumber: "900",
+      },
+      approvalCoverageFromBlockNumber: "1001",
+    });
+    expect(covered.approvalCoverageFromBlockNumber).toBe("1001");
+    // A later segment never raises it.
+    const later = await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers: [],
+      approvals: [],
+      checkpoint: {
+        lastBlockNumber: "1400",
+        lastBlockHash: `0x${"c".repeat(64)}`,
+        startedFromBlockNumber: "900",
+      },
+      approvalCoverageFromBlockNumber: "1201",
+    });
+    expect(later.approvalCoverageFromBlockNumber).toBe("1001");
+
+    // A coverage backfill stores approvals below coverage and lowers it
+    // without touching the checkpoint.
+    const backfilled = await indexer.commitApprovalCoverageSegment({
+      chainId: bscChainId,
+      approvals: [
+        {
+          transactionHash: `0x${"6".repeat(64)}`,
+          logIndex: 3,
+          blockNumber: "960",
+          blockHash: `0x${"a".repeat(64)}`,
+          assetId: wbnbAssetId,
+          ownerAddress: walletA,
+          spenderAddress: counterparty,
+          rawValue: "77",
+        },
+      ],
+      fromBlockNumber: "900",
+      toBlockNumber: "1000",
+    });
+    expect(backfilled).toMatchObject({
+      lastBlockNumber: "1400",
+      approvalCoverageFromBlockNumber: "900",
+      reorgCount: 0,
+    });
+    const approvals = await indexer.listLatestApprovals({
+      chainId: bscChainId,
+      ownerAddress: walletA,
+      assetIds: [wbnbAssetId],
+    });
+    expect(approvals.map((row) => row.rawValue)).toEqual(["77"]);
+    // A range above the checkpoint is refused: it was never indexed.
+    await expect(
+      indexer.commitApprovalCoverageSegment({
+        chainId: bscChainId,
+        approvals: [],
+        fromBlockNumber: "1401",
+        toBlockNumber: "1500",
+      }),
+    ).rejects.toBeInstanceOf(BscIndexerUnavailableError);
+    // The pool lane never gains coverage.
+    const poolCheckpoint = await indexer.getCheckpoint(
+      "pool_event",
+      bscChainId,
+    );
+    expect(poolCheckpoint?.approvalCoverageFromBlockNumber ?? null).toBeNull();
   });
 
   it("commits a segment wider than one insert batch atomically", async () => {

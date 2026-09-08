@@ -297,6 +297,30 @@ describe("V2 error code catalog", () => {
     }
   });
 
+  it("carries client-safe scalar details in detailsSafe and nothing else", () => {
+    const blocked = V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode: "CANARY_CEILING_EXCEEDED",
+      exposureUsd: "750.51",
+      ceilingUsd: "20",
+    });
+    const projection = projectV2Error(blocked, correlationId);
+    expect(projection.response).toEqual({
+      code: "POLICY_BLOCKED",
+      category: "authorization",
+      retryable: false,
+      userMessageKey: "errors.policy.blocked",
+      correlationId,
+      detailsSafe: {
+        reasonCode: "CANARY_CEILING_EXCEEDED",
+        exposureUsd: "750.51",
+        ceilingUsd: "20",
+      },
+      providerReferenceSafe: null,
+    });
+    expect(Object.isFrozen(blocked.detailsSafe)).toBe(true);
+    expect(V2ApiError.fromCode("POLICY_BLOCKED").detailsSafe).toBeNull();
+  });
+
   it("maps frozen V1 errors onto catalog entries with fixed localization keys", () => {
     const stale = projectV2Error(
       new ApiError({

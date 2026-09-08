@@ -30,6 +30,7 @@ const checkpointRowSchema = z
     last_block_number: bigintStringSchema,
     last_block_hash: z.string().regex(new RegExp(blockHashPatternSource)),
     started_from_block_number: bigintStringSchema,
+    approval_coverage_from_block: bigintStringSchema.nullable(),
     reorg_count: z.number().int().min(0),
     updated_at: z.date(),
   })
@@ -56,6 +57,13 @@ export interface IndexerCheckpointRecord {
   readonly lastBlockNumber: string;
   readonly lastBlockHash: string;
   readonly startedFromBlockNumber: string;
+  /**
+   * First block from which `Approval` logs are stored contiguously up to
+   * `lastBlockNumber` (transfer lane only). `null` until the lane has
+   * advanced under approval-aware code; lowered by a coverage backfill and
+   * by a reorg replay, never raised. The pool lane always reports `null`.
+   */
+  readonly approvalCoverageFromBlockNumber: string | null;
   readonly reorgCount: number;
   readonly updatedAt: string;
 }
@@ -106,6 +114,13 @@ export interface CommitTransferSegmentInput {
     readonly lastBlockHash: string;
     readonly startedFromBlockNumber: string;
   };
+  /**
+   * First block of this segment whose `Approval` logs are included in
+   * `approvals`. The lane's `approvalCoverageFromBlockNumber` becomes
+   * `min(current, this)`, so a segment committed without it leaves coverage
+   * untouched (and null coverage stays null).
+   */
+  readonly approvalCoverageFromBlockNumber?: string;
   /**
    * When present, every stored transfer at or above this block is marked
    * removed inside the same transaction before the segment is replayed. This
@@ -217,6 +232,14 @@ export interface ListWalletApprovalsInput {
   readonly assetIds: readonly string[];
 }
 
+export interface CommitApprovalCoverageSegmentInput {
+  readonly chainId: string;
+  /** `Approval` logs for every block in `[fromBlockNumber, toBlockNumber]`. */
+  readonly approvals: readonly IndexedApprovalInput[];
+  readonly fromBlockNumber: string;
+  readonly toBlockNumber: string;
+}
+
 export interface BscIndexerRepository {
   getCheckpoint(
     lane: IndexerLane,
@@ -225,6 +248,26 @@ export interface BscIndexerRepository {
   commitTransferSegment(
     input: CommitTransferSegmentInput,
   ): Promise<IndexerCheckpointRecord>;
+  /**
+   * Stores `Approval` logs for a block range the transfer lane has already
+   * indexed and lowers `approvalCoverageFromBlockNumber` to `fromBlockNumber`.
+   * It never moves `lastBlockNumber`, so a running lane and a coverage
+   * backfill cannot disagree about where the lane is. Refused
+   * (`BscIndexerUnavailableError`) when the lane has no checkpoint or the
+   * range ends above it.
+   */
+  commitApprovalCoverageSegment(
+    input: CommitApprovalCoverageSegmentInput,
+  ): Promise<IndexerCheckpointRecord>;
+  /**
+   * Lowest indexed block in which the address sent or received a registry
+   * asset, or `null` when the lane has never seen it. The approvals inventory
+   * compares it with the approval coverage start.
+   */
+  earliestWalletActivityBlockNumber(input: {
+    readonly chainId: string;
+    readonly address: string;
+  }): Promise<string | null>;
   /**
    * The latest non-removed `Approval` log per (asset, spender) for one owner,
    * newest first. It is the inventory candidate list; the current allowance is
@@ -276,6 +319,7 @@ function mapCheckpoint(row: unknown): IndexerCheckpointRecord {
     lastBlockNumber: parsed.last_block_number,
     lastBlockHash: parsed.last_block_hash,
     startedFromBlockNumber: parsed.started_from_block_number,
+    approvalCoverageFromBlockNumber: parsed.approval_coverage_from_block,
     reorgCount: parsed.reorg_count,
     updatedAt: parsed.updated_at.toISOString(),
   });
@@ -301,6 +345,7 @@ const checkpointColumns = `
   last_block_number::text as last_block_number,
   last_block_hash,
   started_from_block_number::text as started_from_block_number,
+  approval_coverage_from_block::text as approval_coverage_from_block,
   reorg_count,
   updated_at
 `;
@@ -557,18 +602,25 @@ async function upsertCheckpoint(
   chainId: string,
   checkpoint: CommitTransferSegmentInput["checkpoint"],
   reorged: boolean,
+  approvalCoverageFromBlockNumber: string | null,
 ): Promise<IndexerCheckpointRecord> {
+  // `least` ignores nulls, so a segment without coverage keeps the stored
+  // value and the pool lane (always null) never gains one.
   const result = await client.query<Record<string, unknown>>({
     text: `
       insert into public.indexer_checkpoints (
         lane, chain_id, last_block_number, last_block_hash,
-        started_from_block_number, reorg_count
+        started_from_block_number, reorg_count, approval_coverage_from_block
       )
-      values ($1, $2, $3::numeric, $4, $5::numeric, $6)
+      values ($1, $2, $3::numeric, $4, $5::numeric, $6, $7::numeric)
       on conflict (lane, chain_id) do update set
         last_block_number = excluded.last_block_number,
         last_block_hash = excluded.last_block_hash,
         reorg_count = public.indexer_checkpoints.reorg_count + $6,
+        approval_coverage_from_block = least(
+          public.indexer_checkpoints.approval_coverage_from_block,
+          excluded.approval_coverage_from_block
+        ),
         updated_at = clock_timestamp()
       returning ${checkpointColumns}
     `,
@@ -579,6 +631,7 @@ async function upsertCheckpoint(
       checkpoint.lastBlockHash,
       checkpoint.startedFromBlockNumber,
       reorged ? 1 : 0,
+      approvalCoverageFromBlockNumber,
     ],
   });
   const row = result.rows[0];
@@ -725,6 +778,7 @@ export function createPostgresBscIndexerRepository(
           input.chainId,
           input.checkpoint,
           rewindFrom !== undefined,
+          input.approvalCoverageFromBlockNumber ?? null,
         );
         await client.query("commit");
         inTransaction = false;
@@ -741,6 +795,91 @@ export function createPostgresBscIndexerRepository(
       } finally {
         client.release();
       }
+    },
+
+    async commitApprovalCoverageSegment(
+      input: CommitApprovalCoverageSegmentInput,
+    ): Promise<IndexerCheckpointRecord> {
+      if (BigInt(input.toBlockNumber) < BigInt(input.fromBlockNumber)) {
+        throw new BscIndexerUnavailableError();
+      }
+      const client = await pool.connect();
+      let inTransaction = false;
+      try {
+        await client.query("begin");
+        inTransaction = true;
+        // Lock the lane row so a concurrent segment commit cannot interleave
+        // with the coverage update; the range must already be indexed.
+        const current = await client.query<Record<string, unknown>>({
+          text: `
+            select ${checkpointColumns}
+            from public.indexer_checkpoints
+            where lane = 'erc20_transfer' and chain_id = $1
+            for update
+          `,
+          values: [input.chainId],
+        });
+        const row = current.rows[0];
+        if (
+          row === undefined ||
+          BigInt(mapCheckpoint(row).lastBlockNumber) <
+            BigInt(input.toBlockNumber)
+        ) {
+          throw new BscIndexerUnavailableError();
+        }
+        await insertApprovals(client, input.chainId, input.approvals);
+        const updated = await client.query<Record<string, unknown>>({
+          text: `
+            update public.indexer_checkpoints
+            set approval_coverage_from_block = least(
+                  approval_coverage_from_block, $2::numeric
+                ),
+                updated_at = clock_timestamp()
+            where lane = 'erc20_transfer' and chain_id = $1
+            returning ${checkpointColumns}
+          `,
+          values: [input.chainId, input.fromBlockNumber],
+        });
+        const committedRow = updated.rows[0];
+        if (committedRow === undefined) {
+          throw new BscIndexerUnavailableError();
+        }
+        await client.query("commit");
+        inTransaction = false;
+        return mapCheckpoint(committedRow);
+      } catch (error) {
+        if (inTransaction) {
+          try {
+            await client.query("rollback");
+          } catch {
+            // The original failure stays authoritative.
+          }
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async earliestWalletActivityBlockNumber(input: {
+      readonly chainId: string;
+      readonly address: string;
+    }): Promise<string | null> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select min(block_number)::text as block_number
+          from public.indexed_transfers
+          where chain_id = $1
+            and (from_address = $2 or to_address = $2)
+            and not removed
+        `,
+        values: [input.chainId, input.address],
+      });
+      const parsed = z
+        .object({ block_number: bigintStringSchema.nullable() })
+        .strict()
+        .parse(result.rows[0] ?? { block_number: null });
+      return parsed.block_number;
     },
 
     async listLatestApprovals(
@@ -897,6 +1036,7 @@ export function createPostgresBscIndexerRepository(
           input.chainId,
           input.checkpoint,
           rewindFrom !== undefined,
+          null,
         );
         await client.query("commit");
         inTransaction = false;
@@ -1028,6 +1168,8 @@ function unavailable(): Promise<never> {
 export function createUnavailableBscIndexerRepository(): BscIndexerRepository {
   return Object.freeze({
     getCheckpoint: unavailable,
+    commitApprovalCoverageSegment: unavailable,
+    earliestWalletActivityBlockNumber: unavailable,
     commitTransferSegment: unavailable,
     listLatestApprovals: unavailable,
     hasOutgoingTransferTo: unavailable,

@@ -518,7 +518,15 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
       code: "POLICY_BLOCKED",
       category: "authorization",
       retryable: false,
+      detailsSafe: {
+        reasonCode: "CANARY_CEILING_EXCEEDED",
+        ceilingUsd: "1",
+      },
     });
+    expect(
+      typeof tooLarge.json<{ detailsSafe: { exposureUsd: unknown } }>()
+        .detailsSafe.exposureUsd,
+    ).toBe("string");
 
     const { app: allowlisted } = await createApp(fakes(), {
       BSC_WRITE_CANARY_ASSETS: wbnbAssetId,
@@ -530,6 +538,10 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
       payload: sendBody,
     });
     expect(notAllowed.statusCode).toBe(403);
+    expect(notAllowed.json()).toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: { reasonCode: "ASSET_NOT_IN_CANARY_ALLOWLIST" },
+    });
 
     const { app: poor } = await createApp(
       fakes({ readClient: { tokenBalance: 1n } }),

@@ -55,6 +55,7 @@ import {
   openWalletIntentStates,
   walletIntentIdempotencyScope,
   walletIntentReasonCodes,
+  walletIntentRefusalReasonCodes,
   type CanaryPolicyFact,
   type ExposureBasis,
   type IntentAssetSnapshot,
@@ -165,9 +166,14 @@ export async function requireSignableWallet(
   return wallet as AccountWalletRecord & { readonly providerWalletId: string };
 }
 
-export async function requireCanaryAsset(
+/**
+ * Shape → chain → registry → not blocked. This is the asset admission every
+ * intent shares; the canary allowlist is a separate, later gate so a kind
+ * can insert its own structural check (e.g. "native has no allowance
+ * surface") between the two.
+ */
+export async function requireAdmittedAsset(
   runtime: WalletIntentRuntime,
-  writes: BscWriteConfig,
   assetId: unknown,
 ): Promise<AssetRecord> {
   if (!isAssetId(assetId)) {
@@ -190,12 +196,34 @@ export async function requireCanaryAsset(
     throw V2ApiError.notFound();
   }
   if (asset.status === "blocked") {
-    throw V2ApiError.fromCode("POLICY_BLOCKED");
-  }
-  if (!writes.canaryAssetIds.includes(asset.assetId)) {
-    throw V2ApiError.fromCode("POLICY_BLOCKED");
+    throw V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode: walletIntentRefusalReasonCodes.assetBlocked,
+    });
   }
   return asset;
+}
+
+export function requireCanaryAllowlisted(
+  writes: BscWriteConfig,
+  asset: AssetRecord,
+): AssetRecord {
+  if (!writes.canaryAssetIds.includes(asset.assetId)) {
+    throw V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode: walletIntentRefusalReasonCodes.assetNotInCanaryAllowlist,
+    });
+  }
+  return asset;
+}
+
+export async function requireCanaryAsset(
+  runtime: WalletIntentRuntime,
+  writes: BscWriteConfig,
+  assetId: unknown,
+): Promise<AssetRecord> {
+  return requireCanaryAllowlisted(
+    writes,
+    await requireAdmittedAsset(runtime, assetId),
+  );
 }
 
 export function parseIntentAmount(value: unknown, decimals: number): bigint {
@@ -270,9 +298,18 @@ export async function valueInUsd(
 export function enforceCanaryCeiling(
   writes: BscWriteConfig,
   valueUsd: string,
+  reasonCode:
+    | typeof walletIntentRefusalReasonCodes.canaryCeilingExceeded
+    | typeof walletIntentRefusalReasonCodes.unlimitedExposureExceedsCeiling = walletIntentRefusalReasonCodes.canaryCeilingExceeded,
 ): void {
   if (compareDecimalStrings(valueUsd, writes.canaryMaxUsd) > 0) {
-    throw V2ApiError.fromCode("POLICY_BLOCKED");
+    // The exposure and the ceiling are the two numbers the sign sheet shows
+    // ("your exposure is $X, the ceiling is $Y"); both are decimal strings.
+    throw V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode,
+      exposureUsd: valueUsd,
+      ceilingUsd: writes.canaryMaxUsd,
+    });
   }
 }
 

@@ -25,6 +25,7 @@ import {
   swapPolicy,
   walletIntentPayloadVersions,
   walletIntentReasonCodes,
+  walletIntentRefusalReasonCodes,
   type IntentSource,
   type PriceImpactFact,
   type SwapAuthorizationPayload,
@@ -516,7 +517,9 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
       );
       enforceCanaryCeiling(writes, quote.inputValuation.valueUsd);
       if (quote.snapshot.priceImpact.decision === "blocked") {
-        throw V2ApiError.fromCode("POLICY_BLOCKED");
+        throw V2ApiError.fromCode("POLICY_BLOCKED", {
+          reasonCode: walletIntentRefusalReasonCodes.priceImpactBlocked,
+        });
       }
       if (
         quote.snapshot.priceImpact.decision === "confirm" &&

@@ -194,12 +194,17 @@ function indexerFake(options: { readonly checkpoint?: boolean } = {}) {
               lastBlockNumber: (headNumber - 5n).toString(10),
               lastBlockHash: `0x${"3".repeat(64)}`,
               startedFromBlockNumber: "43000000",
+              approvalCoverageFromBlockNumber: "43000000",
               reorgCount: 2,
               updatedAt: observedAt,
             },
       ),
     ),
     commitTransferSegment: vi.fn(() => Promise.reject(new Error("not used"))),
+    commitApprovalCoverageSegment: vi.fn(() =>
+      Promise.reject(new Error("not used")),
+    ),
+    earliestWalletActivityBlockNumber: vi.fn(() => Promise.resolve(null)),
     listWalletTransfers: vi.fn(() =>
       Promise.resolve({ items: [transferRecord], hasMore: false }),
     ),

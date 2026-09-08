@@ -1000,9 +1000,19 @@ export const approvalListResourceSchema = {
     freshness: {
       type: "object",
       additionalProperties: false,
-      required: ["indexerBlockNumber", "headBlockNumber", "observedAt"],
+      required: [
+        "indexerBlockNumber",
+        "approvalCoverageFromBlockNumber",
+        "headBlockNumber",
+        "observedAt",
+      ],
       properties: {
         indexerBlockNumber: blockNumberSchema,
+        approvalCoverageFromBlockNumber: {
+          ...blockNumberSchema,
+          description:
+            "First block from which Approval logs are stored contiguously up to indexerBlockNumber. The list is INDEXING_DELAYED while this is unknown or above the wallet's earliest indexed activity.",
+        },
         headBlockNumber: blockNumberSchema,
         observedAt: dateTimeSchema,
       },

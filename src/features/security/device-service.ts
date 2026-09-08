@@ -213,8 +213,11 @@ export function createDeviceService(
       const windowStart =
         observedAt.getTime() - deviceRiskPolicy.windowHours * 3_600_000;
       const visible = sessions.slice(0, deviceListLimit);
+      // Active sessions only, so the signal falls back after a revoke.
       const newSessions24h = visible.filter(
-        (session) => Date.parse(session.createdAt) >= windowStart,
+        (session) =>
+          session.status === "active" &&
+          Date.parse(session.createdAt) >= windowStart,
       ).length;
       return Object.freeze({
         devices: Object.freeze(

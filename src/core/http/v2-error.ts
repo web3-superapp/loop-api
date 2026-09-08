@@ -250,13 +250,22 @@ export const v2ErrorCodes = Object.freeze(
   Object.keys(v2ErrorCatalog).sort() as V2ErrorCode[],
 );
 
+/**
+ * Client-safe, non-sensitive structured details. Only scalar values so the
+ * body can never carry an address, a payload, or a Provider message; every
+ * key is documented in the module's frontend contract.
+ */
+export type V2ErrorDetailsSafe = Readonly<
+  Record<string, string | number | boolean | null>
+>;
+
 export interface V2ErrorResponse {
   readonly code: V2ErrorCode;
   readonly category: V2ErrorCategory;
   readonly retryable: boolean;
   readonly userMessageKey: string;
   readonly correlationId: string;
-  readonly detailsSafe: null;
+  readonly detailsSafe: V2ErrorDetailsSafe | null;
   readonly providerReferenceSafe: null;
 }
 
@@ -270,6 +279,7 @@ interface V2ErrorDescriptor {
 interface V2ApiErrorOptions extends V2ErrorDescriptor {
   readonly statusCode: V2ErrorStatusCode;
   readonly includeBearerChallenge?: boolean;
+  readonly detailsSafe?: V2ErrorDetailsSafe | null;
 }
 
 export interface V2ErrorProjection {
@@ -334,10 +344,17 @@ export class V2ApiError extends Error {
   readonly retryable: boolean;
   readonly userMessageKey: string;
   readonly includeBearerChallenge: boolean;
+  readonly detailsSafe: V2ErrorDetailsSafe | null;
 
   constructor(options: V2ApiErrorOptions) {
     super(options.userMessageKey);
     this.name = "V2ApiError";
+    this.detailsSafe =
+      options.detailsSafe === undefined
+        ? null
+        : options.detailsSafe === null
+          ? null
+          : Object.freeze({ ...options.detailsSafe });
     this.statusCode = options.statusCode;
     this.code = options.code;
     this.category = options.category;
@@ -346,12 +363,20 @@ export class V2ApiError extends Error {
     this.includeBearerChallenge = options.includeBearerChallenge ?? false;
   }
 
-  /** Create the canonical error for a catalog code. */
-  static fromCode(code: V2ErrorCode): V2ApiError {
+  /**
+   * Create the canonical error for a catalog code. `detailsSafe` is the only
+   * per-occurrence slot of the seven-field envelope; it is optional and must
+   * stay client-safe (see `V2ErrorDetailsSafe`).
+   */
+  static fromCode(
+    code: V2ErrorCode,
+    detailsSafe: V2ErrorDetailsSafe | null = null,
+  ): V2ApiError {
     const entry = v2ErrorCatalog[code];
     return new V2ApiError({
       statusCode: entry.statusCode,
       includeBearerChallenge: entry.includeBearerChallenge,
+      detailsSafe,
       ...descriptor(code),
     });
   }
@@ -449,6 +474,7 @@ function createProjection(
   errorDescriptor: V2ErrorDescriptor,
   correlationId: string,
   includeBearerChallenge: boolean,
+  detailsSafe: V2ErrorDetailsSafe | null = null,
 ): V2ErrorProjection {
   return Object.freeze({
     statusCode,
@@ -459,7 +485,7 @@ function createProjection(
       retryable: errorDescriptor.retryable,
       userMessageKey: errorDescriptor.userMessageKey,
       correlationId,
-      detailsSafe: null,
+      detailsSafe,
       providerReferenceSafe: null,
     }),
   });
@@ -475,6 +501,7 @@ export function projectV2Error(
       error,
       correlationId,
       error.includeBearerChallenge,
+      error.detailsSafe,
     );
   }
 

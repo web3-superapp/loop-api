@@ -25,6 +25,7 @@ import {
   intentRequestDigest,
   sealIntent,
   walletIntentPayloadVersions,
+  walletIntentRefusalReasonCodes,
   type DecodedCallReview,
   type IntentSource,
   type SpenderReview,
@@ -44,7 +45,8 @@ import {
   readBalanceSnapshot,
   readFeeSnapshot,
   readNonce,
-  requireCanaryAsset,
+  requireAdmittedAsset,
+  requireCanaryAllowlisted,
   requireSignableWallet,
   requireWallet,
   requireWriteAdmission,
@@ -103,6 +105,8 @@ export interface ApprovalListResource {
   };
   readonly freshness: {
     readonly indexerBlockNumber: string;
+    /** First block from which Approval logs are contiguous up to `indexerBlockNumber`. */
+    readonly approvalCoverageFromBlockNumber: string;
     readonly headBlockNumber: string;
     readonly observedAt: string;
   };
@@ -199,12 +203,17 @@ export function createApprovalService(
       input.principal,
       input.walletId,
     );
-    const asset = await requireCanaryAsset(runtime, writes, input.assetId);
-    if (asset.address === null) {
-      // The native asset has no allowance surface.
-      throw V2ApiError.fromCode("VALIDATION_FAILED");
+    // Order (S6 finding 2): shape → native → allowlist → ceiling. The native
+    // asset has no allowance surface, so that is a request-shape fact
+    // (422) and is decided before the canary allowlist (403).
+    const admitted = await requireAdmittedAsset(runtime, input.assetId);
+    if (admitted.address === null) {
+      throw V2ApiError.fromCode("VALIDATION_FAILED", {
+        reasonCode: walletIntentRefusalReasonCodes.nativeAssetNotApprovable,
+      });
     }
-    const tokenAddress = asset.address;
+    const asset = requireCanaryAllowlisted(writes, admitted);
+    const tokenAddress = admitted.address;
     const spender = parseSpender(input.spenderAddress);
     if (spender === wallet.address) {
       throw V2ApiError.fromCode("VALIDATION_FAILED");
@@ -246,7 +255,13 @@ export function createApprovalService(
             exposureRaw,
             input.signal,
           );
-          enforceCanaryCeiling(writes, valuation.valueUsd);
+          enforceCanaryCeiling(
+            writes,
+            valuation.valueUsd,
+            isUnlimited
+              ? walletIntentRefusalReasonCodes.unlimitedExposureExceedsCeiling
+              : walletIntentRefusalReasonCodes.canaryCeilingExceeded,
+          );
         }
         let spenderCode: Hex;
         try {
@@ -527,6 +542,26 @@ export function createApprovalService(
       if (checkpoint === null) {
         throw V2ApiError.fromCode("INDEXING_DELAYED");
       }
+      // The lane shares its checkpoint with the transfer history, but
+      // Approval decoding only covers [approvalCoverageFromBlockNumber,
+      // lastBlockNumber]. An inventory is published only when that window
+      // reaches back to the wallet's earliest indexed activity; otherwise
+      // "no approvals" would be a gap, not a fact (S6 finding 4).
+      const coverage = checkpoint.approvalCoverageFromBlockNumber;
+      if (coverage === null) {
+        throw V2ApiError.fromCode("INDEXING_DELAYED");
+      }
+      const earliestActivity =
+        await runtime.indexer.earliestWalletActivityBlockNumber({
+          chainId: bscChainId,
+          address: wallet.address,
+        });
+      if (
+        earliestActivity !== null &&
+        BigInt(coverage) > BigInt(earliestActivity)
+      ) {
+        throw V2ApiError.fromCode("INDEXING_DELAYED");
+      }
       const assets = (
         await runtime.registry.listReadableAssets(bscChainId)
       ).filter((asset) => asset.address !== null);
@@ -579,6 +614,7 @@ export function createApprovalService(
         }),
         freshness: Object.freeze({
           indexerBlockNumber: checkpoint.lastBlockNumber,
+          approvalCoverageFromBlockNumber: coverage,
           headBlockNumber: read.headBlockNumber,
           observedAt: read.observedAt,
         }),

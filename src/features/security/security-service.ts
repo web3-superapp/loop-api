@@ -62,6 +62,7 @@ export interface SecurityApprovalsBlock {
   readonly unlimitedCount: number;
   readonly freshness: {
     readonly indexerBlockNumber: string;
+    readonly approvalCoverageFromBlockNumber: string;
     readonly headBlockNumber: string;
     readonly observedAt: string;
   };
@@ -176,7 +177,9 @@ export function createSecurityService(
     const active = sessions.filter((session) => session.status === "active");
     const windowStart =
       observedAt.getTime() - deviceRiskPolicy.windowHours * 3_600_000;
-    const newSessions24h = sessions.filter(
+    // Only sessions that are still active count: a revoked session is no
+    // longer a new device to worry about (S8 finding 4).
+    const newSessions24h = active.filter(
       (session) => Date.parse(session.createdAt) >= windowStart,
     ).length;
     return Object.freeze({

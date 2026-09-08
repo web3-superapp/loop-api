@@ -97,6 +97,22 @@ export const venueMilestoneMarketTypes = [
 ] as const;
 export type VenueMilestoneMarketType =
   (typeof venueMilestoneMarketTypes)[number];
+/**
+ * The five venue tracks of 03 §8.4, each with its own state machine. A track
+ * without a stored row is implicitly `PREPARING`; the milestones read
+ * publishes that row so a client never has to infer it from an empty list.
+ */
+export const venueMilestoneTracks: readonly {
+  readonly venue: VenueMilestoneVenue;
+  readonly marketType: VenueMilestoneMarketType;
+}[] = Object.freeze([
+  Object.freeze({ venue: "lbank", marketType: "spot" }),
+  Object.freeze({ venue: "binance", marketType: "alpha" }),
+  Object.freeze({ venue: "binance", marketType: "perpetual" }),
+  Object.freeze({ venue: "binance", marketType: "spot" }),
+  Object.freeze({ venue: "bithumb", marketType: "spot" }),
+] as const);
+
 export const venueMilestoneStates = [
   "PREPARING",
   "APPLIED",
@@ -208,7 +224,8 @@ const projectValuesSchema = z
     name: boundedText(maximumLaunchNameCodePoints),
     ticker: z.string().regex(tickerPattern),
     narrative: boundedText(maximumLaunchNarrativeCodePoints).nullable(),
-    officialLinks: officialLinksSchema,
+    // Omitting the object is the same as omitting every key (all null).
+    officialLinks: officialLinksSchema.optional(),
   })
   .strict();
 
@@ -236,13 +253,13 @@ export interface ReplaceLaunchProjectRequest {
 }
 
 function normalizeLinks(
-  value: z.infer<typeof officialLinksSchema>,
+  value: z.infer<typeof officialLinksSchema> | undefined,
 ): LaunchOfficialLinks {
   return Object.freeze({
-    website: value.website ?? null,
-    x: value.x ?? null,
-    telegram: value.telegram ?? null,
-    discord: value.discord ?? null,
+    website: value?.website ?? null,
+    x: value?.x ?? null,
+    telegram: value?.telegram ?? null,
+    discord: value?.discord ?? null,
   });
 }
 

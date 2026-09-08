@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createBscIndexerWorker } from "../src/bsc-indexer-worker.js";
 import type {
   BscIndexerRepository,
+  CommitApprovalCoverageSegmentInput,
   CommitTransferSegmentInput,
   IndexerCheckpointRecord,
   IndexedTransferRecord,
@@ -14,6 +15,7 @@ import type {
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import {
   BscReadUnavailableError,
+  type BscApprovalLog,
   type BscReadClient,
   type BscTransferLog,
   type BscTransferLogQuery,
@@ -65,8 +67,29 @@ function repositoryFake() {
   let checkpoint: IndexerCheckpointRecord | null = null;
   const commits: CommitTransferSegmentInput[] = [];
 
+  const coverageCommits: CommitApprovalCoverageSegmentInput[] = [];
+
   const repository: BscIndexerRepository = {
     getCheckpoint: () => Promise.resolve(checkpoint),
+    commitApprovalCoverageSegment: (input) => {
+      coverageCommits.push(input);
+      if (
+        checkpoint === null ||
+        BigInt(checkpoint.lastBlockNumber) < BigInt(input.toBlockNumber)
+      ) {
+        return Promise.reject(new Error("range not indexed"));
+      }
+      const current = checkpoint.approvalCoverageFromBlockNumber;
+      checkpoint = {
+        ...checkpoint,
+        approvalCoverageFromBlockNumber:
+          current === null || BigInt(input.fromBlockNumber) < BigInt(current)
+            ? input.fromBlockNumber
+            : current,
+      };
+      return Promise.resolve(checkpoint);
+    },
+    earliestWalletActivityBlockNumber: () => Promise.resolve(null),
     commitTransferSegment: (input) => {
       commits.push(input);
       const rewind = input.rewindFromBlockNumber;
@@ -84,10 +107,20 @@ function repositoryFake() {
           observedAt: "2026-09-08T00:00:00.000Z",
         });
       }
+      const previousCoverage =
+        checkpoint?.approvalCoverageFromBlockNumber ?? null;
+      const segmentCoverage = input.approvalCoverageFromBlockNumber ?? null;
       checkpoint = {
         lastBlockNumber: input.checkpoint.lastBlockNumber,
         lastBlockHash: input.checkpoint.lastBlockHash,
         startedFromBlockNumber: input.checkpoint.startedFromBlockNumber,
+        approvalCoverageFromBlockNumber:
+          previousCoverage === null
+            ? segmentCoverage
+            : segmentCoverage === null ||
+                BigInt(previousCoverage) <= BigInt(segmentCoverage)
+              ? previousCoverage
+              : segmentCoverage,
         reorgCount:
           (checkpoint?.reorgCount ?? 0) + (rewind === undefined ? 0 : 1),
         updatedAt: "2026-09-08T00:00:00.000Z",
@@ -104,12 +137,24 @@ function repositoryFake() {
     aggregateSwapCandles: () => Promise.resolve([]),
   };
 
-  return { repository, rows, commits, current: () => checkpoint };
+  return {
+    repository,
+    rows,
+    commits,
+    coverageCommits,
+    current: () => checkpoint,
+    seed: (record: IndexerCheckpointRecord) => {
+      checkpoint = record;
+    },
+  };
 }
 
 interface ReadClientOptions {
   readonly head: bigint;
   readonly logsFor?: (query: BscTransferLogQuery) => readonly BscTransferLog[];
+  readonly approvalLogsFor?: (
+    query: BscTransferLogQuery,
+  ) => readonly BscApprovalLog[];
   readonly blockHashFor?: (blockNumber: bigint) => string | null;
   readonly headUnavailable?: boolean;
 }
@@ -142,8 +187,23 @@ function readClientFake(options: ReadClientOptions): BscReadClient {
     readTransferLogs: (query) =>
       Promise.resolve(options.logsFor?.(query) ?? []),
     readPoolEventLogs: () => Promise.resolve([]),
-    readApprovalLogs: () => Promise.resolve([]),
+    readApprovalLogs: (query) =>
+      Promise.resolve(options.approvalLogsFor?.(query) ?? []),
     probeEndpoints: () => Promise.resolve([]),
+  };
+}
+
+function approvalLog(blockNumber: bigint, logIndex: number): BscApprovalLog {
+  return {
+    transactionHash: `0x${blockNumber.toString(16).padStart(62, "0")}a${String(logIndex)}`,
+    logIndex,
+    blockNumber,
+    blockHash: blockHash(blockNumber),
+    address: wbnb,
+    owner,
+    spender: wbnb,
+    value: 7n,
+    removed: false,
   };
 }
 
@@ -231,6 +291,104 @@ describe("BSC ERC-20 indexer lane", () => {
     }
     expect(storage.current()?.lastBlockNumber).toBe("4999");
     expect(storage.current()?.startedFromBlockNumber).toBe("1000");
+    // Approval logs were decoded for every committed segment, so coverage
+    // starts where the lane started and does not move on the next segment.
+    expect(
+      storage.commits.map((c) => c.approvalCoverageFromBlockNumber),
+    ).toEqual(["1000", "3000"]);
+    expect(storage.current()?.approvalCoverageFromBlockNumber).toBe("1000");
+  });
+
+  it("backfills approval coverage downward from the coverage start without moving the checkpoint", async () => {
+    const storage = repositoryFake();
+    // A lane indexed before Approval decoding existed: checkpoint, no coverage.
+    storage.seed({
+      lastBlockNumber: "9999",
+      lastBlockHash: blockHash(9_999n),
+      startedFromBlockNumber: "1000",
+      approvalCoverageFromBlockNumber: null,
+      reorgCount: 0,
+      updatedAt: "2026-09-08T00:00:00.000Z",
+    });
+    const ranges: BscTransferLogQuery[] = [];
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      readClient: readClientFake({
+        head: 9_999n,
+        approvalLogsFor: (query) => {
+          ranges.push(query);
+          return [approvalLog(query.fromBlock, 0)];
+        },
+      }),
+      chainId: bscChainId,
+      startBlockNumber: null,
+    });
+
+    const first = await worker.backfillApprovalCoverageOnce(5_000n);
+    expect(first).toMatchObject({
+      kind: "covered",
+      fromBlockNumber: "8000",
+      toBlockNumber: "9999",
+      approvalCount: 1,
+    });
+    expect(storage.current()?.approvalCoverageFromBlockNumber).toBe("8000");
+    expect(storage.current()?.lastBlockNumber).toBe("9999");
+
+    const second = await worker.backfillApprovalCoverageOnce(5_000n);
+    expect(second).toMatchObject({
+      kind: "covered",
+      fromBlockNumber: "6000",
+      toBlockNumber: "7999",
+    });
+    const third = await worker.backfillApprovalCoverageOnce(5_000n);
+    expect(third).toMatchObject({
+      kind: "covered",
+      fromBlockNumber: "5000",
+      toBlockNumber: "5999",
+    });
+    expect(storage.current()?.approvalCoverageFromBlockNumber).toBe("5000");
+    await expect(worker.backfillApprovalCoverageOnce(5_000n)).resolves.toEqual({
+      kind: "idle",
+      fromBlockNumber: null,
+      toBlockNumber: null,
+      approvalCount: 0,
+      reasonCode: "APPROVAL_COVERAGE_SATISFIED",
+    });
+    // A higher target than the current coverage is already satisfied.
+    await expect(
+      worker.backfillApprovalCoverageOnce(7_000n),
+    ).resolves.toMatchObject({
+      kind: "idle",
+      reasonCode: "APPROVAL_COVERAGE_SATISFIED",
+    });
+    for (const range of ranges) {
+      expect(range.toBlock - range.fromBlock + 1n).toBeLessThanOrEqual(2_000n);
+    }
+    expect(storage.coverageCommits.map((c) => c.toBlockNumber)).toEqual([
+      "9999",
+      "7999",
+      "5999",
+    ]);
+    expect(storage.commits).toHaveLength(0);
+  });
+
+  it("does not backfill approval coverage for a lane that has no checkpoint", async () => {
+    const storage = repositoryFake();
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      readClient: readClientFake({ head: 9_999n }),
+      chainId: bscChainId,
+      startBlockNumber: 1_000,
+    });
+    await expect(
+      worker.backfillApprovalCoverageOnce(100n),
+    ).resolves.toMatchObject({
+      kind: "idle",
+      reasonCode: "APPROVAL_COVERAGE_LANE_NOT_SEEDED",
+    });
+    expect(storage.coverageCommits).toHaveLength(0);
   });
 
   it("stores a replayed segment idempotently", async () => {

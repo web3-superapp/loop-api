@@ -143,9 +143,15 @@ const approvalsBlockSchema = {
     freshness: {
       type: "object",
       additionalProperties: false,
-      required: ["indexerBlockNumber", "headBlockNumber", "observedAt"],
+      required: [
+        "indexerBlockNumber",
+        "approvalCoverageFromBlockNumber",
+        "headBlockNumber",
+        "observedAt",
+      ],
       properties: {
         indexerBlockNumber: blockNumberSchema,
+        approvalCoverageFromBlockNumber: blockNumberSchema,
         headBlockNumber: blockNumberSchema,
         observedAt: dateTimeSchema,
       },

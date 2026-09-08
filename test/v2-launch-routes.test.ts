@@ -293,7 +293,7 @@ describe("LOOP API V2 launch module", () => {
   });
 
   it("replaces material by compare-and-swap, rejects an Idempotency-Key, and maps stale/conflict errors", async () => {
-    const { app } = await createApp();
+    const { app, repository } = await createApp();
     const body = {
       expectedVersion: 1,
       project: {
@@ -313,6 +313,29 @@ describe("LOOP API V2 launch module", () => {
     expect(replaced.json()).toMatchObject({
       project: { version: 2, materialVersion: 2 },
     });
+    // officialLinks may be omitted entirely: it is the same as all-null.
+    const omitted = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+      payload: {
+        expectedVersion: 2,
+        project: { name: "MoonCat", ticker: "MCAT", narrative: null },
+      },
+    });
+    expect(omitted.statusCode).toBe(200);
+    expect(calls(repository, "replaceProject")).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        values: expect.objectContaining({
+          officialLinks: {
+            website: null,
+            x: null,
+            telegram: null,
+            discord: null,
+          },
+        }) as unknown,
+      }),
+    );
     const withKey = await app.inject({
       method: "PUT",
       url: `/v2/launch/projects/${projectId}`,
@@ -666,15 +689,36 @@ describe("LOOP API V2 launch module", () => {
       headers: s7CommonHeaders(),
     });
     expect(milestones.statusCode).toBe(200);
+    // The stored row first, then an implicit PREPARING row for each of the
+    // other four 03 §8.4 tracks (nothing is written for them).
     expect(milestones.json()).toMatchObject({
       projectId,
       items: [
         {
+          venueMilestoneId: "7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6",
           venue: "lbank",
           marketType: "spot",
           state: "APPLIED",
           evidence: { digest: null, recordedAt: null, observedAt: null },
+          version: 2,
         },
+        {
+          venueMilestoneId: null,
+          venue: "binance",
+          marketType: "alpha",
+          state: "PREPARING",
+          evidence: {
+            digest: null,
+            recordedAt: null,
+            observedAt: null,
+            reviewer: null,
+          },
+          version: 0,
+          updatedAt: null,
+        },
+        { venue: "binance", marketType: "perpetual", state: "PREPARING" },
+        { venue: "binance", marketType: "spot", state: "PREPARING" },
+        { venue: "bithumb", marketType: "spot", state: "PREPARING" },
       ],
     });
     const economy = await app.inject({

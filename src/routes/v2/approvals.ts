@@ -32,7 +32,7 @@ export function registerV2ApprovalRoutes(
         operationId: "listV2Approvals",
         summary: "List the wallet's ERC-20 allowances",
         description:
-          "Spenders observed through indexed Approval events for registry assets, each with the current allowance() read at one block. Rows whose current allowance is zero are omitted; an unreadable allowance is reported as unavailable, never as zero. INDEXING_DELAYED until the transfer lane has a checkpoint.",
+          "Spenders observed through indexed Approval events for registry assets, each with the current allowance() read at one block. Rows whose current allowance is zero are omitted; an unreadable allowance is reported as unavailable, never as zero. INDEXING_DELAYED until the transfer lane has a checkpoint whose Approval coverage reaches back to the wallet's earliest indexed activity.",
         tags: ["approvals"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

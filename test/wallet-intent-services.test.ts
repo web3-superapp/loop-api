@@ -261,27 +261,35 @@ describe("send intent preparation", () => {
     );
   });
 
-  it("refuses the canary asset allowlist and the USD ceiling with POLICY_BLOCKED", async () => {
+  it("refuses the canary asset allowlist and the USD ceiling with POLICY_BLOCKED and a distinguishing reasonCode", async () => {
     const { send } = build({ canaryAssetIds: [wbnbAssetId] });
-    await expectCode(
+    await expect(
       send.prepare({
         principal,
         idempotencyKey: randomUUID(),
         body: sendBody(),
         signal,
       }),
-      "POLICY_BLOCKED",
-    );
+    ).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: { reasonCode: "ASSET_NOT_IN_CANARY_ALLOWLIST" },
+    });
     const { send: capped } = build({ canaryMaxUsd: "1" });
-    await expectCode(
+    await expect(
       capped.prepare({
         principal,
         idempotencyKey: randomUUID(),
         body: sendBody(),
         signal,
       }),
-      "POLICY_BLOCKED",
-    );
+    ).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: {
+        reasonCode: "CANARY_CEILING_EXCEEDED",
+        exposureUsd: expect.stringMatching(/^[0-9]+(\.[0-9]+)?$/) as string,
+        ceilingUsd: "1",
+      },
+    });
   });
 
   it("does not admit an amount it cannot price", async () => {
@@ -819,7 +827,7 @@ describe("approve and revoke intents", () => {
     const { approvals: rich } = build({
       readClient: { tokenBalance: 30_000_000_000_000_000_000n },
     });
-    await expectCode(
+    await expect(
       rich.prepareApprove({
         principal,
         idempotencyKey: randomUUID(),
@@ -832,8 +840,14 @@ describe("approve and revoke intents", () => {
         },
         signal,
       }),
-      "POLICY_BLOCKED",
-    );
+    ).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: {
+        reasonCode: "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+        exposureUsd: expect.any(String) as string,
+        ceilingUsd: expect.any(String) as string,
+      },
+    });
     await expectCode(
       approvals.prepareApprove({
         principal,
@@ -974,6 +988,71 @@ describe("approve and revoke intents", () => {
       approvals.list({ principal, walletId }),
       "INDEXING_DELAYED",
     );
+  });
+
+  it("is INDEXING_DELAYED while the lane has a checkpoint but no Approval coverage", async () => {
+    // A lane backfilled before migration 000021: transfers exist, approvals
+    // were never decoded. An empty inventory here would be a lie.
+    const { approvals } = build({
+      indexer: (await import("./wallet-intent-fakes.js")).indexerFake({
+        approvalCoverageFromBlockNumber: null,
+      }),
+    });
+    await expectCode(
+      approvals.list({ principal, walletId }),
+      "INDEXING_DELAYED",
+    );
+  });
+
+  it("is INDEXING_DELAYED while Approval coverage starts after the wallet's earliest indexed activity", async () => {
+    const fakes = await import("./wallet-intent-fakes.js");
+    const { approvals: gap } = build({
+      indexer: fakes.indexerFake({
+        approvalCoverageFromBlockNumber: "43500000",
+        earliestActivityBlockNumber: "43400000",
+      }),
+    });
+    await expectCode(gap.list({ principal, walletId }), "INDEXING_DELAYED");
+
+    // Coverage reaching back to (or below) the first activity is enough, and
+    // a wallet the lane has never seen is not blocked by coverage.
+    for (const indexer of [
+      fakes.indexerFake({
+        approvalCoverageFromBlockNumber: "43400000",
+        earliestActivityBlockNumber: "43400000",
+      }),
+      fakes.indexerFake({
+        approvalCoverageFromBlockNumber: "43500000",
+        earliestActivityBlockNumber: null,
+      }),
+    ]) {
+      const { approvals: covered } = build({ indexer });
+      const list = await covered.list({ principal, walletId });
+      expect(list.items).toEqual([]);
+      expect(list.freshness.approvalCoverageFromBlockNumber).toMatch(
+        /^43[45]00000$/,
+      );
+    }
+  });
+
+  it("refuses a native-asset approval as VALIDATION_FAILED before the canary allowlist is consulted", async () => {
+    const { approvals } = build({ canaryAssetIds: [usdtAssetId] });
+    await expect(
+      approvals.prepareApprove({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: {
+          walletId,
+          assetId: "eip155:56:native",
+          spenderAddress,
+          allowance: { mode: "exact", amount: "1" },
+        },
+        signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "NATIVE_ASSET_NOT_APPROVABLE" },
+    });
   });
 });
 

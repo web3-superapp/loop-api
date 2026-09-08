@@ -261,12 +261,17 @@ function indexerFake(
               lastBlockNumber: (headNumber - 5n).toString(10),
               lastBlockHash: `0x${"3".repeat(64)}`,
               startedFromBlockNumber: "120000000",
+              approvalCoverageFromBlockNumber: null,
               reorgCount: 0,
               updatedAt: observedAt,
             },
       ),
     ),
     commitTransferSegment: vi.fn(() => Promise.reject(new Error("not used"))),
+    commitApprovalCoverageSegment: vi.fn(() =>
+      Promise.reject(new Error("not used")),
+    ),
+    earliestWalletActivityBlockNumber: vi.fn(() => Promise.resolve(null)),
     listWalletTransfers: vi.fn(() =>
       Promise.resolve({ items: [], hasMore: false }),
     ),

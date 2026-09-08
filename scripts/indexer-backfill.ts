@@ -6,6 +6,7 @@ import pg from "pg";
 import {
   createBscIndexerWorker,
   type BscIndexerRunResult,
+  type BscIndexerWorker,
 } from "../src/bsc-indexer-worker.js";
 import { createBscPoolIndexerWorker } from "../src/bsc-pool-indexer-worker.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
@@ -26,6 +27,11 @@ import { createBscReadClient } from "../src/integrations/bsc/rpc-client.js";
  * reaches the chain head. `--from` seeds a brand-new lane; it never rewrites an
  * existing checkpoint, so a running worker and a backfill cannot disagree about
  * where the lane is.
+ *
+ * For an existing `erc20_transfer` lane, `--from X` additionally backfills
+ * `Approval` logs downward from the lane's approval coverage start to X
+ * (S6 finding 4): `approval_coverage_from_block` is lowered segment by segment
+ * and `last_block_number` is untouched.
  *
  * Usage: `pnpm indexer:backfill --from <block> [--lane erc20_transfer|pool_event]`
  */
@@ -98,7 +104,7 @@ export function parseIndexerBackfillRequest(
 }
 
 export interface BackfillSegmentResult {
-  readonly kind: BscIndexerRunResult["kind"];
+  readonly kind: BscIndexerRunResult["kind"] | "approval_coverage";
   readonly fromBlockNumber: string | null;
   readonly toBlockNumber: string | null;
   readonly rowCount: number;
@@ -126,8 +132,12 @@ export async function runBackfill(
       chainId: bscChainId,
       startBlockNumber: request.fromBlockNumber,
     };
-    const runOnce: () => Promise<BackfillSegmentResult> =
+    const transferWorker: BscIndexerWorker | null =
       request.lane === "pool_event"
+        ? null
+        : createBscIndexerWorker(laneOptions);
+    const runOnce: () => Promise<BackfillSegmentResult> =
+      transferWorker === null
         ? (() => {
             const worker = createBscPoolIndexerWorker(laneOptions);
             return async () => {
@@ -135,13 +145,38 @@ export async function runBackfill(
               return { ...result, rowCount: result.eventCount };
             };
           })()
-        : (() => {
-            const worker = createBscIndexerWorker(laneOptions);
-            return async () => {
-              const result = await worker.runOnce();
-              return { ...result, rowCount: result.transferCount };
-            };
-          })();
+        : async () => {
+            const result = await transferWorker.runOnce();
+            return { ...result, rowCount: result.transferCount };
+          };
+    if (transferWorker !== null) {
+      const target = BigInt(request.fromBlockNumber);
+      for (let segment = 0; segment < request.maximumSegments; segment += 1) {
+        const result =
+          await transferWorker.backfillApprovalCoverageOnce(target);
+        if (result.kind === "covered") {
+          onSegment({
+            kind: "approval_coverage",
+            fromBlockNumber: result.fromBlockNumber,
+            toBlockNumber: result.toBlockNumber,
+            rowCount: result.approvalCount,
+            reasonCode: null,
+          });
+          continue;
+        }
+        if (result.kind === "unavailable" || result.kind === "aborted") {
+          onSegment({
+            kind: result.kind,
+            fromBlockNumber: null,
+            toBlockNumber: null,
+            rowCount: 0,
+            reasonCode: result.reasonCode,
+          });
+          return;
+        }
+        break;
+      }
+    }
     for (let segment = 0; segment < request.maximumSegments; segment += 1) {
       const result = await runOnce();
       onSegment(result);

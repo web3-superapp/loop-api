@@ -536,6 +536,41 @@ describe("LOOP API V2 security, settings, and support modules", () => {
       expect(JSON.stringify(body)).not.toContain("privy");
     });
 
+    it("counts only active sessions in newSessions24h so a revoke lowers the signal", async () => {
+      const revokedInWindow = session({
+        sessionId: otherSessionId,
+        deviceId: otherDeviceId,
+        status: "revoked",
+        createdAt: "2026-09-09T01:30:00.000Z",
+        lastSeenAt: "2026-09-09T01:30:00.000Z",
+        revokedAt: "2026-09-09T01:45:00.000Z",
+      });
+      const { app } = await createApp(
+        fakes({ sessions: [session(), revokedInWindow] }),
+      );
+      const devices = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: readHeaders,
+      });
+      expect(devices.statusCode).toBe(200);
+      expect(
+        devices.json<{ riskSignals: unknown }>().riskSignals,
+      ).toMatchObject({ newSessions24h: 1, highRiskNewDevice: false });
+      const summary = await app.inject({
+        method: "GET",
+        url: "/v2/security/summary",
+        headers: readHeaders,
+      });
+      expect(summary.statusCode).toBe(200);
+      expect(summary.json<{ devices: unknown }>().devices).toMatchObject({
+        deviceCount: 1,
+        activeSessionCount: 1,
+        newSessions24h: 1,
+        highRiskNewDevice: false,
+      });
+    });
+
     it("flags two sessions inside 24 hours as a high-risk new device and marks nothing current without the header", async () => {
       const { app } = await createApp(
         fakes({

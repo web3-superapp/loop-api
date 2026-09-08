@@ -11,6 +11,7 @@ import {
   BscChainMismatchError,
   BscReadUnavailableError,
   bscMaximumLogRange,
+  type BscApprovalLog,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 
@@ -56,10 +57,33 @@ export interface BscIndexerInfrastructureBackoff {
   readonly retryDelayMs: number;
 }
 
+export type BscApprovalCoverageRunKind =
+  "aborted" | "covered" | "idle" | "unavailable";
+
+export interface BscApprovalCoverageRunResult {
+  readonly kind: BscApprovalCoverageRunKind;
+  readonly fromBlockNumber: string | null;
+  readonly toBlockNumber: string | null;
+  readonly approvalCount: number;
+  readonly reasonCode: string | null;
+}
+
 export interface BscIndexerWorker {
   readonly workerId: string;
   readonly lane: typeof BSC_INDEXER_LANE;
   runOnce(signal?: AbortSignal): Promise<BscIndexerRunResult>;
+  /**
+   * Approval-coverage backfill (S6 finding 4): reads `Approval` logs for one
+   * segment *below* the lane's current coverage start, ending at the block
+   * just under it, and lowers the coverage start to the segment start. It
+   * walks downward so an interrupted backfill leaves coverage contiguous with
+   * `lastBlockNumber`. `idle` once coverage already reaches `targetFromBlock`
+   * (or the lane has no checkpoint yet: seed it with `runOnce` first).
+   */
+  backfillApprovalCoverageOnce(
+    targetFromBlock: bigint,
+    signal?: AbortSignal,
+  ): Promise<BscApprovalCoverageRunResult>;
   run(signal: AbortSignal): Promise<void>;
 }
 
@@ -231,16 +255,7 @@ export function createBscIndexerWorker(
       rawValue: log.value.toString(10),
     }));
 
-    const approvals: IndexedApprovalInput[] = approvalLogs.map((log) => ({
-      transactionHash: log.transactionHash,
-      logIndex: log.logIndex,
-      blockNumber: log.blockNumber.toString(10),
-      blockHash: log.blockHash,
-      assetId: assetIdForAddress(options.chainId, log.address),
-      ownerAddress: log.owner,
-      spenderAddress: log.spender,
-      rawValue: log.value.toString(10),
-    }));
+    const approvals = approvalInputs(approvalLogs);
 
     const toBlockHash =
       toBlock === head.blockNumber
@@ -259,6 +274,9 @@ export function createBscIndexerWorker(
         lastBlockHash: toBlockHash,
         startedFromBlockNumber: startedFrom.toString(10),
       },
+      // Approval logs for [fromBlock, toBlock] are in this commit, so
+      // coverage extends down to fromBlock (or stays lower).
+      approvalCoverageFromBlockNumber: fromBlock.toString(10),
       ...(rewindFrom === null
         ? {}
         : { rewindFromBlockNumber: rewindFrom.toString(10) }),
@@ -269,6 +287,106 @@ export function createBscIndexerWorker(
       fromBlockNumber: fromBlock.toString(10),
       toBlockNumber: toBlock.toString(10),
       transferCount: transfers.length,
+      reasonCode: null,
+    });
+  }
+
+  function approvalInputs(
+    approvalLogs: readonly BscApprovalLog[],
+  ): IndexedApprovalInput[] {
+    return approvalLogs.map((log) => ({
+      transactionHash: log.transactionHash,
+      logIndex: log.logIndex,
+      blockNumber: log.blockNumber.toString(10),
+      blockHash: log.blockHash,
+      assetId: assetIdForAddress(options.chainId, log.address),
+      ownerAddress: log.owner,
+      spenderAddress: log.spender,
+      rawValue: log.value.toString(10),
+    }));
+  }
+
+  async function backfillApprovalCoverageOnce(
+    targetFromBlock: bigint,
+    signal?: AbortSignal,
+  ): Promise<BscApprovalCoverageRunResult> {
+    const coverageIdle = (
+      kind: BscApprovalCoverageRunKind,
+      reasonCode: string | null,
+    ): BscApprovalCoverageRunResult =>
+      Object.freeze({
+        kind,
+        fromBlockNumber: null,
+        toBlockNumber: null,
+        approvalCount: 0,
+        reasonCode,
+      });
+    if (targetFromBlock < 0n) {
+      return coverageIdle("idle", "APPROVAL_COVERAGE_TARGET_INVALID");
+    }
+    const assets = await options.registry.listReadableAssets(options.chainId);
+    const tokens = assets.filter(
+      (asset): asset is typeof asset & { address: string } =>
+        asset.address !== null,
+    );
+    if (tokens.length === 0) {
+      return coverageIdle("idle", "ASSET_REGISTRY_EMPTY");
+    }
+    const checkpoint = await options.repository.getCheckpoint(
+      BSC_INDEXER_LANE,
+      options.chainId,
+    );
+    if (checkpoint === null) {
+      return coverageIdle("idle", "APPROVAL_COVERAGE_LANE_NOT_SEEDED");
+    }
+    // Coverage is contiguous up to lastBlockNumber; with no coverage at all
+    // the first block still uncovered is lastBlockNumber itself.
+    const uncoveredEnd =
+      checkpoint.approvalCoverageFromBlockNumber === null
+        ? BigInt(checkpoint.lastBlockNumber)
+        : BigInt(checkpoint.approvalCoverageFromBlockNumber) - 1n;
+    if (uncoveredEnd < targetFromBlock) {
+      return coverageIdle("idle", "APPROVAL_COVERAGE_SATISFIED");
+    }
+    const toBlock = uncoveredEnd;
+    const lowest = toBlock - bscMaximumLogRange + 1n;
+    const fromBlock = lowest > targetFromBlock ? lowest : targetFromBlock;
+    let approvalLogs;
+    try {
+      approvalLogs = await options.readClient.readApprovalLogs({
+        addresses: tokens.map((token) => token.address),
+        fromBlock,
+        toBlock,
+      });
+    } catch (error) {
+      if (
+        error instanceof BscReadUnavailableError ||
+        error instanceof BscChainMismatchError
+      ) {
+        return coverageIdle(
+          "unavailable",
+          error instanceof BscChainMismatchError
+            ? "BSC_CHAIN_ID_MISMATCH"
+            : error.reasonCode,
+        );
+      }
+      throw error;
+    }
+    if (isAborted(signal)) {
+      return coverageIdle("aborted", null);
+    }
+    const approvals = approvalInputs(approvalLogs);
+    await options.repository.commitApprovalCoverageSegment({
+      chainId: options.chainId,
+      approvals,
+      fromBlockNumber: fromBlock.toString(10),
+      toBlockNumber: toBlock.toString(10),
+    });
+    return Object.freeze({
+      kind: "covered",
+      fromBlockNumber: fromBlock.toString(10),
+      toBlockNumber: toBlock.toString(10),
+      approvalCount: approvals.length,
       reasonCode: null,
     });
   }
@@ -290,6 +408,7 @@ export function createBscIndexerWorker(
     workerId,
     lane: BSC_INDEXER_LANE,
     runOnce,
+    backfillApprovalCoverageOnce,
     async run(signal: AbortSignal): Promise<void> {
       if (loopRunning) {
         throw new Error("The BSC indexer lane is already running");

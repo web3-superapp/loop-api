@@ -24,6 +24,7 @@ import {
   parseReplaceLaunchProjectRequest,
   unavailable,
   unavailableOnChainState,
+  venueMilestoneTracks,
   type LaunchEligibilityMode,
   type LaunchGraduationStep,
   type LaunchOnChainStateProjection,
@@ -202,7 +203,8 @@ export interface LaunchHistoryResource {
 }
 
 export interface VenueMilestoneProjection {
-  readonly venueMilestoneId: string;
+  /** `null` for an implicit `PREPARING` row (no stored record yet). */
+  readonly venueMilestoneId: string | null;
   readonly venue: VenueMilestoneRecord["venue"];
   readonly marketType: VenueMilestoneRecord["marketType"];
   readonly state: VenueMilestoneRecord["state"];
@@ -212,8 +214,10 @@ export interface VenueMilestoneProjection {
     readonly observedAt: string | null;
     readonly reviewer: string | null;
   };
+  /** 0 for an implicit `PREPARING` row. */
   readonly version: number;
-  readonly updatedAt: string;
+  /** `null` for an implicit `PREPARING` row. */
+  readonly updatedAt: string | null;
 }
 
 export interface LaunchMilestonesResource {
@@ -439,6 +443,43 @@ function milestoneProjection(
     version: record.version,
     updatedAt: record.updatedAt,
   });
+}
+
+/**
+ * Every 03 §8.4 track, stored rows first (newest update first, as the
+ * repository orders them) and an implicit `PREPARING` row for each track
+ * that has no record yet (S7 finding 2). Nothing is written.
+ */
+function milestoneRows(
+  records: readonly VenueMilestoneRecord[],
+): readonly VenueMilestoneProjection[] {
+  const stored = records.map(milestoneProjection);
+  const implicit = venueMilestoneTracks
+    .filter(
+      (track) =>
+        !records.some(
+          (record) =>
+            record.venue === track.venue &&
+            record.marketType === track.marketType,
+        ),
+    )
+    .map((track): VenueMilestoneProjection =>
+      Object.freeze({
+        venueMilestoneId: null,
+        venue: track.venue,
+        marketType: track.marketType,
+        state: "PREPARING",
+        evidence: Object.freeze({
+          digest: null,
+          recordedAt: null,
+          observedAt: null,
+          reviewer: null,
+        }),
+        version: 0,
+        updatedAt: null,
+      }),
+    );
+  return Object.freeze([...stored, ...implicit]);
 }
 
 /** The confirmed config, or the newest pending one when nothing is confirmed. */
@@ -815,7 +856,7 @@ export function createLaunchService(
         const items = await repository.listMilestones(project.projectId);
         return Object.freeze({
           projectId: project.projectId,
-          items: Object.freeze(items.map(milestoneProjection)),
+          items: milestoneRows(items),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {

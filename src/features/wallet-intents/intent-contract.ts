@@ -67,6 +67,24 @@ export const walletIntentPayloadVersions = Object.freeze({
 
 /** Product policy snapshots published with every intent. */
 export const bscWriteCanaryPolicyVersion = "bscWriteCanaryV1" as const;
+
+/**
+ * `detailsSafe.reasonCode` values that distinguish the policy refusals
+ * (`403 POLICY_BLOCKED`) and the native-asset approval refusal
+ * (`422 VALIDATION_FAILED`) so the sign sheet can say which rule fired
+ * (S6 finding 1/2). Ceiling refusals also carry `exposureUsd` and
+ * `ceilingUsd` as decimal strings.
+ */
+export const walletIntentRefusalReasonCodes = Object.freeze({
+  assetBlocked: "ASSET_BLOCKED",
+  assetNotInCanaryAllowlist: "ASSET_NOT_IN_CANARY_ALLOWLIST",
+  canaryCeilingExceeded: "CANARY_CEILING_EXCEEDED",
+  unlimitedExposureExceedsCeiling: "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+  nativeAssetNotApprovable: "NATIVE_ASSET_NOT_APPROVABLE",
+  priceImpactBlocked: "PRICE_IMPACT_BLOCKED",
+} as const);
+export type WalletIntentRefusalReasonCode =
+  (typeof walletIntentRefusalReasonCodes)[keyof typeof walletIntentRefusalReasonCodes];
 export const swapPolicyVersion = "swapPolicyV1" as const;
 export const swapPolicy = Object.freeze({
   configVersion: swapPolicyVersion,
