@@ -188,6 +188,10 @@ const messageRequestDecisionSchema = z
   .object({ decision: z.enum(messageRequestDecisions) })
   .strict();
 
+const sendMessageRequestSchema = z
+  .object({ targetPublicProfileId: uuidSchema })
+  .strict();
+
 export interface CreateCommunityValues {
   readonly name: string;
   readonly slug: string;
@@ -312,6 +316,11 @@ export function parseBlockRequest(value: unknown): {
 } {
   const parsed = blockRequestSchema.safeParse(value);
   return parsed.success ? Object.freeze(parsed.data) : invalid();
+}
+
+export function parseSendMessageRequest(value: unknown): string {
+  const parsed = sendMessageRequestSchema.safeParse(value);
+  return parsed.success ? parsed.data.targetPublicProfileId : invalid();
 }
 
 export function parseMessageRequestDecision(

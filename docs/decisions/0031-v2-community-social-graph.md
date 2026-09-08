@@ -292,3 +292,46 @@ Remove `community` and `search` from `V2_MODULES_ENABLED`: every route
 disappears, the two capabilities return to `deferred`, and
 `communityMining`/`communityPresence` stay `unavailable`. The migration rolls
 back only while no community or social-graph data exists.
+
+## Revision 2026-09-08 — `POST /v2/message-requests`
+
+`GET /v2/message-requests` had no V2 producer. The only way to create a row in
+`friend_requests` was `POST /v1/friend-requests`, whose eligibility predicate
+reads the V1 `privacy_preferences` and `social_privacy_preferences` tables. A
+V2-activated account writes `privacy_preferences_v2` and has no V1 privacy row
+at all, so every V2-only account was permanently ineligible: the V1 send
+answered `target_unavailable` and the V2 inbox could never fill (S3 integration,
+2026-09-08). V1 stays frozen; V2 gains the missing producer.
+
+| Item            | Ruling                                                                                                                                                                                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route           | `POST /v2/message-requests`, body `{targetPublicProfileId}`, `Idempotency-Key` required, response 200                                                                                                                                                    |
+| Storage         | The frozen V1 `friend_requests` table and its state machine: one pending row per pair, the seven-day lifetime, the 24-hour rejection cooldown, the same append-only triggers. No new table, no second state machine.                                     |
+| Admission       | The V2 rule set, identical to `follow`: the caller has an activated profile; the target is activated, `privacy_preferences_v2.discoverable = true`, not the caller itself, and not blocked in either direction.                                          |
+| Non-enumeration | Every ineligible target — unknown, unactivated, non-discoverable, self, blocked — answers the same `404 NOT_FOUND`.                                                                                                                                      |
+| Stale pair      | An existing friendship, a pending request in either direction, and an active rejection cooldown answer `409 DATA_STALE`.                                                                                                                                 |
+| Replay          | The same `Idempotency-Key` returns the request the first call created, even after the recipient decided it.                                                                                                                                              |
+| Response        | One message-request item in the shape `GET /v2/message-requests` publishes, with `contractVersion`. The identity is the recipient (the list projects the requester, because it answers the other side). `preview` and `aiModeration` stay `unavailable`. |
+| Audit           | One `social_graph_events` row, `event_type = message_request_sent`, `result_status = sent`, `subject_id` = the request. Migration `000018` extends that vocabulary and touches nothing else.                                                             |
+
+Consequence: `POST /v1/friend-requests` remains the V1 path for V1 accounts and
+is not changed, deprecated, or dual-written. Nothing here reads or writes the
+V1 privacy tables.
+
+## Revision 2026-09-08 — the `chat` projection has three states
+
+`GET /v2/communities/{id}`'s `chat.status` was `available | unavailable`, so a
+community whose channel had been allocated and enqueued (verified, worker not
+finished) reported `unavailable` — the client rendered "chat unavailable" for
+work that was in flight (S4 integration, OBS-1). `chat.status` is now
+`available | syncing | unavailable`:
+
+| State         | When                                                                                                                                                                                                                                      |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `available`   | The channel is provisioned and the viewer's member state is `synced`; the only state carrying a `channelCid`.                                                                                                                             |
+| `syncing`     | LOOP recorded the intent and Stream has not caught up: the channel row exists but is not provisioned (`COMMUNITY_CHANNEL_NOT_PROVISIONED`), or it is provisioned and the viewer is not `synced` yet (`COMMUNITY_CHANNEL_MEMBER_SYNCING`). |
+| `unavailable` | Nothing is in flight: no communication runtime, no channel row at all (the community is not verified, `COMMUNITY_CHANNEL_NOT_PROVISIONED`), a terminal provisioning failure, no membership, or the member cap.                            |
+
+`voice` is unchanged. The client renders `syncing` as "chat permission
+syncing" and may poll the community record; it must still never synthesize a
+CID.

@@ -232,6 +232,14 @@ export interface ListMessageRequestsInput {
   readonly after?: ConnectionCursor | undefined;
 }
 
+export interface SendMessageRequestInput {
+  readonly ownerUserId: string;
+  readonly targetPublicProfileId: string;
+  readonly idempotencyKey: string;
+  readonly requestSha256: string;
+  readonly requestId: string;
+}
+
 export interface DecideMessageRequestInput {
   readonly ownerUserId: string;
   readonly messageRequestId: string;
@@ -313,6 +321,9 @@ export interface CommunityRepository {
   listMessageRequests(
     input: ListMessageRequestsInput,
   ): Promise<readonly MessageRequestRecord[]>;
+  sendMessageRequest(
+    input: SendMessageRequestInput,
+  ): Promise<MessageRequestRecord>;
   decideMessageRequest(
     input: DecideMessageRequestInput,
   ): Promise<MessageRequestDecisionRecord>;
@@ -430,6 +441,7 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     listBlocks: unavailable,
     countBlocks: unavailable,
     listMessageRequests: unavailable,
+    sendMessageRequest: unavailable,
     decideMessageRequest: unavailable,
     searchUsers: unavailable,
     searchCommunities: unavailable,

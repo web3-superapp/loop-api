@@ -60,6 +60,7 @@ import {
   type ListMessageRequestsInput,
   type MembershipRecord,
   type MessageRequestDecisionRecord,
+  type SendMessageRequestInput,
   type MessageRequestRecord,
   type SearchCommunitiesInput,
   type SearchCommunityRecord,
@@ -79,6 +80,8 @@ import {
  */
 
 const rejectionCooldownSql = "24 hours";
+/** The V1 friend-request lifetime, reused verbatim by the V2 send path. */
+const messageRequestLifetimeSql = "7 days";
 const uniqueViolation = "23505";
 
 const canonicalUuidPattern =
@@ -692,6 +695,50 @@ async function resolveTarget(
       alias: row["alias"],
       avatar_ref: row["avatar_ref"],
     }),
+  });
+}
+
+/**
+ * Project one `friend_requests` row in the shape of a V2 message-request item.
+ * The identity is the **recipient**: this projection answers the sender, while
+ * `listMessageRequests` answers the recipient and therefore projects the
+ * requester. Both carry the same fields.
+ */
+async function readMessageRequest(
+  client: DatabaseClient,
+  messageRequestId: string,
+): Promise<MessageRequestRecord> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        request.friend_request_id,
+        request.created_at,
+        request.expires_at,
+        ${identityColumns}
+      from public.friend_requests as request
+      join public.user_profiles as profile
+        on profile.owner_user_id = request.recipient_user_id
+      join public.loop_users as account
+        on account.id = request.recipient_user_id
+      where request.friend_request_id = $1
+      limit 1
+    `,
+    values: [messageRequestId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new CommunityRepositoryUnavailableError();
+  }
+  return Object.freeze({
+    messageRequestId: opaqueIdSchema.parse(row["friend_request_id"]),
+    profile: toIdentity({
+      public_profile_id: row["public_profile_id"],
+      loop_id: row["loop_id"],
+      alias: row["alias"],
+      avatar_ref: row["avatar_ref"],
+    }),
+    createdAt: dateSchema.parse(row["created_at"]).toISOString(),
+    expiresAt: dateSchema.parse(row["expires_at"]).toISOString(),
   });
 }
 
@@ -2174,6 +2221,143 @@ export function createPostgresCommunityRepository(
             }),
           ),
         );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    /**
+     * Send a stranger message request (Decision 0031 revision, 2026-09-08).
+     * It writes the frozen V1 `friend_requests` storage and obeys the V1 state
+     * machine (one pending row per pair, the seven-day lifetime, the rejection
+     * cooldown), but admission is the V2 rule set: an active profile,
+     * `privacy_preferences_v2.discoverable`, and no block in either direction.
+     * Every ineligible target answers the same non-enumerating NOT_FOUND.
+     */
+    async sendMessageRequest(
+      rawInput: SendMessageRequestInput,
+    ): Promise<MessageRequestRecord> {
+      try {
+        const ownerUserId = userIdSchema.parse(rawInput.ownerUserId);
+        const targetPublicProfileId = opaqueIdSchema.parse(
+          rawInput.targetPublicProfileId,
+        );
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimSocialGraphCommand(client, {
+            ownerUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          const replay = await findSocialGraphAudit(client, recordId);
+          if (replay !== null && replay.subjectId !== null) {
+            // A replay reports the request the first call created, even after
+            // the recipient has decided it.
+            return await readMessageRequest(client, replay.subjectId);
+          }
+          await requireActiveProfile(client, ownerUserId);
+          const target = await resolveTarget(client, {
+            viewerUserId: ownerUserId,
+            targetPublicProfileId,
+            requireDiscoverable: true,
+            requireUnblocked: true,
+          });
+          // The same pair lock the V1 sender takes, so two concurrent sends
+          // cannot both pass the pending check.
+          await client.query({
+            text: `
+              select id
+              from public.loop_users
+              where id in ($1, $2)
+              order by id
+              for update
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          await client.query({
+            text: `
+              update public.friend_requests
+              set
+                status = 'expired',
+                decided_at = greatest(clock_timestamp(), created_at),
+                updated_at = greatest(clock_timestamp(), updated_at)
+              where pair_user_id_low = least($1::uuid, $2::uuid)
+                and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                and status = 'pending'
+                and expires_at <= clock_timestamp()
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          const blocking = await client.query<{
+            friendship: boolean;
+            pending: boolean;
+            cooldown: boolean;
+          }>({
+            text: `
+              select
+                exists (
+                  select 1
+                  from public.friendships
+                  where user_id_low = least($1::uuid, $2::uuid)
+                    and user_id_high = greatest($1::uuid, $2::uuid)
+                ) as friendship,
+                exists (
+                  select 1
+                  from public.friend_requests
+                  where pair_user_id_low = least($1::uuid, $2::uuid)
+                    and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                    and status = 'pending'
+                ) as pending,
+                exists (
+                  select 1
+                  from public.friend_requests
+                  where pair_user_id_low = least($1::uuid, $2::uuid)
+                    and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                    and status = 'rejected'
+                    and rejection_cooldown_until > clock_timestamp()
+                ) as cooldown
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          const state = blocking.rows[0];
+          if (state === undefined) {
+            throw new CommunityRepositoryUnavailableError();
+          }
+          // An existing friendship, a pending request in either direction, and
+          // an active rejection cooldown are all "refresh before deciding
+          // again": the caller's view of the pair is stale.
+          if (state.friendship || state.pending || state.cooldown) {
+            throw new CommunityDataStaleError();
+          }
+          const inserted = await client.query<{ friend_request_id: string }>({
+            text: `
+              insert into public.friend_requests (
+                requester_user_id,
+                recipient_user_id,
+                expires_at
+              )
+              values ($1, $2, clock_timestamp() + $3::interval)
+              returning friend_request_id
+            `,
+            values: [ownerUserId, target.userId, messageRequestLifetimeSql],
+          });
+          const messageRequestId = opaqueIdSchema.parse(
+            inserted.rows[0]?.friend_request_id,
+          );
+          await appendSocialGraphAudit(client, {
+            actorUserId: ownerUserId,
+            eventType: "message_request_sent",
+            targetUserId: target.userId,
+            subjectId: messageRequestId,
+            resultStatus: "sent",
+            reasonCode: null,
+            idempotencyRecordId: recordId,
+            requestId,
+          });
+          return await readMessageRequest(client, messageRequestId);
+        });
       } catch (error) {
         return translateRepositoryError(error);
       }

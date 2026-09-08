@@ -187,7 +187,8 @@ UUIDv4 `Idempotency-Key`; every read rejects one.
 | `POST`   | `/v2/voice-rooms/{voiceRoomId}/end`                        | Host ends the room; every later write is `DATA_STALE`          |
 
 `GET /v2/communities/{communityId}` (the `community` module) grows `chat` and
-`voice`. The V2 artifact now carries 52 operations under `/v2` (54 with the two
+`voice`. The V2 artifact carried 52 operations under `/v2` at the time of this
+decision (54 with the two
 shared `/health/*` endpoints).
 
 ## Capabilities

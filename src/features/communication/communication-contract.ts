@@ -196,12 +196,26 @@ export function communicationUnavailable(
  * whose Stream side is still catching up sees "syncing", never a CID it
  * cannot use.
  */
+/**
+ * Three states, never two (S4 integration, OBS-1): `syncing` is the honest
+ * answer while LOOP has recorded the intent and the Stream side has not caught
+ * up yet — the channel row exists but is not provisioned, or the viewer's
+ * membership is still `pending`. `unavailable` means nothing is in flight: no
+ * runtime, no channel at all, a terminal failure, no membership, or the member
+ * cap. Only `available` ever carries a CID.
+ */
 export type CommunityChatProjection =
   | Readonly<{
       status: "available";
       channelCid: string;
       memberState: "synced";
       reasonCode: null;
+    }>
+  | Readonly<{
+      status: "syncing";
+      channelCid: null;
+      memberState: CommunityChannelMemberState | null;
+      reasonCode: string;
     }>
   | Readonly<{
       status: "unavailable";
@@ -228,6 +242,18 @@ export function unavailableCommunityChat(
 ): CommunityChatProjection {
   return Object.freeze({
     status: "unavailable",
+    channelCid: null,
+    memberState,
+    reasonCode,
+  });
+}
+
+export function syncingCommunityChat(
+  reasonCode: string,
+  memberState: CommunityChannelMemberState | null = null,
+): CommunityChatProjection {
+  return Object.freeze({
+    status: "syncing",
     channelCid: null,
     memberState,
     reasonCode,

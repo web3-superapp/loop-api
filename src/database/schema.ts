@@ -1,4 +1,4 @@
-export const latestMigrationName = "000017_v2_communication";
+export const latestMigrationName = "000018_v2_message_request_send";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

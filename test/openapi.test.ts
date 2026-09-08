@@ -112,7 +112,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(54);
+    expect(operationIds).toHaveLength(55);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

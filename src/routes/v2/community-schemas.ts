@@ -252,7 +252,7 @@ const communityChatSchema = {
   additionalProperties: false,
   required: ["status", "channelCid", "memberState", "reasonCode"],
   properties: {
-    status: { type: "string", enum: ["available", "unavailable"] },
+    status: { type: "string", enum: ["available", "syncing", "unavailable"] },
     channelCid: {
       anyOf: [
         { type: "string", pattern: streamChannelCidPatternSource },
@@ -581,6 +581,42 @@ export const messageRequestListResourceSchema = {
       },
     },
     nextCursor: nullableCursorSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const sendMessageRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["targetPublicProfileId"],
+  properties: {
+    targetPublicProfileId: {
+      type: "string",
+      pattern: publicProfileIdPatternSource,
+    },
+  },
+} as const;
+
+export const messageRequestResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "messageRequestId",
+    "profile",
+    "createdAt",
+    "expiresAt",
+    "preview",
+    "aiModeration",
+    "contractVersion",
+  ],
+  properties: {
+    messageRequestId: { type: "string", pattern: opaqueIdPatternSource },
+    profile: identityProjectionSchema,
+    createdAt: { type: "string", format: "date-time" },
+    expiresAt: { type: "string", format: "date-time" },
+    preview: unavailableSchema,
+    aiModeration: unavailableSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

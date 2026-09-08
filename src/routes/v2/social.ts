@@ -18,6 +18,8 @@ import {
   messageRequestDecisionRequestSchema,
   messageRequestDecisionResourceSchema,
   messageRequestListResourceSchema,
+  messageRequestResourceSchema,
+  sendMessageRequestSchema,
   pageQuerySchema,
   publicProfileIdParamsSchema,
   readErrors,
@@ -291,6 +293,36 @@ export function registerV2SocialRoutes(
         principal: requireAuthenticatedLoopPrincipal(request),
         cursor: query.cursor,
         limit: query.limit,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/message-requests",
+    {
+      schema: {
+        operationId: "sendV2MessageRequest",
+        summary: "Send a stranger message request",
+        description:
+          "Writes the frozen V1 friend_requests storage through the V2 admission rules: an activated, discoverable target with no block in either direction. A nonexistent, unactivated, non-discoverable, self, or blocked target all return the same non-enumerating NOT_FOUND. An existing friendship, a pending request in either direction, and an active rejection cooldown are DATA_STALE. Replaying the same Idempotency-Key returns the original request.",
+        tags: ["social"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        body: sendMessageRequestSchema,
+        response: { 200: messageRequestResourceSchema, ...commandErrors },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await service.sendMessageRequest({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        body: request.body,
+        ...commandContext(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

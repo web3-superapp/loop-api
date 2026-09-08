@@ -133,6 +133,14 @@ function communityRepositoryFake() {
     }),
   );
   const listCommunitiesMock = vi.fn(() => Promise.resolve([community]));
+  const sendMessageRequestMock = vi.fn(() =>
+    Promise.resolve({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+    }),
+  );
   const listMembersMock = vi.fn((): Promise<CommunityMemberPageRecord> =>
     Promise.resolve({
       community,
@@ -215,6 +223,7 @@ function communityRepositoryFake() {
         },
       ]),
     ),
+    sendMessageRequest: sendMessageRequestMock,
     decideMessageRequest: vi.fn(() =>
       Promise.resolve({
         messageRequestId,
@@ -236,6 +245,7 @@ function communityRepositoryFake() {
     repository,
     listCommunitiesMock,
     listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -260,6 +270,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
     repository: communityRepository,
     listCommunitiesMock,
     listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -294,6 +305,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
     communityRepository,
     listCommunitiesMock,
     listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -701,6 +713,73 @@ describe("LOOP API V2 community, social, and search modules", () => {
       blocked: true,
       contractVersion: "2.0",
     });
+  });
+
+  it("sends a message request and projects it like a directory item", async () => {
+    const { app, sendMessageRequestMock } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/message-requests",
+      headers: commandHeaders(),
+      payload: { targetPublicProfileId: targetProfileId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+      preview: {
+        status: "unavailable",
+        reasonCode: "MESSAGE_PREVIEW_DEFERRED",
+      },
+      aiModeration: {
+        status: "unavailable",
+        reasonCode: "AI_MODERATION_DEFERRED",
+      },
+      contractVersion: "2.0",
+    });
+    expect(sendMessageRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPublicProfileId: targetProfileId }),
+    );
+  });
+
+  it("rejects a malformed or unknown-property message-request body", async () => {
+    const { app } = await createApp();
+    for (const payload of [
+      {},
+      { targetPublicProfileId: "not-a-uuid" },
+      { targetPublicProfileId: targetProfileId, note: "hi" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("maps an ineligible message-request target onto NOT_FOUND and a stale pair onto DATA_STALE", async () => {
+    for (const [error, status, code] of [
+      [new CommunityTargetUnavailableError(), 404, "NOT_FOUND"],
+      [new CommunityDataStaleError(), 409, "DATA_STALE"],
+    ] as const) {
+      const dependencies = fakes();
+      dependencies.sendMessageRequestMock.mockRejectedValue(error);
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload: { targetPublicProfileId: targetProfileId },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
   });
 
   it("hides message preview and AI moderation behind unavailable", async () => {

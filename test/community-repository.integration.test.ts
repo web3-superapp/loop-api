@@ -756,6 +756,102 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ).toBe(false);
   });
 
+  it("sends a message request under the V2 admission rules and replays by key", async () => {
+    const sender = await createAccount("send-sender");
+    const recipient = await createAccount("send-recipient");
+    const hidden = await createAccount("send-hidden");
+    await pool.query({
+      text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
+      values: [hidden.userId],
+    });
+
+    const send = (
+      targetPublicProfileId: string,
+      idempotencyKey = randomUUID(),
+    ) =>
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId,
+        idempotencyKey,
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          targetPublicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    // A non-discoverable target and the sender itself are both the same
+    // non-enumerating failure.
+    await expect(send(hidden.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(sender.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+
+    const key = randomUUID();
+    const sent = await send(recipient.publicProfileId, key);
+    expect(sent.profile.publicProfileId).toBe(recipient.publicProfileId);
+    expect(Date.parse(sent.expiresAt)).toBeGreaterThan(
+      Date.parse(sent.createdAt),
+    );
+
+    // The recipient sees exactly that request, projected from the sender side.
+    const inbox = await repository.listMessageRequests({
+      ownerUserId: recipient.userId,
+      limit: 20,
+    });
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.messageRequestId).toBe(sent.messageRequestId);
+    expect(inbox[0]?.profile.publicProfileId).toBe(sender.publicProfileId);
+
+    // The same key returns the original request; a new key hits the pending row.
+    await expect(send(recipient.publicProfileId, key)).resolves.toEqual(sent);
+    await expect(send(recipient.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityDataStaleError,
+    );
+
+    const events = await pool.query<{ event_type: string; subject_id: string }>(
+      {
+        text: `
+        select event_type, subject_id
+        from public.social_graph_events
+        where actor_user_id = $1 and event_type = 'message_request_sent'
+      `,
+        values: [sender.userId],
+      },
+    );
+    expect(events.rows).toEqual([
+      { event_type: "message_request_sent", subject_id: sent.messageRequestId },
+    ]);
+  });
+
+  it("refuses a message request across a block in either direction", async () => {
+    const sender = await createAccount("send-blocked-sender");
+    const recipient = await createAccount("send-blocked-recipient");
+    await repository.blockUser({
+      ownerUserId: recipient.userId,
+      stableId: sender.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        sender.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId: recipient.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          recipient.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
   it("reports a message request as reject plus block plus audit in one transaction", async () => {
     const recipient = await createAccount("dm-recipient");
     const requester = await createAccount("dm-requester");

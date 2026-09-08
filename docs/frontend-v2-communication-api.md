@@ -150,17 +150,22 @@ DELETE /v2/chat/groups/{groupId}/membership
 }
 ```
 
-`chat.status` 只有在**官方频道已在 Stream 建好**且**当前用户的频道成员状态是
-`synced`** 时才是 `available`。否则：
+`chat.status` 有**三个**取值（2026-09-08 修订，此前只有两个）：
+`available | syncing | unavailable`。只有在**官方频道已在 Stream 建好**且
+**当前用户的频道成员状态是 `synced`** 时才是 `available`，也只有这一种状态带
+`channelCid`。`syncing` 表示 LOOP 已经记录意图、Stream 侧还没跟上——请显示
+「聊天权限同步中」并可轮询社区详情，**不要显示为不可用**。`unavailable` 表示
+没有任何同步在进行中。
 
-| `reasonCode`                         | 含义与 UI                                                  |
-| ------------------------------------ | ---------------------------------------------------------- |
-| `COMMUNITY_CHANNEL_NOT_PROVISIONED`  | 社区尚未 verified，或频道还没在 Stream 建好 → 不可用       |
-| `COMMUNITY_CHANNEL_MEMBER_SYNCING`   | 成员同步中 → 显示「聊天权限同步中」，可轮询社区详情        |
-| `COMMUNITY_CHANNEL_CAPACITY_PENDING` | 频道已达 Stream 成员上限 → 显示不可用；LOOP 成员资格仍成立 |
-| `COMMUNITY_CHANNEL_PROVISION_FAILED` | 频道创建/同步终态失败 → 不可用，需运维介入                 |
-| `COMMUNITY_MEMBERSHIP_REQUIRED`      | 当前用户不是该社区非封禁成员                               |
-| `VOICE_ROOM_RUNTIME_UNAVAILABLE`     | 后端通信运行时未组装 → 不可用                              |
+| `status`      | `reasonCode`                         | 含义与 UI                                                             |
+| ------------- | ------------------------------------ | --------------------------------------------------------------------- |
+| `syncing`     | `COMMUNITY_CHANNEL_NOT_PROVISIONED`  | 社区已 verified、频道行与同步任务已入队，Stream 频道还没建好 → 同步中 |
+| `syncing`     | `COMMUNITY_CHANNEL_MEMBER_SYNCING`   | 频道已建好，本人的成员同步在途 → 同步中                               |
+| `unavailable` | `COMMUNITY_CHANNEL_NOT_PROVISIONED`  | 社区尚未 verified，压根没有频道 → 不可用                              |
+| `unavailable` | `COMMUNITY_CHANNEL_CAPACITY_PENDING` | 频道已达 Stream 成员上限 → 不可用；LOOP 成员资格仍成立                |
+| `unavailable` | `COMMUNITY_CHANNEL_PROVISION_FAILED` | 频道创建/同步终态失败 → 不可用，需运维介入                            |
+| `unavailable` | `COMMUNITY_MEMBERSHIP_REQUIRED`      | 当前用户不是该社区非封禁成员                                          |
+| `unavailable` | `VOICE_ROOM_RUNTIME_UNAVAILABLE`     | 后端通信运行时未组装 → 不可用                                         |
 
 - `memberState` 取值 `synced | pending | removed | capacityPending | null`，
   仅用于文案区分，不要据此推断 Stream 事实。

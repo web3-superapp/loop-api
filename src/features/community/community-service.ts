@@ -36,6 +36,7 @@ import {
   parseEnumValue,
   parseListLimit,
   parseMessageRequestDecision,
+  parseSendMessageRequest,
   parseOpaqueUuid,
   parseRoleChangeRequest,
   parseUpdateCommunityRequest,
@@ -88,6 +89,7 @@ import {
 import {
   communicationUnavailableReasonCodes,
   communityChannelCid,
+  syncingCommunityChat,
   unavailableCommunityChat,
   unavailableCommunityVoice,
   type CommunityChatProjection,
@@ -181,6 +183,10 @@ export interface ListBlocksInput extends ListInput {
 }
 
 export interface BlockCommandInput extends CommandInput {
+  readonly body: unknown;
+}
+
+export interface SendMessageRequestInput extends CommandInput {
   readonly body: unknown;
 }
 
@@ -344,6 +350,10 @@ export interface MessageRequestProjection {
   readonly aiModeration: UnavailableProjection;
 }
 
+export interface MessageRequestResource extends MessageRequestProjection {
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
 export interface MessageRequestListResource {
   readonly items: readonly MessageRequestProjection[];
   readonly nextCursor: string | null;
@@ -400,6 +410,9 @@ export interface CommunityService {
   block(input: BlockCommandInput): Promise<BlockResource>;
   unblock(input: BlockCommandInput): Promise<BlockResource>;
   listMessageRequests(input: ListInput): Promise<MessageRequestListResource>;
+  sendMessageRequest(
+    input: SendMessageRequestInput,
+  ): Promise<MessageRequestResource>;
   decideMessageRequest(
     input: DecideMessageRequestInput,
   ): Promise<MessageRequestDecisionResource>;
@@ -545,8 +558,18 @@ function chatProjection(
       communicationUnavailableReasonCodes.chatRuntime,
     );
   }
-  if (channel.channel === null || !channel.channel.provisioned) {
+  if (channel.channel === null) {
+    // Nothing is in flight: the community is not verified, so no channel row
+    // and no sync job exist yet.
     return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.channelNotProvisioned,
+      channel.viewerMemberState,
+    );
+  }
+  if (!channel.channel.provisioned) {
+    // Verification allocated the channel row and enqueued the sync jobs; the
+    // worker has not created the Stream channel yet.
+    return syncingCommunityChat(
       communicationUnavailableReasonCodes.channelNotProvisioned,
       channel.viewerMemberState,
     );
@@ -570,7 +593,8 @@ function chatProjection(
     );
   }
   if (channel.viewerMemberState !== "synced") {
-    return unavailableCommunityChat(
+    // The channel exists and the membership add is still on its way.
+    return syncingCommunityChat(
       communicationUnavailableReasonCodes.channelSyncing,
       channel.viewerMemberState,
     );
@@ -1460,6 +1484,35 @@ export function createCommunityService(
                     publicProfileId: last.messageRequestId,
                   }),
                 ),
+          contractVersion: v2ContractVersion,
+        });
+      } catch (error) {
+        return mapFailure(error);
+      }
+    },
+
+    async sendMessageRequest(input) {
+      const owner = assertPrincipal(input.principal);
+      try {
+        const targetPublicProfileId = parseSendMessageRequest(input.body);
+        const record = await options.repository.sendMessageRequest({
+          ownerUserId: owner.userId,
+          targetPublicProfileId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+            targetPublicProfileId,
+          ]),
+          requestId: input.requestId,
+        });
+        return Object.freeze({
+          messageRequestId: record.messageRequestId,
+          profile: freezeIdentity(record.profile),
+          createdAt: record.createdAt,
+          expiresAt: record.expiresAt,
+          preview: unavailable(communityUnavailableReasonCodes.messagePreview),
+          aiModeration: unavailable(
+            communityUnavailableReasonCodes.aiModeration,
+          ),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
