@@ -27,6 +27,7 @@ import {
 import {
   CommunicationDataStaleError,
   CommunicationPermissionDeniedError,
+  CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
   type CommunityChannelSyncRepository,
 } from "../src/features/communication/communication-repository.js";
@@ -318,10 +319,16 @@ describe("PostgreSQL V2 communication repository", () => {
       kind: "remove",
     });
 
+    const banWorkerId = randomUUID();
+    await sync.claimDueJobs({
+      workerId: banWorkerId,
+      leaseSeconds: 60,
+      limit: 10,
+    });
     await sync.completeJob({
       communityId,
       ownerUserId: member.userId,
-      workerId: randomUUID(),
+      workerId: banWorkerId,
       memberState: "removed",
       channelState: "created",
     });
@@ -467,10 +474,12 @@ describe("PostgreSQL V2 communication repository", () => {
     const member = await createAccount();
     await join(member.userId, communityId);
 
+    const workerId = randomUUID();
+    await sync.claimDueJobs({ workerId, leaseSeconds: 60, limit: 10 });
     await sync.completeJob({
       communityId,
       ownerUserId: member.userId,
-      workerId: randomUUID(),
+      workerId,
       memberState: "capacityPending",
       channelState: "capacityPending",
     });
@@ -482,6 +491,200 @@ describe("PostgreSQL V2 communication repository", () => {
     expect(channel.viewerMemberState).toBe("capacityPending");
     expect(channel.viewerIsCommunityMember).toBe(true);
     expect(channel.channel).toMatchObject({ state: "capacityPending" });
+  });
+
+  it("refuses a stale lease write-back for the job, member, and channel", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    await verifyCommunity(communityId);
+    const holder = randomUUID();
+    await sync.claimDueJobs({ workerId: holder, leaseSeconds: 30, limit: 10 });
+
+    const stale = randomUUID();
+    await sync.completeJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: stale,
+      memberState: "synced",
+      channelState: "created",
+    });
+    await sync.failJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: stale,
+      errorCode: "stream_channel_sync_exhausted",
+    });
+    await sync.retryJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: stale,
+      errorCode: "stream_channel_sync_unavailable",
+      retryDelaySeconds: 60,
+    });
+    await sync.markChannelProvisioned({ communityId, workerId: stale });
+
+    expect(await jobRow(communityId, owner.userId)).toMatchObject({
+      state: "pending",
+      last_error_code: null,
+    });
+    const channel = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: owner.userId,
+    });
+    expect(channel.channel).toMatchObject({
+      state: "created",
+      provisioned: false,
+    });
+    expect(channel.viewerMemberState).toBe("pending");
+
+    // The real lease holder still writes through.
+    await sync.markChannelProvisioned({ communityId, workerId: holder });
+    await sync.completeJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: holder,
+      memberState: "synced",
+      channelState: "created",
+    });
+    const settled = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: owner.userId,
+    });
+    expect(settled.channel).toMatchObject({ provisioned: true });
+    expect(settled.viewerMemberState).toBe("synced");
+  });
+
+  it("never clears a failed channel from the provisioning step", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    await verifyCommunity(communityId);
+    const first = randomUUID();
+    await sync.claimDueJobs({ workerId: first, leaseSeconds: 30, limit: 10 });
+    await sync.failJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: first,
+      errorCode: "stream_channel_projection_mismatch",
+    });
+
+    await pool.query({
+      text: `
+        update public.community_channel_sync_jobs
+        set state = 'pending', next_attempt_at = clock_timestamp()
+        where community_id = $1
+      `,
+      values: [communityId],
+    });
+    const second = randomUUID();
+    await sync.claimDueJobs({ workerId: second, leaseSeconds: 30, limit: 10 });
+    await sync.markChannelProvisioned({ communityId, workerId: second });
+
+    const stillFailed = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: owner.userId,
+    });
+    expect(stillFailed.channel).toMatchObject({
+      state: "failed",
+      provisioned: true,
+    });
+
+    // Only a confirmed member write clears the terminal channel failure.
+    await sync.completeJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId: second,
+      memberState: "synced",
+      channelState: "created",
+    });
+    const cleared = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: owner.userId,
+    });
+    expect(cleared.channel).toMatchObject({ state: "created" });
+  });
+
+  it("decides the member cap inside the completing transaction", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    await verifyCommunity(communityId);
+    const second = await createAccount();
+    const third = await createAccount();
+    await join(second.userId, communityId);
+    await join(third.userId, communityId);
+
+    const workerId = randomUUID();
+    await sync.claimDueJobs({ workerId, leaseSeconds: 60, limit: 10 });
+    // The cap is 2 for this database, so the first two members fit.
+    for (const userId of [owner.userId, second.userId]) {
+      await sync.completeJob({
+        communityId,
+        ownerUserId: userId,
+        workerId,
+        memberState: "synced",
+        channelState: "created",
+      });
+    }
+    // The worker believed there was room (it read a stale count), but the
+    // transaction re-counts and parks the third member instead.
+    await sync.completeJob({
+      communityId,
+      ownerUserId: third.userId,
+      workerId,
+      memberState: "synced",
+      channelState: "created",
+    });
+
+    const parked = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: third.userId,
+    });
+    expect(parked.viewerMemberState).toBe("capacityPending");
+    expect(parked.viewerIsCommunityMember).toBe(true);
+    expect(parked.channel).toMatchObject({ state: "capacityPending" });
+    expect(await jobRow(communityId, third.userId)).toMatchObject({
+      state: "succeeded",
+    });
+  });
+
+  it("repairs only the gaps when a verified community is verified again", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    await verifyCommunity(communityId);
+    const workerId = randomUUID();
+    await sync.claimDueJobs({ workerId, leaseSeconds: 60, limit: 10 });
+    await sync.completeJob({
+      communityId,
+      ownerUserId: owner.userId,
+      workerId,
+      memberState: "synced",
+      channelState: "created",
+    });
+    const member = await createAccount();
+    await join(member.userId, communityId);
+    await pool.query({
+      text: `
+        delete from public.community_channel_sync_jobs
+        where community_id = $1 and owner_user_id = $2
+      `,
+      values: [communityId, member.userId],
+    });
+
+    await verifyCommunity(communityId);
+
+    // The synced owner is untouched and gets no new job.
+    const ownerChannel = await communication.readCommunityChannel({
+      communityId,
+      viewerUserId: owner.userId,
+    });
+    expect(ownerChannel.viewerMemberState).toBe("synced");
+    expect(await jobRow(communityId, owner.userId)).toMatchObject({
+      state: "succeeded",
+    });
+    // The member whose job was lost is re-enqueued.
+    expect(await jobRow(communityId, member.userId)).toMatchObject({
+      kind: "add",
+      state: "pending",
+    });
   });
 
   async function createVoiceRoom(
@@ -498,6 +701,14 @@ describe("PostgreSQL V2 communication repository", () => {
       requestId: randomUUID(),
     });
     return record.room.voiceRoomId;
+  }
+
+  async function provision(voiceRoomId: string): Promise<void> {
+    await communication.recordVoiceRoomProvisioning({
+      voiceRoomId,
+      provisionState: "provisioned",
+      errorCode: null,
+    });
   }
 
   function joinRoom(
@@ -539,10 +750,50 @@ describe("PostgreSQL V2 communication repository", () => {
     ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
   });
 
+  it("leaves no row behind when joining a room whose Stream call is unconfirmed", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    const listener = await createAccount();
+    await join(listener.userId, communityId);
+
+    const key = randomUUID();
+    await expect(
+      communication.joinVoiceRoom({
+        actorUserId: listener.userId,
+        voiceRoomId,
+        idempotencyKey: key,
+        requestSha256: communicationCommandDigest("voiceRoomJoin", [
+          voiceRoomId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunicationUnprovisionedRoomError);
+
+    for (const [text, values] of [
+      [
+        `select 1 from public.voice_room_members where voice_room_id = $1 and owner_user_id = $2`,
+        [voiceRoomId, listener.userId],
+      ],
+      [
+        `select 1 from public.voice_room_events where voice_room_id = $1 and actor_user_id = $2`,
+        [voiceRoomId, listener.userId],
+      ],
+      [
+        `select 1 from public.idempotency_records where idempotency_key = $1`,
+        [key],
+      ],
+    ] as const) {
+      const result = await pool.query({ text, values: [...values] });
+      expect(result.rowCount).toBe(0);
+    }
+  });
+
   it("orders concurrent hand raises with a gapless sequence and one pending raise each", async () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);
     const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
 
     const listeners = await Promise.all(
       Array.from({ length: 8 }, async () => {
@@ -608,6 +859,7 @@ describe("PostgreSQL V2 communication repository", () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);
     const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
     const listener = await createAccount();
     await join(listener.userId, communityId);
     await joinRoom(listener.userId, voiceRoomId);
@@ -662,6 +914,7 @@ describe("PostgreSQL V2 communication repository", () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);
     const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
     const listener = await createAccount();
     await join(listener.userId, communityId);
     await joinRoom(listener.userId, voiceRoomId);
@@ -787,10 +1040,15 @@ describe("PostgreSQL V2 communication repository", () => {
     const member = await createAccount();
     const groupId = await createGroupFixture(creator.userId, member.userId);
 
+    const leaveKey = randomUUID();
+    const leaveDigest = communicationCommandDigest("chatGroupLeave", [groupId]);
     const preparation = await communication.prepareChatGroupLeave({
       actorUserId: member.userId,
       groupId,
+      idempotencyKey: leaveKey,
+      requestSha256: leaveDigest,
     });
+    expect(preparation.alreadyCommitted).toBe(false);
     expect(preparation.groupId).toBe(groupId);
     expect(preparation.streamChannelId).toMatch(/^loop_group_[0-9a-f]{32}$/);
     expect(preparation.memberStreamUserId).toBe(
@@ -804,16 +1062,16 @@ describe("PostgreSQL V2 communication repository", () => {
       communication.prepareChatGroupLeave({
         actorUserId: creator.userId,
         groupId,
+        idempotencyKey: randomUUID(),
+        requestSha256: communicationCommandDigest("chatGroupLeave", [groupId]),
       }),
     ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
 
-    const key = randomUUID();
-    const digest = communicationCommandDigest("chatGroupLeave", [groupId]);
     await communication.commitChatGroupLeave({
       actorUserId: member.userId,
       groupId,
-      idempotencyKey: key,
-      requestSha256: digest,
+      idempotencyKey: leaveKey,
+      requestSha256: leaveDigest,
       requestId: randomUUID(),
     });
     const remaining = await pool.query({
@@ -822,12 +1080,22 @@ describe("PostgreSQL V2 communication repository", () => {
     });
     expect(remaining.rowCount).toBe(1);
 
-    // An exact replay is a no-op that returns the original committed result.
+    // A retry with the same key after a lost response replays the preparation
+    // (so the caller can repeat only the idempotent Stream removal) and the
+    // commit stays a no-op.
+    const replay = await communication.prepareChatGroupLeave({
+      actorUserId: member.userId,
+      groupId,
+      idempotencyKey: leaveKey,
+      requestSha256: leaveDigest,
+    });
+    expect(replay.alreadyCommitted).toBe(true);
+    expect(replay.streamChannelId).toBe(preparation.streamChannelId);
     await communication.commitChatGroupLeave({
       actorUserId: member.userId,
       groupId,
-      idempotencyKey: key,
-      requestSha256: digest,
+      idempotencyKey: leaveKey,
+      requestSha256: leaveDigest,
       requestId: randomUUID(),
     });
     const audits = await pool.query({

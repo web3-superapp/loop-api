@@ -743,8 +743,16 @@ async function enqueueCommunityChannelSync(
     readonly ownerUserId: string;
     readonly kind: "add" | "remove";
     readonly requestId: string;
+    /**
+     * `reset` records a new intent and restarts the job. `fillGap` only
+     * creates what is missing: it never resets an already `synced` member and
+     * never restarts a job that already exists, so re-running verification is
+     * a repair rather than a re-synchronization of the whole community.
+     */
+    readonly mode?: "reset" | "fillGap";
   },
 ): Promise<void> {
+  const fillGap = input.mode === "fillGap";
   await client.query({
     text: `
       insert into public.community_channel_members (
@@ -756,6 +764,7 @@ async function enqueueCommunityChannelSync(
       )
       on conflict (community_id, owner_user_id) do update
       set state = 'pending', updated_at = clock_timestamp()
+      ${fillGap ? "where false" : ""}
     `,
     values: [
       input.communityId,
@@ -772,7 +781,10 @@ async function enqueueCommunityChannelSync(
       where exists (
         select 1 from public.community_channels where community_id = $1
       )
-      on conflict (community_id, owner_user_id) do update
+      on conflict (community_id, owner_user_id) do ${
+        fillGap
+          ? "nothing"
+          : `update
       set
         kind = excluded.kind,
         state = 'pending',
@@ -782,7 +794,8 @@ async function enqueueCommunityChannelSync(
         lease_worker_id = null,
         lease_expires_at = null,
         request_id = excluded.request_id,
-        updated_at = clock_timestamp()
+        updated_at = clock_timestamp()`
+      }
     `,
     values: [input.communityId, input.ownerUserId, input.kind, input.requestId],
   });
@@ -800,6 +813,8 @@ async function provisionCommunityChannel(
     readonly communityId: string;
     readonly memberCap: number;
     readonly requestId: string;
+    /** `repair` re-runs verification without disturbing synced members. */
+    readonly mode?: "initial" | "repair";
   },
 ): Promise<void> {
   await client.query({
@@ -818,14 +833,22 @@ async function provisionCommunityChannel(
       input.memberCap,
     ],
   });
+  const repair = input.mode === "repair";
+  // A repair only looks at memberships whose channel projection is missing or
+  // not yet `synced`; an account Stream already accepted is left alone.
   const members = await client.query<{ owner_user_id: string }>({
     text: `
-      select owner_user_id
-      from public.community_memberships
-      where community_id = $1 and status <> 'banned'
-      order by joined_at asc
+      select membership.owner_user_id
+      from public.community_memberships as membership
+      left join public.community_channel_members as member
+        on member.community_id = membership.community_id
+        and member.owner_user_id = membership.owner_user_id
+      where membership.community_id = $1
+        and membership.status <> 'banned'
+        and ($2::boolean is false or member.state is distinct from 'synced')
+      order by membership.joined_at asc
     `,
-    values: [input.communityId],
+    values: [input.communityId, repair],
   });
   for (const member of members.rows) {
     await enqueueCommunityChannelSync(client, {
@@ -833,6 +856,7 @@ async function provisionCommunityChannel(
       ownerUserId: userIdSchema.parse(member.owner_user_id),
       kind: "add",
       requestId: input.requestId,
+      mode: repair ? "fillGap" : "reset",
     });
   }
 }
@@ -2535,6 +2559,7 @@ export function createPostgresCommunityRepository(
               communityId,
               memberCap: communityChannelMemberCap,
               requestId,
+              mode: "repair",
             });
             return readCommunity(client, communityId);
           }

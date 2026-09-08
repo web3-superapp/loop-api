@@ -24,6 +24,7 @@ import {
   CommunicationProfileRequiredError,
   CommunicationRepositoryUnavailableError,
   CommunicationResourceConflictError,
+  CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
   type CommunityChannelSyncJobRecord,
   type CommunityChannelSyncRepository,
@@ -98,7 +99,8 @@ function translateRepositoryError(error: unknown): never {
     error instanceof CommunicationPermissionDeniedError ||
     error instanceof CommunicationProfileRequiredError ||
     error instanceof CommunicationRepositoryUnavailableError ||
-    error instanceof CommunicationResourceConflictError
+    error instanceof CommunicationResourceConflictError ||
+    error instanceof CommunicationUnprovisionedRoomError
   ) {
     throw error;
   }
@@ -874,6 +876,11 @@ export function createPostgresCommunicationRepository(
             return readViewerRecord(client, room, actorUserId);
           }
           const room = await requireLiveRoom(client, voiceRoomId);
+          // A room whose Stream call is not confirmed cannot be joined, and the
+          // refusal must leave no membership, audit, or idempotency row behind.
+          if (room.provisionState !== "provisioned") {
+            throw new CommunicationUnprovisionedRoomError();
+          }
           await requireActiveProfile(client, actorUserId);
           await requireCommunityStanding(client, room.communityId, actorUserId);
           // Join is idempotent: an existing member keeps its current role and
@@ -1278,12 +1285,30 @@ export function createPostgresCommunicationRepository(
     async prepareChatGroupLeave(rawInput: {
       readonly actorUserId: string;
       readonly groupId: string;
+      readonly idempotencyKey: string;
+      readonly requestSha256: string;
     }): Promise<ChatGroupLeavePreparation> {
       try {
         const actorUserId = userIdSchema.parse(rawInput.actorUserId);
         const groupId = opaqueIdSchema.parse(rawInput.groupId);
-        const result = await pool.query<Record<string, unknown>>({
-          text: `
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimCommand(client, {
+            ownerUserId: actorUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          const replay = await client.query<{ event_id: string }>({
+            text: `
+              select event_id from public.chat_group_membership_events
+              where idempotency_record_id = $1 limit 1
+            `,
+            values: [recordId],
+          });
+          const alreadyCommitted = replay.rows[0] !== undefined;
+          const result = await client.query<Record<string, unknown>>({
+            text: `
             select
               groups.stream_channel_id,
               creator.owner_user_id as creator_user_id,
@@ -1300,30 +1325,34 @@ export function createPostgresCommunicationRepository(
               and groups.channel_state = 'active'
             limit 1
           `,
-          values: [groupId, actorUserId],
-        });
-        const row = result.rows[0];
-        if (row === undefined) {
-          throw new CommunicationNotFoundError();
-        }
-        if (row["self_role"] === null || row["self_role"] === undefined) {
-          throw new CommunicationDataStaleError();
-        }
-        if (row["self_role"] !== "member") {
-          // The group creator cannot leave in this step; group member
-          // management stays unavailable until a later decision.
-          throw new CommunicationPermissionDeniedError();
-        }
-        return Object.freeze({
-          groupId,
-          streamChannelId: z
-            .string()
-            .regex(/^loop_group_[0-9a-f]{32}$/)
-            .parse(row["stream_channel_id"]),
-          channelCreatedByStreamUserId: deriveStreamUserId(
-            userIdSchema.parse(row["creator_user_id"]),
-          ),
-          memberStreamUserId: deriveStreamUserId(actorUserId),
+            values: [groupId, actorUserId],
+          });
+          const row = result.rows[0];
+          if (row === undefined) {
+            throw new CommunicationNotFoundError();
+          }
+          if (!alreadyCommitted) {
+            if (row["self_role"] === null || row["self_role"] === undefined) {
+              throw new CommunicationDataStaleError();
+            }
+            if (row["self_role"] !== "member") {
+              // The group creator cannot leave in this step; group member
+              // management stays unavailable until a later decision.
+              throw new CommunicationPermissionDeniedError();
+            }
+          }
+          return Object.freeze({
+            groupId,
+            streamChannelId: z
+              .string()
+              .regex(/^loop_group_[0-9a-f]{32}$/)
+              .parse(row["stream_channel_id"]),
+            channelCreatedByStreamUserId: deriveStreamUserId(
+              userIdSchema.parse(row["creator_user_id"]),
+            ),
+            memberStreamUserId: deriveStreamUserId(actorUserId),
+            alreadyCommitted,
+          });
         });
       } catch (error) {
         return translateRepositoryError(error);
@@ -1503,22 +1532,41 @@ export function createPostgresCommunityChannelSyncRepository(
       );
     },
 
+    /**
+     * Record that Stream confirmed the channel exists. It is fenced by the
+     * caller's own lease, and it never clears a `failed` channel: a terminal
+     * failure is resolved only by a confirmed member write, never by the
+     * provisioning step that runs before it.
+     */
     async markChannelProvisioned(input: {
       readonly communityId: string;
       readonly workerId: string;
     }): Promise<void> {
       await pool.query({
         text: `
-          update public.community_channels
+          update public.community_channels as channel
           set
-            provisioned_at = coalesce(provisioned_at, clock_timestamp()),
-            state = case when state = 'failed' then 'created' else state end,
-            last_error_code = null,
-            record_version = record_version + 1,
+            provisioned_at = coalesce(channel.provisioned_at, clock_timestamp()),
+            last_error_code = case
+              when channel.state = 'failed' then channel.last_error_code
+              else null
+            end,
+            record_version = channel.record_version + 1,
             updated_at = clock_timestamp()
-          where community_id = $1
+          where channel.community_id = $1
+            and exists (
+              select 1
+              from public.community_channel_sync_jobs as job
+              where job.community_id = channel.community_id
+                and job.lease_worker_id = $2
+                and job.lease_expires_at > clock_timestamp()
+                and job.state in ('pending', 'reconciling')
+            )
         `,
-        values: [opaqueIdSchema.parse(input.communityId)],
+        values: [
+          opaqueIdSchema.parse(input.communityId),
+          uuidV4Schema.parse(input.workerId),
+        ],
       });
     },
 
@@ -1541,7 +1589,9 @@ export function createPostgresCommunityChannelSyncRepository(
       const client = await pool.connect();
       try {
         await client.query("begin");
-        await client.query({
+        // The member and channel projections are written only under the same
+        // lease that claimed the job. A stale lease writes nothing at all.
+        const claimed = await client.query({
           text: `
             update public.community_channel_sync_jobs
             set
@@ -1553,27 +1603,68 @@ export function createPostgresCommunityChannelSyncRepository(
             where community_id = $1
               and owner_user_id = $2
               and lease_worker_id = $3
+              and lease_expires_at > clock_timestamp()
           `,
           values: [communityId, ownerUserId, workerId],
         });
+        if (claimed.rowCount === 0) {
+          await client.query("rollback");
+          return;
+        }
+        // The member cap is decided here, under the channel row lock, so two
+        // workers cannot both believe there was room for one more member.
+        let appliedMemberState = memberState;
+        let appliedChannelState = channelState;
+        if (memberState === "synced") {
+          const capacity = await client.query<{
+            member_cap: number;
+            synced_count: string;
+          }>({
+            text: `
+              select
+                channel.member_cap,
+                (
+                  select count(*)
+                  from public.community_channel_members as member
+                  where member.community_id = channel.community_id
+                    and member.owner_user_id <> $2
+                    and member.state = 'synced'
+                )::text as synced_count
+              from public.community_channels as channel
+              where channel.community_id = $1
+              for update
+            `,
+            values: [communityId, ownerUserId],
+          });
+          const row = capacity.rows[0];
+          if (row === undefined) {
+            await client.query("rollback");
+            return;
+          }
+          if (Number.parseInt(row.synced_count, 10) >= row.member_cap) {
+            appliedMemberState = "capacityPending";
+            appliedChannelState = "capacityPending";
+          }
+        }
         await client.query({
           text: `
             update public.community_channel_members
             set state = $3, updated_at = clock_timestamp()
             where community_id = $1 and owner_user_id = $2
           `,
-          values: [communityId, ownerUserId, memberState],
+          values: [communityId, ownerUserId, appliedMemberState],
         });
         await client.query({
           text: `
             update public.community_channels
             set
               state = $2,
+              last_error_code = null,
               record_version = record_version + 1,
               updated_at = clock_timestamp()
             where community_id = $1 and state <> $2
           `,
-          values: [communityId, channelState],
+          values: [communityId, appliedChannelState],
         });
         await client.query("commit");
       } catch (error) {
@@ -1605,6 +1696,7 @@ export function createPostgresCommunityChannelSyncRepository(
           where community_id = $1
             and owner_user_id = $2
             and lease_worker_id = $3
+            and lease_expires_at > clock_timestamp()
         `,
         values: [
           opaqueIdSchema.parse(input.communityId),
@@ -1635,7 +1727,7 @@ export function createPostgresCommunityChannelSyncRepository(
       const client = await pool.connect();
       try {
         await client.query("begin");
-        await client.query({
+        const claimed = await client.query({
           text: `
             update public.community_channel_sync_jobs
             set
@@ -1647,9 +1739,14 @@ export function createPostgresCommunityChannelSyncRepository(
             where community_id = $1
               and owner_user_id = $2
               and lease_worker_id = $3
+              and lease_expires_at > clock_timestamp()
           `,
           values: [communityId, ownerUserId, workerId, errorCode],
         });
+        if (claimed.rowCount === 0) {
+          await client.query("rollback");
+          return;
+        }
         await client.query({
           text: `
             update public.community_channels

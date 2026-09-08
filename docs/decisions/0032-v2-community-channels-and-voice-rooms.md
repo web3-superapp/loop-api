@@ -49,9 +49,20 @@ mixes contract versions.
    `reconciling` with a bounded exponential backoff. After
    `COMMUNITY_CHANNEL_SYNC_MAX_ATTEMPTS` attempts, or on an authoritative
    projection mismatch, the job and the channel become `failed`; that is a
-   terminal unresolved state, never a silent success.
+   terminal unresolved state, never a silent success. Every write-back
+   (`completeJob`, `failJob`, `retryJob`, `markChannelProvisioned`) is fenced
+   by the caller's own unexpired lease and writes the member and channel
+   projections only inside the transaction that consumed that lease, so a
+   worker whose lease already lapsed changes nothing. `markChannelProvisioned`
+   never clears a `failed` channel: only a confirmed member write does.
 
-2. **The channel is provisioned lazily by the first `add` job.** Verification
+2. **Re-verifying a verified community repairs rather than resynchronizes.**
+   The early-exit branch of `verifyCommunity` only creates the missing channel
+   row and the missing member rows, and only enqueues an `add` for a
+   membership whose channel projection is absent or not yet `synced`. An
+   account Stream already accepted is never reset and never re-enqueued.
+
+   **The channel is provisioned lazily by the first `add` job.** Verification
    allocates the deterministic channel ID and the member rows inside the
    verifying transaction; the Stream `getOrCreate` happens in the worker, so a
    verification never performs a provider write and a lost response can never
@@ -70,7 +81,10 @@ mixes contract versions.
    report which happened.** LOOP PostgreSQL is authoritative for the room
    lifecycle, host identity, LOOP-side role intent, and the hand-raise queue;
    Stream stays authoritative for participants, media state, and live
-   permissions. Every command response carries
+   permissions. `speakerCount` and `listenerCount` are LOOP role intent, never
+   a presence count; the observed participant count walks a bounded number of
+   Stream member pages and reports `unavailable` rather than publishing a
+   truncated total. Every command response carries
    `providerSync: {status: "confirmed" | "unconfirmed", reasonCode}`, so a
    committed LOOP transition is never presented as a confirmed provider fact.
    An exact idempotency replay skips the local transition and re-attempts only
@@ -79,7 +93,9 @@ mixes contract versions.
 5. **`join` is idempotent; every write on an `ended` room is `DATA_STALE`.**
    Joining an already-joined room returns the account's current role rather
    than failing. A room that is not `provisioned` cannot be joined
-   (`CAPABILITY_UNAVAILABLE`), because the Stream call may not exist.
+   (`CAPABILITY_UNAVAILABLE`), because the Stream call may not exist; that
+   check runs inside the join transaction, so the refusal leaves no
+   membership, audit, or idempotency row behind.
 
 6. **The hand-raise sequence is allocated under the `voice_rooms` row lock.**
    `voice_rooms.hand_raise_sequence` is incremented inside the same
@@ -95,7 +111,10 @@ mixes contract versions.
    commits the LOOP membership deletion and its audit row. Stream treats
    removing a non-member as a success, so retrying after an unknown result is
    safe and can never report a leave that did not happen. An unknown provider
-   result is `PROVIDER_DISCONNECTED` with no local change. Decision 0025's
+   result is `PROVIDER_DISCONNECTED` with no local change; the retry uses the
+   same `Idempotency-Key`, and because `prepareChatGroupLeave` claims that
+   record it recognizes an already-committed leave, replays only the
+   idempotent Stream removal, and answers `200` instead of `DATA_STALE`. Decision 0025's
    freeze on `communication_group_members` is narrowed to exactly this
    transition: a non-creator member deleting its own row. Role changes and
    creator removal stay rejected by the database trigger.

@@ -26,6 +26,7 @@ import {
   CommunicationProfileRequiredError,
   CommunicationRepositoryUnavailableError,
   CommunicationResourceConflictError,
+  CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
   type HandRaiseQueueEntryRecord,
   type VoiceRoomIdentity,
@@ -200,7 +201,10 @@ function mapRepositoryError(error: unknown): never {
   if (error instanceof CommunicationResourceConflictError) {
     throw V2ApiError.fromCode("RESOURCE_CONFLICT");
   }
-  if (error instanceof CommunicationRepositoryUnavailableError) {
+  if (
+    error instanceof CommunicationRepositoryUnavailableError ||
+    error instanceof CommunicationUnprovisionedRoomError
+  ) {
     throw V2ApiError.capabilityUnavailable();
   }
   throw error;
@@ -309,6 +313,10 @@ export function createVoiceRoomService(
         signal,
       });
       signal.throwIfAborted();
+      if (!observation.complete) {
+        // A truncated page walk is a floor, not the participant count.
+        return notObserved;
+      }
       return Object.freeze({
         status: "available" as const,
         memberCount: observation.memberCount,
@@ -458,9 +466,6 @@ export function createVoiceRoomService(
           requestId: input.requestId,
         }),
       );
-      if (record.room.provisionState !== "provisioned") {
-        throw V2ApiError.capabilityUnavailable();
-      }
       const providerSync = await attemptProviderWrite(
         () =>
           options.callGateway.updateCallMembers({

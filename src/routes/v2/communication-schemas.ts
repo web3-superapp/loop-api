@@ -333,7 +333,7 @@ const observedParticipantsSchema = {
       type: "string",
       format: "date-time",
       description:
-        "When Stream reported this member count. It is a read-only projection, never a LOOP-maintained counter.",
+        "When Stream reported this member count. It is a read-only projection accumulated across a bounded number of Stream member pages; a truncated walk reports unavailable instead.",
     },
   },
 } as const;
@@ -414,8 +414,18 @@ const voiceRoomBodySchema = {
       additionalProperties: false,
       required: ["speakerCount", "listenerCount", "observed"],
       properties: {
-        speakerCount: { type: "integer", minimum: 0 },
-        listenerCount: { type: "integer", minimum: 0 },
+        speakerCount: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "LOOP-side role intent (voice_room_members with role=speaker). It is not a Stream presence or online count.",
+        },
+        listenerCount: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "LOOP-side role intent (voice_room_members with role=listener). It is not a Stream presence or online count.",
+        },
         observed: {
           oneOf: [observedParticipantsSchema, unavailableProjectionSchema],
         },

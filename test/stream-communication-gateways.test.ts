@@ -354,8 +354,53 @@ describe("Stream audio_room call gateway", () => {
       signal: signal(),
     });
 
-    expect(observation.memberCount).toBe(2);
+    expect(observation).toMatchObject({ memberCount: 2, complete: true });
     expect(Date.parse(observation.observedAt)).not.toBeNaN();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accumulates member pages and stops when Stream reports no next page", async () => {
+    const page = (next?: string) =>
+      jsonResponse({
+        duration: "1ms",
+        members: Array.from({ length: 100 }, (_, index) => ({
+          user_id: `loop_${index.toString(16).padStart(32, "0")}`,
+        })),
+        ...(next === undefined ? {} : { next }),
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(page("cursor-1"))
+      .mockResolvedValueOnce(page("cursor-2"))
+      .mockResolvedValueOnce(page());
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.queryMembers({ callId, signal: signal() }),
+    ).resolves.toMatchObject({ memberCount: 300, complete: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports an incomplete observation beyond the bounded page budget", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          members: Array.from({ length: 100 }, (_, index) => ({
+            user_id: `loop_${index.toString(16).padStart(32, "0")}`,
+          })),
+          next: "cursor-more",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.queryMembers({ callId, signal: signal() }),
+    ).resolves.toMatchObject({ memberCount: 1_000, complete: false });
+    expect(fetchMock).toHaveBeenCalledTimes(10);
   });
 
   it("sanitizes a provider failure into the unavailable error", async () => {

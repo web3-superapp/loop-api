@@ -377,16 +377,22 @@ export function createV2ChatService(
      * and only then commits the LOOP membership removal. Stream treats
      * removing a non-member as a success, so retrying after an unknown
      * provider result is safe and can never leave the account inside a channel
-     * it believes it left.
+     * it believes it left. A retry with the same key after a lost response
+     * finds the original commit and replays only the provider call.
      */
     async leaveGroup(
       input: V2ChatGroupLeaveInput,
     ): Promise<V2ChatGroupMembershipResource> {
       const groupId = parseCommunicationOpaqueId(input.groupId);
+      const requestSha256 = communicationCommandDigest("chatGroupLeave", [
+        groupId,
+      ]);
       const preparation = await chatCall(() =>
         options.repository.prepareChatGroupLeave({
           actorUserId: input.principal.userId,
           groupId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256,
         }),
       );
       try {
@@ -404,17 +410,17 @@ export function createV2ChatService(
         }
         throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
       }
-      await chatCall(() =>
-        options.repository.commitChatGroupLeave({
-          actorUserId: input.principal.userId,
-          groupId,
-          idempotencyKey: input.idempotencyKey,
-          requestSha256: communicationCommandDigest("chatGroupLeave", [
+      if (!preparation.alreadyCommitted) {
+        await chatCall(() =>
+          options.repository.commitChatGroupLeave({
+            actorUserId: input.principal.userId,
             groupId,
-          ]),
-          requestId: input.requestId,
-        }),
-      );
+            idempotencyKey: input.idempotencyKey,
+            requestSha256,
+            requestId: input.requestId,
+          }),
+        );
+      }
       return Object.freeze({
         groupId,
         membership: null,

@@ -18,6 +18,7 @@ import { createUnavailableCommunityRepository } from "../src/features/community/
 import {
   CommunicationDataStaleError,
   CommunicationPermissionDeniedError,
+  CommunicationUnprovisionedRoomError,
   createUnavailableCommunicationRepository,
   type CommunicationRepository,
   type VoiceRoomViewerRecord,
@@ -224,6 +225,7 @@ function communicationRepositoryFake(
         streamChannelId: `loop_group_${groupId.replaceAll("-", "")}`,
         channelCreatedByStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
         memberStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+        alreadyCommitted: false,
       }),
     ),
     commitChatGroupLeave: vi.fn(() => Promise.resolve()),
@@ -257,7 +259,11 @@ function callGatewayFake(overrides: Partial<StreamCallGateway> = {}): {
     muteUsers: vi.fn(() => Promise.resolve()),
     endCall: vi.fn(() => Promise.resolve()),
     queryMembers: vi.fn(() =>
-      Promise.resolve({ memberCount: 5, observedAt: createdAt }),
+      Promise.resolve({
+        memberCount: 5,
+        observedAt: createdAt,
+        complete: true,
+      }),
     ),
   };
   for (const [name, value] of Object.entries(overrides)) {
@@ -552,12 +558,7 @@ describe("LOOP API V2 communication module", () => {
   it("refuses to join a room whose Stream call is not provisioned", async () => {
     const communication = communicationRepositoryFake({
       joinVoiceRoom: vi.fn(() =>
-        Promise.resolve(
-          room({
-            room: { ...room().room, provisionState: "reconciling" },
-            viewerRole: "listener",
-          }),
-        ),
+        Promise.reject(new CommunicationUnprovisionedRoomError()),
       ),
     });
     const { app, callMocks } = await createApp(fakes({ communication }));
@@ -767,6 +768,35 @@ describe("LOOP API V2 communication module", () => {
     });
   });
 
+  it("reports an unavailable participant count when the Stream page walk is truncated", async () => {
+    const callGateway = callGatewayFake({
+      queryMembers: vi.fn(() =>
+        Promise.resolve({
+          memberCount: 1_000,
+          observedAt: createdAt,
+          complete: false,
+        }),
+      ),
+    });
+    const { app } = await createApp(fakes({ callGateway }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/voice-rooms/current`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      current: {
+        participants: {
+          observed: {
+            status: "unavailable",
+            reasonCode: "STREAM_PARTICIPANT_COUNT_NOT_OBSERVED",
+          },
+        },
+      },
+    });
+  });
+
   it("reports no live room with a machine reason code", async () => {
     const communication = communicationRepositoryFake({
       getCurrentVoiceRoom: vi.fn(() => Promise.resolve(null)),
@@ -864,6 +894,45 @@ describe("LOOP API V2 communication module", () => {
       category: "availability",
       retryable: true,
     });
+    expect(communicationMocks["commitChatGroupLeave"]).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 for a same-key group-leave retry after a lost response", async () => {
+    const communication = communicationRepositoryFake({
+      prepareChatGroupLeave: vi.fn(() =>
+        Promise.resolve({
+          groupId,
+          streamChannelId: `loop_group_${groupId.replaceAll("-", "")}`,
+          channelCreatedByStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+          memberStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+          alreadyCommitted: true,
+        }),
+      ),
+    });
+    const removeMembers = vi.fn(() =>
+      Promise.resolve({
+        channelId: `loop_group_${groupId.replaceAll("-", "")}`,
+        streamCid: `messaging:loop_group_${groupId.replaceAll("-", "")}`,
+        memberCount: 2,
+      }),
+    );
+    const channelGateway = channelGatewayFake({ removeMembers });
+    const { app, communicationMocks } = await createApp(
+      fakes({ communication, channelGateway }),
+    );
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/v2/chat/groups/${groupId}/membership`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      groupId,
+      membership: null,
+      contractVersion: "2.0",
+    });
+    // Only the idempotent Stream removal replays; nothing commits twice.
+    expect(removeMembers).toHaveBeenCalledTimes(1);
     expect(communicationMocks["commitChatGroupLeave"]).not.toHaveBeenCalled();
   });
 

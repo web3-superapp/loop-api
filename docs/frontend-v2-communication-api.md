@@ -117,7 +117,9 @@ DELETE /v2/chat/groups/{groupId}/membership
 - **退出小群**：`DELETE /v2/chat/groups/{groupId}/membership`，成功 `200`
   `{groupId, membership: null, contractVersion}`。后端先做 Stream `removeMembers`
   再提交本地删除；Stream 未知结果返回 `503 PROVIDER_DISCONNECTED` 且**不提交**，
-  同一 key 重试是安全的。群创建者不能退出（`403 PERMISSION_DENIED`）。
+  同一 key 重试是安全的：后端在 `prepare` 阶段就认领幂等记录，命中已提交的退群
+  会只重放那一次 Stream 移除并返回 `200`，不会变成 `DATA_STALE`。群创建者不能
+  退出（`403 PERMISSION_DENIED`）。
 - `group-info` 的成员管理（踢人、改名）本步不做，显示 unavailable。
 
 ## 4. 社区官方群（`community-chat`）
@@ -226,10 +228,12 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   （绝不是 JS number），全序无重复。每人同一时刻只能有一个 `pending` 举手；
   重复举手返回 `409 DATA_STALE`。host 邀请发言会把该用户的 pending 举手置为
   `invited`。
-- **人数**：`speakerCount` / `listenerCount` 是 LOOP 的角色投影；
+- **人数**：`speakerCount` / `listenerCount` 是 LOOP 的**角色意图**投影（来自
+  `voice_room_members`），**不是 Stream 在线人数**；
   `participants.observed` 是只读 Stream 投影，必须带 `observedAt` 展示。读不到
   时是 `{status:"unavailable", reasonCode:"STREAM_PARTICIPANT_COUNT_NOT_OBSERVED"}`，
-  不要显示 0。
+  不要显示 0。后端最多翻 10 页（每页 100）累加；仍未翻完时同样返回 unavailable，
+  绝不发布被截断的总数。
 - **`providerSync`**：`confirmed` 表示这次命令的那一次 Stream 写入被确认；
   `unconfirmed` 表示 LOOP 侧已提交但 Provider 事实未确认（`reasonCode` 形如
   `STREAM_CALL_MUTE_UNCONFIRMED`）。**不要把 LOOP 提交当成 Provider 事实。**

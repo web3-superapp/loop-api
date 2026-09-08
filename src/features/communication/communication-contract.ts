@@ -83,6 +83,7 @@ export const communicationUnavailableReasonCodes = Object.freeze({
   channelCapacity: "COMMUNITY_CHANNEL_CAPACITY_PENDING",
   channelFailed: "COMMUNITY_CHANNEL_PROVISION_FAILED",
   notMember: "COMMUNITY_MEMBERSHIP_REQUIRED",
+  chatRuntime: "COMMUNICATION_RUNTIME_UNAVAILABLE",
   voiceNotLive: "COMMUNITY_VOICE_ROOM_NOT_LIVE",
   voiceNotProvisioned: "COMMUNITY_VOICE_ROOM_NOT_PROVISIONED",
   voiceRuntime: "VOICE_ROOM_RUNTIME_UNAVAILABLE",

@@ -16,6 +16,7 @@ const streamUserIdPattern = /^loop_[0-9a-f]{32}$/;
 const callIdPattern = /^loop_voice_[0-9a-f]{32}$/;
 const maximumCallMemberBatch = 100;
 const maximumQueriedMembers = 100;
+const maximumQueriedMemberPages = 10;
 
 /** Stream permission that lets a call member publish audio. */
 export const streamSendAudioPermission = "send-audio" as const;
@@ -64,6 +65,12 @@ export interface StreamCallEndInput {
 export interface StreamCallMemberObservation {
   readonly memberCount: number;
   readonly observedAt: string;
+  /**
+   * False when Stream still had more member pages after the bounded page
+   * budget. The count is then a floor, not a fact, so callers must report it
+   * as unavailable rather than publish a truncated number.
+   */
+  readonly complete: boolean;
 }
 
 export interface StreamCallGateway {
@@ -422,17 +429,36 @@ export function createStreamCallGateway(
       const callId = rawInput["callId"];
       const signal = parseSignal(rawInput["signal"]);
       try {
-        signal.throwIfAborted();
-        const response = await client.video
-          .call(streamCallType, callId)
-          .queryMembers({ limit: maximumQueriedMembers });
-        signal.throwIfAborted();
-        if (!isRecord(response) || !Array.isArray(response["members"])) {
-          return projectionMismatch();
+        // Stream pages call members. The count is accumulated across a bounded
+        // number of pages; beyond that the observation is reported incomplete
+        // instead of publishing a truncated number as if it were the total.
+        let memberCount = 0;
+        let cursor: string | undefined;
+        let complete = false;
+        for (let page = 0; page < maximumQueriedMemberPages; page += 1) {
+          signal.throwIfAborted();
+          const response = await client.video
+            .call(streamCallType, callId)
+            .queryMembers({
+              limit: maximumQueriedMembers,
+              ...(cursor === undefined ? {} : { next: cursor }),
+            });
+          signal.throwIfAborted();
+          if (!isRecord(response) || !Array.isArray(response["members"])) {
+            return projectionMismatch();
+          }
+          memberCount += response["members"].length;
+          const next = response["next"];
+          if (typeof next !== "string" || next.length === 0) {
+            complete = true;
+            break;
+          }
+          cursor = next;
         }
         return Object.freeze({
-          memberCount: response["members"].length,
+          memberCount,
           observedAt: new Date().toISOString(),
+          complete,
         });
       } catch (error) {
         if (error instanceof StreamCallProjectionMismatchError) {

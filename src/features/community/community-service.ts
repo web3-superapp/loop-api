@@ -541,7 +541,7 @@ function chatProjection(
 ): CommunityChatProjection {
   if (channel === null) {
     return unavailableCommunityChat(
-      communicationUnavailableReasonCodes.voiceRuntime,
+      communicationUnavailableReasonCodes.chatRuntime,
     );
   }
   if (channel.channel === null || !channel.channel.provisioned) {

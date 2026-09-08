@@ -102,6 +102,8 @@ export interface ChatGroupLeavePreparation {
   readonly streamChannelId: string;
   readonly channelCreatedByStreamUserId: string;
   readonly memberStreamUserId: string;
+  /** True when this key already committed; only the provider call replays. */
+  readonly alreadyCommitted: boolean;
 }
 
 export interface CommunicationRepository {
@@ -142,13 +144,17 @@ export interface CommunicationRepository {
   endVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   /**
    * Authorize a small-group leave and return the exact Stream identities the
-   * caller must remove. It performs no write: removal from Stream is
+   * caller must remove. It changes no membership: removal from Stream is
    * idempotent, so the provider call is made first and only a confirmed
-   * removal is committed by `commitChatGroupLeave`.
+   * removal is committed by `commitChatGroupLeave`. It claims the durable
+   * idempotency record, so a retry after a lost response finds the original
+   * commit and replays only the provider call instead of failing stale.
    */
   prepareChatGroupLeave(input: {
     readonly actorUserId: string;
     readonly groupId: string;
+    readonly idempotencyKey: string;
+    readonly requestSha256: string;
   }): Promise<ChatGroupLeavePreparation>;
   commitChatGroupLeave(input: {
     readonly actorUserId: string;
@@ -252,6 +258,16 @@ export class CommunicationIdempotencyConflictError extends Error {
   constructor() {
     super("The communication idempotency key conflicts");
     this.name = "CommunicationIdempotencyConflictError";
+  }
+}
+
+/** The voice room exists but its Stream call is not confirmed yet. */
+export class CommunicationUnprovisionedRoomError extends Error {
+  readonly code = "communication_room_unprovisioned";
+
+  constructor() {
+    super("The voice room has no confirmed Stream call");
+    this.name = "CommunicationUnprovisionedRoomError";
   }
 }
 
