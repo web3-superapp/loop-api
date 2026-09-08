@@ -143,6 +143,7 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `QUOTE_EXPIRED`               | 409    | `stale`          | no        | `errors.quote.expired`              |
 | `RATE_LIMITED`                | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`         |
 | `REGION_BLOCKED`              | 403    | `authorization`  | no        | `errors.region.blocked`             |
+| `RESOURCE_CONFLICT`           | 409    | `conflict`       | no        | `errors.conflict.resource`          |
 | `REQUEST_TIMEOUT`             | 503    | `availability`   | yes       | `errors.request.timeout`            |
 | `SESSION_NOT_FOUND`           | 404    | `validation`     | no        | `errors.session.notFound`           |
 | `SIMULATION_FAILED`           | 409    | `conflict`       | no        | `errors.simulation.failed`          |
@@ -153,6 +154,11 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 `ALIAS_RESERVED` and `ALIAS_BLOCKED` (Decision 0030) are alias-policy
 rejections for V2 profile writes; the client shows the specific message and
 never retries the same alias.
+
+`RESOURCE_CONFLICT` (Decision 0031) means an immutable, caller-chosen
+identifier is already taken by another resource (today: a community `slug`).
+It is a conflict, not a shape failure, so the client asks the user for a
+different value rather than retrying the same one.
 
 `PROFILE_ACTIVATION_REQUIRED` (Decision 0031) means the account is
 bootstrapped but has no activated V2 profile, so it has no public identity to

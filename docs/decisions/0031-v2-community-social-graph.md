@@ -26,20 +26,37 @@ it yet". This decision is the consumer.
 
 ## Rulings adopted (main agent, 2026-09-07)
 
-| Topic                | Ruling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Community entity     | PostgreSQL is the truth for Community/Membership/Role/audit. `communityId` is an opaque UUID. Fields: `name` (1–40 code points, alias safety rules), `slug` (unique, `^[a-z0-9-]{3,32}$`), `description` (≤280), `logoRef` (`avatar:preset/community-<slot>` or null), `verificationStatus` (`pending\|verified\|rejected`), `boundAssetKey` (nullable, canonical `eip155:<chainId>:<0x lowercase>`, stored but not resolved before D10), `memberCount` (server-maintained), `createdAt`, `configVersion`. |
-| Roles                | Three tiers `owner \| admin \| member`. The 03 document's "Admin/Moderator" is one tier (`admin`) in this step; no custom roles and no channels.                                                                                                                                                                                                                                                                                                                                                           |
-| Permission matrix    | Owner: appoint/revoke admin, transfer ownership, mute, ban, edit. Admin: mute and ban members, approve joins. Member: view, join, leave. Every change appends an `audit_events` row with `RoleChanged` semantics.                                                                                                                                                                                                                                                                                          |
-| Community source     | Users apply with `POST /v2/communities`, which creates a `pending` community with the applicant as owner. `verified` is set only by the Dev-only operator script `pnpm community:verify <communityId>`, which writes an audit row. Admin console and RBAC land in D17.                                                                                                                                                                                                                                     |
-| Discovery list       | `GET /v2/communities?sort=members\|newest&verification=verified\|all`. Ordering uses only checkable facts (member count, creation time); "highest mining power", "fastest growing", and "most discussed" have no backend and are not offered. The response carries a `recommendationId` and the versioned rule `rule:verified-members-v1`.                                                                                                                                                                 |
-| Home aggregate       | `GET /v2/community/home` returns `joined[]`, `discover[]` (≤5), `unread: unavailable` (Stream not connected), `liveVoice: unavailable`, and `freshness`.                                                                                                                                                                                                                                                                                                                                                   |
-| Follow graph         | New directed graph: `POST/DELETE /v2/connections/follow/{publicProfileId}` and `GET /v2/connections?direction=following\|followers`. No consent is required. A blocked or non-discoverable target returns one non-enumerating error. The V1 friend graph stays for chat and folds in at D7.                                                                                                                                                                                                                |
-| Blocks               | `POST/DELETE /v2/blocks` with `{kind: user\|contract\|domain, stableId}`. Only `user` is implemented; `contract` and `domain` return `CAPABILITY_UNAVAILABLE`. A block outranks following and DM: it removes both follow edges and rejects the DM request.                                                                                                                                                                                                                                                 |
-| Stranger requests    | `dm-requests` reuses the V1 `friend_requests` storage, adapted as `GET /v2/message-requests` and `POST /v2/message-requests/{id}/decision {accept\|ignore\|report}`. `report` = reject + block + audit. AI moderation is `unavailable` in this step.                                                                                                                                                                                                                                                       |
-| Search               | `GET /v2/search?domain=users\|communities\|assets\|launch\|dapps&q=&cursor=`. `users` and `communities` are implemented; the other three answer `{status: "unavailable", reasonCode}`. Results carry `{resultType, stableId, displaySnapshot, destination}`. The alias prefix rules and the public search quota are reused. Chat content never enters this domain.                                                                                                                                         |
-| Referral page        | Read-only. The five levels 10/5/3/2/1 and the rule copy come from `GET /v2/mining/referral/rules` (versioned static configuration). `edges` and `inviteCode` are `unavailable` until D19.                                                                                                                                                                                                                                                                                                                  |
-| Member/online/unread | Member counts come from PostgreSQL. Online counts, unread counts, and voice-room state are `unavailable` until Stream is connected; no fixture is shown.                                                                                                                                                                                                                                                                                                                                                   |
+| Topic                      | Ruling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Community entity           | PostgreSQL is the truth for Community/Membership/Role/audit. `communityId` is an opaque UUID. Fields: `name` (1–40 code points, alias safety rules), `slug` (unique, `^[a-z0-9-]{3,32}$`), `description` (≤280), `logoRef` (`avatar:preset/community-<slot>` or null), `verificationStatus` (`pending\|verified\|rejected`), `boundAssetKey` (nullable, canonical `eip155:<chainId>:<0x lowercase>`, stored but not resolved before D10), `memberCount` (server-maintained), `createdAt`, `configVersion`. |
+| Roles                      | Three tiers `owner \| admin \| member`. The 03 document's "Admin/Moderator" is one tier (`admin`) in this step; no custom roles and no channels.                                                                                                                                                                                                                                                                                                                                                           |
+| Permission matrix[^matrix] | Owner: appoint/revoke admin, transfer ownership, mute, ban, edit. Admin: mute and ban members, approve joins. Member: view, join, leave. Every change appends an `audit_events` row with `RoleChanged` semantics.                                                                                                                                                                                                                                                                                          |
+| Community source           | Users apply with `POST /v2/communities`, which creates a `pending` community with the applicant as owner. `verified` is set only by the Dev-only operator script `pnpm community:verify <communityId>`, which writes an audit row. Admin console and RBAC land in D17.                                                                                                                                                                                                                                     |
+| Discovery list             | `GET /v2/communities?sort=members\|newest&verification=verified\|all`. Ordering uses only checkable facts (member count, creation time); "highest mining power", "fastest growing", and "most discussed" have no backend and are not offered. The response carries a `recommendationId` and the versioned rule `rule:verified-members-v1`.                                                                                                                                                                 |
+| Home aggregate             | `GET /v2/community/home` returns `joined[]`, `discover[]` (≤5), `unread: unavailable` (Stream not connected), `liveVoice: unavailable`, and `freshness`.                                                                                                                                                                                                                                                                                                                                                   |
+| Follow graph               | New directed graph: `POST/DELETE /v2/connections/follow/{publicProfileId}` and `GET /v2/connections?direction=following\|followers`. No consent is required. A blocked or non-discoverable target returns one non-enumerating error. The V1 friend graph stays for chat and folds in at D7.                                                                                                                                                                                                                |
+| Blocks[^blocks]            | `POST/DELETE /v2/blocks` with `{kind: user\|contract\|domain, stableId}`. Only `user` is implemented; `contract` and `domain` return `CAPABILITY_UNAVAILABLE`. A block outranks following and DM: it removes both follow edges and rejects the DM request.                                                                                                                                                                                                                                                 |
+| Stranger requests          | `dm-requests` reuses the V1 `friend_requests` storage, adapted as `GET /v2/message-requests` and `POST /v2/message-requests/{id}/decision {accept\|ignore\|report}`. `report` = reject + block + audit. AI moderation is `unavailable` in this step.                                                                                                                                                                                                                                                       |
+| Search                     | `GET /v2/search?domain=users\|communities\|assets\|launch\|dapps&q=&cursor=`. `users` and `communities` are implemented; the other three answer `{status: "unavailable", reasonCode}`. Results carry `{resultType, stableId, displaySnapshot, destination}`. The alias prefix rules and the public search quota are reused. Chat content never enters this domain.                                                                                                                                         |
+| Referral page              | Read-only. The five levels 10/5/3/2/1 and the rule copy come from `GET /v2/mining/referral/rules` (versioned static configuration). `edges` and `inviteCode` are `unavailable` until D19.                                                                                                                                                                                                                                                                                                                  |
+| Member/online/unread       | Member counts come from PostgreSQL. Online counts, unread counts, and voice-room state are `unavailable` until Stream is connected; no fixture is shown.                                                                                                                                                                                                                                                                                                                                                   |
+
+[^matrix]:
+    Two rights in this row are not what the routes below deliver, so they are
+    pinned here rather than left contradictory. **`approveJoin` is deferred**:
+    this step has no pending-membership state and communities are open-join,
+    so an admin never approves anything; gated joins arrive with the Admin
+    console in D17. **`edit` is delivered by `PATCH /v2/communities/{id}`**
+    and is owner-only, so it appears in the matrix as the `editProfile` self
+    action rather than as an action on another member.
+
+[^blocks]:
+    In this step a block is enforced on the **read** side: it hides the two
+    accounts from each other's connection lists, user search, follow, and
+    message-request list, removes both follow edges, and refuses to accept a
+    message request across it. There is no V2 send surface yet, so **write-side
+    interception lives in the D7 V2 messaging routes**; the frozen V1 friend
+    request and channel creation paths are deliberately unchanged.
 
 ## Implementation rulings (main agent, 2026-09-08)
 
@@ -50,7 +67,9 @@ it yet". This decision is the consumer.
    result. That is neither an authorization refusal (`POLICY_BLOCKED`) nor a
    bootstrap failure. The catalog gains
    `PROFILE_ACTIVATION_REQUIRED` (409, `conflict`, not retryable,
-   `errors.profile.activationRequired`), bringing it to 29 codes. The client
+   `errors.profile.activationRequired`) and, for a slug that another community
+   already holds, `RESOURCE_CONFLICT` (409, `conflict`, not retryable,
+   `errors.conflict.resource`), bringing it to 30 codes. The client
    routes the user to `loop-id-setup` and retries; Decision 0029's table and
    `docs/api-v2-conventions.md` are updated.
 2. **Follow and user search require `discoverable = true`.** The ruled
@@ -97,6 +116,12 @@ Six relations, all registered in `src/database/schema.ts`:
 - `social_graph_events` — append-only follow/block/message-request audit with
   a unique `idempotency_record_id`.
 
+Accepting a message request across a block in either direction is
+`DATA_STALE`: no friendship is created. The member directory left joins
+`user_profiles`, so a membership whose profile row is missing is still listed
+and still counted (its `publicProfileId` is `null` and it can never be a
+governance target), keeping the page and the server counts consistent.
+
 `member_count` is maintained by an `after insert or update of status or
 delete` row trigger on `community_memberships` that updates
 `communities.member_count`. The update takes the community row lock inside
@@ -126,6 +151,11 @@ Additional invariants encoded in the same module:
   muted, or banned by anyone. Ownership changes only through
   `transferOwnership`, which also demotes the previous owner to `admin`.
 - An owner cannot leave; it must transfer first (`PERMISSION_DENIED`).
+- `editProfile` (`PATCH /v2/communities/{id}`) is owner-only and changes only
+  the keys present in the body; `slug` and `verificationStatus` are immutable
+  through it, and each edit appends a `community_profile_updated` audit row.
+- A ban is community scoped. It does not touch the personal follow graph;
+  only `POST /v2/blocks` removes follow edges.
 - Self-targeting a governance action is always denied.
 - A banned actor has no standing. A muted actor keeps governance standing,
   because mute only silences chat, which Stream owns.
@@ -168,10 +198,23 @@ envelope (tested). Every write requires exactly one canonical UUIDv4
 | `GET`    | `/v2/search`                                          | `users`/`communities` live; `assets`/`launch`/`dapps` answer 200 + `unavailable`    |
 | `GET`    | `/v2/mining/referral/rules`                           | Versioned static rule snapshot under the community module                           |
 
+The V2 artifact carries 34 operations under `/v2` (36 total with the two
+shared `/health/*` endpoints); 23 of the `/v2` operations are new in this
+decision.
+
 `GET /v2/mining/referral/rules` deliberately lives in the community module
 rather than in a new `mining` module: it is a read-only product constant with
 no mining runtime behind it, and creating a half-empty `mining` module would
 claim readiness the backend does not have.
+
+### Read visibility
+
+A community that is not `verified` is visible only to its creator and to its
+own non-banned members. Discovery, community search, `GET /v2/communities/{id}`,
+and the member directory all apply the same predicate, so an unverified
+community cannot be enumerated through any read surface. Joining only requires
+the community to exist, because the joiner becomes a legitimate reader by that
+command.
 
 ### Identity projection
 
@@ -194,6 +237,9 @@ wallet addresses, Privy subjects, and Stream IDs never leave the repository.
   encrypted continuation, so `limit` and `cursor` are mutually exclusive and a
   cursor cannot be widened. A cursor from another account, route, or filter is
   `INVALID_REQUEST`.
+- `verification` narrows only the `communities` search domain, so it is not
+  bound into a `users` cursor: an unrelated query parameter cannot invalidate
+  a page mid-pagination.
 - `GET /v2/search` consumes the same `public_alias_search` quota bucket as
   `GET /v1/discovery/users` for both live domains, and reuses
   `parseAliasSearchPrefix` for normalization and the 2–40 code-point bound.

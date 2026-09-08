@@ -159,7 +159,10 @@ Privy ID、Stream ID**：
 
 ```json
 {
-  "joined": [{ "community": { … }, "membership": { "role": "owner", "status": "active", "joinedAt": "…" } }],
+  "joined": {
+    "items": [{ "community": { … }, "membership": { "role": "owner", "status": "active", "joinedAt": "…" } }],
+    "truncated": false
+  },
   "discover": [{ … }],
   "unread": { "status": "unavailable", "reasonCode": "STREAM_UNREAD_NOT_CONNECTED" },
   "liveVoice": { "status": "unavailable", "reasonCode": "STREAM_VOICE_NOT_CONNECTED" },
@@ -169,9 +172,11 @@ Privy ID、Stream ID**：
 }
 ```
 
-`discover` 最多 5 条，只含 `verified` 且当前账号未加入的社区。主卡文案只能用
-`joined.length` 与 `memberCount` 这类真实数字，没有数字时显示 `—`。消息面板的
-未读/语音/陌生人请求条目在 D7 之前显示 unavailable。
+`discover` 最多 5 条，只含 `verified` 且当前账号未加入的社区。
+`joined.truncated === true` 表示已加入的社区超过本聚合承载量，"查看全部"要走
+`GET /v2/communities?membership=joined`（游标分页）。主卡文案只能用
+`joined.items.length` 与 `memberCount` 这类真实数字，没有数字时显示 `—`。
+消息面板的未读/语音/陌生人请求条目在 D7 之前显示 unavailable。
 
 ### 4.2 `GET /v2/communities` — `community-discover` 页
 
@@ -179,12 +184,15 @@ Privy ID、Stream ID**：
 | -------------- | --------------------- | ---------- |
 | `sort`         | `members` \| `newest` | `members`  |
 | `verification` | `verified` \| `all`   | `verified` |
+| `membership`   | `all` \| `joined`     | `all`      |
 | `limit`        | 1–50                  | 20         |
 | `cursor`       | 上一页 `nextCursor`   | —          |
 
 四个 seg 只有"成员最多"（`sort=members`）与"新社区"（`sort=newest`）可用；
 "算力最高""增长最快""讨论最多"没有后端，seg 置灰并解释原因（D19/D7）。
-`verification=all` 额外包含调用者自己创建或已加入的非 verified 社区。
+`verification=all` 额外包含调用者自己创建或已加入的非 verified 社区；
+`membership=joined` 把结果收窄到调用者自己的社区，供 `community` 首页
+"查看全部已加入"使用。
 
 响应 `{ items[], nextCursor, recommendation, contractVersion }`。
 `recommendation.ruleVersion` 固定 `rule:verified-members-v1`，前端如展示"推荐
@@ -213,8 +221,27 @@ Privy ID、Stream ID**：
 **API 没有自助认证路径**，`verified` 只能由运维脚本设置。
 
 错误：`422 ALIAS_RESERVED`（名称撞保留词）、`422 ALIAS_BLOCKED`（撞运营屏蔽词）、
-`422 VALIDATION_FAILED`（slug 已被占用 / 归一化后长度越界）、
+`409 RESOURCE_CONFLICT`（slug 已被别的社区占用，提示用户换一个）、
+`422 VALIDATION_FAILED`（归一化后长度越界）、
 `400 INVALID_REQUEST`（字段形状不合法）、`409 PROFILE_ACTIVATION_REQUIRED`。
+
+### 4.3b `PATCH /v2/communities/{communityId}` — 编辑社区资料（owner 专属）
+
+写 header + 部分字段 body（至少一个，未出现的字段不变）：
+
+```json
+{
+  "name": "Frog Holders",
+  "description": "Frogs only",
+  "logoRef": null,
+  "boundAssetKey": null
+}
+```
+
+校验规则与创建一致。`slug` 与 `verificationStatus` **不可通过本接口修改**
+（出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。仅 owner 可调用，
+admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，服务端写一条
+`community_profile_updated` 审计。
 
 ### 4.4 `GET /v2/communities/{communityId}` — `community-profile` 页
 
@@ -280,7 +307,13 @@ Privy ID、Stream ID**：
 ```
 
 排序固定 owner → admin → member，同组按 `joinedAt` 升序。seg 计数用
-`counts.all/owner/admin`，"在线"seg 禁用。`isSelf === true` 的那一行不可导航、
+`counts.all/owner/admin`，"在线"seg 禁用。
+
+成员行的 `profile.publicProfileId` 可能为 `null`（该成员没有资料行）：这种行仍会
+列出并计入 `counts`，保证计数与可翻页行数一致，但 **不可作为任何治理动作的目标**，
+前端要隐藏该行的操作入口，用 `loopId` 显示。
+
+`isSelf === true` 的那一行不可导航、
 不显示治理动作。治理动作可见性只看 `viewer.canInviteAdmin/canMute/canBan`，
 不要在前端复刻权限规则。
 
@@ -298,11 +331,11 @@ Privy ID、Stream ID**：
 
 权限矩阵（服务端唯一真相，前端只做可见性）：
 
-| 操作者 \ 动作 | 任命 admin | 撤销 admin | 转让 owner    | 禁言          | 解除禁言      | 封禁          | 解除封禁      | 自己退出 |
-| ------------- | ---------- | ---------- | ------------- | ------------- | ------------- | ------------- | ------------- | -------- |
-| `owner`       | member     | admin      | admin, member | admin, member | admin, member | admin, member | admin, member | 否       |
-| `admin`       | —          | —          | —             | member        | member        | member        | member        | 是       |
-| `member`      | —          | —          | —             | —             | —             | —             | —             | 是       |
+| 操作者 \ 动作 | 任命 admin | 撤销 admin | 转让 owner    | 禁言          | 解除禁言      | 封禁          | 解除封禁      | 编辑资料 | 自己退出 |
+| ------------- | ---------- | ---------- | ------------- | ------------- | ------------- | ------------- | ------------- | -------- | -------- |
+| `owner`       | member     | admin      | admin, member | admin, member | admin, member | admin, member | admin, member | 是       | 否       |
+| `admin`       | —          | —          | —             | member        | member        | member        | member        | 否       | 是       |
+| `member`      | —          | —          | —             | —             | —             | —             | —             | 否       | 是       |
 
 单元格是"可以作用的目标角色"。owner 永远不能成为任何治理动作的目标；
 自己不能对自己执行治理动作；被封禁的操作者没有任何权限；被禁言的操作者
@@ -363,8 +396,13 @@ Privy ID、Stream ID**：
   返回 `{ "block": … | null, "contractVersion": "2.0" }`。
 - **`kind=contract` 与 `kind=domain` 在三个方法上都返回
   `503 CAPABILITY_UNAVAILABLE`**：两个 seg 置灰并解释，不显示任何条目。
-- 屏蔽优先于关注与 DM：屏蔽会在同一事务里删除双向关注边，并让对方的陌生人
-  请求不再出现。解除屏蔽**不会**恢复关注，需要重新关注。
+- 屏蔽优先于关注与 DM。本步在**读侧**生效：同一事务里删除双向关注边，并让对方
+  在关注/粉丝列表、用户搜索、陌生人请求列表中消失；跨屏蔽 `accept` 陌生人请求
+  返回 `409 DATA_STALE`（不会建立关系）。**写侧拦截（阻止对方发起会话/消息）在
+  D7 的 v2 发送接口实现**，本步不改 v1 创建路径。
+- 解除屏蔽**不会**恢复关注，需要重新关注。
+- 封禁成员是社区范围的动作，**不会**改变个人关注关系；只有 `POST /v2/blocks`
+  会断开关注边。
 - `reasonCode`：`user_request`（用户手动屏蔽）或 `message_request_report`
   （举报陌生人请求产生）。
 
@@ -402,7 +440,8 @@ Privy ID、Stream ID**：
 }
 ```
 
-- `accept`：接受（后端在 V1 好友表上建立关系）。
+- `accept`：接受（后端在 V1 好友表上建立关系）。任一方向存在屏蔽时返回
+  `409 DATA_STALE`，不会建立关系。
 - `ignore`：拒绝并进入 24 小时冷却。
 - `report`：拒绝 + 屏蔽发起人 + 写审计，同一事务；`blocked: true`。成功后 Toast
   "已举报并屏蔽"，并从列表移除。
@@ -519,8 +558,9 @@ Privy ID、Stream ID**：
 | `PROFILE_ACTIVATION_REQUIRED`    | 409  | 账号未完成 LOOP ID 激活                                   | 跳 `loop-id-setup` 后重试      |
 | `DATA_STALE`                     | 409  | 状态已变（已禁言/已处理/已过期/非成员）                   | 刷新后重新决定，禁止盲重试     |
 | `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                   | 换新 key 重发                  |
+| `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                     | 提示用户换 slug，不重试同值    |
 | `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                      | 升级客户端                     |
-| `VALIDATION_FAILED`              | 422  | slug 已占用、归一化后长度越界                             | 提示用户改内容                 |
+| `VALIDATION_FAILED`              | 422  | 归一化后长度越界                                          | 提示用户改内容                 |
 | `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                            | 提示换名，不重试同名           |
 | `ALIAS_BLOCKED`                  | 422  | 社区名撞运营屏蔽词                                        | 同上                           |
 | `RATE_LIMITED`                   | 429  | 搜索配额耗尽                                              | 退避后重试                     |

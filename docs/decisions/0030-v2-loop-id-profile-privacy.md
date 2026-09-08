@@ -107,7 +107,8 @@ binding. The same ruling confirms that the CAS routes reject a client
   `rug pull` catches `rugpull`, `rug-pull`, `Rug_Pull`).
   Reserved is evaluated first. New catalog entries (both `validation`, 422,
   not retryable): `ALIAS_RESERVED` (`errors.alias.reserved`) and
-  `ALIAS_BLOCKED` (`errors.alias.blocked`). The catalog now has 28 codes;
+  `ALIAS_BLOCKED` (`errors.alias.blocked`). The catalog had 28 codes at this
+  decision and has 30 after Decision 0031;
   Decision 0029's table and `docs/api-v2-conventions.md` are updated.
 - `ACCOUNT_BOOTSTRAP_REQUIRED` when the Privy subject has no LOOP account;
   `CAPABILITY_UNAVAILABLE` when the repository is not composed.

@@ -140,6 +140,7 @@ challenge flag; routes only narrow the codes they may return.
 | `QUOTE_EXPIRED`                      | 409    | `stale`          | no        | `errors.quote.expired`              |
 | `RATE_LIMITED`                       | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`         |
 | `REGION_BLOCKED`                     | 403    | `authorization`  | no        | `errors.region.blocked`             |
+| `RESOURCE_CONFLICT` (0031)           | 409    | `conflict`       | no        | `errors.conflict.resource`          |
 | `REQUEST_TIMEOUT`                    | 503    | `availability`   | yes       | `errors.request.timeout`            |
 | `SESSION_NOT_FOUND`                  | 404    | `validation`     | no        | `errors.session.notFound`           |
 | `SIMULATION_FAILED`                  | 409    | `conflict`       | no        | `errors.simulation.failed`          |

@@ -135,7 +135,9 @@ Community identity projections are fixed to
 wallet addresses, Privy subjects, and Stream IDs are never projected. An
 account without an activated V2 profile receives
 `409 PROFILE_ACTIVATION_REQUIRED` from every community and social-graph write.
-`pnpm community:verify <communityId>` is the only path that sets
+An unverified community is visible only to its creator and its own non-banned
+members, on every read surface. `pnpm community:verify <communityId>` is the
+only path that sets
 `verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
 and writes an operator audit row.
 
