@@ -163,8 +163,8 @@ export function up(pgm: MigrationBuilder): void {
       last_block_hash text not null,
       started_from_block_number bigint not null,
       reorg_count integer not null default 0,
-      updated_at timestamptz not null default clock_timestamp(),
       created_at timestamptz not null default clock_timestamp(),
+      updated_at timestamptz not null default clock_timestamp(),
       primary key (lane, chain_id),
       constraint indexer_checkpoints_lane_check
         check (lane in ('erc20_transfer', 'pool_event')),

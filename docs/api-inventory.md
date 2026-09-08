@@ -141,26 +141,80 @@ only path that sets
 `verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
 and writes an operator audit row.
 
+### V2 chain module (Decision 0033, `V2_MODULES_ENABLED=chain`)
+
+| Method and path            | Request                                    | Success projection                                                                               | Interface     | Capability                                                             |
+| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
+| `GET /v2/chain/status`     | Bearer + contract/client headers; no input | Chain constants, RPC verification and head, per-endpoint health behind opaque refs, indexer lane | `implemented` | `blocked-provider`; needs a configured, chain-56-verified RPC endpoint |
+| `GET /v2/assets/{assetId}` | Canonical CAIP `assetId` in the path       | Registry identity read from on-chain calls plus a non-swappable capability                       | `implemented` | `implemented`; `swappable` stays false until D15                       |
+
+`symbol`, `name`, and `decimals` are only ever the values an on-chain
+`symbol()`/`name()`/`decimals()` call returned, recorded with the observing
+block. `pnpm asset:register <address>` performs that read itself; a `verified`
+row additionally requires `BSC_USD1_TOKEN_ADDRESS` and `BSC_USD1_VERIFIED`.
+`pnpm pool:register <address>` registers a PancakeSwap V3 pool only when both
+of its tokens are already readable registry rows. RPC endpoint URLs are never
+published: `GET /v2/chain/status` identifies each endpoint by an opaque,
+non-reversible `endpointRef`. With no configured endpoint the route is
+`503 CAPABILITY_UNAVAILABLE`, never an all-null healthy document.
+
+### V2 wallet module (Decision 0033, `V2_MODULES_ENABLED=wallet`)
+
+| Method and path                       | Request                                                    | Success projection                                                                              | Interface     | Capability                                                             |
+| ------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
+| `GET /v2/wallets`                     | Bearer + contract/client headers; no input                 | Opaque `walletId`, `kind`, `status`, `isActive`; no address                                     | `implemented` | `blocked-provider`; needs Privy credentials                            |
+| `PUT /v2/wallets/active`              | No `Idempotency-Key`; `{walletId, expectedActiveWalletId}` | Committed wallet list; concurrent switch is `VERSION_CONFLICT`                                  | `implemented` | `implemented`; moves no funds and grants no signing authority          |
+| `GET /v2/wallets/{walletId}/balances` | Bearer + contract/client headers; no input                 | One snapshot block; display/available/spendable/gasReserve/pending, valuation, Privy crossCheck | `implemented` | `blocked-provider`; needs a verified RPC endpoint                      |
+| `GET /v2/wallets/{walletId}/activity` | `cursor` or `limit` (1–50), mutually exclusive             | Indexed ERC-20 transfers with tx/log/block/confirmations plus indexer freshness                 | `implemented` | `blocked-provider`; `INDEXING_DELAYED` until the lane has a checkpoint |
+| `GET /v2/wallets/{walletId}/receive`  | Bearer + contract/client headers; no input                 | Address and EIP-681 request for BSC only                                                        | `implemented` | `implemented`                                                          |
+
+Privy stays authoritative for which wallets exist; LOOP only issues the opaque
+`walletId` and remembers the active selection. A wallet Privy stops reporting
+is archived, never deleted. The RPC multicall is the authoritative balance
+source: Privy's own balance view is a cross-check whose `disputed` or
+`unavailable` result never changes the published value. Valuation and net worth
+stay `unavailable` (`MARKET_PRICE_PROVIDER_NOT_CONFIGURED`) until D11; native
+transfers and cross-chain activity stay `unavailable` in this step. Nothing is
+served from a stored balance snapshot when the chain is unreadable.
+
+### V2 watchlist module (Decision 0033, `V2_MODULES_ENABLED=watchlist`)
+
+| Method and path     | Request                                           | Success projection                                           | Interface     | Capability                                              |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------------------ | ------------- | ------------------------------------------------------- |
+| `GET /v2/watchlist` | Bearer + contract/client headers; no input        | Ordered groups of `assetId` with registry identity per asset | `implemented` | `implemented`                                           |
+| `PUT /v2/watchlist` | No `Idempotency-Key`; `{expectedVersion, groups}` | Committed resource; stale version is `VERSION_CONFLICT`      | `implemented` | `implemented`; unknown `assetId` is `VALIDATION_FAILED` |
+
+V1 and V2 are the same owner-bound resource and share
+`watchlist_versions.record_version`. They differ only in asset identity: a V1
+row stores `asset_key`, a V2 row stores the canonical lowercase CAIP
+`asset_id`, and exactly one of the two columns is set per row. A V2 replacement
+owns the whole owner-level snapshot, so it replaces legacy V1 rows rather than
+merging two asset namespaces. A watchlist entry is a user preference and never
+evidence that a market, price, or trading path exists.
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
-point. `V2_MODULES_ENABLED` selects which module routes may register. `profile`,
-`community`, and `search` ship their registrars (Decisions 0030 and 0031);
-every other module below has none yet, so enabling it registers no route and
-only changes its capability projection.
+point. `V2_MODULES_ENABLED` selects which module routes may register.
+`profile` (Decision 0030), `community` and `search` (0031), and `chain`,
+`wallet`, and `watchlist` (0033) ship their registrars; every other module
+below has none yet, so enabling it registers no route and only changes its
+capability projection.
 
 | Module ID       | Capability projected | Registrar   | Status                                                     |
 | --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
 | `community`     | `community`          | shipped     | routes and capability `implemented` (Decision 0031)        |
 | `search`        | `search`             | shipped     | routes and capability `implemented` (Decision 0031)        |
 | `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
-| `wallet`        | `walletRead`         | not shipped | gate `implemented`; routes pending D12                     |
+| `chain`         | `bscRead`            | shipped     | routes and capability `implemented` (Decision 0033)        |
+| `wallet`        | `walletRead`         | shipped     | routes and capability `implemented` (Decision 0033)        |
 | `swap`          | `privySwap`          | not shipped | gate `implemented`; routes pending D13 Go/No-Go            |
 | `sendApprovals` | `sendApprovals`      | not shipped | gate `implemented`; routes pending D14                     |
 | `launch`        | `launch`             | not shipped | gate `implemented`; routes pending D17/D18 and 02 document |
 | `mining`        | `mining`             | not shipped | gate `implemented`; routes pending D19 formula freeze      |
 | `notifications` | `pushNotifications`  | not shipped | gate `implemented`; routes pending D16                     |
 | `profile`       | `profile`            | shipped     | routes and capability `implemented` (Decision 0030)        |
+| `watchlist`     | `watchlist`          | shipped     | routes and capability `implemented` (Decision 0033)        |
 
 An enabled module without a registrar reports
 `availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The
@@ -170,7 +224,11 @@ An enabled module without a registrar reports
 (`STREAM_PRESENCE_NOT_CONNECTED`). `community` and `search` report `available`
 only when the module is enabled and `buildApp` composed the PostgreSQL
 community repository and the V2 cursor codec (plus the public search quota for
-`search`); otherwise they fail closed.
+`search`); otherwise they fail closed. `bscRead` is `available` only when the
+`chain` module is enabled, at least one RPC endpoint is configured, the registry
+repository is composed, and `eth_chainId` was actually observed to equal 56; an
+unprobed, unreachable, or mismatched chain fails closed with its own reason
+code. `walletRead` additionally needs Privy credentials and the cursor codec.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one

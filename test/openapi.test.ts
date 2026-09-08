@@ -38,7 +38,10 @@ describe("committed OpenAPI artifact", () => {
 
     expect(first).toBe(second);
     expect(committed).toBe(first);
-  });
+    // The generated V2 surface grew with the chain, wallet, and watchlist
+    // modules; rendering it twice under full-suite parallel load exceeds the
+    // 5s default.
+  }, 30_000);
 
   it("keeps the frozen V1 artifact byte-for-byte compatible", async () => {
     const committed = await readFile(openApiArtifactPath);
@@ -117,7 +120,10 @@ describe("committed OpenAPI artifact", () => {
       "idempotency-key",
       "x-loop-platform",
     ]);
-  });
+    // The generated V2 surface grew with the chain, wallet, and watchlist
+    // modules; rendering it twice under full-suite parallel load exceeds the
+    // 5s default.
+  }, 30_000);
 
   it("contains only the implemented canonical route surface", async () => {
     const document = JSON.parse(
