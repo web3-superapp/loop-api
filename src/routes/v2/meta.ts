@@ -305,10 +305,9 @@ const aboutResponseSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["name", "version", "purpose", "license"],
+            required: ["name", "purpose", "license"],
             properties: {
               name: { type: "string", minLength: 1, maxLength: 128 },
-              version: { type: "string", minLength: 1, maxLength: 64 },
               purpose: { type: "string", minLength: 1, maxLength: 256 },
               license: { type: "string", minLength: 1, maxLength: 64 },
             },

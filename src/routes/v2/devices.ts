@@ -6,7 +6,7 @@ import {
   emptyQueryStringSchema,
   noStoreResponseHeaders,
 } from "../../core/http/schemas.js";
-import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
+import { V2ApiError, v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
   deviceListLimit,
@@ -165,7 +165,12 @@ const revokeResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["session", "contractVersion"],
+  required: [
+    "session",
+    "effect",
+    "providerAccessTerminated",
+    "contractVersion",
+  ],
   properties: {
     session: {
       type: "object",
@@ -177,6 +182,13 @@ const revokeResourceSchema = {
         revokedAt: dateTimeSchema,
       },
     },
+    effect: {
+      type: "string",
+      const: "auditOnly",
+      description:
+        "The LOOP audit projection is revoked and a security.event is recorded; LOOP refuses further requests naming this session. The device's Privy access is not terminated (Privy session revocation is a Go/No-Go item).",
+    },
+    providerAccessTerminated: { type: "boolean", const: false },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -286,13 +298,13 @@ export function registerV2DeviceRoutes(
       preValidation: assertNoBodyOrQuery,
       preHandler: authenticateLoopBearer,
     },
-    async (request, reply) => {
+    async (request) => {
       await deviceService.revokeAll({
         principal: requireAuthenticatedLoopPrincipal(request),
         metadata: parseV2SessionLogoutMetadata(request.raw.rawHeaders),
       });
-      reply.header("cache-control", "no-store");
-      return reply.code(500).send();
+      // revokeAll never resolves in this step; reaching here is a defect.
+      throw V2ApiError.fromCode("INTERNAL_ERROR");
     },
   );
 }

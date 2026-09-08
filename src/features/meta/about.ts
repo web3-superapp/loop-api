@@ -1,11 +1,8 @@
 import type { AppConfig } from "../../config.js";
-import { deviceRiskPolicy } from "../security/security-contract.js";
-import { settingsPolicy } from "../settings/settings-service.js";
-import { supportResponsePolicy } from "../support/support-contract.js";
 import {
-  bscWriteCanaryPolicyVersion,
-  swapPolicy,
-} from "../wallet-intents/intent-contract.js";
+  v2ConfigVersionRegistry,
+  type ConfigVersionEntry,
+} from "./config-version-registry.js";
 import {
   openSourceAttributionEntries,
   openSourceAttributionSource,
@@ -15,8 +12,6 @@ import {
 import {
   createV2ClientPolicyProjection,
   v2ContractVersion,
-  v2ProductConfigVersion,
-  v2ProductEffectiveAt,
   type V2TermsGate,
 } from "./product-policy.js";
 
@@ -27,11 +22,7 @@ import {
  * Nothing here is account state and nothing is a service build version.
  */
 
-export interface ConfigVersionEntry {
-  readonly module: string;
-  readonly configVersion: string;
-  readonly effectiveAt: string | null;
-}
+export type { ConfigVersionEntry } from "./config-version-registry.js";
 
 export interface AboutProjection {
   readonly contractVersion: typeof v2ContractVersion;
@@ -53,49 +44,17 @@ export function createV2AboutProjection(
   now: Date = new Date(),
 ): AboutProjection {
   const clientPolicy = createV2ClientPolicyProjection(config, now);
+  const [productPolicy, ...rest] = v2ConfigVersionRegistry;
   return Object.freeze({
     contractVersion: v2ContractVersion,
     configVersions: Object.freeze([
-      Object.freeze({
-        module: "productPolicy",
-        configVersion: v2ProductConfigVersion,
-        effectiveAt: v2ProductEffectiveAt,
-      }),
+      ...(productPolicy === undefined ? [] : [productPolicy]),
       Object.freeze({
         module: "clientPolicy",
         configVersion: clientPolicy.configVersion,
         effectiveAt: clientPolicy.effectiveAt,
       }),
-      Object.freeze({
-        module: "sessionPolicy",
-        configVersion: "sessionPolicyV1",
-        effectiveAt: null,
-      }),
-      Object.freeze({
-        module: "deviceRisk",
-        configVersion: deviceRiskPolicy.configVersion,
-        effectiveAt: null,
-      }),
-      Object.freeze({
-        module: "accountSettings",
-        configVersion: settingsPolicy.configVersion,
-        effectiveAt: null,
-      }),
-      Object.freeze({
-        module: "support",
-        configVersion: supportResponsePolicy.configVersion,
-        effectiveAt: null,
-      }),
-      Object.freeze({
-        module: "swapPolicy",
-        configVersion: swapPolicy.configVersion,
-        effectiveAt: null,
-      }),
-      Object.freeze({
-        module: "bscWriteCanary",
-        configVersion: bscWriteCanaryPolicyVersion,
-        effectiveAt: null,
-      }),
+      ...rest,
     ]),
     termsGate: clientPolicy.termsGate,
     openSource: Object.freeze({

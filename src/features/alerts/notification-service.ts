@@ -291,7 +291,7 @@ export function createNotificationService(
                 route: feedCursorRoute,
                 filter: feedCursorFilter,
                 continuation: {
-                  createdAt: last.createdAt,
+                  createdAt: last.createdAtCursor,
                   notificationId: last.notificationId,
                   limit: pageSize,
                 },

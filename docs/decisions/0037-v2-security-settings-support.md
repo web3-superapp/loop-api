@@ -38,8 +38,8 @@ Three new module IDs (`security`, `settings`, `support`) join
 `security` needs the session runtime (`V2_SESSION_ENABLED` plus Privy
 credentials, because device sessions are the same projection), `settings` the
 account-settings repository, `support` the support-ticket repository plus the
-V2 cursor codec. The capability list grows from 27 to 30 entries; the mobile
-enum is synchronised by the S8 frontend task. MFA, passkey, recovery, and key
+V2 cursor codec. The capability list grows to 31 entries (with S7); the
+mobile enum is synchronised by the S8 frontend task. MFA, passkey, recovery, and key
 export are deliberately **not** entries in `GET /v2/meta/capabilities`: they
 are account-facing security methods, published by `GET /v2/security/capabilities`
 with `evidence: pending`, and every one is `unavailable` in this step.
@@ -71,10 +71,11 @@ with `evidence: pending`, and every one is `unavailable` in this step.
 - A successful revoke records one `security.event` notification (main-agent
   ruling 2026-09-09): `entityRef deviceSession:<sessionId>`, `contextRoute
 devices`, payload `session_revoked` with device, platform, `revokedAt`, and
-  the revoking session; `dedupeKey security.event:deviceSession:<id>:revoked:<UTC day>`
-  so replays and repeated revokes add nothing. The write is best effort after
-  the durable revocation: a feed failure never undoes or hides the revoke.
-  `NotificationRepository.record` is the producer entry point.
+  the revoking session; `dedupeKey security.event:deviceSession:<id>:revoked:<UTC day>`,
+  `source: loop_session`, so replays and repeated revokes add nothing. The
+  write is best effort after the durable revocation: a feed failure never
+  undoes or hides the revoke and is logged at `warn` with the session, owner,
+  and request ID. `NotificationRepository.record` is the producer entry point.
 - `POST /v2/devices/revoke-all` is registered so the client can show the
   reason instead of simulating it; it is always `AUTH_STEP_UP_REQUIRED` and
   never writes.
@@ -135,8 +136,10 @@ community | other`. Body: same character-safety rule as alias (no control,
   `created` by `user`) and `attachments: {unavailable,
 SUPPORT_ATTACHMENTS_UNAVAILABLE}`; no attachment column exists.
 - `GET /v2/support/tickets` is an owner-bound cursor list (`supportTickets`
-  route, filter `all`, keyset `createdAt desc, ticketId desc`, limit 1–50,
-  default 25, `CAPABILITY_UNAVAILABLE` without a cursor secret).
+  route, filter `all`, keyset `(created_at, ticket_id)` row comparison with a
+  microsecond-precise `createdAtCursor`, limit 1–50, default 25,
+  `CAPABILITY_UNAVAILABLE` without a cursor secret). The notification feed
+  cursor moved to the same row comparison and precision.
 - Status moves only through `pnpm support:answer <ticketId> [note]`
   (`open → answered`) and `pnpm support:answer <ticketId> --close [note]`
   (`open|answered → closed`). The script refuses `NODE_ENV=production`, sanitises
@@ -148,15 +151,20 @@ SUPPORT_ATTACHMENTS_UNAVAILABLE}`; no attachment column exists.
 
 ### About (`GET /v2/meta/about`)
 
-Public, no headers, no input. Publishes `contractVersion`, a `configVersions`
-list (`productPolicy`, `clientPolicy` with `effectiveAt`, `sessionPolicy`,
-`deviceRisk`, `accountSettings`, `support`, `swapPolicy`, `bscWriteCanary`),
-the same `termsGate` union as the client policy, and `openSource`. The
-attribution is a compiled constant (`src/features/meta/open-source-attribution.ts`)
-rather than a runtime file read: the Docker runtime image does not ship
-`docs/`, and a build-time constant cannot fail at request time. Drift is
-caught by `test/v2-meta-about.test.ts`, which parses the register table in
-`docs/open-source-attribution.md` and compares it with the constant.
+Public, no headers, no input. Publishes `contractVersion`, the
+`configVersions` list from the central registry
+`src/features/meta/config-version-registry.ts` (each entry references the
+owning module's constant: `productPolicy`, `sessionPolicy`, `community`,
+`marketTrending`, `deviceRisk`, `accountSettings`, `support`, `swapPolicy`,
+`bscWriteCanary`; `clientPolicy` with `effectiveAt` is appended from
+configuration per request), the same `termsGate` union as the client policy,
+and `openSource`. The attribution is a compiled constant
+(`src/features/meta/open-source-attribution.ts`) carrying name, purpose, and
+license only (versions live in `pnpm-lock.yaml` and are not published) rather
+than a runtime file read: the Docker runtime image does not ship `docs/`, and
+a build-time constant cannot fail at request time. Drift is caught by
+`test/v2-meta-about.test.ts`, which parses the register table in
+`docs/open-source-attribution.md` and compares names and licenses.
 `clientBuild` is `{status: local, reasonCode: CLIENT_BUILD_IS_DEVICE_LOCAL}`:
 the app version and build number never come from the server.
 
@@ -175,8 +183,8 @@ exists.
 - The `devices`, `security`, `settings`, `about`, and `support` pages have a
   backend; `key-export` and `social-recovery` render only the reason and the
   guide. Nothing here proves a physical-device flow.
-- `GET /v2/meta/capabilities` has 30 entries; `openapi/loop-api.v2.json`
-  has 103 operations.
+- `GET /v2/meta/capabilities` has 31 entries and `openapi/loop-api.v2.json`
+  125 operations after the merge with S7 (Decision 0036).
 - The `NotificationRepository` interface gains `listRecentByType`; fakes in
   the alert-evaluator and notifications route tests implement it.
 

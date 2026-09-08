@@ -7,6 +7,7 @@ import {
   clientVersionSemver2PatternSource,
 } from "../features/session/client-version.js";
 import {
+  DeviceSessionCallerInvalidError,
   DeviceSessionIdempotencyConflictError,
   DeviceSessionRateLimitedError,
   type BootstrapVerifiedPrivyUserResult,
@@ -120,6 +121,7 @@ const revokeInputSchema = z
     requestSha256: sha256Schema,
     requestId: uuidV4Schema,
     commandKind: commandKindSchema.default("logout"),
+    callerSessionId: uuidSchema.optional(),
   })
   .strict();
 const listLimitSchema = z.number().int().min(1).max(500);
@@ -502,6 +504,22 @@ export function createPostgresDeviceSessionRepository(
         });
         if (existingCommand.rows[0] !== undefined) {
           return resolveReplayedCommand(client, input, existingCommand.rows[0]);
+        }
+
+        if (input.commandKind === "revoke") {
+          // The caller's session is re-read under the same transaction: a
+          // revoked or foreign caller cannot revoke anybody else.
+          if (input.callerSessionId === undefined) {
+            throw new DeviceSessionCallerInvalidError();
+          }
+          const caller = await findSession(
+            client,
+            input.ownerUserId,
+            input.callerSessionId,
+          );
+          if (caller === null || caller.status !== "active") {
+            throw new DeviceSessionCallerInvalidError();
+          }
         }
 
         await client.query({

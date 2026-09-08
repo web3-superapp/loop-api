@@ -98,6 +98,65 @@ describe("Native Privy Bearer authentication", () => {
     },
   );
 
+  it("refuses a request that names a revoked LOOP session and ignores unknown or active ones", async () => {
+    const inputs = dependencies();
+    const revokedSessionId = "1c3d2e4f-5a6b-4c7d-9e8f-0a1b2c3d4e5f";
+    const findById = vi.fn((_owner: string, sessionId: string) =>
+      Promise.resolve(
+        sessionId === revokedSessionId
+          ? {
+              sessionId,
+              ownerUserId: loopUserId,
+              deviceId: "2d4e3f50-6b7c-4d8e-8f90-1b2c3d4e5f60",
+              clientPlatform: "ios" as const,
+              clientVersion: "1.0.0",
+              authStrength: "providerAuthenticated" as const,
+              policyVersion: "sessionPolicyV1" as const,
+              status: "revoked" as const,
+              createdAt: "2026-09-09T01:00:00.000Z",
+              lastSeenAt: "2026-09-09T01:00:00.000Z",
+              revokedAt: "2026-09-09T02:00:00.000Z",
+            }
+          : null,
+      ),
+    );
+    const service = createAuthenticationService(
+      inputs.verifier,
+      inputs.internalUsers,
+      {
+        deviceSessions: {
+          bootstrapVerifiedPrivyUser: () =>
+            Promise.reject(new Error("not used")),
+          create: () => Promise.reject(new Error("not used")),
+          findById,
+          listByOwner: () => Promise.resolve([]),
+          revoke: () => Promise.reject(new Error("not used")),
+        },
+      },
+    );
+
+    await expect(
+      service.authenticateLoopBearer([
+        ...validRawHeaders,
+        "x-loop-session-id",
+        revokedSessionId,
+      ]),
+    ).rejects.toMatchObject({ statusCode: 401, code: "invalid_access_token" });
+    expect(findById).toHaveBeenCalledWith(loopUserId, revokedSessionId);
+
+    await expect(
+      service.authenticateLoopBearer([
+        ...validRawHeaders,
+        "x-loop-session-id",
+        "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      ]),
+    ).resolves.toMatchObject({ userId: loopUserId });
+    await expect(
+      service.authenticateLoopBearer(validRawHeaders),
+    ).resolves.toMatchObject({ userId: loopUserId });
+    expect(findById).toHaveBeenCalledTimes(2);
+  });
+
   it("requires bootstrap for a verified identity without an internal user", async () => {
     const inputs = dependencies();
     inputs.findByPrivyUserId.mockResolvedValueOnce(null);

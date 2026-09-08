@@ -97,7 +97,14 @@ X-Loop-Client-Version: 1.0.0
 POST /v2/devices/{sessionId}/revoke
 ```
 
-- 200 → `{"session": {"sessionId", "status": "revoked", "revokedAt"}, "contractVersion": "2.0"}`。
+- 200 → `{"session": {"sessionId", "status": "revoked", "revokedAt"}, "effect": "auditOnly", "providerAccessTerminated": false, "contractVersion": "2.0"}`。
+- **撤销的真实效果**：撤销 = LOOP 审计投影置 `revoked` + 写一条 `security.event`
+  - LOOP 侧拒绝后续带该 `X-Loop-Session-ID` 的请求（`401 AUTH_INVALID`）。
+    **不终止对方设备的 Privy 访问令牌**（`providerAccessTerminated: false`）；
+    真正把设备踢下线依赖 Privy 会话撤销（Go/No-Go）。UI 文案必须按此表达，
+    不得显示"已下线"。
+- 自撤销守卫（目标 = 当前 session → 403）是表现层规则；服务端事务内还会校验
+  `X-Loop-Session-ID` 是本账号的**活跃** session，否则 `400 INVALID_REQUEST`。
 - 目标 = 当前 session（header `X-Loop-Session-ID`）→ `403 AUTH_STEP_UP_REQUIRED`
   （MFA 未接，恒返回；本机退出仍走 `POST /v2/session/logout`）。
 - 不存在 / 不属于本账号 → `404 SESSION_NOT_FOUND`（不可枚举）。
@@ -190,8 +197,9 @@ POST /v2/devices/{sessionId}/revoke
   条目结构与 `GET /v2/notifications/feed` 相同。本步唯一生产者是撤销他人设备：
   `entityRef: deviceSession:<sessionId>`、`contextRoute: devices`、
   `contextParams.sessionId`、`payload.event: session_revoked`（含
-  `deviceId`/`platform`/`revokedAt`/`revokedFromSessionId`），同一 session 同一
-  UTC 日只有一条；没有撤销过则为空数组（空态，不是 unavailable）。
+  `deviceId`/`platform`/`revokedAt`/`revokedFromSessionId`）、
+  `source: "loop_session"`，同一 session 同一 UTC 日只有一条；没有撤销过则为
+  空数组（空态，不是 unavailable）。
 
 ## 4. `GET/PUT /v2/settings` → `settings` 页
 
@@ -278,7 +286,6 @@ POST /v2/devices/{sessionId}/revoke
     "entries": [
       {
         "name": "Fastify",
-        "version": "5.12.1",
         "purpose": "HTTP server and route lifecycle",
         "license": "MIT"
       }
@@ -294,7 +301,8 @@ POST /v2/devices/{sessionId}/revoke
 - 客户端版本 / 构建号由 App 本地读取；服务端不下发、不比较。
 - `termsGate` 与 `GET /v2/meta/client-policy` 同一联合；用户协议 / 隐私政策 /
   风险披露的文档 URL 本步**不下发**，原型的法务四行显示为"版本槽位 + unavailable"。
-- `openSource.entries` 就是开源许可页的列表；`summary` 是摘要。
+- `openSource.entries` 就是开源许可页的列表（只有 name/purpose/license，
+  不下发版本号）；`summary` 是摘要。
 - `configVersions` 只展示，不要 pin。
 
 ## 6. 客服工单 → `support` 页

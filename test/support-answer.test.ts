@@ -23,6 +23,7 @@ const answered: SupportTicketRecord = {
   body: "为什么我的币没有权重",
   status: "answered",
   createdAt: "2026-09-09T01:00:00.000Z",
+  createdAtCursor: "2026-09-09T01:00:00.000000Z",
   updatedAt: "2026-09-09T02:00:00.000Z",
   lastEventAt: "2026-09-09T02:00:00.000Z",
   events: [

@@ -75,7 +75,11 @@ sensitive inputs. The server still generates a new request ID for every replay.
   (an identical retry returns the committed resource, a stale version is
   `VERSION_CONFLICT`), and a client-supplied key is rejected with
   `INVALID_REQUEST` so a lost-response retry is never mistaken for a durable
-  command replay (main-agent ruling, Decision 0030).
+  command replay (main-agent ruling, Decision 0030). Exception (Decision
+  0037): `PUT /v2/settings` carries only fixed values, so "identical content"
+  cannot distinguish a retry from a stale write; there the lost-response
+  retry is recognised only when `expectedVersion` equals the committed
+  version minus one, and every other stale version is `VERSION_CONFLICT`.
 - A timeout or lost response does not authorize a blind replay with a new key.
   The client uses the operation/status endpoint named by that module or the
   exact-key replay explicitly defined by a synchronous module such as D1

@@ -845,22 +845,12 @@
                           "items": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": [
-                              "name",
-                              "version",
-                              "purpose",
-                              "license"
-                            ],
+                            "required": ["name", "purpose", "license"],
                             "properties": {
                               "name": {
                                 "type": "string",
                                 "minLength": 1,
                                 "maxLength": 128
-                              },
-                              "version": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
                               },
                               "purpose": {
                                 "type": "string",
@@ -99203,7 +99193,12 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["session", "contractVersion"],
+                  "required": [
+                    "session",
+                    "effect",
+                    "providerAccessTerminated",
+                    "contractVersion"
+                  ],
                   "properties": {
                     "session": {
                       "type": "object",
@@ -99217,6 +99212,15 @@
                         "status": { "type": "string", "enum": ["revoked"] },
                         "revokedAt": { "type": "string", "format": "date-time" }
                       }
+                    },
+                    "effect": {
+                      "type": "string",
+                      "description": "The LOOP audit projection is revoked and a security.event is recorded; LOOP refuses further requests naming this session. The device's Privy access is not terminated (Privy session revocation is a Go/No-Go item).",
+                      "enum": ["auditOnly"]
+                    },
+                    "providerAccessTerminated": {
+                      "type": "boolean",
+                      "enum": [false]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -99891,7 +99895,12 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["session", "contractVersion"],
+                  "required": [
+                    "session",
+                    "effect",
+                    "providerAccessTerminated",
+                    "contractVersion"
+                  ],
                   "properties": {
                     "session": {
                       "type": "object",
@@ -99905,6 +99914,15 @@
                         "status": { "type": "string", "enum": ["revoked"] },
                         "revokedAt": { "type": "string", "format": "date-time" }
                       }
+                    },
+                    "effect": {
+                      "type": "string",
+                      "description": "The LOOP audit projection is revoked and a security.event is recorded; LOOP refuses further requests naming this session. The device's Privy access is not terminated (Privy session revocation is a Go/No-Go item).",
+                      "enum": ["auditOnly"]
+                    },
+                    "providerAccessTerminated": {
+                      "type": "boolean",
+                      "enum": [false]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }

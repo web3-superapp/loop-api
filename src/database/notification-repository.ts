@@ -41,6 +41,7 @@ const notificationRowSchema = z
     observed_at: dateSchema.nullable(),
     read_at: dateSchema.nullable(),
     created_at: dateSchema,
+    created_at_cursor: z.string().min(20),
   })
   .strict();
 
@@ -57,6 +58,8 @@ export interface NotificationRecord {
   readonly observedAt: string | null;
   readonly readAt: string | null;
   readonly createdAt: string;
+  /** Microsecond-precise `createdAt` for keyset cursors; never projected. */
+  readonly createdAtCursor: string;
 }
 
 export interface ListNotificationsInput {
@@ -137,7 +140,8 @@ export interface NotificationRepository {
 
 const notificationColumns = `
   notification_id, owner_user_id, type, entity_ref, context_route,
-  context_params, payload, dedupe_key, source, observed_at, read_at, created_at
+  context_params, payload, dedupe_key, source, observed_at, read_at, created_at,
+  to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_cursor
 `;
 
 function mapNotification(value: unknown): NotificationRecord {
@@ -155,6 +159,7 @@ function mapNotification(value: unknown): NotificationRecord {
     observedAt: row.observed_at?.toISOString() ?? null,
     readAt: row.read_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
+    createdAtCursor: row.created_at_cursor,
   });
 }
 
@@ -282,8 +287,7 @@ export function createPostgresNotificationRepository(
               where owner_user_id = $1
                 and (
                   $2::timestamptz is null
-                  or created_at < $2::timestamptz
-                  or (created_at = $2::timestamptz and notification_id < $3::uuid)
+                  or (created_at, notification_id) < ($2::timestamptz, $3::uuid)
                 )
               order by created_at desc, notification_id desc
               limit $4

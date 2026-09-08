@@ -62,6 +62,11 @@ export interface RevokeDeviceSessionInput {
    * idempotency domains apart. Defaults to `logout`.
    */
   readonly commandKind?: DeviceSessionCommandKind;
+  /**
+   * For `revoke`: the caller's own session, verified inside the transaction
+   * to be an active session of the same owner (Decision 0037 review).
+   */
+  readonly callerSessionId?: string;
 }
 
 export interface DeviceSessionRepository {
@@ -95,6 +100,13 @@ export class DeviceSessionRepositoryUnavailableError extends Error {
   constructor() {
     super("The device-session repository is unavailable");
     this.name = "DeviceSessionRepositoryUnavailableError";
+  }
+}
+
+export class DeviceSessionCallerInvalidError extends Error {
+  constructor() {
+    super("The calling device session is not an active session of the owner");
+    this.name = "DeviceSessionCallerInvalidError";
   }
 }
 

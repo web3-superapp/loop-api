@@ -20,6 +20,8 @@ export interface SupportTicketRecord {
   readonly body: string;
   readonly status: SupportTicketStatus;
   readonly createdAt: string;
+  /** Microsecond-precise `createdAt` for keyset cursors; never projected. */
+  readonly createdAtCursor: string;
   readonly updatedAt: string;
   readonly lastEventAt: string;
   readonly events: readonly SupportTicketEventRecord[];

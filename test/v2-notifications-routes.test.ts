@@ -394,6 +394,7 @@ function notificationRecord(
     observedAt,
     readAt: null,
     createdAt: observedAt,
+    createdAtCursor: observedAt.replace("Z", "000Z"),
     ...overrides,
   };
 }

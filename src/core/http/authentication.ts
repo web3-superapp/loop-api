@@ -16,6 +16,35 @@ import {
   type VerifiedPrivyPrincipal,
 } from "../../integrations/privy/access-token-verifier.js";
 import { ApiError } from "./api-error.js";
+import type { DeviceSessionRepository } from "../../features/session/device-session-repository.js";
+
+const canonicalUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * Optional device-session check (Decision 0037 review): a request that names
+ * a LOOP session through `X-Loop-Session-ID` is refused once that session is
+ * revoked. The Privy token itself stays valid until Privy revokes it; this is
+ * the LOOP-side access closure only.
+ */
+export interface AuthenticationServiceOptions {
+  readonly deviceSessions?: DeviceSessionRepository;
+}
+
+function readSessionIdHeader(rawHeaders: readonly string[]): string | null {
+  const values: string[] = [];
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    if (rawHeaders[index]?.toLowerCase() === "x-loop-session-id") {
+      values.push(rawHeaders[index + 1] ?? "");
+    }
+  }
+  const value = values[0];
+  return values.length === 1 &&
+    value !== undefined &&
+    canonicalUuidPattern.test(value)
+    ? value
+    : null;
+}
 
 const maximumAuthorizationHeaderLength = 8_192;
 const bearerPattern =
@@ -99,6 +128,7 @@ function toLoopPrincipal(
 export function createAuthenticationService(
   verifier: PrivyAccessTokenVerifier,
   internalUsers: InternalUserRepository,
+  options: AuthenticationServiceOptions = {},
 ): AuthenticationService {
   async function authenticatePrivyBearer(
     rawHeaders: readonly string[],
@@ -132,6 +162,22 @@ export function createAuthenticationService(
 
       if (internalUser === null) {
         throw ApiError.bootstrapRequired();
+      }
+
+      const sessionId = readSessionIdHeader(rawHeaders);
+      if (sessionId !== null && options.deviceSessions !== undefined) {
+        let session;
+        try {
+          session = await options.deviceSessions.findById(
+            internalUser.id,
+            sessionId,
+          );
+        } catch {
+          throw ApiError.authenticationUnavailable();
+        }
+        if (session !== null && session.status === "revoked") {
+          throw ApiError.invalidAccessToken();
+        }
       }
 
       return toLoopPrincipal(privyPrincipal, internalUser);

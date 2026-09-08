@@ -784,6 +784,7 @@ export async function buildApp(
   const authenticationService = createAuthenticationService(
     privyAccessTokenVerifier,
     database.internalUsers,
+    { deviceSessions: database.deviceSessions },
   );
   const authenticationHooks = registerAuthenticationHooks(
     app,
@@ -1341,6 +1342,7 @@ export async function buildApp(
     createDeviceService({
       sessions: database.deviceSessions,
       notifications: database.notifications ?? null,
+      logger: app.log,
       now: securityNow,
     });
   const securityService =

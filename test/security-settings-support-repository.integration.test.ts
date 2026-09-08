@@ -8,7 +8,10 @@ import { createPostgresDeviceSessionRepository } from "../src/database/device-se
 import { createPostgresNotificationRepository } from "../src/database/notification-repository.js";
 import { createPostgresSupportTicketRepository } from "../src/database/support-ticket-repository.js";
 import { deviceRevokedNotification } from "../src/features/security/device-service.js";
-import { DeviceSessionIdempotencyConflictError } from "../src/features/session/device-session-repository.js";
+import {
+  DeviceSessionCallerInvalidError,
+  DeviceSessionIdempotencyConflictError,
+} from "../src/features/session/device-session-repository.js";
 import { AccountSettingsVersionConflictError } from "../src/features/settings/account-settings-repository.js";
 import { supportTicketCreateDigest } from "../src/features/support/support-contract.js";
 import {
@@ -132,6 +135,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
         requestSha256: "b".repeat(64),
         requestId: randomUUID(),
         commandKind: "revoke",
+        callerSessionId: first.sessionId,
       });
       expect(revoke?.status).toBe("revoked");
 
@@ -149,6 +153,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
 
     it("records a remote revoke as its own command kind with a session_revoked event", async () => {
       const owner = await createOwner();
+      const caller = await createSession(owner);
       const target = await createSession(owner);
       const key = randomUUID();
       const input = {
@@ -158,6 +163,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
         requestSha256: "c".repeat(64),
         requestId: randomUUID(),
         commandKind: "revoke" as const,
+        callerSessionId: caller.sessionId,
       };
 
       const revoked = await deviceSessions.revoke(input);
@@ -212,8 +218,46 @@ describe("security, settings, and support repositories (migration 000024)", () =
         requestSha256: "e".repeat(64),
         requestId: randomUUID(),
         commandKind: "revoke",
+        callerSessionId: caller.sessionId,
       });
       expect(notFound).toBeNull();
+    });
+
+    it("refuses a revoke whose caller session is missing, foreign, or revoked", async () => {
+      const owner = await createOwner();
+      const caller = await createSession(owner);
+      const target = await createSession(owner);
+      const stranger = await createOwner();
+      const strangerSession = await createSession(stranger);
+      const attempt = (callerSessionId: string | undefined) =>
+        deviceSessions.revoke({
+          ownerUserId: owner,
+          sessionId: target.sessionId,
+          idempotencyKey: randomUUID(),
+          requestSha256: "9".repeat(64),
+          requestId: randomUUID(),
+          commandKind: "revoke",
+          ...(callerSessionId === undefined ? {} : { callerSessionId }),
+        });
+      await expect(attempt(undefined)).rejects.toBeInstanceOf(
+        DeviceSessionCallerInvalidError,
+      );
+      await expect(attempt(strangerSession.sessionId)).rejects.toBeInstanceOf(
+        DeviceSessionCallerInvalidError,
+      );
+      await deviceSessions.revoke({
+        ownerUserId: owner,
+        sessionId: caller.sessionId,
+        idempotencyKey: randomUUID(),
+        requestSha256: "8".repeat(64),
+        requestId: randomUUID(),
+      });
+      await expect(attempt(caller.sessionId)).rejects.toBeInstanceOf(
+        DeviceSessionCallerInvalidError,
+      );
+      expect(
+        (await deviceSessions.findById(owner, target.sessionId))?.status,
+      ).toBe("active");
     });
   });
 
@@ -351,7 +395,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
         ownerUserId: owner,
         limit: 2,
         before: {
-          createdAt: last?.createdAt ?? "",
+          createdAt: last?.createdAtCursor ?? "",
           ticketId: last?.ticketId ?? "",
         },
       });
@@ -425,6 +469,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
   describe("security event notifications", () => {
     it("records the device-revoked security.event once per session and day", async () => {
       const owner = await createOwner();
+      const caller = await createSession(owner);
       const session = await createSession(owner);
       const revoked = await deviceSessions.revoke({
         ownerUserId: owner,
@@ -433,6 +478,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
         requestSha256: "f".repeat(64),
         requestId: randomUUID(),
         commandKind: "revoke",
+        callerSessionId: caller.sessionId,
       });
       const notification = deviceRevokedNotification({
         ownerUserId: owner,
@@ -440,7 +486,7 @@ describe("security, settings, and support repositories (migration 000024)", () =
         deviceId: session.deviceId,
         platform: session.clientPlatform,
         revokedAt: revoked?.revokedAt ?? "",
-        revokedFromSessionId: randomUUID(),
+        revokedFromSessionId: caller.sessionId,
       });
       const first = await notifications.record(notification);
       expect(first).toMatchObject({
@@ -450,6 +496,10 @@ describe("security, settings, and support repositories (migration 000024)", () =
         contextRoute: "devices",
       });
       expect(first?.payload["event"]).toBe("session_revoked");
+      expect(first?.source).toBe("loop_session");
+      expect(first?.createdAtCursor).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+      );
       expect(await notifications.record(notification)).toBeNull();
       const listed = await notifications.listRecentByType({
         ownerUserId: owner,

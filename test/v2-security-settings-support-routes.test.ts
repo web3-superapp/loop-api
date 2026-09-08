@@ -117,6 +117,7 @@ function notification(
     observedAt: null,
     readAt: null,
     createdAt: "2026-09-08T21:00:00.000Z",
+    createdAtCursor: "2026-09-08T21:00:00.000000Z",
     ...overrides,
   };
 }
@@ -132,6 +133,7 @@ function notificationsFake(seed: readonly NotificationRecord[]) {
       notificationId: randomUUID(),
       readAt: null,
       createdAt: now.toISOString(),
+      createdAtCursor: now.toISOString().replace("Z", "000Z"),
     };
     rows.unshift(row);
     return Promise.resolve(row);
@@ -208,6 +210,7 @@ function supportFake() {
         body: input.body,
         status: "open",
         createdAt,
+        createdAtCursor: createdAt.replace("Z", "000Z"),
         updatedAt: createdAt,
         lastEventAt: createdAt,
         events: [
@@ -594,6 +597,8 @@ describe("LOOP API V2 security, settings, and support modules", () => {
           status: "revoked",
           revokedAt: now.toISOString(),
         },
+        effect: "auditOnly",
+        providerAccessTerminated: false,
         contractVersion: "2.0",
       });
       expect(sessions.revoke).toHaveBeenCalledWith(
@@ -602,6 +607,7 @@ describe("LOOP API V2 security, settings, and support modules", () => {
           sessionId: otherSessionId,
           idempotencyKey,
           commandKind: "revoke",
+          callerSessionId: currentSessionId,
         }),
       );
       const digest = sessions.revoke.mock.calls[0]?.[0].requestSha256;
@@ -642,7 +648,7 @@ describe("LOOP API V2 security, settings, and support modules", () => {
           revokedFromSessionId: currentSessionId,
         },
         dedupeKey: `security.event:deviceSession:${otherSessionId}:revoked:2026-09-09`,
-        source: null,
+        source: "loop_session",
         observedAt: now.toISOString(),
       });
       expect(notifications.rows).toHaveLength(1);
@@ -740,6 +746,45 @@ describe("LOOP API V2 security, settings, and support modules", () => {
         headers: withoutKey,
       });
       expectEnvelope(noKey, 400, "INVALID_REQUEST");
+    });
+
+    it("refuses LOOP access to a request that names a revoked session", async () => {
+      const { app } = await createApp(
+        fakes({
+          sessions: [
+            session(),
+            session({
+              sessionId: otherSessionId,
+              deviceId: otherDeviceId,
+              status: "revoked",
+              revokedAt: now.toISOString(),
+            }),
+          ],
+        }),
+      );
+      const revoked = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": otherSessionId },
+      });
+      expectEnvelope(revoked, 401, "AUTH_INVALID");
+      expect(revoked.headers["www-authenticate"]).toBe(
+        'Bearer realm="loop-api"',
+      );
+
+      const active = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": currentSessionId },
+      });
+      expect(active.statusCode).toBe(200);
+
+      const unknown = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": randomUUID() },
+      });
+      expect(unknown.statusCode).toBe(200);
     });
 
     it("requires a Bearer token", async () => {

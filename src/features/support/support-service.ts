@@ -241,7 +241,7 @@ export function createSupportService(input: {
                 route: listCursorRoute,
                 filter: listCursorFilter,
                 continuation: {
-                  createdAt: last.createdAt,
+                  createdAt: last.createdAtCursor,
                   ticketId: last.ticketId,
                   limit: pageSize,
                 },

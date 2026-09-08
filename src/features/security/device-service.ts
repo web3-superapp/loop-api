@@ -6,6 +6,7 @@ import { mandatoryNotificationCategory } from "../alerts/notification-contract.j
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
+  DeviceSessionCallerInvalidError,
   DeviceSessionIdempotencyConflictError,
   DeviceSessionRateLimitedError,
   DeviceSessionRepositoryUnavailableError,
@@ -65,7 +66,19 @@ export interface DeviceRevokeResource {
     readonly status: "revoked";
     readonly revokedAt: string;
   };
+  /**
+   * What a revoke actually does in this step: the LOOP audit projection is
+   * revoked and a security event is recorded. The other device's Privy
+   * access token is not terminated; Privy session revocation is a Go/No-Go
+   * item. Requests that name the revoked session are refused LOOP-side.
+   */
+  readonly effect: "auditOnly";
+  readonly providerAccessTerminated: false;
   readonly contractVersion: typeof v2ContractVersion;
+}
+
+export interface DeviceServiceLogger {
+  warn(context: Record<string, unknown>, message: string): void;
 }
 
 export interface DeviceService {
@@ -90,6 +103,7 @@ export interface CreateDeviceServiceInput {
   readonly sessions: DeviceSessionRepository;
   /** `null` when the notification repository is not composed. */
   readonly notifications: NotificationRepository | null;
+  readonly logger: DeviceServiceLogger;
   readonly now?: () => Date;
 }
 
@@ -122,7 +136,7 @@ export function deviceRevokedNotification(input: {
       revokedFromSessionId: input.revokedFromSessionId,
     }),
     dedupeKey: `security.event:deviceSession:${input.sessionId}:revoked:${day}`,
-    source: null,
+    source: "loop_session",
     observedAt: input.revokedAt,
   });
 }
@@ -179,6 +193,9 @@ async function translate<T>(operation: () => Promise<T>): Promise<T> {
     if (error instanceof DeviceSessionRateLimitedError) {
       throw V2ApiError.rateLimited();
     }
+    if (error instanceof DeviceSessionCallerInvalidError) {
+      throw V2ApiError.invalidRequest();
+    }
     throw error;
   }
 }
@@ -221,9 +238,11 @@ export function createDeviceService(
     },
 
     async revoke({ principal, targetSessionId, metadata, requestId }) {
-      // Revoking the caller's own session is a step-up operation (03 §10.5):
-      // no MFA step is connected, so it is refused before any persistence.
-      // Self-logout keeps using POST /v2/session/logout.
+      // Presentation-layer guard: revoking the caller's own session is a
+      // step-up operation (03 §10.5) and no MFA step is connected, so it is
+      // refused before any persistence. The repository separately verifies
+      // inside the transaction that the caller session is an active session
+      // of the same owner. Self-logout keeps using POST /v2/session/logout.
       if (targetSessionId === metadata.sessionId) {
         throw V2ApiError.fromCode("AUTH_STEP_UP_REQUIRED");
       }
@@ -235,6 +254,7 @@ export function createDeviceService(
           requestSha256: revokeDigest(targetSessionId, metadata),
           requestId,
           commandKind: "revoke",
+          callerSessionId: metadata.sessionId,
         }),
       );
       if (session === null || session.revokedAt === null) {
@@ -255,8 +275,17 @@ export function createDeviceService(
               revokedFromSessionId: metadata.sessionId,
             }),
           );
-        } catch {
+        } catch (error) {
           // The feed simply lacks this row; the revoke result stands.
+          input.logger.warn(
+            {
+              sessionId: session.sessionId,
+              ownerUserId: principal.userId,
+              requestId,
+              errorName: error instanceof Error ? error.name : "unknown",
+            },
+            "Device revoke security.event notification was not recorded",
+          );
         }
       }
       return Object.freeze({
@@ -265,6 +294,8 @@ export function createDeviceService(
           status: "revoked" as const,
           revokedAt: session.revokedAt,
         }),
+        effect: "auditOnly" as const,
+        providerAccessTerminated: false as const,
         contractVersion: v2ContractVersion,
       });
     },

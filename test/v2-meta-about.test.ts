@@ -20,7 +20,12 @@ import {
   openSourceAttributionSource,
   openSourceAttributionSummary,
 } from "../src/features/meta/open-source-attribution.js";
+import { v2ConfigVersionRegistry } from "../src/features/meta/config-version-registry.js";
+import { deviceRiskPolicy } from "../src/features/security/security-contract.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
+import { settingsPolicy } from "../src/features/settings/settings-service.js";
+import { supportResponsePolicy } from "../src/features/support/support-contract.js";
+import { swapPolicy } from "../src/features/wallet-intents/intent-contract.js";
 import { createUnavailablePrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -110,12 +115,40 @@ describe("GET /v2/meta/about", () => {
       "productPolicy",
       "clientPolicy",
       "sessionPolicy",
+      "community",
+      "marketTrending",
       "deviceRisk",
       "accountSettings",
       "support",
       "swapPolicy",
       "bscWriteCanary",
     ]);
+    // Every registry entry is published verbatim; the registry itself
+    // references the module constants, so neither can drift alone.
+    for (const entry of v2ConfigVersionRegistry) {
+      expect(body.configVersions).toContainEqual(entry);
+    }
+    expect(
+      Object.fromEntries(
+        v2ConfigVersionRegistry.map((entry) => [
+          entry.module,
+          entry.configVersion,
+        ]),
+      ),
+    ).toMatchObject({
+      deviceRisk: deviceRiskPolicy.configVersion,
+      accountSettings: settingsPolicy.configVersion,
+      support: supportResponsePolicy.configVersion,
+      swapPolicy: swapPolicy.configVersion,
+      community: "communityV1",
+      marketTrending: "marketTrendingV1",
+    });
+    expect(
+      body.openSource.entries.every(
+        (entry) =>
+          Object.keys(entry).sort().join(",") === "license,name,purpose",
+      ),
+    ).toBe(true);
     expect(body.configVersions[0]).toEqual({
       module: "productPolicy",
       configVersion: "productPolicyV2.2026-09-01",
@@ -182,13 +215,13 @@ describe("GET /v2/meta/about", () => {
           .slice(1, -1)
           .map((cell) => cell.trim().replace(/^`|`$/g, "")),
       )
-      .map(([name, version, purpose, license]) => ({
+      .map(([name, , , license]) => ({ name, license }));
+    expect(rows).toEqual(
+      openSourceAttributionEntries.map(({ name, license }) => ({
         name,
-        version,
-        purpose,
         license,
-      }));
-    expect(rows).toEqual(openSourceAttributionEntries);
+      })),
+    );
     expect(markdown.replace(/\n/g, " ")).toContain(
       openSourceAttributionSummary,
     );

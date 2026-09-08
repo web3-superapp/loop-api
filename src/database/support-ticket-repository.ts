@@ -36,6 +36,7 @@ const ticketRowSchema = z
     body: textSchema,
     status: z.enum(supportTicketStatuses),
     created_at: dateSchema,
+    created_at_cursor: z.string().min(20),
     updated_at: dateSchema,
     last_event_at: dateSchema,
     events: z.array(
@@ -86,6 +87,7 @@ const ticketSelect = `
   select
     t.ticket_id, t.owner_user_id, t.category, t.body, t.status,
     t.created_at, t.updated_at, t.last_event_at,
+    to_char(t.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_cursor,
     coalesce(
       (
         select json_agg(
@@ -135,6 +137,7 @@ function mapTicket(raw: unknown): SupportTicketRecord {
     body: row.body,
     status: row.status,
     createdAt: row.created_at.toISOString(),
+    createdAtCursor: row.created_at_cursor,
     updatedAt: row.updated_at.toISOString(),
     lastEventAt: row.last_event_at.toISOString(),
     events: Object.freeze(row.events.map(mapEvent)),
@@ -306,8 +309,7 @@ export function createPostgresSupportTicketRepository(
             where t.owner_user_id = $1
               and (
                 $2::timestamptz is null
-                or t.created_at < $2::timestamptz
-                or (t.created_at = $2::timestamptz and t.ticket_id < $3::uuid)
+                or (t.created_at, t.ticket_id) < ($2::timestamptz, $3::uuid)
               )
             order by t.created_at desc, t.ticket_id desc
             limit $4
