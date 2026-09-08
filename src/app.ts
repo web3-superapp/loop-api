@@ -1291,6 +1291,7 @@ export async function buildApp(
       approvals: registeredModuleIds.includes("sendApprovals")
         ? approvalService
         : null,
+      approvalsRuntimeAvailable: walletIntentRuntimeAvailable,
       notifications: database.notifications ?? null,
       now: securityNow,
     });

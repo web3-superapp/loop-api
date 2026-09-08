@@ -100,6 +100,8 @@ export interface CreateSecurityServiceInput {
   readonly wallets: AccountWalletRepository | null;
   /** `null` when the `sendApprovals` module is not registered. */
   readonly approvals: ApprovalService | null;
+  /** The wallet-intent runtime (repositories, RPC, indexer) is composed. */
+  readonly approvalsRuntimeAvailable: boolean;
   /** `null` when the notification repository is not composed. */
   readonly notifications: NotificationRepository | null;
   readonly now?: () => Date;
@@ -193,6 +195,9 @@ export function createSecurityService(
     if (input.approvals === null) {
       return unavailable(securityReasonCodes.approvalsDeferred);
     }
+    if (!input.approvalsRuntimeAvailable) {
+      return unavailable(securityReasonCodes.approvalsRuntimeUnavailable);
+    }
     if (input.wallets === null) {
       return unavailable(securityReasonCodes.walletRuntimeUnavailable);
     }
@@ -222,10 +227,11 @@ export function createSecurityService(
     } catch (error) {
       // A missing RPC, indexer, or write switch closes only this block; the
       // error code is the reason so the page can explain it.
-      if (error instanceof V2ApiError) {
-        return unavailable(error.code);
-      }
-      throw error;
+      // Any other failure closes the block too: a summary never turns a
+      // read failure into a server error or a zero.
+      return unavailable(
+        error instanceof V2ApiError ? error.code : "CAPABILITY_UNAVAILABLE",
+      );
     }
   }
 

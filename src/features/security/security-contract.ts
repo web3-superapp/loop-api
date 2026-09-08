@@ -59,6 +59,7 @@ export const securityReasonCodes = Object.freeze({
   walletNotSelected: "WALLET_NOT_SELECTED",
   walletRuntimeUnavailable: "WALLET_RUNTIME_UNAVAILABLE",
   approvalsDeferred: "SEND_APPROVALS_RUNTIME_DEFERRED",
+  approvalsRuntimeUnavailable: "WALLET_INTENT_RUNTIME_UNAVAILABLE",
   notificationsUnavailable: "NOTIFICATIONS_RUNTIME_UNAVAILABLE",
   deviceSessionsUnavailable: "ACCOUNT_SESSION_RUNTIME_UNAVAILABLE",
 } as const);
