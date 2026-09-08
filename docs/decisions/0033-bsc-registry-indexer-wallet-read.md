@@ -217,7 +217,7 @@ migration is one-way, once.
 
 ## Persistence
 
-Migration `000018_v2_chain_registry_wallet` adds `chains` (seeded with BSC),
+Migration `000019_v2_chain_registry_wallet` adds `chains` (seeded with BSC),
 `assets` (seeded with `eip155:56:native`), `pools`, `indexer_checkpoints`,
 `indexed_transfers`, `indexed_pool_events`, `account_wallets`,
 `wallet_balance_snapshots`, and the `watchlist_items.asset_id` column. Raw
