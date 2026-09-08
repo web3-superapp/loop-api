@@ -97,17 +97,60 @@ The LOOP ID (`LOOP-` + 8 Crockford Base32) is assigned at account creation
 by both V1 and V2 bootstrap, backfilled for existing accounts, immutable, and
 never an authorization key. `GET /v2/account/me` is unchanged.
 
+### V2 community and social-graph module (Decision 0031, `V2_MODULES_ENABLED=community`)
+
+| Method and path                                            | Request                                                                        | Success projection                                                           | Interface     | Capability                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------- |
+| `GET /v2/community/home`                                   | Bearer + contract/client headers; no payload                                   | `joined[]`, `discover[]` (≤5), `unread`/`liveVoice` unavailable, `freshness` | `implemented` | `implemented`; Stream-derived counts stay `unavailable`               |
+| `GET /v2/communities`                                      | `sort=members\|newest`, `verification=verified\|all`, cursor page              | Community summaries plus `recommendation` (`rule:verified-members-v1`)       | `implemented` | `implemented`; only member count and creation time order the list     |
+| `POST /v2/communities`                                     | Write headers incl. UUIDv4 `Idempotency-Key`; name/slug/description/logo/asset | `201` with a `pending` community owned by the applicant                      | `implemented` | `implemented`; verification is operator-only                          |
+| `GET /v2/communities/{communityId}`                        | Bearer + contract/client headers; no payload                                   | Community record, viewer membership and permission flags                     | `implemented` | `implemented`; mining/presence/announcements/links `unavailable`      |
+| `POST /v2/communities/{communityId}/join`                  | Write headers; no payload                                                      | Community resource with the viewer membership                                | `implemented` | `implemented`; `member_count` maintained in the same transaction      |
+| `DELETE /v2/communities/{communityId}/membership`          | Write headers; no payload                                                      | Community resource with `membership: null`                                   | `implemented` | `implemented`; an owner must transfer first                           |
+| `GET /v2/communities/{communityId}/members`                | `role=all\|owner\|admin`, cursor page                                          | Owner→admin→member grouping, server counts, viewer permission flags          | `implemented` | `implemented`; per-member mining power and online count `unavailable` |
+| `POST /v2/communities/{id}/members/{publicProfileId}/role` | Write headers; `{role}`                                                        | Refreshed member directory                                                   | `implemented` | `implemented`; owner-only; audited as `role_changed`                  |
+| `POST\|DELETE /v2/communities/{id}/members/{pid}/mute`     | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; owner or admin per the permission matrix               |
+| `POST\|DELETE /v2/communities/{id}/members/{pid}/ban`      | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; a ban also drops the follow edges                      |
+| `POST\|DELETE /v2/connections/follow/{publicProfileId}`    | Write headers; no payload                                                      | `{profile, viewerFollows}`                                                   | `implemented` | `implemented`; target must be activated and `discoverable`            |
+| `GET /v2/connections`                                      | `direction=following\|followers`, cursor page                                  | Connections, `counts.following/followers`                                    | `implemented` | `implemented`; blocked accounts are omitted                           |
+| `GET /v2/blocks`                                           | `kind=user`, cursor page                                                       | Block rows plus `counts.user`                                                | `implemented` | `implemented`; `contract`/`domain` are `CAPABILITY_UNAVAILABLE`       |
+| `POST\|DELETE /v2/blocks`                                  | Write headers; `{kind, stableId}`                                              | `{block}` or `{block: null}`                                                 | `implemented` | `implemented`; a block removes both follow edges                      |
+| `GET /v2/message-requests`                                 | Cursor page                                                                    | Pending incoming requests over the frozen V1 `friend_requests` storage       | `implemented` | `implemented`; preview and AI moderation `unavailable`                |
+| `POST /v2/message-requests/{id}/decision`                  | Write headers; `{decision}`                                                    | `{messageRequestId, decision, blocked}`                                      | `implemented` | `implemented`; `report` = reject + block + audit in one transaction   |
+| `GET /v2/mining/referral/rules`                            | Bearer + contract/client headers; no payload                                   | Versioned five-level Mining Power boost snapshot                             | `implemented` | `implemented`; `edges` and `inviteCode` `unavailable` until D19       |
+
+### V2 search module (Decision 0031, `V2_MODULES_ENABLED=search`)
+
+| Method and path  | Request                                                              | Success projection                                                                | Interface     | Capability                                                                        |
+| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
+| `GET /v2/search` | `domain=users\|communities\|assets\|launch\|dapps`, `q`, cursor page | `{resultType, stableId, displaySnapshot, destination}` or `status: "unavailable"` | `implemented` | `implemented` for `users`/`communities`; the other three domains stay unavailable |
+
+`users` and `communities` reuse the `public_alias_search` quota bucket and the
+alias prefix normalization of `GET /v1/discovery/users`. Chat content is never
+searched. `assets`, `launch`, and `dapps` answer `200` with
+`status: "unavailable"` and consume no quota.
+
+Community identity projections are fixed to
+`{publicProfileId, loopId, alias, avatarRef}`. `profile_code` stays V1-only;
+wallet addresses, Privy subjects, and Stream IDs are never projected. An
+account without an activated V2 profile receives
+`409 PROFILE_ACTIVATION_REQUIRED` from every community and social-graph write.
+`pnpm community:verify <communityId>` is the only path that sets
+`verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
+and writes an operator audit row.
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
-point. `V2_MODULES_ENABLED` selects which module routes may register. `profile`
-ships its registrar (Decision 0030); every other module below has none yet, so
-enabling it registers no route and only changes its capability projection.
+point. `V2_MODULES_ENABLED` selects which module routes may register. `profile`,
+`community`, and `search` ship their registrars (Decisions 0030 and 0031);
+every other module below has none yet, so enabling it registers no route and
+only changes its capability projection.
 
 | Module ID       | Capability projected | Registrar   | Status                                                     |
 | --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
-| `community`     | `community`          | not shipped | gate `implemented`; routes pending D3 decision             |
-| `search`        | none yet             | not shipped | gate `implemented`; capability and routes pending D7       |
+| `community`     | `community`          | shipped     | routes and capability `implemented` (Decision 0031)        |
+| `search`        | `search`             | shipped     | routes and capability `implemented` (Decision 0031)        |
 | `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
 | `wallet`        | `walletRead`         | not shipped | gate `implemented`; routes pending D12                     |
 | `swap`          | `privySwap`          | not shipped | gate `implemented`; routes pending D13 Go/No-Go            |
@@ -120,7 +163,12 @@ enabling it registers no route and only changes its capability projection.
 An enabled module without a registrar reports
 `availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The
 `avatarUpload` capability is not module-gated and stays `unavailable` with
-`AVATAR_STORAGE_NOT_SELECTED` until a storage Provider decision exists.
+`AVATAR_STORAGE_NOT_SELECTED` until a storage Provider decision exists, as do
+`communityMining` (`MINING_FORMULA_BASELINE_PENDING`) and `communityPresence`
+(`STREAM_PRESENCE_NOT_CONNECTED`). `community` and `search` report `available`
+only when the module is enabled and `buildApp` composed the PostgreSQL
+community repository and the V2 cursor codec (plus the public search quota for
+`search`); otherwise they fail closed.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one

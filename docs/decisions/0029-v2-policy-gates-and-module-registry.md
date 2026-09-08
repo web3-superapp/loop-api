@@ -115,36 +115,37 @@ market, wallet, swap, sendApprovals, launch, mining, notifications, profile`
 exactly one HTTP status, category, `retryable`, localization key, and Bearer
 challenge flag; routes only narrow the codes they may return.
 
-| Code                         | Status | Category         | Retryable | userMessageKey                     |
-| ---------------------------- | ------ | ---------------- | --------- | ---------------------------------- |
-| `ACCOUNT_BOOTSTRAP_REQUIRED` | 409    | `authentication` | no        | `errors.account.bootstrapRequired` |
-| `ALIAS_BLOCKED` (0030)       | 422    | `validation`     | no        | `errors.alias.blocked`             |
-| `ALIAS_RESERVED` (0030)      | 422    | `validation`     | no        | `errors.alias.reserved`            |
-| `AUTH_INVALID`               | 401    | `authentication` | no        | `errors.auth.invalid`              |
-| `AUTH_REQUIRED`              | 401    | `authentication` | no        | `errors.auth.required`             |
-| `AUTH_STEP_UP_REQUIRED`      | 403    | `authentication` | no        | `errors.auth.stepUpRequired`       |
-| `CAPABILITY_UNAVAILABLE`     | 503    | `availability`   | yes       | `errors.capability.unavailable`    |
-| `CHAIN_MISMATCH`             | 422    | `validation`     | no        | `errors.chain.mismatch`            |
-| `DATA_STALE`                 | 409    | `stale`          | no        | `errors.data.stale`                |
-| `IDEMPOTENCY_CONFLICT`       | 409    | `conflict`       | no        | `errors.idempotency.conflict`      |
-| `INDEXING_DELAYED`           | 503    | `availability`   | yes       | `errors.indexing.delayed`          |
-| `INSUFFICIENT_BALANCE`       | 409    | `conflict`       | no        | `errors.balance.insufficient`      |
-| `INTERNAL_ERROR`             | 500    | `internal`       | no        | `errors.internal`                  |
-| `INVALID_REQUEST`            | 400    | `validation`     | no        | `errors.request.invalid`           |
-| `MAINTENANCE`                | 503    | `availability`   | yes       | `errors.service.maintenance`       |
-| `NOT_FOUND`                  | 404    | `validation`     | no        | `errors.resource.notFound`         |
-| `PERMISSION_DENIED`          | 403    | `authorization`  | no        | `errors.permission.denied`         |
-| `POLICY_BLOCKED`             | 403    | `authorization`  | no        | `errors.policy.blocked`            |
-| `PROVIDER_DISCONNECTED`      | 503    | `availability`   | yes       | `errors.provider.disconnected`     |
-| `QUOTE_EXPIRED`              | 409    | `stale`          | no        | `errors.quote.expired`             |
-| `RATE_LIMITED`               | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`        |
-| `REGION_BLOCKED`             | 403    | `authorization`  | no        | `errors.region.blocked`            |
-| `REQUEST_TIMEOUT`            | 503    | `availability`   | yes       | `errors.request.timeout`           |
-| `SESSION_NOT_FOUND`          | 404    | `validation`     | no        | `errors.session.notFound`          |
-| `SIMULATION_FAILED`          | 409    | `conflict`       | no        | `errors.simulation.failed`         |
-| `SUBMISSION_UNKNOWN`         | 409    | `conflict`       | no        | `errors.submission.unknown`        |
-| `VALIDATION_FAILED`          | 422    | `validation`     | no        | `errors.validation.failed`         |
-| `VERSION_CONFLICT`           | 409    | `conflict`       | no        | `errors.version.conflict`          |
+| Code                                 | Status | Category         | Retryable | userMessageKey                      |
+| ------------------------------------ | ------ | ---------------- | --------- | ----------------------------------- |
+| `ACCOUNT_BOOTSTRAP_REQUIRED`         | 409    | `authentication` | no        | `errors.account.bootstrapRequired`  |
+| `ALIAS_BLOCKED` (0030)               | 422    | `validation`     | no        | `errors.alias.blocked`              |
+| `ALIAS_RESERVED` (0030)              | 422    | `validation`     | no        | `errors.alias.reserved`             |
+| `AUTH_INVALID`                       | 401    | `authentication` | no        | `errors.auth.invalid`               |
+| `AUTH_REQUIRED`                      | 401    | `authentication` | no        | `errors.auth.required`              |
+| `AUTH_STEP_UP_REQUIRED`              | 403    | `authentication` | no        | `errors.auth.stepUpRequired`        |
+| `CAPABILITY_UNAVAILABLE`             | 503    | `availability`   | yes       | `errors.capability.unavailable`     |
+| `CHAIN_MISMATCH`                     | 422    | `validation`     | no        | `errors.chain.mismatch`             |
+| `DATA_STALE`                         | 409    | `stale`          | no        | `errors.data.stale`                 |
+| `IDEMPOTENCY_CONFLICT`               | 409    | `conflict`       | no        | `errors.idempotency.conflict`       |
+| `INDEXING_DELAYED`                   | 503    | `availability`   | yes       | `errors.indexing.delayed`           |
+| `INSUFFICIENT_BALANCE`               | 409    | `conflict`       | no        | `errors.balance.insufficient`       |
+| `INTERNAL_ERROR`                     | 500    | `internal`       | no        | `errors.internal`                   |
+| `INVALID_REQUEST`                    | 400    | `validation`     | no        | `errors.request.invalid`            |
+| `MAINTENANCE`                        | 503    | `availability`   | yes       | `errors.service.maintenance`        |
+| `NOT_FOUND`                          | 404    | `validation`     | no        | `errors.resource.notFound`          |
+| `PERMISSION_DENIED`                  | 403    | `authorization`  | no        | `errors.permission.denied`          |
+| `POLICY_BLOCKED`                     | 403    | `authorization`  | no        | `errors.policy.blocked`             |
+| `PROFILE_ACTIVATION_REQUIRED` (0031) | 409    | `conflict`       | no        | `errors.profile.activationRequired` |
+| `PROVIDER_DISCONNECTED`              | 503    | `availability`   | yes       | `errors.provider.disconnected`      |
+| `QUOTE_EXPIRED`                      | 409    | `stale`          | no        | `errors.quote.expired`              |
+| `RATE_LIMITED`                       | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`         |
+| `REGION_BLOCKED`                     | 403    | `authorization`  | no        | `errors.region.blocked`             |
+| `REQUEST_TIMEOUT`                    | 503    | `availability`   | yes       | `errors.request.timeout`            |
+| `SESSION_NOT_FOUND`                  | 404    | `validation`     | no        | `errors.session.notFound`           |
+| `SIMULATION_FAILED`                  | 409    | `conflict`       | no        | `errors.simulation.failed`          |
+| `SUBMISSION_UNKNOWN`                 | 409    | `conflict`       | no        | `errors.submission.unknown`         |
+| `VALIDATION_FAILED`                  | 422    | `validation`     | no        | `errors.validation.failed`          |
+| `VERSION_CONFLICT`                   | 409    | `conflict`       | no        | `errors.version.conflict`           |
 
 - The `category` enum stays at the eight values of Decision 0026; the contract
   test fails if a ninth is introduced.

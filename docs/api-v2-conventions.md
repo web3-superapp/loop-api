@@ -118,40 +118,47 @@ Every V2 error body has exactly these fields:
 value, and `userMessageKey`; a route schema may only narrow the codes it can
 return. Modules raise errors with `V2ApiError.fromCode(code)`.
 
-| Code                         | Status | Category         | Retryable | userMessageKey                     |
-| ---------------------------- | ------ | ---------------- | --------- | ---------------------------------- |
-| `ACCOUNT_BOOTSTRAP_REQUIRED` | 409    | `authentication` | no        | `errors.account.bootstrapRequired` |
-| `ALIAS_BLOCKED`              | 422    | `validation`     | no        | `errors.alias.blocked`             |
-| `ALIAS_RESERVED`             | 422    | `validation`     | no        | `errors.alias.reserved`            |
-| `AUTH_INVALID`               | 401    | `authentication` | no        | `errors.auth.invalid`              |
-| `AUTH_REQUIRED`              | 401    | `authentication` | no        | `errors.auth.required`             |
-| `AUTH_STEP_UP_REQUIRED`      | 403    | `authentication` | no        | `errors.auth.stepUpRequired`       |
-| `CAPABILITY_UNAVAILABLE`     | 503    | `availability`   | yes       | `errors.capability.unavailable`    |
-| `CHAIN_MISMATCH`             | 422    | `validation`     | no        | `errors.chain.mismatch`            |
-| `DATA_STALE`                 | 409    | `stale`          | no        | `errors.data.stale`                |
-| `IDEMPOTENCY_CONFLICT`       | 409    | `conflict`       | no        | `errors.idempotency.conflict`      |
-| `INDEXING_DELAYED`           | 503    | `availability`   | yes       | `errors.indexing.delayed`          |
-| `INSUFFICIENT_BALANCE`       | 409    | `conflict`       | no        | `errors.balance.insufficient`      |
-| `INTERNAL_ERROR`             | 500    | `internal`       | no        | `errors.internal`                  |
-| `INVALID_REQUEST`            | 400    | `validation`     | no        | `errors.request.invalid`           |
-| `MAINTENANCE`                | 503    | `availability`   | yes       | `errors.service.maintenance`       |
-| `NOT_FOUND`                  | 404    | `validation`     | no        | `errors.resource.notFound`         |
-| `PERMISSION_DENIED`          | 403    | `authorization`  | no        | `errors.permission.denied`         |
-| `POLICY_BLOCKED`             | 403    | `authorization`  | no        | `errors.policy.blocked`            |
-| `PROVIDER_DISCONNECTED`      | 503    | `availability`   | yes       | `errors.provider.disconnected`     |
-| `QUOTE_EXPIRED`              | 409    | `stale`          | no        | `errors.quote.expired`             |
-| `RATE_LIMITED`               | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`        |
-| `REGION_BLOCKED`             | 403    | `authorization`  | no        | `errors.region.blocked`            |
-| `REQUEST_TIMEOUT`            | 503    | `availability`   | yes       | `errors.request.timeout`           |
-| `SESSION_NOT_FOUND`          | 404    | `validation`     | no        | `errors.session.notFound`          |
-| `SIMULATION_FAILED`          | 409    | `conflict`       | no        | `errors.simulation.failed`         |
-| `SUBMISSION_UNKNOWN`         | 409    | `conflict`       | no        | `errors.submission.unknown`        |
-| `VALIDATION_FAILED`          | 422    | `validation`     | no        | `errors.validation.failed`         |
-| `VERSION_CONFLICT`           | 409    | `conflict`       | no        | `errors.version.conflict`          |
+| Code                          | Status | Category         | Retryable | userMessageKey                      |
+| ----------------------------- | ------ | ---------------- | --------- | ----------------------------------- |
+| `ACCOUNT_BOOTSTRAP_REQUIRED`  | 409    | `authentication` | no        | `errors.account.bootstrapRequired`  |
+| `ALIAS_BLOCKED`               | 422    | `validation`     | no        | `errors.alias.blocked`              |
+| `ALIAS_RESERVED`              | 422    | `validation`     | no        | `errors.alias.reserved`             |
+| `AUTH_INVALID`                | 401    | `authentication` | no        | `errors.auth.invalid`               |
+| `AUTH_REQUIRED`               | 401    | `authentication` | no        | `errors.auth.required`              |
+| `AUTH_STEP_UP_REQUIRED`       | 403    | `authentication` | no        | `errors.auth.stepUpRequired`        |
+| `CAPABILITY_UNAVAILABLE`      | 503    | `availability`   | yes       | `errors.capability.unavailable`     |
+| `CHAIN_MISMATCH`              | 422    | `validation`     | no        | `errors.chain.mismatch`             |
+| `DATA_STALE`                  | 409    | `stale`          | no        | `errors.data.stale`                 |
+| `IDEMPOTENCY_CONFLICT`        | 409    | `conflict`       | no        | `errors.idempotency.conflict`       |
+| `INDEXING_DELAYED`            | 503    | `availability`   | yes       | `errors.indexing.delayed`           |
+| `INSUFFICIENT_BALANCE`        | 409    | `conflict`       | no        | `errors.balance.insufficient`       |
+| `INTERNAL_ERROR`              | 500    | `internal`       | no        | `errors.internal`                   |
+| `INVALID_REQUEST`             | 400    | `validation`     | no        | `errors.request.invalid`            |
+| `MAINTENANCE`                 | 503    | `availability`   | yes       | `errors.service.maintenance`        |
+| `NOT_FOUND`                   | 404    | `validation`     | no        | `errors.resource.notFound`          |
+| `PERMISSION_DENIED`           | 403    | `authorization`  | no        | `errors.permission.denied`          |
+| `POLICY_BLOCKED`              | 403    | `authorization`  | no        | `errors.policy.blocked`             |
+| `PROFILE_ACTIVATION_REQUIRED` | 409    | `conflict`       | no        | `errors.profile.activationRequired` |
+| `PROVIDER_DISCONNECTED`       | 503    | `availability`   | yes       | `errors.provider.disconnected`      |
+| `QUOTE_EXPIRED`               | 409    | `stale`          | no        | `errors.quote.expired`              |
+| `RATE_LIMITED`                | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`         |
+| `REGION_BLOCKED`              | 403    | `authorization`  | no        | `errors.region.blocked`             |
+| `REQUEST_TIMEOUT`             | 503    | `availability`   | yes       | `errors.request.timeout`            |
+| `SESSION_NOT_FOUND`           | 404    | `validation`     | no        | `errors.session.notFound`           |
+| `SIMULATION_FAILED`           | 409    | `conflict`       | no        | `errors.simulation.failed`          |
+| `SUBMISSION_UNKNOWN`          | 409    | `conflict`       | no        | `errors.submission.unknown`         |
+| `VALIDATION_FAILED`           | 422    | `validation`     | no        | `errors.validation.failed`          |
+| `VERSION_CONFLICT`            | 409    | `conflict`       | no        | `errors.version.conflict`           |
 
 `ALIAS_RESERVED` and `ALIAS_BLOCKED` (Decision 0030) are alias-policy
 rejections for V2 profile writes; the client shows the specific message and
 never retries the same alias.
+
+`PROFILE_ACTIVATION_REQUIRED` (Decision 0031) means the account is
+bootstrapped but has no activated V2 profile, so it has no public identity to
+project into a community or the social graph. The client sends the user to
+`loop-id-setup` (`POST /v2/profile/loop-id`) and retries afterwards; it is
+never a Provider or availability failure.
 
 `SUBMISSION_UNKNOWN`, `QUOTE_EXPIRED`, and `DATA_STALE` are never retried
 blindly: the client reconciles through the module's status endpoint or fetches
@@ -244,9 +251,15 @@ operation needs a stronger, module-defined authentication step.
   `sendApprovals→sendApprovals`, `launch→launch`, `mining→mining`,
   `notifications→pushNotifications`, `profile→profile` (delivered by
   Decision 0030; `available` only when the module is enabled and its
-  repository is composed); `search` and `market` gain a capability entry with
-  their module after consumer review. `avatarUpload` is not module-gated and
-  remains `unavailable` (`AVATAR_STORAGE_NOT_SELECTED`).
+  repository is composed), `search→search` (delivered by Decision 0031).
+  `community` and `search` are `available` only when the module is enabled and
+  `buildApp` composed both the PostgreSQL community repository and the
+  `cursorCodec`; `search` additionally needs the shared public-search quota.
+  `market` gains a capability entry with its module after consumer review.
+  `communityMining` and `communityPresence` are not module-gated and stay
+  `unavailable` (`MINING_FORMULA_BASELINE_PENDING`,
+  `STREAM_PRESENCE_NOT_CONNECTED`), as does `avatarUpload`
+  (`AVATAR_STORAGE_NOT_SELECTED`).
 - Module registrars receive shared dependencies (config, authentication hooks,
   session service, and the optional `cursorCodec`) and never compose their
   own authentication or cursor boundary.
