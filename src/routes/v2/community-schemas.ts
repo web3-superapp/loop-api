@@ -6,6 +6,7 @@ import {
   blockKinds,
   communityListLimits,
   communityLogoRefPatternSource,
+  communityMembershipFilters,
   communitySlugPatternSource,
   communitySortValues,
   communityVerificationFilters,
@@ -97,6 +98,38 @@ export const identityProjectionSchema = {
       pattern: publicProfileIdPatternSource,
       description:
         "Opaque public identity of another account; the only accepted command target.",
+    },
+    loopId: { type: "string", pattern: loopIdPatternSource },
+    alias: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: maximumRawTextLength },
+        { type: "null" },
+      ],
+    },
+    avatarRef: {
+      anyOf: [
+        { type: "string", pattern: storedAvatarRefPatternSource },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+/**
+ * Member-directory identity. `publicProfileId` is null only for a membership
+ * whose profile row is missing: the row is still listed and counted so the
+ * page matches the server counts, but it can never be a governance target.
+ */
+export const memberIdentitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["publicProfileId", "loopId", "alias", "avatarRef"],
+  properties: {
+    publicProfileId: {
+      anyOf: [
+        { type: "string", pattern: publicProfileIdPatternSource },
+        { type: "null" },
+      ],
     },
     loopId: { type: "string", pattern: loopIdPatternSource },
     alias: {
@@ -260,15 +293,27 @@ export const communityHomeResourceSchema = {
   ],
   properties: {
     joined: {
-      type: "array",
-      maxItems: 50,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["community", "membership"],
-        properties: {
-          community: communitySummarySchema,
-          membership: membershipSchema,
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "truncated"],
+      properties: {
+        items: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["community", "membership"],
+            properties: {
+              community: communitySummarySchema,
+              membership: membershipSchema,
+            },
+          },
+        },
+        truncated: {
+          type: "boolean",
+          description:
+            "True when the account joined more communities than this aggregate carries; continue with GET /v2/communities?membership=joined.",
         },
       },
     },
@@ -334,7 +379,7 @@ export const memberListResourceSchema = {
           "miningPower",
         ],
         properties: {
-          profile: identityProjectionSchema,
+          profile: memberIdentitySchema,
           role: { type: "string", enum: [...communityRoles] },
           status: { type: "string", enum: [...communityMembershipStatuses] },
           joinedAt: { type: "string", format: "date-time" },
@@ -627,6 +672,18 @@ export const createCommunityRequestSchema = {
   },
 } as const;
 
+export const updateCommunityRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    name: createCommunityRequestSchema.properties.name,
+    description: createCommunityRequestSchema.properties.description,
+    logoRef: createCommunityRequestSchema.properties.logoRef,
+    boundAssetKey: createCommunityRequestSchema.properties.boundAssetKey,
+  },
+} as const;
+
 export const roleChangeRequestSchema = {
   type: "object",
   additionalProperties: false,
@@ -687,6 +744,12 @@ export const communityListQuerySchema = {
   properties: {
     sort: { type: "string", enum: [...communitySortValues] },
     verification: { type: "string", enum: [...communityVerificationFilters] },
+    membership: {
+      type: "string",
+      enum: [...communityMembershipFilters],
+      description:
+        "`joined` narrows the page to the caller's own memberships; it is the cursor-paged continuation of the home aggregate.",
+    },
     cursor: cursorSchema,
     limit: listLimitSchema,
   },
@@ -825,6 +888,7 @@ export const commandErrors = {
     "DATA_STALE",
     "IDEMPOTENCY_CONFLICT",
     "PROFILE_ACTIVATION_REQUIRED",
+    "RESOURCE_CONFLICT",
     "VERSION_CONFLICT",
   ]),
   422: v2ErrorResponseSchema([

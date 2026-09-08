@@ -210,6 +210,7 @@ export function up(pgm: MigrationBuilder): void {
       constraint community_role_events_type_check
         check (event_type in (
           'community_created',
+          'community_profile_updated',
           'community_verified',
           'community_rejected',
           'member_joined',

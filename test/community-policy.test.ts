@@ -143,6 +143,19 @@ describe("V2 community permission matrix", () => {
     ).toBe(true);
   });
 
+  it("gives only the owner the community profile edit right", () => {
+    expect(communitySelfPermissionMatrix.owner.editProfile).toBe(true);
+    expect(communitySelfPermissionMatrix.admin.editProfile).toBe(false);
+    expect(communitySelfPermissionMatrix.member.editProfile).toBe(false);
+    expect(canPerformSelfAction(active("owner"), "editProfile")).toBe(true);
+    expect(canPerformSelfAction(active("admin"), "editProfile")).toBe(false);
+    expect(canPerformSelfAction(active("member"), "editProfile")).toBe(false);
+    expect(canPerformSelfAction(null, "editProfile")).toBe(false);
+    expect(
+      canPerformSelfAction({ role: "owner", status: "banned" }, "editProfile"),
+    ).toBe(false);
+  });
+
   it("lets admins and members leave but requires the owner to transfer first", () => {
     expect(communitySelfPermissionMatrix.owner.leave).toBe(false);
     expect(canPerformSelfAction(active("owner"), "leave")).toBe(false);

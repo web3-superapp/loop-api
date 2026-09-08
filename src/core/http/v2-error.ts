@@ -193,6 +193,13 @@ export const v2ErrorCatalog = Object.freeze({
     userMessageKey: "errors.region.blocked",
     includeBearerChallenge: false,
   },
+  RESOURCE_CONFLICT: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.conflict.resource",
+    includeBearerChallenge: false,
+  },
   REQUEST_TIMEOUT: {
     statusCode: 503,
     category: "availability",

@@ -121,6 +121,9 @@ function communityRepositoryFake() {
       viewerMembership: ownerMembership,
     }),
   );
+  const updateCommunityMock = vi.fn(() =>
+    Promise.resolve({ community, viewerMembership: ownerMembership }),
+  );
   const governMemberMock = vi.fn(() =>
     Promise.resolve({
       community,
@@ -128,11 +131,13 @@ function communityRepositoryFake() {
       target: null,
     }),
   );
-  const repository = {
-    listCommunities: vi.fn(() => Promise.resolve([community])),
+  const listCommunitiesMock = vi.fn(() => Promise.resolve([community]));
+  const repository: CommunityRepository = {
+    listCommunities: listCommunitiesMock,
     getCommunityHome: vi.fn(() =>
       Promise.resolve({
         joined: [{ community, viewerMembership: ownerMembership }],
+        joinedTruncated: true,
         discover: [community],
         observedAt: createdAt,
       }),
@@ -141,6 +146,7 @@ function communityRepositoryFake() {
       Promise.resolve({ community, viewerMembership: ownerMembership }),
     ),
     createCommunity: createCommunityMock,
+    updateCommunity: updateCommunityMock,
     joinCommunity: vi.fn(() =>
       Promise.resolve({ community, viewerMembership: ownerMembership }),
     ),
@@ -223,8 +229,14 @@ function communityRepositoryFake() {
       ]),
     ),
     verifyCommunity: vi.fn(() => Promise.resolve(community)),
-  } satisfies CommunityRepository;
-  return { repository, createCommunityMock, governMemberMock };
+  };
+  return {
+    repository,
+    listCommunitiesMock,
+    createCommunityMock,
+    updateCommunityMock,
+    governMemberMock,
+  };
 }
 
 function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
@@ -243,7 +255,9 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
   );
   const {
     repository: communityRepository,
+    listCommunitiesMock,
     createCommunityMock,
+    updateCommunityMock,
     governMemberMock,
   } = communityRepositoryFake();
   const database = {
@@ -274,7 +288,9 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
 
   return {
     communityRepository,
+    listCommunitiesMock,
     createCommunityMock,
+    updateCommunityMock,
     governMemberMock,
     consumeIssuanceQuota,
     database,
@@ -435,6 +451,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
       status: "unavailable",
       reasonCode: "STREAM_VOICE_NOT_CONNECTED",
     });
+    expect(body["joined"]).toMatchObject({ truncated: true });
     expect(body["freshness"]).toEqual({
       observedAt: createdAt,
       source: "database",
@@ -519,7 +536,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
       [new CommunityTargetUnavailableError(), 404, "NOT_FOUND"],
       [new CommunityDataStaleError(), 409, "DATA_STALE"],
       [new CommunityIdempotencyConflictError(), 409, "IDEMPOTENCY_CONFLICT"],
-      [new CommunitySlugTakenError(), 422, "VALIDATION_FAILED"],
+      [new CommunitySlugTakenError(), 409, "RESOURCE_CONFLICT"],
       [
         new CommunityRepositoryUnavailableError(),
         503,
@@ -906,6 +923,96 @@ describe("LOOP API V2 community, social, and search modules", () => {
         expect.objectContaining({ action }),
       );
     }
+  });
+
+  it("edits the community profile through the owner-only PATCH route", async () => {
+    const { app, updateCommunityMock } = await createApp();
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders(),
+      payload: { description: "  Frogs, updated  ", boundAssetKey: null },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(updateCommunityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: { description: "Frogs, updated", boundAssetKey: null },
+      }),
+    );
+
+    for (const payload of [
+      {},
+      { slug: "renamed" },
+      { verificationStatus: "verified" },
+    ]) {
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/v2/communities/${communityId}`,
+        headers: commandHeaders(),
+        payload,
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+
+    const reserved = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders(),
+      payload: { name: "LOOP Official" },
+    });
+    expect(reserved.statusCode).toBe(422);
+    expect(reserved.json()).toMatchObject({ code: "ALIAS_RESERVED" });
+  });
+
+  it("pages the caller's own memberships with membership=joined", async () => {
+    const { app, listCommunitiesMock } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/communities?membership=joined",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(listCommunitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ membership: "joined" }),
+    );
+    const rejected = await app.inject({
+      method: "GET",
+      url: "/v2/communities?membership=mine",
+      headers: commonHeaders(),
+    });
+    expect(rejected.statusCode).toBe(400);
+  });
+
+  it("keeps a users search cursor valid when verification changes", async () => {
+    const dependencies = fakes();
+    dependencies.communityRepository.searchUsers = vi.fn(() =>
+      Promise.resolve(
+        Array.from({ length: 21 }, (_value, index) => ({
+          profile: {
+            ...profile,
+            publicProfileId: `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${String(index).padStart(2, "0")}`,
+          },
+          searchKey: `frog_${String(index).padStart(2, "0")}`,
+        })),
+      ),
+    );
+    const { app } = await createApp(dependencies);
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=users&q=frog",
+      headers: commonHeaders(),
+    });
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+    expect(cursor).not.toBeNull();
+
+    // `verification` only narrows the communities domain, so it must not be
+    // bound into a users cursor.
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=users&q=frog&verification=all&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(200);
   });
 
   it("rejects unknown body and query fields", async () => {

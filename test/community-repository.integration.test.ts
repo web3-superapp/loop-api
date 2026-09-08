@@ -15,6 +15,7 @@ import {
 import { createPostgresProfileV2Repository } from "../src/database/profile-v2-repository.js";
 import {
   commandDigest,
+  updateCommunityDigestParts,
   type CreateCommunityValues,
 } from "../src/features/community/community-contract.js";
 import {
@@ -215,6 +216,21 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       communityId,
       idempotencyKey: randomUUID(),
       requestSha256: commandDigest("community", "joinCommunity", [communityId]),
+      requestId: randomUUID(),
+    });
+  }
+
+  function follow(
+    ownerUserId: string,
+    targetPublicProfileId: string,
+  ): Promise<unknown> {
+    return repository.follow({
+      ownerUserId,
+      targetPublicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        targetPublicProfileId,
+      ]),
       requestId: randomUUID(),
     });
   }
@@ -424,6 +440,28 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     expect(await memberCount(communityId)).toBe(3);
     await govern(admin.userId, member.publicProfileId, "ban");
     expect(await memberCount(communityId)).toBe(2);
+    const afterBan = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(afterBan.counts.all).toBe(2);
+    expect(afterBan.items).toHaveLength(2);
+    expect(
+      afterBan.items.some(
+        (item) => item.profile.publicProfileId === member.publicProfileId,
+      ),
+    ).toBe(false);
+    const bannedRow = await pool.query<{ role: string; status: string }>({
+      text: `
+        select role, status
+        from public.community_memberships
+        where community_id = $1 and owner_user_id = $2
+      `,
+      values: [communityId, member.userId],
+    });
+    expect(bannedRow.rows[0]).toEqual({ role: "member", status: "banned" });
 
     const events = await pool.query<{ event_type: string }>({
       text: `
@@ -791,6 +829,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         viewerUserId: stranger.userId,
         sort,
         verification: "verified",
+        membership: "all",
         limit: 50,
       });
       const ids = strangerView.map((item) => item.communityId);
@@ -805,6 +844,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       viewerUserId: stranger.userId,
       sort: "members",
       verification: "all",
+      membership: "all",
       limit: 50,
     });
     expect(strangerAll.map((item) => item.communityId)).not.toContain(
@@ -815,6 +855,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       viewerUserId: owner.userId,
       sort: "newest",
       verification: "all",
+      membership: "all",
       limit: 50,
     });
     expect(ownerAll.map((item) => item.communityId)).toContain(pendingId);
@@ -842,6 +883,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         viewerUserId: owner.userId,
         sort,
         verification: "verified",
+        membership: "all",
         limit: 1,
       });
       expect(first).toHaveLength(1);
@@ -853,6 +895,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         viewerUserId: owner.userId,
         sort,
         verification: "verified",
+        membership: "all",
         limit: 1,
         after: {
           lastSortValue:
@@ -915,6 +958,330 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     expect(joinedHome.discover.map((item) => item.communityId)).not.toContain(
       communityId,
     );
+  });
+
+  it("keeps the personal follow graph untouched when a member is banned", async () => {
+    const owner = await createAccount("ban-follow-owner");
+    const member = await createAccount("ban-follow-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "ban-follow",
+      "Ban Follow",
+    );
+    await join(member.userId, communityId);
+    await follow(owner.userId, member.publicProfileId);
+    await follow(member.userId, owner.publicProfileId);
+    expect(await repository.countConnections(owner.userId)).toEqual({
+      following: 1,
+      followers: 1,
+    });
+
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: member.publicProfileId,
+      action: "ban",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        member.publicProfileId,
+        "ban",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    // A ban is community scoped; only POST /v2/blocks drops follow edges.
+    expect(await repository.countConnections(owner.userId)).toEqual({
+      following: 1,
+      followers: 1,
+    });
+  });
+
+  it("does not restore a follow edge when a block is removed", async () => {
+    const first = await createAccount("unblock-first");
+    const second = await createAccount("unblock-second");
+    await follow(first.userId, second.publicProfileId);
+    const blockDigest = commandDigest("socialGraph", "block", [
+      "user",
+      second.publicProfileId,
+    ]);
+    await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 0,
+      followers: 0,
+    });
+
+    await repository.unblockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unblock", [
+        "user",
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(await repository.countBlocks(first.userId)).toEqual({ user: 0 });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 0,
+      followers: 0,
+    });
+  });
+
+  it("replays follow and block from the audit row after the state reverses", async () => {
+    const first = await createAccount("replay-follow-first");
+    const second = await createAccount("replay-follow-second");
+    const followKey = randomUUID();
+    const followDigest = commandDigest("socialGraph", "follow", [
+      second.publicProfileId,
+    ]);
+    await repository.follow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: followKey,
+      requestSha256: followDigest,
+      requestId: randomUUID(),
+    });
+    await repository.unfollow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unfollow", [
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const replayed = await repository.follow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: followKey,
+      requestSha256: followDigest,
+      requestId: randomUUID(),
+    });
+    expect(replayed.profile.publicProfileId).toBe(second.publicProfileId);
+    expect(replayed.viewerFollows).toBe(false);
+
+    const blockKey = randomUUID();
+    const blockDigest = commandDigest("socialGraph", "block", [
+      "user",
+      second.publicProfileId,
+    ]);
+    await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: blockKey,
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    await repository.unblockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unblock", [
+        "user",
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const replayedBlock = await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: blockKey,
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    expect(replayedBlock.stableId).toBe(second.publicProfileId);
+    expect(await repository.countBlocks(first.userId)).toEqual({ user: 0 });
+  });
+
+  it("decrements member_count when a member leaves", async () => {
+    const owner = await createAccount("leave-owner");
+    const member = await createAccount("leave-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "leave-community",
+      "Leave Community",
+    );
+    await join(member.userId, communityId);
+    expect(await memberCount(communityId)).toBe(2);
+
+    const detail = await repository.leaveCommunity({
+      ownerUserId: member.userId,
+      communityId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "leaveCommunity", [
+        communityId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(detail.viewerMembership).toBeNull();
+    expect(detail.community.memberCount).toBe(1);
+    expect(await memberCount(communityId)).toBe(1);
+  });
+
+  it("refuses to accept a message request across a block", async () => {
+    const recipient = await createAccount("accept-block-recipient");
+    const requester = await createAccount("accept-block-requester");
+    const inserted = await pool.query<{ friend_request_id: string }>({
+      text: `
+        insert into public.friend_requests (
+          requester_user_id, recipient_user_id, expires_at
+        )
+        values ($1, $2, clock_timestamp() + interval '7 days')
+        returning friend_request_id
+      `,
+      values: [requester.userId, recipient.userId],
+    });
+    const messageRequestId = inserted.rows[0]?.friend_request_id ?? "";
+    await repository.blockUser({
+      ownerUserId: recipient.userId,
+      stableId: requester.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        requester.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(
+      repository.decideMessageRequest({
+        ownerUserId: recipient.userId,
+        messageRequestId,
+        decision: "accept",
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "decideMessageRequest", [
+          messageRequestId,
+          "accept",
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityDataStaleError);
+    const friendship = await pool.query({
+      text: `
+        select 1
+        from public.friendships
+        where accepted_friend_request_id = $1
+      `,
+      values: [messageRequestId],
+    });
+    expect(friendship.rowCount).toBe(0);
+  });
+
+  it("lets only the owner edit the community profile", async () => {
+    const owner = await createAccount("edit-owner");
+    const member = await createAccount("edit-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "edit-community",
+      "Edit Community",
+    );
+    await join(member.userId, communityId);
+
+    const edit = (
+      actorUserId: string,
+      values: Parameters<typeof repository.updateCommunity>[0]["values"],
+    ) =>
+      repository.updateCommunity({
+        ownerUserId: actorUserId,
+        communityId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "updateCommunity", [
+          communityId,
+          ...updateCommunityDigestParts(values),
+        ]),
+        requestId: randomUUID(),
+        values,
+      });
+
+    await expect(
+      edit(member.userId, { name: "Hijacked" }),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+
+    const updated = await edit(owner.userId, {
+      description: "Frogs, updated",
+      boundAssetKey: null,
+    });
+    expect(updated.community.description).toBe("Frogs, updated");
+    expect(updated.community.name).toBe("Edit Community");
+    expect(updated.community.slug).toBe("edit-community");
+    expect(updated.community.verificationStatus).toBe("pending");
+
+    const audit = await pool.query<{ reason_code: string }>({
+      text: `
+        select reason_code
+        from public.community_role_events
+        where community_id = $1 and event_type = 'community_profile_updated'
+      `,
+      values: [communityId],
+    });
+    expect(audit.rows).toEqual([{ reason_code: "owner_profile_edit" }]);
+  });
+
+  it("hides an unverified community from a stranger on every read path", async () => {
+    const owner = await createAccount("visibility-owner");
+    const stranger = await createAccount("visibility-stranger");
+    const communityId = await createCommunity(
+      owner.userId,
+      "visibility-pending",
+      "Visibility Pending",
+    );
+
+    await expect(
+      repository.getCommunity({
+        viewerUserId: stranger.userId,
+        communityId,
+      }),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    await expect(
+      repository.listMembers({
+        viewerUserId: stranger.userId,
+        communityId,
+        role: "all",
+        limit: 20,
+      }),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+
+    await expect(
+      repository.getCommunity({ viewerUserId: owner.userId, communityId }),
+    ).resolves.toMatchObject({
+      community: { verificationStatus: "pending" },
+    });
+  });
+
+  it("pages the viewer's own memberships with membership=joined", async () => {
+    const owner = await createAccount("joined-owner");
+    const joiner = await createAccount("joined-joiner");
+    const mine = await createCommunity(owner.userId, "joined-mine", "Mine");
+    const theirs = await createCommunity(
+      joiner.userId,
+      "joined-theirs",
+      "Theirs",
+    );
+    for (const communityId of [mine, theirs]) {
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+    }
+
+    const joinedOnly = await repository.listCommunities({
+      viewerUserId: owner.userId,
+      sort: "newest",
+      verification: "verified",
+      membership: "joined",
+      limit: 50,
+    });
+    const ids = joinedOnly.map((item) => item.communityId);
+    expect(ids).toContain(mine);
+    expect(ids).not.toContain(theirs);
   });
 
   it("raises NOT_FOUND semantics for an unknown community", async () => {

@@ -21,6 +21,7 @@ import {
   readErrors,
   referralRulesResourceSchema,
   roleChangeRequestSchema,
+  updateCommunityRequestSchema,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
   validateCommandHeaders,
@@ -111,6 +112,7 @@ export function registerV2CommunityRoutes(
       const query = request.query as {
         readonly sort?: unknown;
         readonly verification?: unknown;
+        readonly membership?: unknown;
         readonly cursor?: unknown;
         readonly limit?: unknown;
       };
@@ -118,6 +120,7 @@ export function registerV2CommunityRoutes(
         principal: requireAuthenticatedLoopPrincipal(request),
         sort: query.sort,
         verification: query.verification,
+        membership: query.membership,
         cursor: query.cursor,
         limit: query.limit,
       });
@@ -180,6 +183,39 @@ export function registerV2CommunityRoutes(
       const resource = await service.getCommunity({
         principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.patch(
+    "/v2/communities/:communityId",
+    {
+      schema: {
+        operationId: "updateV2Community",
+        summary: "Edit the community profile",
+        description:
+          "Owner-only partial edit of name, description, logo, and bound asset key; only the keys present in the body change. The slug and the verification status are immutable through this path, and every edit appends a community_profile_updated audit row.",
+        tags: ["community"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: communityIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: updateCommunityRequestSchema,
+        response: { 200: communityResourceSchema, ...commandErrors },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as CommunityParams;
+      const resource = await service.updateCommunity({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        communityId: params.communityId,
+        body: request.body,
+        ...commandContext(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

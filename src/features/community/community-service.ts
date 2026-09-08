@@ -38,12 +38,15 @@ import {
   parseMessageRequestDecision,
   parseOpaqueUuid,
   parseRoleChangeRequest,
+  parseUpdateCommunityRequest,
   searchFilter,
+  updateCommunityDigestParts,
   searchResultLimits,
   unavailable,
   unavailableSearchDomains,
   communityUnavailableReasonCodes,
   type BlockKind,
+  type CommunityMembershipFilter,
   type CommunitySort,
   type CommunitySummary,
   type CommunityVerificationFilter,
@@ -72,6 +75,7 @@ import {
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
   type CommunityDetailRecord,
+  type CommunityMemberRecord,
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
@@ -133,6 +137,11 @@ export interface CommunityCommandInput extends CommandInput {
 export interface ListCommunitiesInput extends ListInput {
   readonly sort: unknown;
   readonly verification: unknown;
+  readonly membership: unknown;
+}
+
+export interface UpdateCommunityInput extends CommunityCommandInput {
+  readonly body: unknown;
 }
 
 export interface ListMembersInput extends ListInput {
@@ -206,8 +215,18 @@ export interface JoinedCommunityProjection {
   readonly membership: MembershipRecord;
 }
 
+export interface JoinedCommunitiesProjection {
+  readonly items: readonly JoinedCommunityProjection[];
+  /**
+   * True when the account has joined more communities than the home page
+   * carries; the client continues with
+   * `GET /v2/communities?membership=joined`.
+   */
+  readonly truncated: boolean;
+}
+
 export interface CommunityHomeResource {
-  readonly joined: readonly JoinedCommunityProjection[];
+  readonly joined: JoinedCommunitiesProjection;
   readonly discover: readonly CommunitySummary[];
   readonly unread: UnavailableProjection;
   readonly liveVoice: UnavailableProjection;
@@ -219,8 +238,16 @@ export interface CommunityHomeResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+export interface CommunityMemberIdentityProjection {
+  /** Null only when the membership has no `user_profiles` row; not targetable. */
+  readonly publicProfileId: string | null;
+  readonly loopId: string;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+}
+
 export interface CommunityMemberProjection {
-  readonly profile: IdentityProjection;
+  readonly profile: CommunityMemberIdentityProjection;
   readonly role: CommunityRole;
   readonly status: MembershipRecord["status"];
   readonly joinedAt: string;
@@ -339,6 +366,7 @@ export interface CommunityService {
   getHome(input: ViewerInput): Promise<CommunityHomeResource>;
   listCommunities(input: ListCommunitiesInput): Promise<CommunityListResource>;
   createCommunity(input: CreateCommunityInput): Promise<CommunityResource>;
+  updateCommunity(input: UpdateCommunityInput): Promise<CommunityResource>;
   getCommunity(input: CommunityIdInput): Promise<CommunityResource>;
   joinCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
   leaveCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
@@ -403,7 +431,7 @@ function mapFailure(error: unknown): never {
     throw V2ApiError.fromCode("DATA_STALE");
   }
   if (error instanceof CommunitySlugTakenError) {
-    throw V2ApiError.fromCode("VALIDATION_FAILED");
+    throw V2ApiError.fromCode("RESOURCE_CONFLICT");
   }
   if (error instanceof CommunityIdempotencyConflictError) {
     throw V2ApiError.idempotencyConflict();
@@ -432,6 +460,30 @@ function summary(record: CommunityRecord): CommunitySummary {
     memberCount: record.memberCount,
     createdAt: record.createdAt,
     configVersion: "communityV1",
+  });
+}
+
+/**
+ * Member-directory identity. A membership without a profile row keeps its
+ * LOOP ID (always present on the account) and reports a null public profile
+ * ID, so the page and the server counts stay consistent.
+ */
+function memberIdentity(
+  record: CommunityMemberRecord["profile"],
+): CommunityMemberIdentityProjection {
+  if (record.publicProfileId === null) {
+    return Object.freeze({
+      publicProfileId: null,
+      loopId: record.loopId,
+      alias: null,
+      avatarRef: null,
+    });
+  }
+  return freezeIdentity({
+    publicProfileId: record.publicProfileId,
+    loopId: record.loopId,
+    alias: record.alias,
+    avatarRef: record.avatarRef,
   });
 }
 
@@ -629,11 +681,12 @@ export function createCommunityService(
       items: Object.freeze(
         items.map((item) =>
           Object.freeze({
-            profile: freezeIdentity(item.profile),
+            profile: memberIdentity(item.profile),
             role: item.role,
             status: item.status,
             joinedAt: item.joinedAt,
             isSelf:
+              item.profile.publicProfileId !== null &&
               item.profile.publicProfileId === record.viewerPublicProfileId,
             miningPower: unavailable(
               communityUnavailableReasonCodes.miningPower,
@@ -670,19 +723,22 @@ export function createCommunityService(
           discoverLimit: communityHomeDiscoverLimit,
         });
         return Object.freeze({
-          joined: Object.freeze(
-            record.joined.flatMap((entry) => {
-              const current = membership(entry.viewerMembership);
-              return current === null
-                ? []
-                : [
-                    Object.freeze({
-                      community: summary(entry.community),
-                      membership: current,
-                    }),
-                  ];
-            }),
-          ),
+          joined: Object.freeze({
+            items: Object.freeze(
+              record.joined.flatMap((entry) => {
+                const current = membership(entry.viewerMembership);
+                return current === null
+                  ? []
+                  : [
+                      Object.freeze({
+                        community: summary(entry.community),
+                        membership: current,
+                      }),
+                    ];
+              }),
+            ),
+            truncated: record.joinedTruncated,
+          }),
           discover: Object.freeze(record.discover.map(summary)),
           unread: unavailable(communityUnavailableReasonCodes.unread),
           liveVoice: unavailable(communityUnavailableReasonCodes.liveVoice),
@@ -711,7 +767,16 @@ export function createCommunityService(
           ["verified", "all"],
           "verified",
         );
-        const filter = communityDiscoverFilter(sort, verification);
+        const membershipFilter = parseEnumValue<CommunityMembershipFilter>(
+          input.membership,
+          ["all", "joined"],
+          "all",
+        );
+        const filter = communityDiscoverFilter(
+          sort,
+          verification,
+          membershipFilter,
+        );
         const request = page(
           owner.userId,
           communityCursorRoutes.communities,
@@ -726,6 +791,7 @@ export function createCommunityService(
           viewerUserId: owner.userId,
           sort,
           verification,
+          membership: membershipFilter,
           limit: request.limit + 1,
           ...(lastSortValue === undefined || lastCommunityId === undefined
             ? {}
@@ -784,6 +850,32 @@ export function createCommunityService(
           boundAssetKey: values.boundAssetKey,
         });
         return communityResource(record);
+      } catch (error) {
+        return mapFailure(error);
+      }
+    },
+
+    async updateCommunity(input) {
+      const owner = assertPrincipal(input.principal);
+      try {
+        const communityId = parseOpaqueUuid(input.communityId);
+        const values = parseUpdateCommunityRequest(input.body);
+        if (values.name !== undefined) {
+          assertCommunityNameAllowed(values.name);
+        }
+        return communityResource(
+          await options.repository.updateCommunity({
+            ownerUserId: owner.userId,
+            communityId,
+            idempotencyKey: input.idempotencyKey,
+            requestSha256: commandDigest("community", "updateCommunity", [
+              communityId,
+              ...updateCommunityDigestParts(values),
+            ]),
+            requestId: input.requestId,
+            values,
+          }),
+        );
       } catch (error) {
         return mapFailure(error);
       }

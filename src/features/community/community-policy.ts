@@ -33,8 +33,12 @@ export const communityTargetActions = [
 ] as const;
 export type CommunityTargetAction = (typeof communityTargetActions)[number];
 
-/** Actions an actor performs on their own membership. */
-export const communitySelfActions = ["leave"] as const;
+/**
+ * Actions an actor performs without another member as the target: leaving
+ * their own membership, and editing the community profile (owner only, the
+ * "edit" right of the ruled matrix, delivered by `PATCH /v2/communities/{id}`).
+ */
+export const communitySelfActions = ["leave", "editProfile"] as const;
 export type CommunitySelfAction = (typeof communitySelfActions)[number];
 
 export type CommunityAction = CommunityTargetAction | CommunitySelfAction;
@@ -88,13 +92,16 @@ export const communityPermissionMatrix: Readonly<
   }),
 });
 
-/** Self actions per actor role: the owner must transfer before leaving. */
+/**
+ * Self actions per actor role: the owner must transfer before leaving, and
+ * only the owner may edit the community profile.
+ */
 export const communitySelfPermissionMatrix: Readonly<
   Record<CommunityRole, Readonly<Record<CommunitySelfAction, boolean>>>
 > = Object.freeze({
-  owner: Object.freeze({ leave: false }),
-  admin: Object.freeze({ leave: true }),
-  member: Object.freeze({ leave: true }),
+  owner: Object.freeze({ leave: false, editProfile: true }),
+  admin: Object.freeze({ leave: true, editProfile: false }),
+  member: Object.freeze({ leave: true, editProfile: false }),
 });
 
 export interface CommunityActorMembership {

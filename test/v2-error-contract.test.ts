@@ -172,6 +172,13 @@ describe("V2 error code catalog", () => {
       "errors.region.blocked",
       false,
     ],
+    RESOURCE_CONFLICT: [
+      409,
+      "conflict",
+      false,
+      "errors.conflict.resource",
+      false,
+    ],
     REQUEST_TIMEOUT: [
       503,
       "availability",
@@ -232,7 +239,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(29);
+    expect(v2ErrorCodes).toHaveLength(30);
   });
 
   it("keeps the category enum at exactly eight values", () => {

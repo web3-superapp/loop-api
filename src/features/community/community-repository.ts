@@ -1,11 +1,13 @@
 import type {
   BlockKind,
+  CommunityMembershipFilter,
   CommunitySort,
   CommunityVerificationFilter,
   CommunityVerificationStatus,
   IdentityProjection,
   MemberRoleFilter,
   MessageRequestDecision,
+  UpdateCommunityValues,
 } from "./community-contract.js";
 import type {
   CommunityMembershipStatus,
@@ -42,9 +44,21 @@ export interface MembershipRecord {
   readonly joinedAt: string;
 }
 
+/**
+ * A member row. `profile.publicProfileId` is null only for a membership whose
+ * `user_profiles` row is missing: such a row is listed and counted so the
+ * directory totals match the page, but it can never be a governance target.
+ */
+export interface CommunityMemberIdentity {
+  readonly publicProfileId: string | null;
+  readonly loopId: string;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+}
+
 export interface CommunityMemberRecord extends MembershipRecord {
   readonly membershipId: string;
-  readonly profile: IdentityProjection;
+  readonly profile: CommunityMemberIdentity;
 }
 
 export interface CommunityDetailRecord {
@@ -63,12 +77,15 @@ export interface ListCommunitiesInput {
   readonly viewerUserId: string;
   readonly sort: CommunitySort;
   readonly verification: CommunityVerificationFilter;
+  readonly membership: CommunityMembershipFilter;
   readonly limit: number;
   readonly after?: CommunityListCursor | undefined;
 }
 
 export interface CommunityHomeRecord {
   readonly joined: readonly CommunityDetailRecord[];
+  /** True when the account has joined more communities than `joinedLimit`. */
+  readonly joinedTruncated: boolean;
   readonly discover: readonly CommunityRecord[];
   readonly observedAt: string;
 }
@@ -83,6 +100,15 @@ export interface CreateCommunityInput {
   readonly description: string | null;
   readonly logoRef: string | null;
   readonly boundAssetKey: string | null;
+}
+
+export interface UpdateCommunityInput {
+  readonly ownerUserId: string;
+  readonly communityId: string;
+  readonly idempotencyKey: string;
+  readonly requestSha256: string;
+  readonly requestId: string;
+  readonly values: UpdateCommunityValues;
 }
 
 export interface CommunityMembershipCommandInput {
@@ -265,6 +291,7 @@ export interface CommunityRepository {
     readonly communityId: string;
   }): Promise<CommunityDetailRecord>;
   createCommunity(input: CreateCommunityInput): Promise<CommunityDetailRecord>;
+  updateCommunity(input: UpdateCommunityInput): Promise<CommunityDetailRecord>;
   joinCommunity(
     input: CommunityMembershipCommandInput,
   ): Promise<CommunityDetailRecord>;
@@ -389,6 +416,7 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     getCommunityHome: unavailable,
     getCommunity: unavailable,
     createCommunity: unavailable,
+    updateCommunity: unavailable,
     joinCommunity: unavailable,
     leaveCommunity: unavailable,
     listMembers: unavailable,

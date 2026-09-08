@@ -42,6 +42,7 @@ import {
   type ConnectionCountsRecord,
   type ConnectionRecord,
   type CreateCommunityInput,
+  type UpdateCommunityInput,
   type DecideMessageRequestInput,
   type FollowCommandInput,
   type GovernMemberInput,
@@ -150,6 +151,25 @@ const identityFromSql = `
   join public.loop_users as account on account.id = profile.owner_user_id
 `;
 
+/**
+ * A community that is not `verified` is visible only to its creator and to
+ * its own non-banned members. Every read path (discovery, search, record,
+ * member directory) applies the same predicate, so an unverified community
+ * cannot be enumerated by a stranger through any surface. `$1` is the viewer
+ * and is always referenced so PostgreSQL can infer the parameter type.
+ */
+const communityVisibleToViewerSql = `(
+  community.verification_status = 'verified'
+  or community.created_by_user_id = $1::uuid
+  or exists (
+    select 1
+    from public.community_memberships as viewer
+    where viewer.community_id = community.community_id
+      and viewer.owner_user_id = $1::uuid
+      and viewer.status <> 'banned'
+  )
+)`;
+
 function toCommunityRecord(value: unknown): CommunityRecord {
   const row = communityRowSchema.parse(value);
   return Object.freeze({
@@ -172,6 +192,36 @@ function toMembershipRecord(value: unknown): MembershipRecord {
     role: row.role,
     status: row.status,
     joinedAt: row.joined_at.toISOString(),
+  });
+}
+
+const memberIdentityRowSchema = z
+  .object({
+    public_profile_id: opaqueIdSchema.nullable(),
+    loop_id: z.string().regex(/^LOOP-[0-9A-HJKMNP-TV-Z]{8}$/),
+    alias: z.string().min(1).nullable(),
+    avatar_ref: z.string().min(1).nullable(),
+  })
+  .strict();
+
+/** Member-directory identity; `publicProfileId` is null without a profile row. */
+function toMemberIdentity(value: Record<string, unknown>): {
+  readonly publicProfileId: string | null;
+  readonly loopId: string;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+} {
+  const row = memberIdentityRowSchema.parse({
+    public_profile_id: value["public_profile_id"] ?? null,
+    loop_id: value["loop_id"],
+    alias: value["alias"] ?? null,
+    avatar_ref: value["avatar_ref"] ?? null,
+  });
+  return Object.freeze({
+    publicProfileId: row.public_profile_id,
+    loopId: row.loop_id,
+    alias: row.alias,
+    avatarRef: row.avatar_ref,
   });
 }
 
@@ -362,14 +412,16 @@ async function findSocialGraphAudit(
   readonly targetUserId: string | null;
   readonly subjectId: string | null;
   readonly resultStatus: string | null;
+  readonly occurredAt: string;
 } | null> {
   const result = await client.query<{
     target_user_id: string | null;
     subject_id: string | null;
     result_status: string | null;
+    occurred_at: Date;
   }>({
     text: `
-      select target_user_id, subject_id, result_status
+      select target_user_id, subject_id, result_status, occurred_at
       from public.social_graph_events
       where idempotency_record_id = $1
       limit 1
@@ -383,6 +435,7 @@ async function findSocialGraphAudit(
         targetUserId: row.target_user_id,
         subjectId: row.subject_id,
         resultStatus: row.result_status,
+        occurredAt: dateSchema.parse(row.occurred_at).toISOString(),
       });
 }
 
@@ -519,6 +572,29 @@ async function readCommunity(
   return toCommunityRecord(row);
 }
 
+/** Read a community only when it is visible to the viewer (see the predicate). */
+async function readVisibleCommunity(
+  client: DatabaseClient,
+  communityId: string,
+  viewerUserId: string,
+): Promise<CommunityRecord> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select ${communityColumns}
+      from public.communities as community
+      where community.community_id = $2
+        and ${communityVisibleToViewerSql}
+      limit 1
+    `,
+    values: [viewerUserId, communityId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new CommunityNotFoundError();
+  }
+  return toCommunityRecord(row);
+}
+
 async function readMembership(
   client: DatabaseClient,
   communityId: string,
@@ -545,7 +621,7 @@ async function readDetail(
   viewerUserId: string,
 ): Promise<CommunityDetailRecord> {
   return Object.freeze({
-    community: await readCommunity(client, communityId),
+    community: await readVisibleCommunity(client, communityId, viewerUserId),
     viewerMembership: await readMembership(client, communityId, viewerUserId),
   });
 }
@@ -660,44 +736,47 @@ export function createPostgresCommunityRepository(
       input.viewerUserId,
       input.limit,
       input.verification,
+      after?.lastSortValue ?? null,
+      after?.lastCommunityId ?? null,
+      input.membership,
     ];
-    let keyset = "";
-    if (after !== undefined) {
-      values.push(after.lastSortValue, after.lastCommunityId);
-      keyset =
-        input.sort === "members"
-          ? `and (
-              community.member_count < $4::integer
-              or (community.member_count = $4::integer
-                and community.community_id > $5::uuid)
-            )`
-          : `and (
-              community.created_at < $4::timestamptz
-              or (community.created_at = $4::timestamptz
-                and community.community_id < $5::uuid)
-            )`;
-    }
-    // `verification=all` additionally shows the viewer's own applications and
-    // the communities they joined. Every placeholder is referenced in both
-    // branches so PostgreSQL can always infer the parameter types.
+    // The keyset bounds are always referenced (null before the first cursor)
+    // so PostgreSQL can infer every parameter type in both branches.
+    const keyset =
+      input.sort === "members"
+        ? `and (
+            $4::text is null
+            or community.member_count < $4::integer
+            or (community.member_count = $4::integer
+              and community.community_id > $5::uuid)
+          )`
+        : `and (
+            $4::text is null
+            or community.created_at < $4::timestamptz
+            or (community.created_at = $4::timestamptz
+              and community.community_id < $5::uuid)
+          )`;
+    // `verification=verified` narrows to verified only; `all` additionally
+    // shows what the shared visibility predicate already allows (the viewer's
+    // own applications and the communities they joined). `membership=joined`
+    // restricts the page to the viewer's own memberships.
     const result = await client.query<Record<string, unknown>>({
       text: `
         select ${communityColumns}
         from public.communities as community
-        where (
-          community.verification_status = 'verified'
-          or (
-            $3::text = 'all'
-            and (
-              community.created_by_user_id = $1::uuid
-              or exists (
-                select 1
-                from public.community_memberships as viewer
-                where viewer.community_id = community.community_id
-                  and viewer.owner_user_id = $1::uuid
-                  and viewer.status <> 'banned'
-              )
-            )
+        where ${communityVisibleToViewerSql}
+        and (
+          $3::text = 'all'
+          or community.verification_status = 'verified'
+        )
+        and (
+          $6::text = 'all'
+          or exists (
+            select 1
+            from public.community_memberships as joined
+            where joined.community_id = community.community_id
+              and joined.owner_user_id = $1::uuid
+              and joined.status <> 'banned'
           )
         )
         ${keyset}
@@ -748,7 +827,7 @@ export function createPostgresCommunityRepository(
             order by membership.joined_at desc, membership.membership_id desc
             limit $2
           `,
-          values: [viewerUserId, joinedLimit],
+          values: [viewerUserId, joinedLimit + 1],
         });
         const discover = await pool.query<Record<string, unknown>>({
           text: `
@@ -771,9 +850,11 @@ export function createPostgresCommunityRepository(
           text: `select clock_timestamp() as observed_at`,
         });
         const observedAt = dateSchema.parse(observed.rows[0]?.observed_at);
+        const joinedRows = joined.rows.slice(0, joinedLimit);
         return Object.freeze({
+          joinedTruncated: joined.rows.length > joinedLimit,
           joined: Object.freeze(
-            joined.rows.map((row) =>
+            joinedRows.map((row) =>
               Object.freeze({
                 community: toCommunityRecord({
                   community_id: row["community_id"],
@@ -893,6 +974,79 @@ export function createPostgresCommunityRepository(
       }
     },
 
+    async updateCommunity(
+      rawInput: UpdateCommunityInput,
+    ): Promise<CommunityDetailRecord> {
+      try {
+        const ownerUserId = userIdSchema.parse(rawInput.ownerUserId);
+        const communityId = opaqueIdSchema.parse(rawInput.communityId);
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const values = rawInput.values;
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimCommunityCommand(client, {
+            ownerUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          if ((await findCommunityAudit(client, recordId)) !== null) {
+            return readDetail(client, communityId, ownerUserId);
+          }
+          await readCommunity(client, communityId, true);
+          const actor = await readMembership(
+            client,
+            communityId,
+            ownerUserId,
+            true,
+          );
+          if (!canPerformSelfAction(actor, "editProfile")) {
+            throw new CommunityPermissionDeniedError();
+          }
+          // Only the keys actually present change; `slug` and
+          // `verification_status` are immutable through this path.
+          await client.query({
+            text: `
+              update public.communities
+              set
+                name = coalesce($2::text, name),
+                description = case when $3::boolean then $4::text
+                  else description end,
+                logo_ref = case when $5::boolean then $6::text
+                  else logo_ref end,
+                bound_asset_key = case when $7::boolean then $8::text
+                  else bound_asset_key end,
+                record_version = record_version + 1,
+                updated_at = clock_timestamp()
+              where community_id = $1
+            `,
+            values: [
+              communityId,
+              values.name ?? null,
+              values.description !== undefined,
+              values.description ?? null,
+              values.logoRef !== undefined,
+              values.logoRef ?? null,
+              values.boundAssetKey !== undefined,
+              values.boundAssetKey ?? null,
+            ],
+          });
+          await appendCommunityAudit(client, {
+            communityId,
+            actorUserId: ownerUserId,
+            targetUserId: ownerUserId,
+            eventType: "community_profile_updated",
+            reasonCode: "owner_profile_edit",
+            idempotencyRecordId: recordId,
+            requestId,
+          });
+          return readDetail(client, communityId, ownerUserId);
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
     async joinCommunity(
       rawInput: CommunityMembershipCommandInput,
     ): Promise<CommunityDetailRecord> {
@@ -911,6 +1065,9 @@ export function createPostgresCommunityRepository(
           if ((await findCommunityAudit(client, recordId)) !== null) {
             return readDetail(client, communityId, ownerUserId);
           }
+          // Joining only needs the community to exist: the ruled visibility
+          // predicate governs the read surfaces, and a joiner becomes a member
+          // (and therefore a legitimate reader) by this command.
           await readCommunity(client, communityId);
           await requireActiveProfile(client, ownerUserId);
           const existing = await readMembership(
@@ -970,10 +1127,22 @@ export function createPostgresCommunityRepository(
             idempotencyKey,
             requestSha256,
           });
+          // Leaving removes the membership that made an unverified community
+          // visible, so the response reads the record directly instead of
+          // re-deriving viewer visibility after the change.
+          const leftDetail = async (): Promise<CommunityDetailRecord> =>
+            Object.freeze({
+              community: await readCommunity(client, communityId),
+              viewerMembership: await readMembership(
+                client,
+                communityId,
+                ownerUserId,
+              ),
+            });
           if ((await findCommunityAudit(client, recordId)) !== null) {
-            return readDetail(client, communityId, ownerUserId);
+            return leftDetail();
           }
-          await readCommunity(client, communityId);
+          await readVisibleCommunity(client, communityId, ownerUserId);
           const existing = await readMembership(
             client,
             communityId,
@@ -1003,7 +1172,7 @@ export function createPostgresCommunityRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
-          return readDetail(client, communityId, ownerUserId);
+          return leftDetail();
         });
       } catch (error) {
         return translateRepositoryError(error);
@@ -1017,7 +1186,11 @@ export function createPostgresCommunityRepository(
         const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
         const communityId = opaqueIdSchema.parse(rawInput.communityId);
         const limit = limitSchema.parse(rawInput.limit);
-        const community = await readCommunity(pool, communityId);
+        const community = await readVisibleCommunity(
+          pool,
+          communityId,
+          viewerUserId,
+        );
         const viewerMembership = await readMembership(
           pool,
           communityId,
@@ -1063,7 +1236,7 @@ export function createPostgresCommunityRepository(
               membership.joined_at,
               ${identityColumns}
             from public.community_memberships as membership
-            join public.user_profiles as profile
+            left join public.user_profiles as profile
               on profile.owner_user_id = membership.owner_user_id
             join public.loop_users as account
               on account.id = membership.owner_user_id
@@ -1099,6 +1272,9 @@ export function createPostgresCommunityRepository(
         if (countRow === undefined) {
           throw new CommunityRepositoryUnavailableError();
         }
+        // The directory left joins `user_profiles`, so a membership whose
+        // profile row is missing is still listed and still counted; it simply
+        // has no public profile ID and can never be a governance target.
         const items: CommunityMemberRecord[] = members.rows.map((row) =>
           Object.freeze({
             membershipId: opaqueIdSchema.parse(row["membership_id"]),
@@ -1107,12 +1283,7 @@ export function createPostgresCommunityRepository(
               status: row["status"],
               joined_at: row["joined_at"],
             }),
-            profile: toIdentity({
-              public_profile_id: row["public_profile_id"],
-              loop_id: row["loop_id"],
-              alias: row["alias"],
-              avatar_ref: row["avatar_ref"],
-            }),
+            profile: toMemberIdentity(row),
           }),
         );
         return Object.freeze({
@@ -1258,9 +1429,8 @@ export function createPostgresCommunityRepository(
                   : action === "unban"
                     ? "member_unbanned"
                     : "role_changed";
-          if (action === "ban") {
-            await removeFollowEdges(client, actorUserId, targetUserId);
-          }
+          // A ban is community scoped: it does not touch the personal follow
+          // graph. Only POST /v2/blocks removes follow edges.
           await appendCommunityAudit(client, {
             communityId,
             actorUserId,
@@ -1315,6 +1485,8 @@ export function createPostgresCommunityRepository(
           });
           const replay = await findSocialGraphAudit(client, recordId);
           if (replay !== null && replay.targetUserId !== null) {
+            // A replay reports the original outcome. A later unfollow or block
+            // must not turn an already-succeeded command into a failure.
             const stored = await client.query<{ created_at: Date }>({
               text: `
                 select created_at
@@ -1325,13 +1497,13 @@ export function createPostgresCommunityRepository(
               values: [ownerUserId, replay.targetUserId],
             });
             const storedRow = stored.rows[0];
-            if (storedRow === undefined) {
-              throw new CommunityDataStaleError();
-            }
             return Object.freeze({
               profile: await readIdentityByUserId(client, replay.targetUserId),
-              createdAt: dateSchema.parse(storedRow.created_at).toISOString(),
-              viewerFollows: true,
+              createdAt:
+                storedRow === undefined
+                  ? replay.occurredAt
+                  : dateSchema.parse(storedRow.created_at).toISOString(),
+              viewerFollows: storedRow !== undefined,
             });
           }
           await requireActiveProfile(client, ownerUserId);
@@ -1548,13 +1720,41 @@ export function createPostgresCommunityRepository(
             idempotencyKey,
             requestSha256,
           });
+          const replay = await findSocialGraphAudit(client, recordId);
+          if (replay !== null && replay.targetUserId !== null) {
+            // Rebuild the original result; a later unblock must not turn an
+            // already-succeeded block into a 404 or a conflict.
+            const stored = await client.query<{
+              reason_code: string;
+              created_at: Date;
+            }>({
+              text: `
+                select reason_code, created_at
+                from public.user_blocks
+                where owner_user_id = $1 and kind = 'user' and stable_id = $2
+                limit 1
+              `,
+              values: [ownerUserId, stableId],
+            });
+            const storedRow = stored.rows[0];
+            return Object.freeze({
+              kind: "user" as const,
+              stableId,
+              profile: await readIdentityByUserId(client, replay.targetUserId),
+              reasonCode: storedRow?.reason_code ?? "user_request",
+              createdAt:
+                storedRow === undefined
+                  ? replay.occurredAt
+                  : dateSchema.parse(storedRow.created_at).toISOString(),
+            });
+          }
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId: stableId,
             requireDiscoverable: false,
             requireUnblocked: false,
           });
-          if ((await findSocialGraphAudit(client, recordId)) === null) {
+          {
             await client.query({
               text: `
                 insert into public.user_blocks (
@@ -1858,6 +2058,28 @@ export function createPostgresCommunityRepository(
             throw new CommunityDataStaleError();
           }
           const requesterUserId = userIdSchema.parse(row.requester_user_id);
+          if (decision === "accept") {
+            // A block outranks a message request in both directions: accepting
+            // must never quietly create a friendship across one.
+            const blocked = await client.query<{ blocked: boolean }>({
+              text: `
+                select exists (
+                  select 1
+                  from public.user_blocks as blocks
+                  where blocks.kind = 'user'
+                    and (
+                      (blocks.owner_user_id = $1 and blocks.target_user_id = $2)
+                      or (blocks.owner_user_id = $2
+                        and blocks.target_user_id = $1)
+                    )
+                ) as blocked
+              `,
+              values: [ownerUserId, requesterUserId],
+            });
+            if (blocked.rows[0]?.blocked === true) {
+              throw new CommunityDataStaleError();
+            }
+          }
           if (decision === "accept") {
             await client.query({
               text: `

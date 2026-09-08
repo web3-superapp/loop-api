@@ -96,7 +96,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/session/logout",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(35);
+    expect(operationIds).toHaveLength(36);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

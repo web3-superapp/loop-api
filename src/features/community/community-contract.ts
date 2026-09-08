@@ -73,6 +73,9 @@ export type CommunitySort = (typeof communitySortValues)[number];
 export const communityVerificationFilters = ["verified", "all"] as const;
 export type CommunityVerificationFilter =
   (typeof communityVerificationFilters)[number];
+export const communityMembershipFilters = ["all", "joined"] as const;
+export type CommunityMembershipFilter =
+  (typeof communityMembershipFilters)[number];
 export const memberRoleFilters = ["all", "owner", "admin"] as const;
 export type MemberRoleFilter = (typeof memberRoleFilters)[number];
 
@@ -154,6 +157,16 @@ const createCommunityRequestSchema = z
   })
   .strict();
 
+const updateCommunityRequestSchema = z
+  .object({
+    name: communityNameSchema.optional(),
+    description: communityDescriptionSchema.nullable().optional(),
+    logoRef: logoRefSchema.nullable().optional(),
+    boundAssetKey: boundAssetKeySchema.nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0);
+
 const roleChangeRequestSchema = z
   .object({ role: z.enum(communityRoles) })
   .strict();
@@ -176,6 +189,17 @@ export interface CreateCommunityValues {
   readonly logoRef: string | null;
   /** Canonical `eip155:<chainId>:<0x lowercase address>` or null. */
   readonly boundAssetKey: string | null;
+}
+
+/**
+ * Owner-only community profile edit. Only the keys actually present are
+ * changed; `slug` and `verificationStatus` are immutable through this path.
+ */
+export interface UpdateCommunityValues {
+  readonly name?: string | undefined;
+  readonly description?: string | null | undefined;
+  readonly logoRef?: string | null | undefined;
+  readonly boundAssetKey?: string | null | undefined;
 }
 
 export interface IdentityProjection {
@@ -241,6 +265,34 @@ export function parseCreateCommunityRequest(
 ): CreateCommunityValues {
   const parsed = createCommunityRequestSchema.safeParse(value);
   return parsed.success ? Object.freeze(parsed.data) : invalid();
+}
+
+export function parseUpdateCommunityRequest(
+  value: unknown,
+): UpdateCommunityValues {
+  const parsed = updateCommunityRequestSchema.safeParse(value);
+  return parsed.success ? Object.freeze(parsed.data) : invalid();
+}
+
+/**
+ * Canonical digest input for a partial edit: every field appears in a fixed
+ * order with an explicit present/absent marker, so omitting a field and
+ * setting it to null are different commands under the same key.
+ */
+export function updateCommunityDigestParts(
+  values: UpdateCommunityValues,
+): readonly string[] {
+  return Object.freeze(
+    (["name", "description", "logoRef", "boundAssetKey"] as const).flatMap(
+      (key) => {
+        const value = values[key];
+        if (value === undefined) {
+          return [key, "absent", ""];
+        }
+        return [key, value === null ? "null" : "set", value ?? ""];
+      },
+    ),
+  );
 }
 
 export function parseRoleChangeRequest(value: unknown): CommunityRole {
@@ -474,8 +526,9 @@ export interface CommunityRecommendation {
 export function communityDiscoverFilter(
   sort: CommunitySort,
   verification: CommunityVerificationFilter,
+  membership: CommunityMembershipFilter,
 ): string {
-  return canonicalFilter({ sort, verification });
+  return canonicalFilter({ membership, sort, verification });
 }
 
 export function communityMembersFilter(
@@ -497,14 +550,19 @@ export function messageRequestsFilter(): string {
   return canonicalFilter({ status: "pending" });
 }
 
+/**
+ * `verification` only narrows the `communities` domain, so it is excluded
+ * from the `users` filter. Including it there would let an unrelated query
+ * parameter invalidate a cursor mid-pagination.
+ */
 export function searchFilter(
   domain: SearchDomain,
   query: string,
   verification: CommunityVerificationFilter,
 ): string {
-  return canonicalFilter({
-    domain,
-    q: filterDigest(query),
-    verification,
-  });
+  return canonicalFilter(
+    domain === "communities"
+      ? { domain, q: filterDigest(query), verification }
+      : { domain, q: filterDigest(query) },
+  );
 }

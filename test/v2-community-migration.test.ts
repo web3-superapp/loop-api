@@ -79,6 +79,7 @@ describe("000016 V2 community and social graph migration contract", () => {
     const statement = captureSql(up);
 
     expect(statement).toContain("create table public.community_role_events");
+    expect(statement).toContain("'community_profile_updated'");
     expect(statement).toContain("'role_changed'");
     expect(statement).toContain("'member_muted'");
     expect(statement).toContain("'member_banned'");

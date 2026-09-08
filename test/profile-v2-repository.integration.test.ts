@@ -70,6 +70,34 @@ async function migrate(
   });
 }
 
+/** Roll back every migration applied after `targetMigrationName`. */
+async function rollBackTo(
+  targetDatabaseUrl: string,
+  targetMigrationName: string,
+): Promise<void> {
+  const client = new Client({ connectionString: targetDatabaseUrl });
+  await client.connect();
+  let pending: number;
+  try {
+    const result = await client.query<{ count: string }>({
+      text: `
+        select count(*)::text as count
+        from public.pgmigrations
+        where id > (
+          select id from public.pgmigrations where name = $1
+        )
+      `,
+      values: [targetMigrationName],
+    });
+    pending = Number.parseInt(result.rows[0]?.count ?? "0", 10);
+  } finally {
+    await client.end();
+  }
+  if (pending > 0) {
+    await migrate(targetDatabaseUrl, pending, "down");
+  }
+}
+
 async function dropTemporaryDatabase(databaseName: string): Promise<void> {
   const admin = new Client({
     connectionString: databaseConnectionUrl(databaseUrl, "postgres"),
@@ -252,10 +280,9 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
   });
 
   it("refuses to roll back 000015 while any account holds a LOOP ID", async () => {
-    // Migrations after 000015 (000016 community/social, Decision 0031) hold no
-    // data in this fixture, so they roll back cleanly and leave 000015 at the
-    // head; only then is its own guard the one under test.
-    await migrate(temporaryDatabaseUrl, 1, "down");
+    // Roll back by name to 000015 rather than by a fixed count, so adding a
+    // later migration cannot silently retarget this assertion.
+    await rollBackTo(temporaryDatabaseUrl, "000015_v2_loop_id_profile");
     await expect(migrate(temporaryDatabaseUrl, 1, "down")).rejects.toThrow(
       /an assigned LOOP ID is immutable/,
     );
