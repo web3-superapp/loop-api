@@ -95,6 +95,81 @@ export interface CommitTransferSegmentInput {
   readonly rewindFromBlockNumber?: string;
 }
 
+export const poolEventKinds = Object.freeze(["swap", "mint", "burn"] as const);
+export type PoolEventKind = (typeof poolEventKinds)[number];
+
+/** Signed integer string (int256) as emitted by a V3 Swap. */
+const signedBigintStringSchema = z.string().regex(/^-?[0-9]+$/);
+
+export interface IndexedPoolEventInput {
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly blockTimestamp: string;
+  readonly poolId: string;
+  readonly eventKind: PoolEventKind;
+  /** Every decoded field as a canonical string; never a JavaScript number. */
+  readonly payload: Readonly<Record<string, string>>;
+  readonly amount0: string | null;
+  readonly amount1: string | null;
+  readonly sqrtPriceX96: string | null;
+}
+
+export interface IndexedPoolEventRecord extends IndexedPoolEventInput {
+  readonly removed: boolean;
+  readonly observedAt: string;
+}
+
+export interface CommitPoolEventSegmentInput {
+  readonly chainId: string;
+  readonly events: readonly IndexedPoolEventInput[];
+  readonly checkpoint: {
+    readonly lastBlockNumber: string;
+    readonly lastBlockHash: string;
+    readonly startedFromBlockNumber: string;
+  };
+  /** Reorg rewind for this lane only; it never touches `indexed_transfers`. */
+  readonly rewindFromBlockNumber?: string;
+}
+
+export interface ListPoolSwapsInput {
+  readonly poolIds: readonly string[];
+  readonly limit: number;
+  readonly beforeBlockNumber?: string;
+  readonly beforeLogIndex?: number;
+}
+
+export interface PoolSwapPage {
+  readonly items: readonly IndexedPoolEventRecord[];
+  readonly hasMore: boolean;
+}
+
+/**
+ * One time bucket of swaps. Prices are returned as the raw `sqrtPriceX96`
+ * values at the bucket's boundaries and extremes; the service converts them
+ * with exact integer arithmetic in the asset's orientation. Because price is
+ * monotonic in sqrtPriceX96, min/max of the sqrt value give low/high.
+ */
+export interface SwapCandleBucket {
+  readonly bucketStart: string;
+  readonly openSqrtPriceX96: string;
+  readonly closeSqrtPriceX96: string;
+  readonly highSqrtPriceX96: string;
+  readonly lowSqrtPriceX96: string;
+  /** Sum of the absolute asset-side amount, smallest units. */
+  readonly volumeRaw: string;
+  readonly swapCount: number;
+}
+
+export interface AggregateSwapCandlesInput {
+  readonly poolId: string;
+  readonly intervalSeconds: number;
+  readonly assetIsToken0: boolean;
+  readonly fromTimestamp: string;
+  readonly toTimestamp: string;
+}
+
 export interface WalletTransferPage {
   readonly items: readonly IndexedTransferRecord[];
   readonly hasMore: boolean;
@@ -135,6 +210,13 @@ export interface BscIndexerRepository {
     readonly assetIds: readonly string[];
     readonly confirmedThroughBlockNumber: string;
   }): Promise<readonly PendingTransferTotal[]>;
+  commitPoolEventSegment(
+    input: CommitPoolEventSegmentInput,
+  ): Promise<IndexerCheckpointRecord>;
+  listPoolSwaps(input: ListPoolSwapsInput): Promise<PoolSwapPage>;
+  aggregateSwapCandles(
+    input: AggregateSwapCandlesInput,
+  ): Promise<readonly SwapCandleBucket[]>;
 }
 
 export class BscIndexerUnavailableError extends Error {
@@ -193,6 +275,168 @@ const transferColumns = `
   removed,
   observed_at
 `;
+
+const poolEventRowSchema = z
+  .object({
+    transaction_hash: z
+      .string()
+      .regex(new RegExp(transactionHashPatternSource)),
+    log_index: z.number().int().min(0),
+    block_number: bigintStringSchema,
+    block_hash: z.string().regex(new RegExp(blockHashPatternSource)),
+    block_timestamp: z.date(),
+    pool_id: z.string().uuid(),
+    event_kind: z.enum(poolEventKinds),
+    payload: z.record(z.string(), z.string()),
+    amount0: signedBigintStringSchema.nullable(),
+    amount1: signedBigintStringSchema.nullable(),
+    sqrt_price_x96: bigintStringSchema.nullable(),
+    removed: z.boolean(),
+    observed_at: z.date(),
+  })
+  .strict();
+
+const poolEventColumns = `
+  transaction_hash,
+  log_index,
+  block_number::text as block_number,
+  block_hash,
+  block_timestamp,
+  pool_id,
+  event_kind,
+  payload,
+  amount0::text as amount0,
+  amount1::text as amount1,
+  sqrt_price_x96::text as sqrt_price_x96,
+  removed,
+  observed_at
+`;
+
+function mapPoolEvent(row: unknown): IndexedPoolEventRecord {
+  const parsed = poolEventRowSchema.parse(row);
+  return Object.freeze({
+    transactionHash: parsed.transaction_hash,
+    logIndex: parsed.log_index,
+    blockNumber: parsed.block_number,
+    blockHash: parsed.block_hash,
+    blockTimestamp: parsed.block_timestamp.toISOString(),
+    poolId: parsed.pool_id,
+    eventKind: parsed.event_kind,
+    payload: Object.freeze({ ...parsed.payload }),
+    amount0: parsed.amount0,
+    amount1: parsed.amount1,
+    sqrtPriceX96: parsed.sqrt_price_x96,
+    removed: parsed.removed,
+    observedAt: parsed.observed_at.toISOString(),
+  });
+}
+
+const indexedPoolEventColumnCount = 12;
+
+async function insertPoolEvents(
+  client: PoolClient,
+  chainId: string,
+  events: readonly IndexedPoolEventInput[],
+): Promise<void> {
+  const unique = new Map<string, IndexedPoolEventInput>();
+  for (const event of events) {
+    unique.set(`${event.transactionHash}:${String(event.logIndex)}`, event);
+  }
+  const deduplicated = [...unique.values()];
+  for (
+    let offset = 0;
+    offset < deduplicated.length;
+    offset += indexedTransferInsertBatchSize
+  ) {
+    const batch = deduplicated.slice(
+      offset,
+      offset + indexedTransferInsertBatchSize,
+    );
+    const values: unknown[] = [chainId];
+    const tuples = batch.map((event, index) => {
+      const base = index * indexedPoolEventColumnCount + 1;
+      values.push(
+        event.transactionHash,
+        event.logIndex,
+        event.blockNumber,
+        event.blockHash,
+        event.blockTimestamp,
+        event.poolId,
+        event.eventKind,
+        JSON.stringify(event.payload),
+        event.amount0,
+        event.amount1,
+        event.sqrtPriceX96,
+        false,
+      );
+      return `($1, $${String(base + 1)}, $${String(base + 2)}, $${String(base + 3)}::numeric, $${String(base + 4)}, $${String(base + 5)}::timestamptz, $${String(base + 6)}::uuid, $${String(base + 7)}, $${String(base + 8)}::jsonb, $${String(base + 9)}::numeric, $${String(base + 10)}::numeric, $${String(base + 11)}::numeric, $${String(base + 12)})`;
+    });
+    await client.query<Record<string, unknown>>({
+      text: `
+        insert into public.indexed_pool_events (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          block_timestamp, pool_id, event_kind, payload, amount0, amount1,
+          sqrt_price_x96, removed
+        )
+        values ${tuples.join(", ")}
+        on conflict (chain_id, transaction_hash, log_index) do update set
+          block_number = excluded.block_number,
+          block_hash = excluded.block_hash,
+          block_timestamp = excluded.block_timestamp,
+          pool_id = excluded.pool_id,
+          event_kind = excluded.event_kind,
+          payload = excluded.payload,
+          amount0 = excluded.amount0,
+          amount1 = excluded.amount1,
+          sqrt_price_x96 = excluded.sqrt_price_x96,
+          removed = false,
+          observed_at = clock_timestamp()
+      `,
+      values,
+    });
+  }
+}
+
+/**
+ * Advances one lane's checkpoint inside the caller's transaction. Each lane
+ * owns its own row, so the transfer and pool lanes never overwrite each other.
+ */
+async function upsertCheckpoint(
+  client: PoolClient,
+  lane: IndexerLane,
+  chainId: string,
+  checkpoint: CommitTransferSegmentInput["checkpoint"],
+  reorged: boolean,
+): Promise<IndexerCheckpointRecord> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      insert into public.indexer_checkpoints (
+        lane, chain_id, last_block_number, last_block_hash,
+        started_from_block_number, reorg_count
+      )
+      values ($1, $2, $3::numeric, $4, $5::numeric, $6)
+      on conflict (lane, chain_id) do update set
+        last_block_number = excluded.last_block_number,
+        last_block_hash = excluded.last_block_hash,
+        reorg_count = public.indexer_checkpoints.reorg_count + $6,
+        updated_at = clock_timestamp()
+      returning ${checkpointColumns}
+    `,
+    values: [
+      lane,
+      chainId,
+      checkpoint.lastBlockNumber,
+      checkpoint.lastBlockHash,
+      checkpoint.startedFromBlockNumber,
+      reorged ? 1 : 0,
+    ],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new BscIndexerUnavailableError();
+  }
+  return mapCheckpoint(row);
+}
 
 /** Maximum rows per multi-row INSERT; every batch stays in the caller's transaction. */
 export const indexedTransferInsertBatchSize = 500;
@@ -315,35 +559,16 @@ export function createPostgresBscIndexerRepository(
 
         await insertTransfers(client, input.chainId, input.transfers);
 
-        const result = await client.query<Record<string, unknown>>({
-          text: `
-            insert into public.indexer_checkpoints (
-              lane, chain_id, last_block_number, last_block_hash,
-              started_from_block_number, reorg_count
-            )
-            values ('erc20_transfer', $1, $2::numeric, $3, $4::numeric, $5)
-            on conflict (lane, chain_id) do update set
-              last_block_number = excluded.last_block_number,
-              last_block_hash = excluded.last_block_hash,
-              reorg_count = public.indexer_checkpoints.reorg_count + $5,
-              updated_at = clock_timestamp()
-            returning ${checkpointColumns}
-          `,
-          values: [
-            input.chainId,
-            input.checkpoint.lastBlockNumber,
-            input.checkpoint.lastBlockHash,
-            input.checkpoint.startedFromBlockNumber,
-            rewindFrom === undefined ? 0 : 1,
-          ],
-        });
-        const row = result.rows[0];
-        if (row === undefined) {
-          throw new BscIndexerUnavailableError();
-        }
+        const committed = await upsertCheckpoint(
+          client,
+          "erc20_transfer",
+          input.chainId,
+          input.checkpoint,
+          rewindFrom !== undefined,
+        );
         await client.query("commit");
         inTransaction = false;
-        return mapCheckpoint(row);
+        return committed;
       } catch (error) {
         if (inTransaction) {
           try {
@@ -436,6 +661,154 @@ export function createPostgresBscIndexerRepository(
         }),
       );
     },
+
+    async commitPoolEventSegment(
+      input: CommitPoolEventSegmentInput,
+    ): Promise<IndexerCheckpointRecord> {
+      const client = await pool.connect();
+      let inTransaction = false;
+      try {
+        await client.query("begin");
+        inTransaction = true;
+        const rewindFrom = input.rewindFromBlockNumber;
+        if (rewindFrom !== undefined) {
+          await client.query<Record<string, unknown>>({
+            text: `
+              update public.indexed_pool_events
+              set removed = true, observed_at = clock_timestamp()
+              where chain_id = $1 and block_number >= $2::numeric
+            `,
+            values: [input.chainId, rewindFrom],
+          });
+        }
+        await insertPoolEvents(client, input.chainId, input.events);
+        const committed = await upsertCheckpoint(
+          client,
+          "pool_event",
+          input.chainId,
+          input.checkpoint,
+          rewindFrom !== undefined,
+        );
+        await client.query("commit");
+        inTransaction = false;
+        return committed;
+      } catch (error) {
+        if (inTransaction) {
+          try {
+            await client.query("rollback");
+          } catch {
+            // The original failure stays authoritative.
+          }
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listPoolSwaps(input: ListPoolSwapsInput): Promise<PoolSwapPage> {
+      if (input.poolIds.length === 0) {
+        return Object.freeze({ items: Object.freeze([]), hasMore: false });
+      }
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select ${poolEventColumns}
+          from public.indexed_pool_events
+          where pool_id = any($1::uuid[])
+            and event_kind = 'swap'
+            and (
+              $2::numeric is null
+              or block_number < $2::numeric
+              or (block_number = $2::numeric and log_index < $3::int)
+            )
+          order by block_number desc, log_index desc
+          limit $4
+        `,
+        values: [
+          [...input.poolIds],
+          input.beforeBlockNumber ?? null,
+          input.beforeLogIndex ?? null,
+          input.limit + 1,
+        ],
+      });
+      const rows = result.rows.map(mapPoolEvent);
+      return Object.freeze({
+        items: Object.freeze(rows.slice(0, input.limit)),
+        hasMore: rows.length > input.limit,
+      });
+    },
+
+    async aggregateSwapCandles(
+      input: AggregateSwapCandlesInput,
+    ): Promise<readonly SwapCandleBucket[]> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          with swaps as (
+            select
+              block_number,
+              log_index,
+              sqrt_price_x96,
+              abs(case when $3::boolean then amount0 else amount1 end) as amount_asset,
+              date_bin(
+                make_interval(secs => $2::int),
+                block_timestamp,
+                timestamptz 'epoch'
+              ) as bucket
+            from public.indexed_pool_events
+            where pool_id = $1::uuid
+              and event_kind = 'swap'
+              and not removed
+              and block_timestamp >= $4::timestamptz
+              and block_timestamp < $5::timestamptz
+          )
+          select
+            bucket,
+            (array_agg(sqrt_price_x96::text order by block_number asc, log_index asc))[1]
+              as open_sqrt,
+            (array_agg(sqrt_price_x96::text order by block_number desc, log_index desc))[1]
+              as close_sqrt,
+            max(sqrt_price_x96)::text as high_sqrt,
+            min(sqrt_price_x96)::text as low_sqrt,
+            sum(amount_asset)::text as volume_raw,
+            count(*)::int as swap_count
+          from swaps
+          group by bucket
+          order by bucket asc
+        `,
+        values: [
+          input.poolId,
+          input.intervalSeconds,
+          input.assetIsToken0,
+          input.fromTimestamp,
+          input.toTimestamp,
+        ],
+      });
+      const bucketSchema = z
+        .object({
+          bucket: z.date(),
+          open_sqrt: bigintStringSchema,
+          close_sqrt: bigintStringSchema,
+          high_sqrt: bigintStringSchema,
+          low_sqrt: bigintStringSchema,
+          volume_raw: bigintStringSchema,
+          swap_count: z.number().int().min(1),
+        })
+        .strict();
+      return Object.freeze(
+        result.rows.map((row) => {
+          const parsed = bucketSchema.parse(row);
+          return Object.freeze({
+            bucketStart: parsed.bucket.toISOString(),
+            openSqrtPriceX96: parsed.open_sqrt,
+            closeSqrtPriceX96: parsed.close_sqrt,
+            highSqrtPriceX96: parsed.high_sqrt,
+            lowSqrtPriceX96: parsed.low_sqrt,
+            volumeRaw: parsed.volume_raw,
+            swapCount: parsed.swap_count,
+          });
+        }),
+      );
+    },
   });
 }
 
@@ -449,5 +822,8 @@ export function createUnavailableBscIndexerRepository(): BscIndexerRepository {
     commitTransferSegment: unavailable,
     listWalletTransfers: unavailable,
     sumPendingIncoming: unavailable,
+    commitPoolEventSegment: unavailable,
+    listPoolSwaps: unavailable,
+    aggregateSwapCandles: unavailable,
   });
 }

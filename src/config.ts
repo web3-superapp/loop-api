@@ -57,6 +57,46 @@ const optionalOpaqueSecret = (minimumLength: number, maximumLength: number) =>
     z.string().min(minimumLength).max(maximumLength).optional(),
   );
 
+/**
+ * Market Provider keys shared by the API and worker processes (Decision 0034).
+ * DexScreener needs no credential and is on by default; GoPlus needs its key
+ * pair; GeckoTerminal stays off until its commercial terms are verified.
+ * Throttles can only be lowered below each Provider's documented limit.
+ */
+const marketEnvironmentShape = {
+  MARKET_PROVIDER_DEXSCREENER_ENABLED: booleanString,
+  MARKET_PROVIDER_GECKOTERMINAL_ENABLED: booleanString,
+  MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
+  MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 30),
+  MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
+  MARKET_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
+  MARKET_SECURITY_TTL_SECONDS: positiveIntegerString(60, 86_400),
+  MARKET_CANDLES_TTL_SECONDS: positiveIntegerString(15, 3_600),
+  MARKET_STALE_GRACE_SECONDS: positiveIntegerString(0, 86_400),
+  GOPLUS_APP_KEY: optionalCredential(255),
+  GOPLUS_APP_SECRET: optionalOpaqueSecret(1, 4_096),
+} as const;
+
+function refineMarketEnvironment(
+  value: {
+    readonly GOPLUS_APP_KEY?: string | undefined;
+    readonly GOPLUS_APP_SECRET?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    (value.GOPLUS_APP_KEY !== undefined) !==
+    (value.GOPLUS_APP_SECRET !== undefined)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "GOPLUS_APP_KEY and GOPLUS_APP_SECRET must be configured together",
+      path: ["GOPLUS_APP_KEY"],
+    });
+  }
+}
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]),
@@ -107,12 +147,14 @@ const environmentSchema = z
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
+    ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
     DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
   })
   .superRefine((value, context) => {
+    refineMarketEnvironment(value, context);
     const hasAppId = value.PRIVY_APP_ID !== undefined;
     const hasAppSecret = value.PRIVY_APP_SECRET !== undefined;
 
@@ -298,12 +340,27 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_RPC_URLS: optionalCredential(4_096),
     BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    ALERT_EVALUATOR_ENABLED: booleanString,
+    ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
+    ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
     DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
   })
   .superRefine((value, context) => {
+    refineMarketEnvironment(value, context);
+    if (
+      value.ALERT_EVALUATOR_ENABLED &&
+      !value.MARKET_PROVIDER_DEXSCREENER_ENABLED
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "The alert evaluator lane requires MARKET_PROVIDER_DEXSCREENER_ENABLED",
+        path: ["ALERT_EVALUATOR_ENABLED"],
+      });
+    }
     if (value.BSC_INDEXER_ENABLED && value.BSC_RPC_URLS === undefined) {
       context.addIssue({
         code: "custom",
@@ -440,6 +497,38 @@ export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
 }
 
+export interface GoplusConfig {
+  readonly appKey: string;
+  readonly appSecret: string;
+  readonly rateLimitPerMinute: number;
+}
+
+/**
+ * Market Provider configuration (Decision 0034). A disabled or uncredentialed
+ * Provider is `null`/`false` here and every fact it would have supplied is
+ * published as `unavailable`; nothing is inferred from another source.
+ */
+export interface MarketConfig {
+  readonly dexscreener: {
+    readonly enabled: boolean;
+    readonly rateLimitPerMinute: number;
+  };
+  readonly geckoterminal: {
+    readonly enabled: boolean;
+    readonly rateLimitPerMinute: number;
+  };
+  readonly goplus: GoplusConfig | null;
+  readonly priceTtlSeconds: number;
+  readonly securityTtlSeconds: number;
+  readonly candlesTtlSeconds: number;
+  /** Seconds past TTL during which a cached fact may still be served as stale. */
+  readonly staleGraceSeconds: number;
+}
+
+export interface AlertEvaluatorConfig {
+  readonly notificationDedupeSeconds: number;
+}
+
 export interface V2CursorConfig {
   readonly hmacSecret: string;
   readonly ttlSeconds: 600;
@@ -484,6 +573,7 @@ export interface AppConfig {
   readonly bscConfirmations: number;
   readonly bscReorgDepthBlocks: number;
   readonly walletGasReserve: WalletGasReserveConfig;
+  readonly market: MarketConfig;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -508,6 +598,9 @@ export interface ReconciliationWorkerConfig {
    * now parses Stream configuration at all.
    */
   readonly communityChannelSync: StreamConfig | null;
+  readonly market: MarketConfig;
+  /** `alert_evaluator` lane (Decision 0034); default off. */
+  readonly alertEvaluator: AlertEvaluatorConfig | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -806,6 +899,69 @@ function parseWalletGasReserve(value: string): WalletGasReserveConfig {
   });
 }
 
+function marketEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof marketEnvironmentShape, string | undefined> {
+  return {
+    MARKET_PROVIDER_DEXSCREENER_ENABLED:
+      environment["MARKET_PROVIDER_DEXSCREENER_ENABLED"] ?? "true",
+    MARKET_PROVIDER_GECKOTERMINAL_ENABLED:
+      environment["MARKET_PROVIDER_GECKOTERMINAL_ENABLED"] ?? "false",
+    MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE:
+      environment["MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE"] ?? "300",
+    MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE:
+      environment["MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE:
+      environment["MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_PRICE_TTL_SECONDS: environment["MARKET_PRICE_TTL_SECONDS"] ?? "30",
+    MARKET_SECURITY_TTL_SECONDS:
+      environment["MARKET_SECURITY_TTL_SECONDS"] ?? "600",
+    MARKET_CANDLES_TTL_SECONDS:
+      environment["MARKET_CANDLES_TTL_SECONDS"] ?? "60",
+    MARKET_STALE_GRACE_SECONDS:
+      environment["MARKET_STALE_GRACE_SECONDS"] ?? "900",
+    GOPLUS_APP_KEY: environment["GOPLUS_APP_KEY"],
+    GOPLUS_APP_SECRET: environment["GOPLUS_APP_SECRET"],
+  };
+}
+
+function parseMarketConfig(data: {
+  readonly MARKET_PROVIDER_DEXSCREENER_ENABLED: boolean;
+  readonly MARKET_PROVIDER_GECKOTERMINAL_ENABLED: boolean;
+  readonly MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_PRICE_TTL_SECONDS: number;
+  readonly MARKET_SECURITY_TTL_SECONDS: number;
+  readonly MARKET_CANDLES_TTL_SECONDS: number;
+  readonly MARKET_STALE_GRACE_SECONDS: number;
+  readonly GOPLUS_APP_KEY?: string | undefined;
+  readonly GOPLUS_APP_SECRET?: string | undefined;
+}): MarketConfig {
+  return Object.freeze({
+    dexscreener: Object.freeze({
+      enabled: data.MARKET_PROVIDER_DEXSCREENER_ENABLED,
+      rateLimitPerMinute: data.MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE,
+    }),
+    geckoterminal: Object.freeze({
+      enabled: data.MARKET_PROVIDER_GECKOTERMINAL_ENABLED,
+      rateLimitPerMinute: data.MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE,
+    }),
+    goplus:
+      data.GOPLUS_APP_KEY !== undefined && data.GOPLUS_APP_SECRET !== undefined
+        ? Object.freeze({
+            appKey: data.GOPLUS_APP_KEY,
+            appSecret: data.GOPLUS_APP_SECRET,
+            rateLimitPerMinute: data.MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE,
+          })
+        : null,
+    priceTtlSeconds: data.MARKET_PRICE_TTL_SECONDS,
+    securityTtlSeconds: data.MARKET_SECURITY_TTL_SECONDS,
+    candlesTtlSeconds: data.MARKET_CANDLES_TTL_SECONDS,
+    staleGraceSeconds: data.MARKET_STALE_GRACE_SECONDS,
+  });
+}
+
 function assertDatabaseUrl(url: URL): void {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new ConfigurationError([
@@ -881,6 +1037,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
     BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
+    ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -1003,6 +1160,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     bscConfirmations: parsed.data.BSC_CONFIRMATIONS,
     bscReorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
+    market: parseMarketConfig(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });
@@ -1040,6 +1198,10 @@ export function loadReconciliationWorkerConfig(
     BSC_RPC_URLS: environment["BSC_RPC_URLS"],
     BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    ALERT_EVALUATOR_ENABLED: environment["ALERT_EVALUATOR_ENABLED"] ?? "false",
+    ALERT_NOTIFICATION_DEDUPE_SECONDS:
+      environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
+    ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -1113,6 +1275,13 @@ export function loadReconciliationWorkerConfig(
             apiSecret: parsed.data.STREAM_API_SECRET,
           })
         : null,
+    market: parseMarketConfig(parsed.data),
+    alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
+      ? Object.freeze({
+          notificationDedupeSeconds:
+            parsed.data.ALERT_NOTIFICATION_DEDUPE_SECONDS,
+        })
+      : null,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

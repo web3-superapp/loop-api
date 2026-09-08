@@ -39,6 +39,16 @@ describe("loadReconciliationWorkerConfig", () => {
       spotAgentLifecycleMaintenanceEnabled: true,
       issuanceRateRecordCleanupEnabled: true,
       communityChannelSync: null,
+      market: {
+        dexscreener: { enabled: true, rateLimitPerMinute: 300 },
+        geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
+        goplus: null,
+        priceTtlSeconds: 30,
+        securityTtlSeconds: 600,
+        candlesTtlSeconds: 60,
+        staleGraceSeconds: 900,
+      },
+      alertEvaluator: null,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });

@@ -1,0 +1,717 @@
+import { noStoreResponseHeaders } from "../../core/http/schemas.js";
+import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
+import { opaqueIdPatternSource } from "../../core/ids/opaque-id.js";
+import {
+  assetIdPatternSource,
+  assetStatuses,
+  blockHashPatternSource,
+  decimalAmountPatternSource,
+  evmAddressPatternSource,
+  reasonCodePatternSource,
+  transactionHashPatternSource,
+} from "../../features/chain/chain-contract.js";
+import {
+  candleIntervals,
+  candleLimits,
+  marketFactQualities,
+  marketSources,
+  marketTrendingRules,
+  signedDecimalPatternSource,
+  tradeLimits,
+} from "../../features/market/market-contract.js";
+import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { assetResourceSchema, unavailableSchema } from "./chain-schemas.js";
+
+/**
+ * Route schemas for the V2 market surface (Decision 0034). Every number is a
+ * canonical decimal string; every fact carries its source, fetch time, TTL,
+ * and quality; every block can independently be `unavailable`.
+ */
+
+const reasonCodeSchema = {
+  type: "string",
+  pattern: reasonCodePatternSource,
+} as const;
+
+const nullableReasonCodeSchema = {
+  anyOf: [reasonCodeSchema, { type: "null" }],
+} as const;
+
+const decimalSchema = {
+  type: "string",
+  pattern: signedDecimalPatternSource,
+  description: "Canonical decimal string; never a JavaScript number.",
+} as const;
+
+const unsignedDecimalSchema = {
+  type: "string",
+  pattern: decimalAmountPatternSource,
+} as const;
+
+const blockNumberSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,19})$",
+} as const;
+
+const dateTimeSchema = { type: "string", format: "date-time" } as const;
+const nullableDateTimeSchema = {
+  anyOf: [dateTimeSchema, { type: "null" }],
+} as const;
+
+export const marketFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "value",
+    "source",
+    "fetchedAt",
+    "ttlSeconds",
+    "quality",
+    "reasonCode",
+  ],
+  properties: {
+    value: { anyOf: [decimalSchema, { type: "null" }] },
+    source: {
+      anyOf: [{ type: "string", enum: [...marketSources] }, { type: "null" }],
+    },
+    fetchedAt: nullableDateTimeSchema,
+    ttlSeconds: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
+    quality: { type: "string", enum: [...marketFactQualities] },
+    reasonCode: nullableReasonCodeSchema,
+  },
+  description:
+    "One Provider-reported fact with provenance. `unavailable` carries a null value and a reasonCode; `stale` is past its TTL but inside the grace window; `derived` is computed by LOOP from indexed chain events.",
+} as const;
+
+const assetSummarySchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["symbol", "name", "decimals", "status"],
+      properties: {
+        symbol: { type: "string", minLength: 1, maxLength: 32 },
+        name: { type: "string", minLength: 1, maxLength: 128 },
+        decimals: { type: "integer", minimum: 0, maximum: 36 },
+        status: { type: "string", enum: [...assetStatuses] },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
+const marketAssetRowSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["assetId", "asset", "price", "priceChange24h"],
+  properties: {
+    assetId: { type: "string", pattern: assetIdPatternSource },
+    asset: assetSummarySchema,
+    price: marketFactSchema,
+    priceChange24h: marketFactSchema,
+  },
+} as const;
+
+export const marketOverviewResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "watchlist",
+    "trending",
+    "newPairs",
+    "smartMoney",
+    "observedAt",
+    "contractVersion",
+  ],
+  properties: {
+    watchlist: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "version", "items"],
+          properties: {
+            status: { type: "string", const: "available" },
+            version: { type: "integer", minimum: 0 },
+            items: {
+              type: "array",
+              maxItems: 100,
+              items: marketAssetRowSchema,
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    trending: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "recommendationId", "rules", "items"],
+          properties: {
+            status: { type: "string", const: "available" },
+            recommendationId: {
+              type: "string",
+              pattern: opaqueIdPatternSource,
+              description:
+                "Opaque ID of this ordering so a client can report which recommendation it displayed.",
+            },
+            rules: {
+              type: "object",
+              additionalProperties: false,
+              required: ["configVersion", "effectiveAt", "ordering"],
+              properties: {
+                configVersion: {
+                  type: "string",
+                  const: marketTrendingRules.configVersion,
+                },
+                effectiveAt: dateTimeSchema,
+                ordering: {
+                  type: "string",
+                  const: marketTrendingRules.ordering,
+                },
+              },
+            },
+            items: {
+              type: "array",
+              maxItems: marketTrendingRules.maximumItems,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "assetId",
+                  "asset",
+                  "price",
+                  "priceChange24h",
+                  "volume24h",
+                  "liquidityUsd",
+                ],
+                properties: {
+                  ...marketAssetRowSchema.properties,
+                  volume24h: marketFactSchema,
+                  liquidityUsd: marketFactSchema,
+                },
+              },
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    newPairs: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status"],
+          properties: { status: { type: "string", const: "available" } },
+        },
+        unavailableSchema,
+      ],
+    },
+    smartMoney: unavailableSchema,
+    observedAt: dateTimeSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketAssetResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "asset",
+    "capability",
+    "price",
+    "priceChange24h",
+    "liquidityUsd",
+    "volume24h",
+    "marketCap",
+    "fdv",
+    "primaryPair",
+    "community",
+    "security",
+    "holderCount",
+    "contractVersion",
+  ],
+  properties: {
+    asset: assetResourceSchema.properties.asset,
+    capability: assetResourceSchema.properties.capability,
+    price: marketFactSchema,
+    priceChange24h: marketFactSchema,
+    liquidityUsd: marketFactSchema,
+    volume24h: marketFactSchema,
+    marketCap: marketFactSchema,
+    fdv: marketFactSchema,
+    primaryPair: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "pairAddress",
+            "dexId",
+            "labels",
+            "quoteTokenAddress",
+            "quoteTokenSymbol",
+            "pairCreatedAt",
+          ],
+          properties: {
+            pairAddress: { type: "string", pattern: evmAddressPatternSource },
+            dexId: { type: "string", minLength: 1, maxLength: 64 },
+            labels: {
+              type: "array",
+              maxItems: 8,
+              items: { type: "string", maxLength: 32 },
+            },
+            quoteTokenAddress: {
+              type: "string",
+              pattern: evmAddressPatternSource,
+            },
+            quoteTokenSymbol: { type: "string", maxLength: 32 },
+            pairCreatedAt: nullableDateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "The deepest DexScreener pair in which the asset is the base token. Price facts above refer to this pair.",
+    },
+    community: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "communityId", "name", "slug", "memberCount"],
+          properties: {
+            status: { type: "string", const: "available" },
+            communityId: { type: "string", pattern: opaqueIdPatternSource },
+            name: { type: "string", minLength: 1, maxLength: 40 },
+            slug: { type: "string", pattern: "^[a-z0-9-]{3,32}$" },
+            memberCount: { type: "integer", minimum: 0 },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    security: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "source",
+            "fetchedAt",
+            "ttlSeconds",
+            "quality",
+            "reasonCode",
+            "facts",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            source: { type: "string", enum: [...marketSources] },
+            fetchedAt: dateTimeSchema,
+            ttlSeconds: { type: "integer", minimum: 1 },
+            quality: { type: "string", enum: ["fresh", "stale"] },
+            reasonCode: nullableReasonCodeSchema,
+            facts: {
+              type: "array",
+              maxItems: 64,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["fact", "value", "source", "observedAt"],
+                properties: {
+                  fact: { type: "string", pattern: "^[a-z][A-Za-z0-9]{0,63}$" },
+                  value: { type: "string", minLength: 1, maxLength: 96 },
+                  source: { type: "string", enum: [...marketSources] },
+                  observedAt: dateTimeSchema,
+                },
+              },
+              description:
+                "Labelled Provider facts only. No score, rating, or verdict is derived from them.",
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    holderCount: marketFactSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketCandlesResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["assetId", "interval", "candles", "contractVersion"],
+  properties: {
+    assetId: { type: "string", pattern: assetIdPatternSource },
+    interval: { type: "string", enum: [...candleIntervals] },
+    candles: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "quality",
+            "source",
+            "fetchedAt",
+            "labelKey",
+            "pool",
+            "priceUnit",
+            "items",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            quality: { type: "string", enum: ["fresh", "stale", "derived"] },
+            source: { type: "string", enum: [...marketSources] },
+            fetchedAt: dateTimeSchema,
+            labelKey: {
+              anyOf: [{ type: "string", maxLength: 64 }, { type: "null" }],
+              description:
+                "Localization key the client must show next to derived candles (on-chain swap aggregate); null for Provider OHLCV.",
+            },
+            pool: {
+              type: "object",
+              additionalProperties: false,
+              required: ["address", "protocol", "quoteAssetId", "quoteSymbol"],
+              properties: {
+                address: { type: "string", pattern: evmAddressPatternSource },
+                protocol: { type: "string", const: "pancakeswap_v3" },
+                quoteAssetId: {
+                  anyOf: [
+                    { type: "string", pattern: assetIdPatternSource },
+                    { type: "null" },
+                  ],
+                },
+                quoteSymbol: { type: "string", minLength: 1, maxLength: 32 },
+              },
+            },
+            priceUnit: { type: "string", minLength: 1, maxLength: 80 },
+            items: {
+              type: "array",
+              maxItems: candleLimits.maximum,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "openTime",
+                  "closeTime",
+                  "open",
+                  "high",
+                  "low",
+                  "close",
+                  "volume",
+                  "swapCount",
+                ],
+                properties: {
+                  openTime: dateTimeSchema,
+                  closeTime: dateTimeSchema,
+                  open: unsignedDecimalSchema,
+                  high: unsignedDecimalSchema,
+                  low: unsignedDecimalSchema,
+                  close: unsignedDecimalSchema,
+                  volume: unsignedDecimalSchema,
+                  swapCount: {
+                    anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+                  },
+                },
+              },
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketTradesResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["assetId", "trades", "contractVersion"],
+  properties: {
+    assetId: { type: "string", pattern: assetIdPatternSource },
+    trades: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "source", "items", "nextCursor", "freshness"],
+          properties: {
+            status: { type: "string", const: "available" },
+            source: { type: "string", const: "loop_indexer" },
+            items: {
+              type: "array",
+              maxItems: tradeLimits.maximum,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "transactionHash",
+                  "logIndex",
+                  "blockNumber",
+                  "blockHash",
+                  "blockTimestamp",
+                  "confirmations",
+                  "status",
+                  "direction",
+                  "amountAsset",
+                  "amountQuote",
+                  "quoteAssetId",
+                  "quoteSymbol",
+                  "priceAfter",
+                  "poolAddress",
+                  "sender",
+                  "recipient",
+                ],
+                properties: {
+                  transactionHash: {
+                    type: "string",
+                    pattern: transactionHashPatternSource,
+                  },
+                  logIndex: { type: "integer", minimum: 0 },
+                  blockNumber: blockNumberSchema,
+                  blockHash: {
+                    type: "string",
+                    pattern: blockHashPatternSource,
+                  },
+                  blockTimestamp: dateTimeSchema,
+                  confirmations: {
+                    anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+                  },
+                  status: {
+                    type: "string",
+                    enum: ["confirmed", "pending", "reorged"],
+                  },
+                  direction: {
+                    type: "string",
+                    enum: ["buy", "sell"],
+                    description:
+                      "Relative to the asset: buy means the swap took the asset out of the pool.",
+                  },
+                  amountAsset: unsignedDecimalSchema,
+                  amountQuote: unsignedDecimalSchema,
+                  quoteAssetId: {
+                    type: "string",
+                    pattern: assetIdPatternSource,
+                  },
+                  quoteSymbol: { type: "string", minLength: 1, maxLength: 32 },
+                  priceAfter: {
+                    anyOf: [unsignedDecimalSchema, { type: "null" }],
+                  },
+                  poolAddress: {
+                    type: "string",
+                    pattern: evmAddressPatternSource,
+                  },
+                  sender: {
+                    anyOf: [
+                      { type: "string", pattern: evmAddressPatternSource },
+                      { type: "null" },
+                    ],
+                  },
+                  recipient: {
+                    anyOf: [
+                      { type: "string", pattern: evmAddressPatternSource },
+                      { type: "null" },
+                    ],
+                  },
+                },
+              },
+            },
+            nextCursor: {
+              anyOf: [
+                {
+                  type: "string",
+                  minLength: 3,
+                  maxLength: 1_536,
+                  pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                },
+                { type: "null" },
+              ],
+            },
+            freshness: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "indexerBlockNumber",
+                "headBlockNumber",
+                "lagBlocks",
+                "observedAt",
+              ],
+              properties: {
+                indexerBlockNumber: blockNumberSchema,
+                headBlockNumber: {
+                  anyOf: [blockNumberSchema, { type: "null" }],
+                },
+                lagBlocks: {
+                  anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+                },
+                observedAt: dateTimeSchema,
+              },
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketHoldersResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["assetId", "holderCount", "distribution", "contractVersion"],
+  properties: {
+    assetId: { type: "string", pattern: assetIdPatternSource },
+    holderCount: marketFactSchema,
+    distribution: unavailableSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketNewPairsResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["newPairs", "riskScreening", "contractVersion"],
+  properties: {
+    newPairs: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "source",
+            "fetchedAt",
+            "ttlSeconds",
+            "quality",
+            "reasonCode",
+            "items",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            source: { type: "string", enum: [...marketSources] },
+            fetchedAt: dateTimeSchema,
+            ttlSeconds: { type: "integer", minimum: 1 },
+            quality: { type: "string", enum: ["fresh", "stale"] },
+            reasonCode: nullableReasonCodeSchema,
+            items: {
+              type: "array",
+              maxItems: 100,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "poolAddress",
+                  "dexId",
+                  "name",
+                  "baseTokenAddress",
+                  "quoteTokenAddress",
+                  "registryAssetId",
+                  "createdAt",
+                  "reserveUsd",
+                  "volumeH24Usd",
+                ],
+                properties: {
+                  poolAddress: {
+                    type: "string",
+                    pattern: evmAddressPatternSource,
+                  },
+                  dexId: { type: "string", minLength: 1, maxLength: 64 },
+                  name: { type: "string", maxLength: 128 },
+                  baseTokenAddress: {
+                    anyOf: [
+                      { type: "string", pattern: evmAddressPatternSource },
+                      { type: "null" },
+                    ],
+                  },
+                  quoteTokenAddress: {
+                    anyOf: [
+                      { type: "string", pattern: evmAddressPatternSource },
+                      { type: "null" },
+                    ],
+                  },
+                  registryAssetId: {
+                    anyOf: [
+                      { type: "string", pattern: assetIdPatternSource },
+                      { type: "null" },
+                    ],
+                  },
+                  createdAt: nullableDateTimeSchema,
+                  reserveUsd: { anyOf: [decimalSchema, { type: "null" }] },
+                  volumeH24Usd: { anyOf: [decimalSchema, { type: "null" }] },
+                },
+              },
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
+    riskScreening: unavailableSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const marketSmartMoneyResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["smartMoney", "contractVersion"],
+  properties: {
+    smartMoney: unavailableSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const candlesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["interval"],
+  properties: {
+    interval: { type: "string", enum: [...candleIntervals] },
+    limit: { type: "integer", minimum: 1, maximum: candleLimits.maximum },
+  },
+} as const;
+
+export const tradesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: {
+      type: "string",
+      minLength: 3,
+      maxLength: 1_536,
+      pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+    },
+    limit: { type: "integer", minimum: 1, maximum: tradeLimits.maximum },
+  },
+} as const;
+
+export const marketReadErrors = {
+  400: v2ErrorResponseSchema(["INVALID_REQUEST"]),
+  401: v2ErrorResponseSchema(["AUTH_REQUIRED", "AUTH_INVALID"], {
+    includeBearerChallenge: true,
+  }),
+  404: v2ErrorResponseSchema(["NOT_FOUND"]),
+  409: v2ErrorResponseSchema(["ACCOUNT_BOOTSTRAP_REQUIRED"]),
+  422: v2ErrorResponseSchema(["CHAIN_MISMATCH"]),
+  500: v2ErrorResponseSchema(["INTERNAL_ERROR"]),
+  503: v2ErrorResponseSchema([
+    "CAPABILITY_UNAVAILABLE",
+    "PROVIDER_DISCONNECTED",
+    "REQUEST_TIMEOUT",
+  ]),
+} as const;

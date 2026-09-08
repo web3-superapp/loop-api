@@ -29,6 +29,7 @@ import {
   walletActivityLimits,
   walletGasReserveConfigVersion,
 } from "../../features/wallet/wallet-read-service.js";
+import { indexerLanes } from "../../database/bsc-indexer-repository.js";
 import {
   watchlistV2GroupKeyPatternSource,
   watchlistV2MaximumGroups,
@@ -255,7 +256,7 @@ export const chainStatusResourceSchema = {
           "updatedAt",
         ],
         properties: {
-          lane: { type: "string", const: "erc20_transfer" },
+          lane: { type: "string", enum: [...indexerLanes] },
           status: { type: "string", enum: ["available", "unavailable"] },
           reasonCode: nullableReasonCodeSchema,
           lastBlockNumber: { anyOf: [blockNumberSchema, { type: "null" }] },

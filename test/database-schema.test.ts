@@ -94,6 +94,10 @@ describe("database schema readiness contract", () => {
       "public.indexed_pool_events",
       "public.account_wallets",
       "public.wallet_balance_snapshots",
+      "public.market_fact_cache",
+      "public.notifications",
+      "public.notification_preference_v2_versions",
+      "public.notification_preferences_v2",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

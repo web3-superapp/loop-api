@@ -7,21 +7,27 @@ import {
   createBscIndexerWorker,
   type BscIndexerRunResult,
 } from "../src/bsc-indexer-worker.js";
+import { createBscPoolIndexerWorker } from "../src/bsc-pool-indexer-worker.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
-import { createPostgresBscIndexerRepository } from "../src/database/bsc-indexer-repository.js";
+import {
+  createPostgresBscIndexerRepository,
+  indexerLanes,
+  type IndexerLane,
+} from "../src/database/bsc-indexer-repository.js";
 import { createPostgresChainRegistryRepository } from "../src/database/chain-registry-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import { createBscReadClient } from "../src/integrations/bsc/rpc-client.js";
 
 /**
- * Dev-only backfill for the `erc20_transfer` lane (Decision 0033).
+ * Dev-only backfill for the `erc20_transfer` lane (Decision 0033) and the
+ * `pool_event` lane (Decision 0034).
  *
  * It runs the same lane the worker runs, one segment at a time, until the lane
  * reaches the chain head. `--from` seeds a brand-new lane; it never rewrites an
  * existing checkpoint, so a running worker and a backfill cannot disagree about
  * where the lane is.
  *
- * Usage: `pnpm indexer:backfill --from <block>`
+ * Usage: `pnpm indexer:backfill --from <block> [--lane erc20_transfer|pool_event]`
  */
 
 export type IndexerBackfillErrorCode =
@@ -42,6 +48,7 @@ export class IndexerBackfillError extends Error {
 }
 
 export interface IndexerBackfillRequest {
+  readonly lane: IndexerLane;
   readonly fromBlockNumber: number;
   readonly maximumSegments: number;
   readonly config: AppConfig;
@@ -56,14 +63,21 @@ export function parseIndexerBackfillRequest(
   const positional = argv.slice(2);
   const fromIndex = positional.indexOf("--from");
   const rawFrom = fromIndex === -1 ? undefined : positional[fromIndex + 1];
+  const laneIndex = positional.indexOf("--lane");
+  const rawLane =
+    laneIndex === -1 ? "erc20_transfer" : positional[laneIndex + 1];
+  const expectedLength = laneIndex === -1 ? 2 : 4;
   if (
-    fromIndex !== 0 ||
-    positional.length !== 2 ||
+    fromIndex === -1 ||
+    positional.length !== expectedLength ||
     rawFrom === undefined ||
-    !/^(0|[1-9][0-9]{0,15})$/.test(rawFrom)
+    !/^(0|[1-9][0-9]{0,15})$/.test(rawFrom) ||
+    rawLane === undefined ||
+    !(indexerLanes as readonly string[]).includes(rawLane)
   ) {
     throw new IndexerBackfillError("indexer_backfill_arguments_invalid");
   }
+  const lane = rawLane as IndexerLane;
 
   let config: AppConfig;
   try {
@@ -76,15 +90,24 @@ export function parseIndexerBackfillRequest(
   }
 
   return Object.freeze({
+    lane,
     fromBlockNumber: Number.parseInt(rawFrom, 10),
     maximumSegments: defaultMaximumSegments,
     config,
   });
 }
 
+export interface BackfillSegmentResult {
+  readonly kind: BscIndexerRunResult["kind"];
+  readonly fromBlockNumber: string | null;
+  readonly toBlockNumber: string | null;
+  readonly rowCount: number;
+  readonly reasonCode: string | null;
+}
+
 export async function runBackfill(
   request: IndexerBackfillRequest,
-  onSegment: (result: BscIndexerRunResult) => void,
+  onSegment: (result: BackfillSegmentResult) => void,
 ): Promise<void> {
   const chainConfig = request.config.bscChain;
   if (chainConfig === null) {
@@ -96,15 +119,31 @@ export async function runBackfill(
     max: 1,
   });
   try {
-    const worker = createBscIndexerWorker({
+    const laneOptions = {
       repository: createPostgresBscIndexerRepository(pool),
       registry: createPostgresChainRegistryRepository(pool),
       readClient: createBscReadClient({ config: chainConfig }),
       chainId: bscChainId,
       startBlockNumber: request.fromBlockNumber,
-    });
+    };
+    const runOnce: () => Promise<BackfillSegmentResult> =
+      request.lane === "pool_event"
+        ? (() => {
+            const worker = createBscPoolIndexerWorker(laneOptions);
+            return async () => {
+              const result = await worker.runOnce();
+              return { ...result, rowCount: result.eventCount };
+            };
+          })()
+        : (() => {
+            const worker = createBscIndexerWorker(laneOptions);
+            return async () => {
+              const result = await worker.runOnce();
+              return { ...result, rowCount: result.transferCount };
+            };
+          })();
     for (let segment = 0; segment < request.maximumSegments; segment += 1) {
-      const result = await worker.runOnce();
+      const result = await runOnce();
       onSegment(result);
       if (result.kind !== "advanced" && result.kind !== "seeded") {
         return;
@@ -138,7 +177,7 @@ export async function runIndexerBackfill(options: {
     const backfill = options.backfill ?? runBackfill;
     await backfill(request, (result) => {
       options.stdout.write(
-        `${result.kind} ${result.fromBlockNumber ?? "-"}..${result.toBlockNumber ?? "-"} transfers=${String(result.transferCount)} reason=${result.reasonCode ?? "none"}\n`,
+        `${request.lane} ${result.kind} ${result.fromBlockNumber ?? "-"}..${result.toBlockNumber ?? "-"} rows=${String(result.rowCount)} reason=${result.reasonCode ?? "none"}\n`,
       );
     });
     return 0;

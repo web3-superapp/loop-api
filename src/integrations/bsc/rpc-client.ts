@@ -18,7 +18,10 @@ import {
   erc20BalanceAbi,
   erc20IdentityAbi,
   erc20TransferEvent,
+  pancakeV3BurnEvent,
+  pancakeV3MintEvent,
   pancakeV3PoolAbi,
+  pancakeV3SwapEvent,
 } from "./erc20-abi.js";
 
 /**
@@ -110,6 +113,26 @@ export interface BscTransferLogQuery {
   readonly toBlock: bigint;
 }
 
+export type BscPoolEventKind = "swap" | "mint" | "burn";
+
+/**
+ * One decoded PancakeSwap V3 pool log. `blockTimestamp` comes from the RPC log
+ * when the endpoint reports it and from the block header otherwise; it is
+ * never interpolated from a block number.
+ */
+export interface BscPoolEventLog {
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly blockTimestamp: bigint;
+  readonly address: string;
+  readonly kind: BscPoolEventKind;
+  /** Every decoded argument as a canonical decimal string. */
+  readonly args: Readonly<Record<string, string>>;
+  readonly removed: boolean;
+}
+
 export interface BscReadClient {
   readonly chainId: BscChainConfig["chainId"];
   readonly chainReference: BscChainConfig["chainReference"];
@@ -135,6 +158,9 @@ export interface BscReadClient {
   readTransferLogs(
     query: BscTransferLogQuery,
   ): Promise<readonly BscTransferLog[]>;
+  readPoolEventLogs(
+    query: BscTransferLogQuery,
+  ): Promise<readonly BscPoolEventLog[]>;
   probeEndpoints(): Promise<readonly BscEndpointHealth[]>;
 }
 
@@ -281,22 +307,36 @@ export function createBscReadClient(
     fromBlock: bigint,
     toBlock: bigint,
   ) {
+    return readLogRangeWith(
+      (range) =>
+        aggregate.getLogs({
+          address: addresses,
+          event: erc20TransferEvent,
+          fromBlock: range.from,
+          toBlock: range.to,
+        }),
+      fromBlock,
+      toBlock,
+    );
+  }
+
+  async function readLogRangeWith<T>(
+    read: (range: {
+      readonly from: bigint;
+      readonly to: bigint;
+    }) => Promise<readonly T[]>,
+    fromBlock: bigint,
+    toBlock: bigint,
+  ): Promise<T[]> {
     const pending = [{ from: fromBlock, to: toBlock }];
-    const collected = [];
+    const collected: T[] = [];
     while (pending.length > 0) {
       const range = pending.shift();
       if (range === undefined) {
         break;
       }
       try {
-        collected.push(
-          ...(await aggregate.getLogs({
-            address: addresses,
-            event: erc20TransferEvent,
-            fromBlock: range.from,
-            toBlock: range.to,
-          })),
-        );
+        collected.push(...(await read(range)));
       } catch (error) {
         const isRangeRejection =
           error instanceof LimitExceededRpcError ||
@@ -513,6 +553,91 @@ export function createBscReadClient(
       );
     },
 
+    async readPoolEventLogs(
+      query: BscTransferLogQuery,
+    ): Promise<readonly BscPoolEventLog[]> {
+      await requireVerifiedChain();
+      if (query.toBlock < query.fromBlock) {
+        throw new BscReadUnavailableError("BSC_LOG_RANGE_INVALID");
+      }
+      if (query.toBlock - query.fromBlock + 1n > bscMaximumLogRange) {
+        throw new BscReadUnavailableError("BSC_LOG_RANGE_TOO_WIDE");
+      }
+      if (query.addresses.length === 0) {
+        return Object.freeze([]);
+      }
+      const addresses = [...query.addresses].map(asAddress);
+      const logs = await readLogRangeWith(
+        (range) =>
+          aggregate.getLogs({
+            address: addresses,
+            events: [
+              pancakeV3SwapEvent,
+              pancakeV3MintEvent,
+              pancakeV3BurnEvent,
+            ],
+            fromBlock: range.from,
+            toBlock: range.to,
+          }),
+        query.fromBlock,
+        query.toBlock,
+      );
+      // Endpoints that omit `blockTimestamp` on logs fall back to one header
+      // read per distinct block; the value is never derived from the height.
+      const timestamps = new Map<bigint, bigint>();
+      for (const log of logs) {
+        if (log.blockTimestamp !== undefined) {
+          timestamps.set(log.blockNumber, log.blockTimestamp);
+        }
+      }
+      for (const log of logs) {
+        if (timestamps.has(log.blockNumber)) {
+          continue;
+        }
+        const block = await aggregate.getBlock({
+          blockNumber: log.blockNumber,
+        });
+        timestamps.set(log.blockNumber, block.timestamp);
+      }
+      const decoded: BscPoolEventLog[] = [];
+      for (const log of logs) {
+        const blockTimestamp = timestamps.get(log.blockNumber);
+        if (blockTimestamp === undefined) {
+          throw new BscReadUnavailableError("BSC_BLOCK_TIMESTAMP_UNAVAILABLE");
+        }
+        const args: Record<string, string> = {};
+        for (const [name, value] of Object.entries(log.args)) {
+          if (typeof value === "bigint") {
+            args[name] = value.toString(10);
+          } else if (typeof value === "number") {
+            args[name] = String(value);
+          } else if (typeof value === "string") {
+            args[name] = normalizeHex(value);
+          }
+        }
+        const kind: BscPoolEventKind =
+          log.eventName === "Swap"
+            ? "swap"
+            : log.eventName === "Mint"
+              ? "mint"
+              : "burn";
+        decoded.push(
+          Object.freeze({
+            transactionHash: normalizeHex(log.transactionHash),
+            logIndex: log.logIndex,
+            blockNumber: log.blockNumber,
+            blockHash: normalizeHex(log.blockHash),
+            blockTimestamp,
+            address: normalizeHex(log.address),
+            kind,
+            args: Object.freeze(args),
+            removed: log.removed,
+          }),
+        );
+      }
+      return Object.freeze(decoded);
+    },
+
     async probeEndpoints(): Promise<readonly BscEndpointHealth[]> {
       const observedAt = now().toISOString();
       const probes = await Promise.all(
@@ -619,6 +744,7 @@ export function createUnavailableBscReadClient(
     readPoolIdentity: reject,
     readBalances: reject,
     readTransferLogs: reject,
+    readPoolEventLogs: reject,
     probeEndpoints: (): Promise<readonly BscEndpointHealth[]> =>
       Promise.resolve(Object.freeze([])),
   });

@@ -1,6 +1,10 @@
 import { V2ApiError } from "../../core/http/v2-error.js";
 import type { ChainRegistryRepository } from "../../database/chain-registry-repository.js";
-import type { BscIndexerRepository } from "../../database/bsc-indexer-repository.js";
+import {
+  indexerLanes,
+  type BscIndexerRepository,
+  type IndexerLane,
+} from "../../database/bsc-indexer-repository.js";
 import type {
   BscEndpointHealth,
   BscReadClient,
@@ -32,7 +36,7 @@ export interface ChainHeadProjection {
 }
 
 export interface IndexerLaneProjection {
-  readonly lane: "erc20_transfer";
+  readonly lane: IndexerLane;
   readonly status: "available" | "unavailable";
   readonly reasonCode: string | null;
   readonly lastBlockNumber: string | null;
@@ -125,38 +129,42 @@ export function createChainStatusService(
         }
       }
 
-      const checkpoint = await input.indexerRepository.getCheckpoint(
-        "erc20_transfer",
-        input.chainId,
-      );
-      const lane: IndexerLaneProjection =
-        checkpoint === null
-          ? Object.freeze({
-              lane: "erc20_transfer" as const,
-              status: "unavailable" as const,
-              reasonCode: chainStatusReasonCodes.indexerNotStarted,
-              lastBlockNumber: null,
-              lastBlockHash: null,
-              lagBlocks: null,
-              reorgCount: null,
-              updatedAt: null,
-            })
-          : Object.freeze({
-              lane: "erc20_transfer" as const,
-              status: "available" as const,
-              reasonCode: null,
-              lastBlockNumber: checkpoint.lastBlockNumber,
-              lastBlockHash: checkpoint.lastBlockHash,
-              lagBlocks:
-                head === null
-                  ? null
-                  : Number(
-                      BigInt(head.blockNumber) -
-                        BigInt(checkpoint.lastBlockNumber),
-                    ),
-              reorgCount: checkpoint.reorgCount,
-              updatedAt: checkpoint.updatedAt,
-            });
+      const lanes: IndexerLaneProjection[] = [];
+      for (const laneName of indexerLanes) {
+        const checkpoint = await input.indexerRepository.getCheckpoint(
+          laneName,
+          input.chainId,
+        );
+        lanes.push(
+          checkpoint === null
+            ? Object.freeze({
+                lane: laneName,
+                status: "unavailable" as const,
+                reasonCode: chainStatusReasonCodes.indexerNotStarted,
+                lastBlockNumber: null,
+                lastBlockHash: null,
+                lagBlocks: null,
+                reorgCount: null,
+                updatedAt: null,
+              })
+            : Object.freeze({
+                lane: laneName,
+                status: "available" as const,
+                reasonCode: null,
+                lastBlockNumber: checkpoint.lastBlockNumber,
+                lastBlockHash: checkpoint.lastBlockHash,
+                lagBlocks:
+                  head === null
+                    ? null
+                    : Number(
+                        BigInt(head.blockNumber) -
+                          BigInt(checkpoint.lastBlockNumber),
+                      ),
+                reorgCount: checkpoint.reorgCount,
+                updatedAt: checkpoint.updatedAt,
+              }),
+        );
+      }
 
       const [assets, pools] = await Promise.all([
         input.repository.listReadableAssets(input.chainId),
@@ -182,7 +190,7 @@ export function createChainStatusService(
           head,
           endpoints,
         }),
-        indexer: Object.freeze([lane]),
+        indexer: Object.freeze(lanes),
         registry: Object.freeze({
           readableAssetCount: assets.length,
           registeredPoolCount: pools.length,

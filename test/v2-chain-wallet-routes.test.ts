@@ -203,6 +203,9 @@ function indexerFake(options: { readonly checkpoint?: boolean } = {}) {
         { assetId: wbnbAssetId, rawValue: "250000000000000000" },
       ]),
     ),
+    commitPoolEventSegment: vi.fn(() => Promise.reject(new Error("not used"))),
+    listPoolSwaps: vi.fn(() => Promise.resolve({ items: [], hasMore: false })),
+    aggregateSwapCandles: vi.fn(() => Promise.resolve([])),
   };
   return repository;
 }
@@ -327,6 +330,7 @@ function readClientFake(
           })
         : Promise.reject(new BscReadUnavailableError("BSC_RPC_NOT_CONFIGURED")),
     readTransferLogs: () => Promise.resolve([]),
+    readPoolEventLogs: () => Promise.resolve([]),
     probeEndpoints: () =>
       Promise.resolve(
         configured

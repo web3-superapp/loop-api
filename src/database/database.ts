@@ -26,6 +26,18 @@ import {
   createPostgresWatchlistV2Repository,
   type WatchlistV2Repository,
 } from "./watchlist-v2-repository.js";
+import {
+  createPostgresMarketFactCacheRepository,
+  type MarketFactCacheRepository,
+} from "./market-fact-cache-repository.js";
+import {
+  createPostgresAlertV2Repository,
+  type AlertV2Repository,
+} from "./alert-v2-repository.js";
+import {
+  createPostgresNotificationRepository,
+  type NotificationRepository,
+} from "./notification-repository.js";
 import type {
   CommunicationRepository,
   CommunityChannelSyncRepository,
@@ -119,6 +131,12 @@ export interface Database {
   /** Narrow BSC indexer lanes and their projections (Decision 0033). */
   readonly bscIndexer?: BscIndexerRepository;
   readonly alerts: AlertRepository;
+  /** Market Provider fact cache (Decision 0034). */
+  readonly marketFacts?: MarketFactCacheRepository;
+  /** V2 price alerts keyed by asset ID (Decision 0034). */
+  readonly alertsV2?: AlertV2Repository;
+  /** Context notification feed and V2 preferences (Decision 0034). */
+  readonly notifications?: NotificationRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -241,6 +259,9 @@ export function createPostgresDatabase(
   const accountWallets = createPostgresAccountWalletRepository(pool);
   const bscIndexer = createPostgresBscIndexerRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
+  const marketFacts = createPostgresMarketFactCacheRepository(pool);
+  const alertsV2 = createPostgresAlertV2Repository(pool);
+  const notifications = createPostgresNotificationRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
@@ -279,6 +300,9 @@ export function createPostgresDatabase(
     accountWallets,
     bscIndexer,
     alerts,
+    marketFacts,
+    alertsV2,
+    notifications,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `
