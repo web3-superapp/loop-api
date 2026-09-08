@@ -127,6 +127,12 @@ function parseRows<Row extends QueryResultRow>(
   }
 }
 
+/**
+ * The frozen V1 projection reads only rows that carry a V1 `asset_key`. After
+ * Decision 0033 the same table also stores V2 rows keyed by `asset_id`; the
+ * join excludes them so the V1 contract keeps its exact shape instead of
+ * failing closed on a row it cannot represent.
+ */
 async function loadSnapshot(
   client: DatabaseClient,
   ownerUserId: string,
@@ -147,6 +153,7 @@ async function loadSnapshot(
       left join public.watchlist_items as items
         on items.owner_user_id = groups.owner_user_id
        and items.group_key = groups.group_key
+       and items.asset_key is not null
       where versions.owner_user_id = $1
       order by groups.position asc nulls last, items.position asc nulls last
     `,

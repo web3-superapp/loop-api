@@ -15,6 +15,7 @@ export const v2ModuleIds = Object.freeze([
   "community",
   "search",
   "market",
+  "chain",
   "wallet",
   "swap",
   "sendApprovals",
@@ -22,6 +23,7 @@ export const v2ModuleIds = Object.freeze([
   "mining",
   "notifications",
   "profile",
+  "watchlist",
 ] as const);
 
 export type V2ModuleId = (typeof v2ModuleIds)[number];
@@ -96,6 +98,11 @@ const environmentSchema = z
     HYPERLIQUID_PRIVATE_READS_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
+    BSC_RPC_URLS: optionalCredential(4_096),
+    BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
+    BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
+    BSC_USD1_VERIFIED: booleanString,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -274,12 +281,29 @@ const reconciliationWorkerEnvironmentSchema = z
     ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: booleanString,
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
+    BSC_INDEXER_ENABLED: booleanString,
+    BSC_INDEXER_START_BLOCK: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    BSC_RPC_URLS: optionalCredential(4_096),
+    BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
+    BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
     DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
   })
   .superRefine((value, context) => {
+    if (value.BSC_INDEXER_ENABLED && value.BSC_RPC_URLS === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "The BSC indexer lane requires BSC_RPC_URLS",
+        path: ["BSC_INDEXER_ENABLED"],
+      });
+    }
     if (
       value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined &&
       (value.HYPERLIQUID_RECONCILIATION_READS_ENABLED ||
@@ -355,6 +379,26 @@ export interface V2ClientPolicyConfig {
   readonly termsRequiredVersion: string | null;
 }
 
+/**
+ * BSC read configuration. Present only when at least one RPC endpoint URL is
+ * configured; absent means every chain read fails closed. A present value is
+ * not proof that an endpoint is reachable or that it actually serves chain 56:
+ * `eth_chainId` is verified at runtime before any read is published.
+ */
+export interface BscChainConfig {
+  readonly chainId: "eip155:56";
+  readonly chainReference: 56;
+  readonly rpcUrls: readonly string[];
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+  /** Present only when the address is configured and independently verified. */
+  readonly usd1TokenAddress: string | null;
+}
+
+export interface BscIndexerConfig {
+  readonly startBlockNumber: number | null;
+}
+
 export interface V2CursorConfig {
   readonly hmacSecret: string;
   readonly ttlSeconds: 600;
@@ -385,6 +429,7 @@ export interface AppConfig {
   readonly social: SocialConfig | null;
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
+  readonly bscChain: BscChainConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -401,6 +446,8 @@ export interface ReconciliationWorkerConfig {
   readonly hyperliquidSpotReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly spotAgentLifecycleMaintenanceEnabled: boolean;
   readonly issuanceRateRecordCleanupEnabled: boolean;
+  readonly bscChain: BscChainConfig | null;
+  readonly bscIndexer: BscIndexerConfig | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -580,6 +627,97 @@ function parseV2ClientPolicy(data: {
   });
 }
 
+const maximumBscRpcEndpoints = 8;
+
+/**
+ * Comma-separated RPC endpoint list. Endpoint URLs are Provider configuration:
+ * they are validated here and never published in an API response, a capability
+ * projection, or a log field.
+ */
+function parseBscRpcUrls(value: string | undefined): readonly string[] {
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  const urls: string[] = [];
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim();
+    if (entry.length === 0) {
+      continue;
+    }
+    const url = parseUrl("BSC_RPC_URLS", entry);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new ConfigurationError([
+        "BSC_RPC_URLS: protocol must be http or https",
+      ]);
+    }
+    if (url.username !== "" || url.password !== "") {
+      throw new ConfigurationError([
+        "BSC_RPC_URLS: credentials are not allowed in an endpoint URL",
+      ]);
+    }
+    const normalized = url.toString();
+    if (!urls.includes(normalized)) {
+      urls.push(normalized);
+    }
+  }
+  if (urls.length > maximumBscRpcEndpoints) {
+    throw new ConfigurationError([
+      `BSC_RPC_URLS: at most ${maximumBscRpcEndpoints} endpoints are supported`,
+    ]);
+  }
+  return Object.freeze(urls);
+}
+
+const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * The USD1 slot needs both an address and an explicit verification flag. A
+ * configured address alone never enters the registry as `verified`.
+ */
+function parseVerifiedUsd1Address(
+  address: string | undefined,
+  verified: boolean,
+): string | null {
+  if (address === undefined) {
+    if (verified) {
+      throw new ConfigurationError([
+        "BSC_USD1_VERIFIED: requires BSC_USD1_TOKEN_ADDRESS",
+      ]);
+    }
+    return null;
+  }
+  if (!evmAddressPattern.test(address)) {
+    throw new ConfigurationError([
+      "BSC_USD1_TOKEN_ADDRESS: must be a 0x-prefixed 20-byte address",
+    ]);
+  }
+  return verified ? address.toLowerCase() : null;
+}
+
+function parseBscChainConfig(data: {
+  readonly BSC_RPC_URLS?: string | undefined;
+  readonly BSC_CONFIRMATIONS: number;
+  readonly BSC_REORG_DEPTH_BLOCKS: number;
+  readonly BSC_USD1_TOKEN_ADDRESS?: string | undefined;
+  readonly BSC_USD1_VERIFIED?: boolean | undefined;
+}): BscChainConfig | null {
+  const rpcUrls = parseBscRpcUrls(data.BSC_RPC_URLS);
+  if (rpcUrls.length === 0) {
+    return null;
+  }
+  return Object.freeze({
+    chainId: "eip155:56" as const,
+    chainReference: 56 as const,
+    rpcUrls,
+    confirmations: data.BSC_CONFIRMATIONS,
+    reorgDepthBlocks: data.BSC_REORG_DEPTH_BLOCKS,
+    usd1TokenAddress: parseVerifiedUsd1Address(
+      data.BSC_USD1_TOKEN_ADDRESS,
+      data.BSC_USD1_VERIFIED ?? false,
+    ),
+  });
+}
+
 function assertDatabaseUrl(url: URL): void {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new ConfigurationError([
@@ -647,6 +785,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
       environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
+    BSC_RPC_URLS: environment["BSC_RPC_URLS"],
+    BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
+    BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
+    BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -764,6 +907,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     social,
     perpReadCursor,
     hyperliquidPrivateReads,
+    bscChain: parseBscChainConfig(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });
@@ -792,6 +936,11 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
       environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
+    BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
+    BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
+    BSC_RPC_URLS: environment["BSC_RPC_URLS"],
+    BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
+    BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -847,6 +996,15 @@ export function loadReconciliationWorkerConfig(
       parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
     issuanceRateRecordCleanupEnabled:
       parsed.data.ISSUANCE_RATE_RECORD_CLEANUP_ENABLED,
+    bscChain: parseBscChainConfig({
+      ...parsed.data,
+      BSC_USD1_VERIFIED: false,
+    }),
+    bscIndexer: parsed.data.BSC_INDEXER_ENABLED
+      ? Object.freeze({
+          startBlockNumber: parsed.data.BSC_INDEXER_START_BLOCK ?? null,
+        })
+      : null,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

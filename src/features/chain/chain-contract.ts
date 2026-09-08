@@ -1,0 +1,175 @@
+/**
+ * Canonical chain, asset, and address identity for the V2 BSC surface
+ * (Decision 0033).
+ *
+ * A CAIP-2 chain ID is `eip155:<reference>`; a CAIP-19 asset ID is
+ * `<chainId>:<0x lowercase address>` for a token and `<chainId>:native` for the
+ * chain's native asset. Symbols, names, and tickers are display facts only:
+ * they never key a record and never appear in a request path.
+ */
+
+export const bscChainReference = 56 as const;
+export const bscChainId = "eip155:56" as const;
+export const bscNativeAssetId = "eip155:56:native" as const;
+export const bscNativeSymbol = "BNB" as const;
+export const bscNativeDecimals = 18 as const;
+
+export const chainIdPatternSource = "^eip155:[1-9][0-9]{0,9}$";
+export const assetIdPatternSource =
+  "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$";
+export const evmAddressPatternSource = "^0x[0-9a-f]{40}$";
+export const anyCaseEvmAddressPatternSource = "^0x[0-9a-fA-F]{40}$";
+export const transactionHashPatternSource = "^0x[0-9a-f]{64}$";
+export const blockHashPatternSource = "^0x[0-9a-f]{64}$";
+/** Canonical unsigned integer string in an asset's smallest unit. */
+export const rawAmountPatternSource = "^(0|[1-9][0-9]{0,77})$";
+/** Canonical non-negative decimal string; never a JavaScript number. */
+export const decimalAmountPatternSource = "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$";
+export const reasonCodePatternSource = "^[A-Z][A-Z0-9_]{0,63}$";
+
+const chainIdPattern = new RegExp(chainIdPatternSource);
+const assetIdPattern = new RegExp(assetIdPatternSource);
+const anyCaseAddressPattern = new RegExp(anyCaseEvmAddressPatternSource);
+const lowercaseAddressPattern = new RegExp(evmAddressPatternSource);
+
+export const assetStatuses = Object.freeze([
+  "pending",
+  "verified",
+  "blocked",
+] as const);
+export type AssetStatus = (typeof assetStatuses)[number];
+
+/**
+ * `swappable` stays false until the Swap module (D15) is delivered; a registry
+ * row is never evidence that an asset can be traded.
+ */
+export const assetCapabilityValues = Object.freeze([
+  "viewable",
+  "swappable",
+  "temporarily_unavailable",
+  "blocked",
+] as const);
+export type AssetCapabilityValue = (typeof assetCapabilityValues)[number];
+
+export const walletKinds = Object.freeze(["embedded", "external"] as const);
+export type WalletKind = (typeof walletKinds)[number];
+
+export class InvalidChainIdentityError extends Error {
+  readonly code = "invalid_chain_identity";
+
+  constructor() {
+    super("The chain identity value is not canonical");
+    this.name = "InvalidChainIdentityError";
+  }
+}
+
+export function isChainId(value: unknown): value is string {
+  return typeof value === "string" && chainIdPattern.test(value);
+}
+
+export function isAssetId(value: unknown): value is string {
+  return typeof value === "string" && assetIdPattern.test(value);
+}
+
+export function parseAssetId(value: unknown): string {
+  if (!isAssetId(value)) {
+    throw new InvalidChainIdentityError();
+  }
+  return value;
+}
+
+/**
+ * Normalises an EVM address to its lowercase form. Mixed-case checksums are
+ * accepted as input because wallets and explorers produce them, but only the
+ * lowercase form is ever stored, compared, or published.
+ */
+export function normalizeEvmAddress(value: unknown): string {
+  if (typeof value !== "string" || !anyCaseAddressPattern.test(value)) {
+    throw new InvalidChainIdentityError();
+  }
+  return value.toLowerCase();
+}
+
+export function isNormalizedEvmAddress(value: unknown): value is string {
+  return typeof value === "string" && lowercaseAddressPattern.test(value);
+}
+
+export function assetIdForAddress(chainId: string, address: string): string {
+  if (!isChainId(chainId)) {
+    throw new InvalidChainIdentityError();
+  }
+  return `${chainId}:${normalizeEvmAddress(address)}`;
+}
+
+export function nativeAssetId(chainId: string): string {
+  if (!isChainId(chainId)) {
+    throw new InvalidChainIdentityError();
+  }
+  return `${chainId}:native`;
+}
+
+export interface ParsedAssetId {
+  readonly chainId: string;
+  readonly reference: number;
+  readonly address: string | null;
+}
+
+export function decomposeAssetId(value: unknown): ParsedAssetId {
+  const assetId = parseAssetId(value);
+  const lastSeparator = assetId.lastIndexOf(":");
+  const chainId = assetId.slice(0, lastSeparator);
+  const tail = assetId.slice(lastSeparator + 1);
+  const reference = Number.parseInt(chainId.slice("eip155:".length), 10);
+  if (!Number.isSafeInteger(reference) || reference <= 0) {
+    throw new InvalidChainIdentityError();
+  }
+  return Object.freeze({
+    chainId,
+    reference,
+    address: tail === "native" ? null : tail,
+  });
+}
+
+/**
+ * EIP-681 payment request for a plain native transfer target. Only the address
+ * and chain ID are encoded: no amount, calldata, or Provider URL.
+ */
+export function eip681Uri(address: string, chainReference: number): string {
+  if (!Number.isSafeInteger(chainReference) || chainReference <= 0) {
+    throw new InvalidChainIdentityError();
+  }
+  return `ethereum:${normalizeEvmAddress(address)}@${String(chainReference)}`;
+}
+
+export function parseRawAmount(value: bigint): string {
+  if (value < 0n) {
+    throw new InvalidChainIdentityError();
+  }
+  return value.toString(10);
+}
+
+/**
+ * Formats a smallest-unit integer as an exact decimal string. The conversion
+ * is pure integer arithmetic: no JavaScript floating-point value is ever
+ * produced for a balance, price, or amount.
+ */
+export function formatDecimalAmount(raw: bigint, decimals: number): string {
+  if (raw < 0n) {
+    throw new InvalidChainIdentityError();
+  }
+  if (!Number.isSafeInteger(decimals) || decimals < 0 || decimals > 36) {
+    throw new InvalidChainIdentityError();
+  }
+  if (decimals === 0) {
+    return raw.toString(10);
+  }
+  const digits = raw.toString(10).padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
+  return fraction.length === 0 ? whole : `${whole}.${fraction}`;
+}
+
+export function subtractFloorZero(left: bigint, right: bigint): bigint {
+  const difference = left - right;
+  return difference < 0n ? 0n : difference;
+}

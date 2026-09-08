@@ -78,6 +78,14 @@ describe("database schema readiness contract", () => {
       "public.notification_preference_versions",
       "public.notification_preferences",
       "public.price_alert_events",
+      "public.chains",
+      "public.assets",
+      "public.pools",
+      "public.indexer_checkpoints",
+      "public.indexed_transfers",
+      "public.indexed_pool_events",
+      "public.account_wallets",
+      "public.wallet_balance_snapshots",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

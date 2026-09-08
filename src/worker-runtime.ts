@@ -1,4 +1,16 @@
+import {
+  createBscIndexerWorker,
+  type BscIndexerWorker,
+  type CreateBscIndexerWorkerOptions,
+} from "./bsc-indexer-worker.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
+import type { BscIndexerRepository } from "./database/bsc-indexer-repository.js";
+import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
+import { bscChainId } from "./features/chain/chain-contract.js";
+import {
+  createBscReadClient,
+  type BscReadClient,
+} from "./integrations/bsc/rpc-client.js";
 import {
   createPostgresDatabase,
   type PostgresDatabaseConfig,
@@ -49,6 +61,8 @@ export interface ReconciliationWorkerDatabase {
     SpotAgentAuthorizationRepository,
     "expireElapsedPrepared" | "retireElapsedAgentIdentities"
   >;
+  readonly chainRegistry?: ChainRegistryRepository;
+  readonly bscIndexer?: BscIndexerRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -70,6 +84,14 @@ export type IssuanceQuotaRetentionWorkerFactory = (
   options: CreateIssuanceQuotaRetentionWorkerOptions,
 ) => IssuanceQuotaRetentionWorker;
 
+export type BscIndexerWorkerFactory = (
+  options: CreateBscIndexerWorkerOptions,
+) => BscIndexerWorker;
+
+export type BscReadClientFactory = (
+  config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
+) => BscReadClient;
+
 export interface RunReconciliationWorkerOptions {
   readonly config: ReconciliationWorkerConfig;
   readonly logger: ReconciliationWorkerLogger;
@@ -78,6 +100,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createWorker?: ReconciliationWorkerFactory;
   readonly createLifecycleWorker?: SpotAgentLifecycleWorkerFactory;
   readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
+  readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
+  readonly createBscReadClient?: BscReadClientFactory;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -107,6 +131,11 @@ export async function runReconciliationWorker(
     options.createLifecycleWorker ?? createSpotAgentLifecycleWorker;
   const quotaRetentionWorkerFactory =
     options.createQuotaRetentionWorker ?? createIssuanceQuotaRetentionWorker;
+  const indexerWorkerFactory =
+    options.createBscIndexerWorker ?? createBscIndexerWorker;
+  const readClientFactory =
+    options.createBscReadClient ??
+    ((config): BscReadClient => createBscReadClient({ config }));
   const controller = new AbortController();
   let database: ReconciliationWorkerDatabase | undefined;
   let workerId: string | undefined;
@@ -193,6 +222,32 @@ export async function runReconciliationWorker(
           },
         })
       : null;
+    // The BSC indexer is an independent, default-off lane in the same
+    // standalone worker process (Decision 0012 shape). It shares no state with
+    // Hyperliquid reconciliation and never signs or submits anything.
+    const indexerConfig = options.config.bscIndexer;
+    const indexerChainConfig = options.config.bscChain;
+    const indexerRepository = database.bscIndexer;
+    const indexerRegistry = database.chainRegistry;
+    const indexerWorker =
+      indexerConfig === null ||
+      indexerChainConfig === null ||
+      indexerRepository === undefined ||
+      indexerRegistry === undefined
+        ? null
+        : indexerWorkerFactory({
+            repository: indexerRepository,
+            registry: indexerRegistry,
+            readClient: readClientFactory(indexerChainConfig),
+            chainId: bscChainId,
+            startBlockNumber: indexerConfig.startBlockNumber,
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -217,6 +272,9 @@ export async function runReconciliationWorker(
               quotaRetentionWorker.run(controller.signal),
             ),
           ]),
+      ...(indexerWorker === null
+        ? []
+        : [Promise.resolve().then(() => indexerWorker.run(controller.signal))]),
     ];
 
     try {

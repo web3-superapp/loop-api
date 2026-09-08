@@ -1,4 +1,5 @@
 import type { AppConfig, V2ModuleId } from "../../config.js";
+import type { ChainVerificationState } from "../../integrations/bsc/rpc-client.js";
 
 export const v2ContractVersion = "2.0" as const;
 export const v2ProductConfigVersion = "productPolicyV2.2026-09-01" as const;
@@ -126,6 +127,19 @@ export interface V2ProductPolicyRuntime {
   readonly communityRuntimeAvailable: boolean;
   /** `search` module enabled with the repository, cursor codec, and quota. */
   readonly searchRuntimeAvailable: boolean;
+  /** `chain` module enabled with at least one configured BSC RPC endpoint. */
+  readonly chainRuntimeAvailable: boolean;
+  /**
+   * Live `eth_chainId` verification. It is a function because verification is
+   * probed asynchronously after startup: the projection must report the
+   * current state, never the state that happened to hold when the app was
+   * composed.
+   */
+  readonly bscChainVerification: () => ChainVerificationState;
+  /** `wallet` module enabled with Privy credentials and the wallet repository. */
+  readonly walletRuntimeAvailable: boolean;
+  /** `watchlist` module enabled with the V2 watchlist repository composed. */
+  readonly watchlistRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -148,6 +162,22 @@ export const v2CommunityMiningUnavailableReasonCode =
   "MINING_FORMULA_BASELINE_PENDING" as const;
 export const v2CommunityPresenceUnavailableReasonCode =
   "STREAM_PRESENCE_NOT_CONNECTED" as const;
+export const v2ChainModuleDeferredReasonCode =
+  "BSC_CHAIN_MODULE_NOT_ENABLED" as const;
+export const v2ChainRpcNotConfiguredReasonCode =
+  "BSC_RPC_NOT_CONFIGURED" as const;
+export const v2ChainIdMismatchReasonCode = "BSC_CHAIN_ID_MISMATCH" as const;
+export const v2ChainRpcUnreachableReasonCode = "BSC_RPC_UNREACHABLE" as const;
+export const v2ChainVerificationPendingReasonCode =
+  "BSC_CHAIN_VERIFICATION_PENDING" as const;
+export const v2WalletModuleDeferredReasonCode =
+  "WALLET_PROJECTION_DEFERRED" as const;
+export const v2WalletRuntimeUnavailableReasonCode =
+  "WALLET_RUNTIME_UNAVAILABLE" as const;
+export const v2WatchlistModuleDeferredReasonCode =
+  "V2_WATCHLIST_RUNTIME_DEFERRED" as const;
+export const v2WatchlistRuntimeUnavailableReasonCode =
+  "WATCHLIST_RUNTIME_UNAVAILABLE" as const;
 
 /**
  * Capability projected by each V2 module gate. A module without a capability
@@ -159,6 +189,7 @@ export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
   search: "search",
   market: null,
+  chain: "bscRead",
   wallet: "walletRead",
   swap: "privySwap",
   sendApprovals: "sendApprovals",
@@ -166,6 +197,7 @@ export const v2ModuleCapabilityIds = Object.freeze({
   mining: "mining",
   notifications: "pushNotifications",
   profile: "profile",
+  watchlist: "watchlist",
 } as const satisfies Readonly<Record<V2ModuleId, string | null>>);
 
 export const v2CapabilityIds = Object.freeze([
@@ -179,6 +211,7 @@ export const v2CapabilityIds = Object.freeze([
   "search",
   "bscRead",
   "walletRead",
+  "watchlist",
   "privySwap",
   "sendApprovals",
   "launch",
@@ -413,6 +446,54 @@ function profileCapability(
   });
 }
 
+/**
+ * `bscRead` is available only when the chain module is registered, at least
+ * one RPC endpoint is configured, and `eth_chainId` was actually observed to
+ * equal 56. An unprobed, unreachable, or mismatched chain is never `available`:
+ * a wrong-chain endpoint would otherwise publish another chain's facts as BSC
+ * facts.
+ */
+function bscReadCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const capabilityId = v2ModuleCapabilityIds.chain;
+  if (!config.v2ModulesEnabled.has("chain")) {
+    return deferredCapability(capabilityId, v2ChainModuleDeferredReasonCode);
+  }
+  const reasonCode = !runtime.chainRuntimeAvailable
+    ? v2ChainRpcNotConfiguredReasonCode
+    : chainVerificationReasonCode(runtime.bscChainVerification());
+  return Object.freeze({
+    capabilityId,
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "pending",
+      reasonCode: "BSC_RPC_PROVIDER_EVIDENCE_PENDING",
+    }),
+  });
+}
+
+function chainVerificationReasonCode(
+  state: ChainVerificationState,
+): string | null {
+  switch (state) {
+    case "verified": {
+      return null;
+    }
+    case "mismatched": {
+      return v2ChainIdMismatchReasonCode;
+    }
+    case "unreachable": {
+      return v2ChainRpcUnreachableReasonCode;
+    }
+    case "unknown": {
+      return v2ChainVerificationPendingReasonCode;
+    }
+  }
+}
+
 function unavailableCapability(
   capabilityId: string,
   reasonCode: string,
@@ -494,12 +575,14 @@ export function createV2CapabilitiesProjection(
       v2SearchModuleDeferredReasonCode,
       v2SearchRuntimeUnavailableReasonCode,
     ),
-    deferredCapability("bscRead", "BSC_PROVIDER_SELECTION_DEFERRED"),
-    moduleGatedCapability(
+    bscReadCapability(config, runtime),
+    deliveredModuleCapability(
       config,
       "wallet",
       v2ModuleCapabilityIds.wallet,
-      "WALLET_PROJECTION_DEFERRED",
+      runtime.walletRuntimeAvailable,
+      v2WalletModuleDeferredReasonCode,
+      v2WalletRuntimeUnavailableReasonCode,
     ),
     moduleGatedCapability(
       config,
@@ -532,6 +615,14 @@ export function createV2CapabilitiesProjection(
       "PUSH_RUNTIME_DEFERRED",
     ),
     profileCapability(config, runtime),
+    deliveredModuleCapability(
+      config,
+      "watchlist",
+      "watchlist",
+      runtime.watchlistRuntimeAvailable,
+      v2WatchlistModuleDeferredReasonCode,
+      v2WatchlistRuntimeUnavailableReasonCode,
+    ),
     unavailableCapability("avatarUpload", v2AvatarUploadUnavailableReasonCode),
     deferredCapability("pay", "PAY_RUNTIME_DEFERRED"),
     deferredCapability("bridge", "BRIDGE_RUNTIME_DEFERRED"),

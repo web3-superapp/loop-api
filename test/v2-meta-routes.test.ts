@@ -311,11 +311,11 @@ describe("LOOP API V2 meta policy gates", () => {
 
   it("moves enabled module capabilities from deferred to not-registered", async () => {
     const app = await createApp({
-      V2_MODULES_ENABLED: "wallet,mining, notifications",
+      V2_MODULES_ENABLED: "mining, notifications",
     });
     const capabilities = await readCapabilities(app);
 
-    for (const capabilityId of ["walletRead", "mining", "pushNotifications"]) {
+    for (const capabilityId of ["mining", "pushNotifications"]) {
       expect(capabilities[capabilityId]).toEqual({
         capabilityId,
         availability: "unavailable",
@@ -330,6 +330,8 @@ describe("LOOP API V2 meta policy gates", () => {
       "sendApprovals",
       "launch",
       "bscRead",
+      "walletRead",
+      "watchlist",
       "pay",
       "bridge",
       "dappExecution",
@@ -351,7 +353,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(21);
+    expect(Object.keys(capabilities)).toHaveLength(22);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -383,6 +385,10 @@ describe("LOOP API V2 meta policy gates", () => {
       profileRuntimeAvailable: false,
       communityRuntimeAvailable: false,
       searchRuntimeAvailable: false,
+      chainRuntimeAvailable: false,
+      bscChainVerification: () => "unknown" as const,
+      walletRuntimeAvailable: false,
+      watchlistRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -411,12 +417,21 @@ describe("LOOP API V2 meta policy gates", () => {
     expect(registeredV2ModuleIds(config)).toEqual([
       "community",
       "search",
+      "chain",
+      "wallet",
       "profile",
+      "watchlist",
     ]);
 
-    const undelivered = v2ModuleIds.filter(
-      (id) => id !== "profile" && id !== "community" && id !== "search",
-    );
+    const deliveredModuleIds = new Set([
+      "community",
+      "search",
+      "chain",
+      "wallet",
+      "profile",
+      "watchlist",
+    ]);
+    const undelivered = v2ModuleIds.filter((id) => !deliveredModuleIds.has(id));
     const app = await createApp({
       V2_MODULES_ENABLED: undelivered.join(","),
     });
@@ -426,7 +441,9 @@ describe("LOOP API V2 meta policy gates", () => {
       ),
     ).toEqual([]);
     for (const path of [
-      "/v2/wallet",
+      "/v2/wallets",
+      "/v2/chain/status",
+      "/v2/watchlist",
       "/v2/community/home",
       "/v2/profile",
       "/v2/profile/avatars",

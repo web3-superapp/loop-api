@@ -10,6 +10,22 @@ import type { ChatChannelRepository } from "../features/communication/chat-chann
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
 import type { CommunityRepository } from "../features/community/community-repository.js";
+import {
+  createPostgresAccountWalletRepository,
+  type AccountWalletRepository,
+} from "./account-wallet-repository.js";
+import {
+  createPostgresBscIndexerRepository,
+  type BscIndexerRepository,
+} from "./bsc-indexer-repository.js";
+import {
+  createPostgresChainRegistryRepository,
+  type ChainRegistryRepository,
+} from "./chain-registry-repository.js";
+import {
+  createPostgresWatchlistV2Repository,
+  type WatchlistV2Repository,
+} from "./watchlist-v2-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
 import { createPostgresCommunityRepository } from "./community-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
@@ -84,6 +100,14 @@ export interface Database {
   /** V2 community, follow graph, blocks, and search (Decision 0031). */
   readonly community?: CommunityRepository;
   readonly watchlists: WatchlistRepository;
+  /** V2 Watchlist rows keyed by canonical assetId (Decision 0033). */
+  readonly watchlistsV2?: WatchlistV2Repository;
+  /** BSC chain and Asset Registry (Decision 0033). */
+  readonly chainRegistry?: ChainRegistryRepository;
+  /** LOOP wallet inventory projected from Privy (Decision 0033). */
+  readonly accountWallets?: AccountWalletRepository;
+  /** Narrow BSC indexer lanes and their projections (Decision 0033). */
+  readonly bscIndexer?: BscIndexerRepository;
   readonly alerts: AlertRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -199,6 +223,10 @@ export function createPostgresDatabase(
   const profiles = createPostgresProfileRepository(pool);
   const profilesV2 = createPostgresProfileV2Repository(pool);
   const watchlists = createPostgresWatchlistRepository(pool);
+  const watchlistsV2 = createPostgresWatchlistV2Repository(pool);
+  const chainRegistry = createPostgresChainRegistryRepository(pool);
+  const accountWallets = createPostgresAccountWalletRepository(pool);
+  const bscIndexer = createPostgresBscIndexerRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
@@ -223,6 +251,10 @@ export function createPostgresDatabase(
     profilesV2,
     community,
     watchlists,
+    watchlistsV2,
+    chainRegistry,
+    accountWallets,
+    bscIndexer,
     alerts,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({

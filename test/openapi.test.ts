@@ -70,7 +70,9 @@ describe("committed OpenAPI artifact", () => {
       "/health/live",
       "/health/ready",
       "/v2/account/me",
+      "/v2/assets/{assetId}",
       "/v2/blocks",
+      "/v2/chain/status",
       "/v2/communities",
       "/v2/communities/{communityId}",
       "/v2/communities/{communityId}/join",
@@ -94,9 +96,15 @@ describe("committed OpenAPI artifact", () => {
       "/v2/search",
       "/v2/session/bootstrap",
       "/v2/session/logout",
+      "/v2/wallets",
+      "/v2/wallets/active",
+      "/v2/wallets/{walletId}/activity",
+      "/v2/wallets/{walletId}/balances",
+      "/v2/wallets/{walletId}/receive",
+      "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(36);
+    expect(operationIds).toHaveLength(45);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

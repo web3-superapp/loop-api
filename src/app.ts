@@ -22,6 +22,45 @@ import {
   registerAuthenticationHooks,
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
+import { createUnavailableAccountWalletRepository } from "./database/account-wallet-repository.js";
+import { createUnavailableBscIndexerRepository } from "./database/bsc-indexer-repository.js";
+import { createUnavailableChainRegistryRepository } from "./database/chain-registry-repository.js";
+import { createUnavailableWatchlistV2Repository } from "./database/watchlist-v2-repository.js";
+import {
+  createAssetRegistryService,
+  type AssetRegistryService,
+} from "./features/chain/asset-registry-service.js";
+import {
+  createChainStatusService,
+  type ChainStatusService,
+} from "./features/chain/chain-status-service.js";
+import {
+  bscChainId,
+  bscChainReference,
+  bscNativeAssetId,
+} from "./features/chain/chain-contract.js";
+import {
+  createWalletReadService,
+  type WalletReadService,
+} from "./features/wallet/wallet-read-service.js";
+import {
+  createWatchlistV2Service,
+  type WatchlistV2Service,
+} from "./features/watchlist/watchlist-v2-service.js";
+import {
+  createBscReadClient,
+  createUnavailableBscReadClient,
+  type BscReadClient,
+  type ChainVerificationState,
+} from "./integrations/bsc/rpc-client.js";
+import {
+  createPrivyBalanceReader,
+  createPrivyWalletReader,
+  createUnavailablePrivyBalanceReader,
+  createUnavailablePrivyWalletReader,
+  type PrivyBalanceReader,
+  type PrivyWalletReader,
+} from "./integrations/privy/wallet-reader.js";
 import { createUnavailableCommunityRepository } from "./features/community/community-repository.js";
 import {
   createCommunityService,
@@ -243,6 +282,13 @@ export interface BuildAppOptions {
   readonly spotWalletBindingService?: SpotWalletBindingService;
   readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
   readonly v2SessionService?: V2SessionService;
+  readonly bscReadClient?: BscReadClient;
+  readonly privyWalletReader?: PrivyWalletReader;
+  readonly privyBalanceReader?: PrivyBalanceReader;
+  readonly chainStatusService?: ChainStatusService;
+  readonly assetRegistryService?: AssetRegistryService;
+  readonly walletReadService?: WalletReadService;
+  readonly watchlistV2Service?: WatchlistV2Service;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -502,6 +548,21 @@ export async function buildApp(
       name: "profile",
       description:
         "Server-assigned LOOP ID, owner-bound profile, preset avatars, and V2 privacy preferences",
+    },
+    {
+      name: "chain",
+      description:
+        "BSC read freshness and the on-chain-verified Asset Registry; every fact carries the block it was observed at",
+    },
+    {
+      name: "wallet",
+      description:
+        "Read-only Privy wallet inventory, snapshot balances, indexed activity, and receive details",
+    },
+    {
+      name: "watchlist",
+      description:
+        "Owner-bound grouped V2 Watchlist keyed by canonical asset IDs",
     },
   ] as const;
   const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
@@ -790,6 +851,107 @@ export async function buildApp(
     options.spotAgentAuthorizationService ??
     createUnavailableSpotAgentAuthorizationService();
 
+  const registeredModuleIds = registeredV2ModuleIds(config);
+  const bscReadClient =
+    options.bscReadClient ??
+    (config.bscChain === null
+      ? createUnavailableBscReadClient()
+      : createBscReadClient({ config: config.bscChain }));
+  const chainRegistryRepository =
+    database.chainRegistry ?? createUnavailableChainRegistryRepository();
+  const bscIndexerRepository =
+    database.bscIndexer ?? createUnavailableBscIndexerRepository();
+  const accountWalletRepository =
+    database.accountWallets ?? createUnavailableAccountWalletRepository();
+  const privyWalletReader =
+    options.privyWalletReader ??
+    (privyServerClient === null
+      ? createUnavailablePrivyWalletReader()
+      : createPrivyWalletReader(privyServerClient.users()));
+  const privyBalanceReader =
+    options.privyBalanceReader ??
+    (privyServerClient === null
+      ? createUnavailablePrivyBalanceReader()
+      : createPrivyBalanceReader(privyServerClient.wallets().balance));
+  const assetRegistryService =
+    options.assetRegistryService ??
+    createAssetRegistryService({
+      repository: chainRegistryRepository,
+      readClient: bscReadClient,
+      chainId: bscChainId,
+      verifiedUsd1Address: config.bscChain?.usd1TokenAddress ?? null,
+    });
+  const chainStatusService =
+    options.chainStatusService ??
+    createChainStatusService({
+      repository: chainRegistryRepository,
+      indexerRepository: bscIndexerRepository,
+      readClient: bscReadClient,
+      chainId: bscChainId,
+      chainName: "BNB Smart Chain",
+      chainReference: bscChainReference,
+      nativeAssetId: bscNativeAssetId,
+    });
+  const walletReadService =
+    options.walletReadService ??
+    createWalletReadService({
+      repository: accountWalletRepository,
+      indexerRepository: bscIndexerRepository,
+      assetRegistry: assetRegistryService,
+      readClient: bscReadClient,
+      walletReader: privyWalletReader,
+      balanceReader: privyBalanceReader,
+      cursorCodec: v2CursorCodec,
+      chainId: bscChainId,
+      chainName: "BNB Smart Chain",
+      chainReference: bscChainReference,
+    });
+  const watchlistV2Service =
+    options.watchlistV2Service ??
+    createWatchlistV2Service({
+      repository:
+        database.watchlistsV2 ?? createUnavailableWatchlistV2Repository(),
+      registry: chainRegistryRepository,
+      chainId: bscChainId,
+    });
+  const chainRuntimeAvailable =
+    registeredModuleIds.includes("chain") &&
+    (options.bscReadClient !== undefined || config.bscChain !== null) &&
+    (options.chainStatusService !== undefined ||
+      database.chainRegistry !== undefined);
+  const walletRuntimeAvailable =
+    registeredModuleIds.includes("wallet") &&
+    (options.walletReadService !== undefined ||
+      (config.privy !== null &&
+        database.accountWallets !== undefined &&
+        v2CursorCodec !== null));
+  const watchlistRuntimeAvailable =
+    registeredModuleIds.includes("watchlist") &&
+    (options.watchlistV2Service !== undefined ||
+      (database.watchlistsV2 !== undefined &&
+        database.chainRegistry !== undefined));
+
+  // Chain-ID verification is probed once at startup and refreshed lazily by
+  // the read client. A misconfigured endpoint is a loud warning and a closed
+  // capability, never a crash and never a silently wrong chain.
+  let chainVerification: ChainVerificationState = "unknown";
+  if (chainRuntimeAvailable) {
+    void bscReadClient
+      .verifyChain()
+      .then((state) => {
+        chainVerification = state;
+        if (state !== "verified") {
+          app.log.warn(
+            { chainId: bscChainId, chainVerification: state },
+            "BSC chain verification did not confirm the configured chain",
+          );
+        }
+      })
+      .catch(() => {
+        chainVerification = "unreachable";
+      });
+  }
+
   app.addHook("onClose", async () => {
     await database.close();
   });
@@ -900,12 +1062,20 @@ export async function buildApp(
         profileRuntimeAvailable: profileV2RuntimeAvailable,
         communityRuntimeAvailable,
         searchRuntimeAvailable,
+        chainRuntimeAvailable,
+        bscChainVerification: () => chainVerification,
+        walletRuntimeAvailable,
+        watchlistRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
       profileService: profileV2Service,
       communityService,
+      chainStatusService,
+      assetRegistryService,
+      walletReadService,
+      watchlistV2Service,
       cursorCodec: v2CursorCodec,
     });
   }

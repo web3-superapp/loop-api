@@ -31,6 +31,8 @@ describe("loadReconciliationWorkerConfig", () => {
       databasePoolMax: 10,
       databaseConnectionTimeoutMs: 3_000,
       databaseStatementTimeoutMs: 5_000,
+      bscChain: null,
+      bscIndexer: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
