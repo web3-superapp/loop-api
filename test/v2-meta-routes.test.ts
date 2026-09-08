@@ -315,14 +315,17 @@ describe("LOOP API V2 meta policy gates", () => {
     });
     const capabilities = await readCapabilities(app);
 
-    for (const capabilityId of ["mining"]) {
-      expect(capabilities[capabilityId]).toEqual({
-        capabilityId,
-        availability: "unavailable",
-        reasonCode: "MODULE_RUNTIME_NOT_REGISTERED",
-        evidence: { status: "notApplicable", reasonCode: null },
-      });
-    }
+    // Decision 0036: mining is delivered; without a composed repository it
+    // is unavailable, and the formula baseline stays pending as evidence.
+    expect(capabilities["mining"]).toEqual({
+      capabilityId: "mining",
+      availability: "unavailable",
+      reasonCode: "MINING_RUNTIME_UNAVAILABLE",
+      evidence: {
+        status: "pending",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      },
+    });
     // Push delivery never opens with the module gate: no FCM/APNs runtime.
     expect(capabilities["pushNotifications"]).toEqual({
       capabilityId: "pushNotifications",
@@ -339,6 +342,7 @@ describe("LOOP API V2 meta policy gates", () => {
       "privySwap",
       "sendApprovals",
       "launch",
+      "referral",
       "bscRead",
       "walletRead",
       "watchlist",
@@ -364,7 +368,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(30);
+    expect(Object.keys(capabilities)).toHaveLength(31);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -408,6 +412,9 @@ describe("LOOP API V2 meta policy gates", () => {
       walletIntentRuntimeAvailable: false,
       bscWritesEnabled: false,
       privySwapRuntimeAvailable: false,
+      launchRuntimeAvailable: false,
+      miningRuntimeAvailable: false,
+      referralRuntimeAvailable: false,
       securityRuntimeAvailable: false,
       settingsRuntimeAvailable: false,
       supportRuntimeAvailable: false,
@@ -445,6 +452,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "wallet",
       "swap",
       "sendApprovals",
+      "launch",
+      "mining",
+      "referral",
       "notifications",
       "profile",
       "watchlist",
@@ -462,6 +472,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "wallet",
       "swap",
       "sendApprovals",
+      "launch",
+      "mining",
+      "referral",
       "notifications",
       "profile",
       "watchlist",

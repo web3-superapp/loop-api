@@ -46,6 +46,12 @@ import { createPostgresAccountSettingsRepository } from "./account-settings-repo
 import { createPostgresSupportTicketRepository } from "./support-ticket-repository.js";
 import type { AccountSettingsRepository } from "../features/settings/account-settings-repository.js";
 import type { SupportTicketRepository } from "../features/support/support-ticket-repository.js";
+import { createPostgresLaunchRepository } from "./launch-repository.js";
+import { createPostgresMiningRepository } from "./mining-repository.js";
+import { createPostgresReferralRepository } from "./referral-repository.js";
+import type { LaunchRepository } from "../features/launch/launch-repository.js";
+import type { MiningRepository } from "../features/mining/mining-repository.js";
+import type { ReferralRepository } from "../features/referral/referral-repository.js";
 import type {
   CommunicationRepository,
   CommunityChannelSyncRepository,
@@ -151,6 +157,12 @@ export interface Database {
   readonly accountSettings?: AccountSettingsRepository;
   /** Decision 0037 support tickets. */
   readonly supportTickets?: SupportTicketRepository;
+  /** Launch off-chain catalog and review (Decision 0036). */
+  readonly launch?: LaunchRepository;
+  /** Mining formula versions, weights, and snapshots (Decision 0036). */
+  readonly mining?: MiningRepository;
+  /** Invite codes and referral edges (Decision 0036). */
+  readonly referral?: ReferralRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -279,6 +291,9 @@ export function createPostgresDatabase(
   const walletIntents = createPostgresWalletIntentRepository(pool);
   const accountSettings = createPostgresAccountSettingsRepository(pool);
   const supportTickets = createPostgresSupportTicketRepository(pool);
+  const launch = createPostgresLaunchRepository(pool);
+  const mining = createPostgresMiningRepository(pool);
+  const referral = createPostgresReferralRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
@@ -323,6 +338,9 @@ export function createPostgresDatabase(
     walletIntents,
     accountSettings,
     supportTickets,
+    launch,
+    mining,
+    referral,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

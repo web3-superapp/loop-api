@@ -284,6 +284,24 @@ import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registeredV2ModuleIds, registerV2Routes } from "./routes/v2/index.js";
 import {
+  createLaunchService,
+  createUnavailableLaunchService,
+  type LaunchService,
+} from "./features/launch/launch-service.js";
+import { createUnavailableLaunchRepository } from "./features/launch/launch-repository.js";
+import {
+  createMiningService,
+  createUnavailableMiningService,
+  type MiningService,
+} from "./features/mining/mining-service.js";
+import { createUnavailableMiningRepository } from "./features/mining/mining-repository.js";
+import {
+  createReferralService,
+  createUnavailableReferralService,
+  type ReferralService,
+} from "./features/referral/referral-service.js";
+import { createUnavailableReferralRepository } from "./features/referral/referral-repository.js";
+import {
   createDeviceService,
   type DeviceService,
 } from "./features/security/device-service.js";
@@ -397,6 +415,10 @@ export interface BuildAppOptions {
   readonly approvalService?: ApprovalService;
   readonly swapService?: SwapService;
   readonly walletIntentNow?: () => Date;
+  /** Test seams for the S7 runtimes (Decision 0036). */
+  readonly launchService?: LaunchService;
+  readonly miningService?: MiningService;
+  readonly referralService?: ReferralService;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
   readonly securityService?: SecurityService;
@@ -1260,6 +1282,43 @@ export async function buildApp(
   const swapService =
     options.swapService ?? createSwapService({ runtime: walletIntentRuntime });
 
+  // Launch, mining, and referral (Decision 0036): PostgreSQL-backed
+  // catalog, formula versions, and relationship graph. The contract and
+  // formula baselines stay pending; that is reported through the capability
+  // evidence, not by pretending the runtime is missing.
+  const launchRuntimeAvailable =
+    registeredModuleIds.includes("launch") &&
+    (options.launchService !== undefined ||
+      (database.launch !== undefined && v2CursorCodec !== null));
+  const launchService =
+    options.launchService ??
+    (launchRuntimeAvailable
+      ? createLaunchService({
+          repository: database.launch ?? createUnavailableLaunchRepository(),
+          cursorCodec: v2CursorCodec,
+        })
+      : createUnavailableLaunchService());
+  const miningRuntimeAvailable =
+    registeredModuleIds.includes("mining") &&
+    (options.miningService !== undefined || database.mining !== undefined);
+  const miningService =
+    options.miningService ??
+    (miningRuntimeAvailable
+      ? createMiningService({
+          repository: database.mining ?? createUnavailableMiningRepository(),
+        })
+      : createUnavailableMiningService());
+  const referralRuntimeAvailable =
+    registeredModuleIds.includes("referral") &&
+    (options.referralService !== undefined || database.referral !== undefined);
+  const referralService =
+    options.referralService ??
+    (referralRuntimeAvailable
+      ? createReferralService({
+          repository:
+            database.referral ?? createUnavailableReferralRepository(),
+        })
+      : createUnavailableReferralService());
   // D20 (Decision 0037): security reuses the device-session projection and
   // composes the approvals summary only when that module is registered;
   // settings and support have their own repositories.
@@ -1454,6 +1513,9 @@ export async function buildApp(
         walletIntentRuntimeAvailable,
         bscWritesEnabled: config.bscWrites !== null,
         privySwapRuntimeAvailable,
+        launchRuntimeAvailable,
+        miningRuntimeAvailable,
+        referralRuntimeAvailable,
         securityRuntimeAvailable,
         settingsRuntimeAvailable,
         supportRuntimeAvailable,
@@ -1476,6 +1538,9 @@ export async function buildApp(
       sendService,
       approvalService,
       swapService,
+      launchService,
+      miningService,
+      referralService,
       deviceService,
       securityService,
       settingsService,

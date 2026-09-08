@@ -68,7 +68,8 @@ sensitive inputs. The server still generates a new request ID for every replay.
 - The same key and identical canonical input returns the original operation or
   result. The same key with different input returns `IDEMPOTENCY_CONFLICT`.
 - Versioned compare-and-swap replacements (`PUT /v2/profile`,
-  `PUT /v2/profile/privacy`, `PUT /v2/settings`, and any later
+  `PUT /v2/profile/privacy`, `PUT /v2/settings`,
+  `PUT /v2/launch/projects/{id}`, and any later
   `expectedVersion` resource) do not
   accept an `Idempotency-Key`: they are idempotent through `expectedVersion`
   (an identical retry returns the committed resource, a stale version is
@@ -258,9 +259,10 @@ operation needs a stronger, module-defined authentication step.
   routes are always registered.
 - `V2_MODULES_ENABLED` is a comma-separated subset of `community`,
   `communication`, `search`, `market`, `chain`, `wallet`, `swap`,
-  `sendApprovals`, `launch`, `mining`, `notifications`, `profile`,
-  `watchlist`, `security`, `settings`, `support`. Unknown or duplicate IDs
-  fail startup. A module not listed is not registered even if its code exists.
+  `sendApprovals`, `launch`, `mining`, `referral`, `notifications`,
+  `profile`, `watchlist`, `security`, `settings`, `support`. Unknown or
+  duplicate IDs fail startup. A module not listed is not registered even
+  if its code exists.
 - Each module ships a registrar in `v2ModuleRegistrars` with its own decision.
   Until then the entry is `null`: enabling the module registers no route and
   moves its capability from `deferred` to `unavailable` with
@@ -281,6 +283,11 @@ operation needs a stronger, module-defined authentication step.
   recovery, key export) are not capabilities here; `GET /v2/security/capabilities`
   reports each as `unavailable` with pending evidence.
   `market` gains a capability entry with its module after consumer review.
+  `launch→launch`, `mining→mining`, and `referral→referral` are delivered by
+  Decision 0036: `available` when the module is enabled and its repository
+  is composed, with `evidence` always `pending`
+  (`LAUNCH_CONTRACT_BASELINE_PENDING` / `MINING_FORMULA_BASELINE_PENDING`)
+  because the contract and formula baselines do not exist.
   `communityMining` and `communityPresence` are not module-gated and stay
   `unavailable` (`MINING_FORMULA_BASELINE_PENDING`,
   `STREAM_PRESENCE_NOT_CONNECTED`), as does `avatarUpload`

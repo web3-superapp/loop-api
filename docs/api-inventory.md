@@ -144,6 +144,53 @@ only path that sets
 `verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
 and writes an operator audit row.
 
+### V2 launch module (Decision 0036, `V2_MODULES_ENABLED=launch`)
+
+The 02 contract document has not been provided: every on-chain Launch fact is
+`unavailable` with `LAUNCH_CONTRACT_BASELINE_PENDING`, no Launch transaction
+is built, and no prototype supply/tax/suffix number is published. Frontend
+contract: `docs/frontend-v2-launch-api.md`.
+
+| Method and path                                  | Request                                                                   | Success projection                                                                       | Interface     | Capability                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------ |
+| `GET /v2/launch/overview`                        | Bearer + contract/client headers; no payload                              | Approved launches by `scheduleStatus`; `graduated`/`myEligibility`/`staking` unavailable | `implemented` | `implemented`; four-axis projection pinned to `unavailable`              |
+| `GET /v2/launch/projects`                        | `status`, `limit`, owner-bound cursor                                     | Caller's applications                                                                    | `implemented` | `implemented`                                                            |
+| `POST /v2/launch/projects`                       | Write headers incl. UUIDv4 `Idempotency-Key`; name/ticker/narrative/links | `201` draft; KYB and attachments `unavailable`                                           | `implemented` | `implemented`; review is operator-only (`pnpm launch:review`)            |
+| `GET /v2/launch/projects/{projectId}`            | Bearer + headers                                                          | Project (owner: any status; others: `approved` only)                                     | `implemented` | `implemented`                                                            |
+| `PUT /v2/launch/projects/{projectId}`            | Same headers, no `Idempotency-Key`; `{expectedVersion, project}`          | Committed material (`draft`/`returned` only)                                             | `implemented` | `implemented`; CAS                                                       |
+| `POST /v2/launch/projects/{projectId}/submit`    | Write headers; no payload                                                 | `submitted`                                                                              | `implemented` | `implemented`; `returned` may resubmit                                   |
+| `GET /v2/launch/projects/{projectId}/milestones` | Bearer + headers                                                          | Venue milestones with evidence digest/time/reviewer                                      | `implemented` | `implemented`; recorded only by `pnpm launch:milestone`                  |
+| `GET /v2/launches/{launchId}`                    | Bearer + headers                                                          | Launch + config slots + rounds + four axes + graduation steps + pool evidence            | `implemented` | `blocked-provider`; every on-chain block `unavailable`                   |
+| `GET /v2/launch/{launchId}/eligibility`          | Bearer + headers                                                          | `mode` from `tierModeV1`; `TIER_MODE_PENDING`                                            | `implemented` | `blocked-product-legal`; Tier mode unconfirmed; never depends on staking |
+| `GET /v2/launch/{launchId}/holders`              | Bearer + headers                                                          | All `unavailable`                                                                        | `implemented` | `blocked-provider`                                                       |
+| `GET /v2/launch/{launchId}/history`              | Bearer + headers                                                          | Empty records + `source: unavailable`                                                    | `implemented` | `blocked-provider`                                                       |
+| `POST /v2/launch/{launchId}/intents`             | Write headers; `{walletId, roundId, payAmount}`                           | Always `503 CAPABILITY_UNAVAILABLE`                                                      | `implemented` | `blocked-provider`; `launch_intents` is structure only                   |
+| `GET /v2/launch/stake`                           | Bearer + headers                                                          | `STAKING_CONTRACT_PENDING`, `executable: false`                                          | `implemented` | `blocked-provider`                                                       |
+| `GET /v2/launch/economy`                         | Bearer + headers                                                          | Provable counts + `source: loop_db`; supply/tax `unavailable`                            | `implemented` | `implemented`                                                            |
+
+### V2 mining module (Decision 0036, `V2_MODULES_ENABLED=mining`)
+
+No Mining formula version is approved (`miningFormulaV1-draft` is
+`pending_approval`); every power, reward, and rank is `unavailable`. Frontend
+contract: `docs/frontend-v2-mining-api.md`.
+
+| Method and path                            | Request                    | Success projection                                                 | Interface     | Capability                                                     |
+| ------------------------------------------ | -------------------------- | ------------------------------------------------------------------ | ------------- | -------------------------------------------------------------- |
+| `GET /v2/mining/summary`                   | Bearer + headers           | All numbers `unavailable`; names the pending formula version       | `implemented` | `blocked-product-legal`; `MINING_FORMULA_BASELINE_PENDING`     |
+| `GET /v2/mining/assets`                    | Bearer + headers           | `unavailable`; empty lists by contract                             | `implemented` | `blocked-product-legal`                                        |
+| `GET /v2/mining/rewards`                   | Bearer + headers           | `claimable` `REWARD_AUTHORITY_PENDING`, `claimExecutable: false`   | `implemented` | `blocked-product-legal`                                        |
+| `GET /v2/mining/rank`                      | `scope=users\|communities` | `unavailable`; anonymity display rule                              | `implemented` | `blocked-product-legal`                                        |
+| `GET /v2/mining/communities/{communityId}` | Bearer + headers           | Weight record (`approved` value or `pending_review`)               | `implemented` | `implemented` for the review state; power blocks `unavailable` |
+| `GET /v2/mining/rules`                     | Bearer + headers           | Approved (null) + pending versions with rule keys; referral levels | `implemented` | `implemented`; no weight number before approval                |
+| `GET /v2/mining/referral/rules`            | Bearer + headers           | Versioned five-level boost snapshot (moved from `community`)       | `implemented` | `implemented`                                                  |
+
+### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
+
+| Method and path           | Request                       | Success projection                                                             | Interface     | Capability                                             |
+| ------------------------- | ----------------------------- | ------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------ |
+| `GET /v2/referral`        | Bearer + headers              | Invite code (issued on first read), binding, level counts, boost `unavailable` | `implemented` | `implemented`; boost `MINING_FORMULA_BASELINE_PENDING` |
+| `POST /v2/referral/claim` | Write headers; `{inviteCode}` | Binding (depth 1..5 edges materialised)                                        | `implemented` | `implemented`; 7-day window, once, no self/cycle       |
+
 ### V2 chain module (Decision 0033, `V2_MODULES_ENABLED=chain`)
 
 | Method and path            | Request                                    | Success projection                                                                               | Interface     | Capability                                                             |

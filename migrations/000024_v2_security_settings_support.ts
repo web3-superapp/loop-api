@@ -50,6 +50,8 @@ export function up(pgm: MigrationBuilder): void {
         'social_graph_command_v1',
         'communication_command_v1',
         'price_alert_create_v2',
+        'launch_command_v1',
+        'referral_command_v1',
         'support_ticket_create_v1'
       ));
 
@@ -263,7 +265,9 @@ export function down(pgm: MigrationBuilder): void {
         'community_command_v1',
         'social_graph_command_v1',
         'communication_command_v1',
-        'price_alert_create_v2'
+        'price_alert_create_v2',
+        'launch_command_v1',
+        'referral_command_v1'
       ));
 
     alter table public.device_session_commands
