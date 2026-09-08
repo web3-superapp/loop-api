@@ -11,6 +11,10 @@ import Fastify, {
 
 import type { AppConfig } from "./config.js";
 import { ApiError } from "./core/http/api-error.js";
+import {
+  registerRequestAbortSignal,
+  requestAbortDeadlineMilliseconds,
+} from "./core/http/request-abort-signal.js";
 import { createV2CursorCodec } from "./core/http/v2-cursor.js";
 import {
   isV2RequestPath,
@@ -435,6 +439,10 @@ export async function buildApp(
     trustProxy: config.trustProxy ? localCloudflaredProxyCidrs : false,
   };
   const app = Fastify(fastifyOptions);
+
+  // Must be the first onRequest hook: every later hook, handler, and gateway
+  // reads the replacement `request.signal` it installs.
+  registerRequestAbortSignal(app, requestAbortDeadlineMilliseconds);
 
   app.addHook("onRequest", (request, _reply, done) => {
     request.log.info(
