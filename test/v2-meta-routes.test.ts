@@ -385,6 +385,7 @@ describe("LOOP API V2 meta policy gates", () => {
       profileRuntimeAvailable: false,
       communityRuntimeAvailable: false,
       searchRuntimeAvailable: false,
+      bscRpcConfigured: false,
       chainRuntimeAvailable: false,
       bscChainVerification: () => "unknown" as const,
       walletRuntimeAvailable: false,

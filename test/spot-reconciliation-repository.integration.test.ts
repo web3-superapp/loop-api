@@ -1274,6 +1274,8 @@ describe("PostgreSQL Spot reconciliation repository", () => {
       public.device_session_events,
       public.device_session_commands,
       public.device_sessions,
+      public.wallet_balance_snapshots,
+      public.account_wallets,
       public.loop_users
     cascade
   `;

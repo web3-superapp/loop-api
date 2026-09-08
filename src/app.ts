@@ -914,9 +914,10 @@ export async function buildApp(
       registry: chainRegistryRepository,
       chainId: bscChainId,
     });
+  const bscRpcConfigured = bscReadClient.endpointRefs.length > 0;
   const chainRuntimeAvailable =
     registeredModuleIds.includes("chain") &&
-    (options.bscReadClient !== undefined || config.bscChain !== null) &&
+    bscRpcConfigured &&
     (options.chainStatusService !== undefined ||
       database.chainRegistry !== undefined);
   const walletRuntimeAvailable =
@@ -1062,6 +1063,7 @@ export async function buildApp(
         profileRuntimeAvailable: profileV2RuntimeAvailable,
         communityRuntimeAvailable,
         searchRuntimeAvailable,
+        bscRpcConfigured,
         chainRuntimeAvailable,
         bscChainVerification: () => chainVerification,
         walletRuntimeAvailable,

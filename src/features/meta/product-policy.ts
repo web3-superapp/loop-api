@@ -127,7 +127,9 @@ export interface V2ProductPolicyRuntime {
   readonly communityRuntimeAvailable: boolean;
   /** `search` module enabled with the repository, cursor codec, and quota. */
   readonly searchRuntimeAvailable: boolean;
-  /** `chain` module enabled with at least one configured BSC RPC endpoint. */
+  /** At least one BSC RPC endpoint is configured for this process. */
+  readonly bscRpcConfigured: boolean;
+  /** `chain` module enabled with the RPC endpoint and the registry composed. */
   readonly chainRuntimeAvailable: boolean;
   /**
    * Live `eth_chainId` verification. It is a function because verification is
@@ -166,6 +168,8 @@ export const v2ChainModuleDeferredReasonCode =
   "BSC_CHAIN_MODULE_NOT_ENABLED" as const;
 export const v2ChainRpcNotConfiguredReasonCode =
   "BSC_RPC_NOT_CONFIGURED" as const;
+export const v2ChainRuntimeUnavailableReasonCode =
+  "BSC_CHAIN_RUNTIME_UNAVAILABLE" as const;
 export const v2ChainIdMismatchReasonCode = "BSC_CHAIN_ID_MISMATCH" as const;
 export const v2ChainRpcUnreachableReasonCode = "BSC_RPC_UNREACHABLE" as const;
 export const v2ChainVerificationPendingReasonCode =
@@ -461,9 +465,11 @@ function bscReadCapability(
   if (!config.v2ModulesEnabled.has("chain")) {
     return deferredCapability(capabilityId, v2ChainModuleDeferredReasonCode);
   }
-  const reasonCode = !runtime.chainRuntimeAvailable
+  const reasonCode = !runtime.bscRpcConfigured
     ? v2ChainRpcNotConfiguredReasonCode
-    : chainVerificationReasonCode(runtime.bscChainVerification());
+    : !runtime.chainRuntimeAvailable
+      ? v2ChainRuntimeUnavailableReasonCode
+      : chainVerificationReasonCode(runtime.bscChainVerification());
   return Object.freeze({
     capabilityId,
     availability: reasonCode === null ? "available" : "unavailable",

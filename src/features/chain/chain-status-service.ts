@@ -1,3 +1,4 @@
+import { V2ApiError } from "../../core/http/v2-error.js";
 import type { ChainRegistryRepository } from "../../database/chain-registry-repository.js";
 import type { BscIndexerRepository } from "../../database/bsc-indexer-repository.js";
 import type {
@@ -79,13 +80,7 @@ export interface CreateChainStatusServiceInput {
   readonly nativeAssetId: string;
 }
 
-function rpcReasonCode(
-  configured: boolean,
-  verification: ChainVerificationState,
-): string | null {
-  if (!configured) {
-    return chainStatusReasonCodes.notConfigured;
-  }
+function rpcReasonCode(verification: ChainVerificationState): string | null {
   switch (verification) {
     case "verified": {
       return null;
@@ -107,14 +102,14 @@ export function createChainStatusService(
 ): ChainStatusService {
   return Object.freeze({
     async getStatus(): Promise<ChainStatusResource> {
-      const configured = input.readClient.endpointRefs.length > 0;
-      const verification = configured
-        ? await input.readClient.verifyChain()
-        : "unknown";
-      const reasonCode = rpcReasonCode(configured, verification);
-      const endpoints = configured
-        ? await input.readClient.probeEndpoints()
-        : Object.freeze([]);
+      // Without a configured endpoint there is no chain to report on. The
+      // route fails closed rather than publishing an all-null "healthy" shape.
+      if (input.readClient.endpointRefs.length === 0) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      const verification = await input.readClient.verifyChain();
+      const reasonCode = rpcReasonCode(verification);
+      const endpoints = await input.readClient.probeEndpoints();
 
       let head: ChainHeadProjection | null = null;
       if (reasonCode === null) {
