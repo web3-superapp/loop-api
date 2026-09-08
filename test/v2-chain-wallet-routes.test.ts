@@ -564,7 +564,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(response.json()).toMatchObject({ code: "CHAIN_MISMATCH" });
   });
 
-  it("projects the Privy wallet inventory without publishing an address", async () => {
+  it("projects the Privy wallet inventory with each wallet's public address", async () => {
     const { app, listEthereumWallets } = await createApp();
     const response = await app.inject({
       method: "GET",
@@ -575,12 +575,17 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(listEthereumWallets).toHaveBeenCalledTimes(1);
     expect(response.json()).toMatchObject({
       wallets: [
-        { walletId, kind: "embedded", provider: "privy", isActive: true },
+        {
+          walletId,
+          kind: "embedded",
+          provider: "privy",
+          address: walletAddress,
+          isActive: true,
+        },
       ],
       activeWalletId: walletId,
       source: { provider: "privy" },
     });
-    expect(response.body).not.toContain(walletAddress);
   });
 
   it("compare-and-swaps the active wallet and rejects an idempotency key", async () => {
@@ -688,6 +693,48 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       reasonCode: "MARKET_PRICE_PROVIDER_NOT_CONFIGURED",
     });
     expect(recordBalanceSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies the configured native gas reserve", async () => {
+    const { app } = await createApp(fakes(), {
+      WALLET_GAS_RESERVE_BNB: "0.02",
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    const body = response.json<{
+      readonly gasReservePolicy: {
+        readonly configVersion: string;
+        readonly nativeReserveRaw: string;
+      };
+      readonly balances: readonly {
+        readonly assetId: string;
+        readonly gasReserve: string;
+        readonly spendableBalance: string;
+      }[];
+    }>();
+    expect(body.gasReservePolicy).toEqual({
+      configVersion: "walletGasReserveV1",
+      nativeReserveRaw: "20000000000000000",
+    });
+    const native = body.balances.find(
+      (balance) => balance.assetId === "eip155:56:native",
+    );
+    expect(native).toMatchObject({
+      gasReserve: "0.02",
+      spendableBalance: "6.98",
+    });
+  });
+
+  it("rejects a gas reserve above one BNB at startup", () => {
+    expect(() => testConfig({ WALLET_GAS_RESERVE_BNB: "2" })).toThrow(
+      /must not exceed 1 BNB/,
+    );
+    expect(() => testConfig({ WALLET_GAS_RESERVE_BNB: "abc" })).toThrow(
+      /non-negative decimal/,
+    );
   });
 
   it("reports a Privy balance mismatch as disputed without changing the RPC value", async () => {

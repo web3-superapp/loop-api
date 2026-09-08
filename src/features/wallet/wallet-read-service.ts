@@ -43,12 +43,6 @@ import { v2ContractVersion } from "../meta/product-policy.js";
  */
 
 export const walletGasReserveConfigVersion = "walletGasReserveV1" as const;
-/**
- * Native amount held back from `spendableBalance` so a later transfer or Swap
- * can still pay gas. It is a display-side product policy, not a chain fact,
- * and is published with its own config version.
- */
-export const bscNativeGasReserveWei = 5_000_000_000_000_000n;
 
 export const walletReasonCodes = Object.freeze({
   chainUnavailable: "BSC_READ_UNAVAILABLE",
@@ -76,6 +70,12 @@ export interface UnavailableProjection {
 export interface WalletProjection {
   readonly walletId: string;
   readonly provider: "privy";
+  /**
+   * The wallet's public chain address. It is a public on-chain fact the
+   * wallet screens need; it is never an account or authorization key, and the
+   * server never accepts it as one.
+   */
+  readonly address: string;
   readonly kind: WalletKind;
   readonly status: "active" | "archived";
   readonly isActive: boolean;
@@ -214,6 +214,8 @@ export interface CreateWalletReadServiceInput {
   readonly walletReader: PrivyWalletReader;
   readonly balanceReader: PrivyBalanceReader;
   readonly cursorCodec: V2CursorCodec | null;
+  /** Native reserve in wei, from WALLET_GAS_RESERVE_BNB. */
+  readonly gasReserveRawWei: bigint;
   readonly chainId: string;
   readonly chainName: string;
   readonly chainReference: number;
@@ -224,6 +226,7 @@ function projectWallet(record: AccountWalletRecord): WalletProjection {
   return Object.freeze({
     walletId: record.walletId,
     provider: "privy" as const,
+    address: record.address,
     kind: record.kind,
     status: record.status,
     isActive: record.isActive,
@@ -457,7 +460,7 @@ export function createWalletReadService(
           continue;
         }
         const isNative = asset.address === null;
-        const gasReserve = isNative ? bscNativeGasReserveWei : 0n;
+        const gasReserve = isNative ? input.gasReserveRawWei : 0n;
         const spendable = subtractFloorZero(rawValue, gasReserve);
         const pendingRaw = pendingTotals?.find(
           (total) => total.assetId === asset.assetId,
@@ -513,7 +516,7 @@ export function createWalletReadService(
         }),
         gasReservePolicy: Object.freeze({
           configVersion: walletGasReserveConfigVersion,
-          nativeReserveRaw: bscNativeGasReserveWei.toString(10),
+          nativeReserveRaw: input.gasReserveRawWei.toString(10),
         }),
         balances: Object.freeze(balances),
         netWorth: unavailable(walletReasonCodes.priceProviderMissing),

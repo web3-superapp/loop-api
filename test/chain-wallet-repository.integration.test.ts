@@ -11,6 +11,7 @@ import {
 } from "../src/database/account-wallet-repository.js";
 import {
   createPostgresBscIndexerRepository,
+  indexedTransferInsertBatchSize,
   type BscIndexerRepository,
 } from "../src/database/bsc-indexer-repository.js";
 import {
@@ -311,6 +312,61 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       limit: 10,
     });
     expect(afterReorg.items[0]?.removed).toBe(true);
+  });
+
+  it("commits a segment wider than one insert batch atomically", async () => {
+    await registry.upsertAsset({
+      assetId: wbnbAssetId,
+      chainId: bscChainId,
+      address: wbnb,
+      symbol: "WBNB",
+      name: "Wrapped BNB",
+      decimals: 18,
+      status: "pending",
+      sourceBlockNumber: "43000000",
+    });
+
+    const segmentSize = indexedTransferInsertBatchSize * 2 + 1;
+    const transfers = Array.from({ length: segmentSize }, (_unused, index) => ({
+      transactionHash: `0x${index.toString(16).padStart(64, "0")}`,
+      logIndex: 0,
+      blockNumber: String(2000 + index),
+      blockHash: `0x${"a".repeat(64)}`,
+      assetId: wbnbAssetId,
+      fromAddress: counterparty,
+      toAddress: walletA,
+      rawValue: "1",
+    }));
+
+    await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers,
+      checkpoint: {
+        lastBlockNumber: String(2000 + segmentSize),
+        lastBlockHash: `0x${"a".repeat(64)}`,
+        startedFromBlockNumber: "2000",
+      },
+    });
+
+    const stored = await pool.query<{ count: string }>(
+      `select count(*)::text as count from public.indexed_transfers where chain_id = 'eip155:56'`,
+    );
+    expect(stored.rows[0]?.count).toBe(String(segmentSize));
+
+    // A replay of the same segment stays idempotent across batch boundaries.
+    await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers,
+      checkpoint: {
+        lastBlockNumber: String(2000 + segmentSize),
+        lastBlockHash: `0x${"a".repeat(64)}`,
+        startedFromBlockNumber: "2000",
+      },
+    });
+    const replayed = await pool.query<{ count: string }>(
+      `select count(*)::text as count from public.indexed_transfers where chain_id = 'eip155:56'`,
+    );
+    expect(replayed.rows[0]?.count).toBe(String(segmentSize));
   });
 
   it("shares the record version with the frozen V1 watchlist", async () => {

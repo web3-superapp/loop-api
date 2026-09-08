@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assetIdForAddress,
+  parseDecimalAmount,
   decomposeAssetId,
   eip681Uri,
   formatDecimalAmount,
@@ -75,6 +76,23 @@ describe("chain identity and amount contract", () => {
       InvalidChainIdentityError,
     );
     expect(() => formatDecimalAmount(1n, 37)).toThrow(
+      InvalidChainIdentityError,
+    );
+  });
+
+  it("parses an exact decimal into a smallest-unit integer", () => {
+    expect(parseDecimalAmount("0.005", 18)).toBe(5_000_000_000_000_000n);
+    expect(parseDecimalAmount("0", 18)).toBe(0n);
+    expect(parseDecimalAmount("1", 18)).toBe(1_000_000_000_000_000_000n);
+    expect(parseDecimalAmount("0.000000000000000001", 18)).toBe(1n);
+    // More fraction digits than the asset has decimals would silently round.
+    expect(() => parseDecimalAmount("0.0000000000000000001", 18)).toThrow(
+      InvalidChainIdentityError,
+    );
+    expect(() => parseDecimalAmount("-1", 18)).toThrow(
+      InvalidChainIdentityError,
+    );
+    expect(() => parseDecimalAmount("1e18", 18)).toThrow(
       InvalidChainIdentityError,
     );
   });

@@ -74,12 +74,12 @@ freshness surface the `networks` page needs.
 
 ### Wallet addresses
 
-`GET /v2/wallets` publishes `walletId`, `kind`, `status`, and `isActive` — not
-the address. The address is a public chain fact returned only by
-`/v2/wallets/{walletId}/receive` and `/v2/wallets/{walletId}/balances`, where
-the product needs it. **Open question for the main agent:** the `wallets`
-prototype screen shows a truncated address per row, which this contract cannot
-supply without an extra call per wallet.
+`GET /v2/wallets`, `/receive`, and `/balances` all publish the wallet's full
+address (main-agent ruling, 2026-09-08): a user's own wallet address is a
+public on-chain fact the wallet screens need, and truncation is a client
+concern. The address is still never an identifier: every request names a wallet
+by its opaque `walletId`, and the server rejects a client-selected address as
+an account, owner, or authorization key.
 
 ### Active wallet selection is a compare-and-swap, not a command
 
@@ -98,11 +98,13 @@ and a failed cross-check never fails the request.
 
 ### Gas reserve is a published product policy
 
-`spendableBalance = displayBalance − gasReserve` holds back
-`5000000000000000` wei (0.005 BNB) of the native asset so a later transfer or
-Swap can still pay gas. It is a display-side policy, not a chain fact, so the
-response carries `gasReservePolicy.configVersion = "walletGasReserveV1"` and
-the raw reserve. Non-native assets have a zero reserve.
+`spendableBalance = displayBalance − gasReserve` holds back a configured amount
+of the native asset so a later transfer or Swap can still pay gas.
+`WALLET_GAS_RESERVE_BNB` sets it in decimal BNB (default `0.005`, at most 1
+BNB, converted with exact integer arithmetic). It is a display-side policy, not
+a chain fact, so the response carries
+`gasReservePolicy.configVersion = "walletGasReserveV1"` and the raw reserve.
+Non-native assets have a zero reserve.
 
 ### Indexer lane state machine
 
@@ -121,16 +123,24 @@ idle ──head unreachable──▶ unavailable ──backoff──▶ idle
 ```
 
 Event rows and the checkpoint advance commit in **one** transaction, so a
-checkpoint can never claim a block whose logs were not stored. Rows are unique
-on `(chain_id, transaction_hash, log_index)`, so a replayed segment is
-idempotent. A reorged-out log keeps its row with `removed = true` so a client
+checkpoint can never claim a block whose logs were not stored. A segment is
+written as multi-row INSERTs of at most 500 rows, all inside that same
+transaction; the batch is de-duplicated on `(transaction hash, log index)`
+first because a multi-row upsert cannot touch one conflict key twice. Rows are
+unique on `(chain_id, transaction_hash, log_index)`, so a replayed segment is
+idempotent across batch boundaries. A reorged-out log keeps its row with `removed = true` so a client
 can reconcile what it already displayed instead of watching history silently
 change. `pnpm indexer:backfill --from <block>` runs the same lane synchronously.
 
-Endpoints cap `eth_getLogs` by result size as well as by block span, so a dense
-token can exceed the cap inside a legal 2000-block segment. The read client
-halves the range and retries; a single block that still exceeds the cap is an
-endpoint limitation and fails closed rather than silently dropping logs.
+Endpoints cap `eth_getLogs` by block span and by result size, and report the
+two through different JSON-RPC errors (`InvalidParams` and `LimitExceeded`).
+The read client halves the range and retries on either; a single block that
+still fails is an endpoint limitation and fails closed rather than silently
+dropping logs.
+
+The `pool_event` lane is deliberately not implemented here: its storage,
+ABIs, `pnpm pool:register`, and reorg rewind are in place, but the lane itself
+belongs to S5b, which is the first consumer (candles and trades).
 
 ### Activity is never an empty success
 

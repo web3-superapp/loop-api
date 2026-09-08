@@ -294,6 +294,7 @@ const walletProjectionSchema = {
   required: [
     "walletId",
     "provider",
+    "address",
     "kind",
     "status",
     "isActive",
@@ -305,9 +306,10 @@ const walletProjectionSchema = {
       type: "string",
       pattern: opaqueIdPatternSource,
       description:
-        "Opaque LOOP wallet ID. The wallet address is not published here: it is returned only where the product needs the public chain fact.",
+        "Opaque LOOP wallet ID. It is the only identifier a request may name; the address below is never accepted as one.",
     },
     provider: { type: "string", const: "privy" },
+    address: addressSchema,
     kind: { type: "string", enum: [...walletKinds] },
     status: { type: "string", enum: ["active", "archived"] },
     isActive: { type: "boolean" },

@@ -162,7 +162,7 @@ non-reversible `endpointRef`. With no configured endpoint the route is
 
 | Method and path                       | Request                                                    | Success projection                                                                              | Interface     | Capability                                                             |
 | ------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
-| `GET /v2/wallets`                     | Bearer + contract/client headers; no input                 | Opaque `walletId`, `kind`, `status`, `isActive`; no address                                     | `implemented` | `blocked-provider`; needs Privy credentials                            |
+| `GET /v2/wallets`                     | Bearer + contract/client headers; no input                 | Opaque `walletId`, public `address`, `kind`, `status`, `isActive`                               | `implemented` | `blocked-provider`; needs Privy credentials                            |
 | `PUT /v2/wallets/active`              | No `Idempotency-Key`; `{walletId, expectedActiveWalletId}` | Committed wallet list; concurrent switch is `VERSION_CONFLICT`                                  | `implemented` | `implemented`; moves no funds and grants no signing authority          |
 | `GET /v2/wallets/{walletId}/balances` | Bearer + contract/client headers; no input                 | One snapshot block; display/available/spendable/gasReserve/pending, valuation, Privy crossCheck | `implemented` | `blocked-provider`; needs a verified RPC endpoint                      |
 | `GET /v2/wallets/{walletId}/activity` | `cursor` or `limit` (1–50), mutually exclusive             | Indexed ERC-20 transfers with tx/log/block/confirmations plus indexer freshness                 | `implemented` | `blocked-provider`; `INDEXING_DELAYED` until the lane has a checkpoint |
@@ -170,7 +170,11 @@ non-reversible `endpointRef`. With no configured endpoint the route is
 
 Privy stays authoritative for which wallets exist; LOOP only issues the opaque
 `walletId` and remembers the active selection. A wallet Privy stops reporting
-is archived, never deleted. The RPC multicall is the authoritative balance
+is archived, never deleted. A wallet address is published as a public on-chain
+fact, but only `walletId` is ever accepted as an identifier. The native gas
+reserve subtracted from `spendableBalance` is configured by
+`WALLET_GAS_RESERVE_BNB` and published as `walletGasReserveV1`. The RPC
+multicall is the authoritative balance
 source: Privy's own balance view is a cross-check whose `disputed` or
 `unavailable` result never changes the published value. Valuation and net worth
 stay `unavailable` (`MARKET_PRICE_PROVIDER_NOT_CONFIGURED`) until D11; native

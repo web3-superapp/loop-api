@@ -169,6 +169,27 @@ export function formatDecimalAmount(raw: bigint, decimals: number): string {
   return fraction.length === 0 ? whole : `${whole}.${fraction}`;
 }
 
+/**
+ * Parses an exact decimal string into a smallest-unit integer. It is pure
+ * string arithmetic: no JavaScript floating-point value is produced, so a
+ * configured amount cannot silently lose precision.
+ */
+export function parseDecimalAmount(value: string, decimals: number): bigint {
+  if (!Number.isSafeInteger(decimals) || decimals < 0 || decimals > 36) {
+    throw new InvalidChainIdentityError();
+  }
+  const match = /^(0|[1-9][0-9]{0,30})(?:\.([0-9]{1,36}))?$/.exec(value);
+  if (match === null) {
+    throw new InvalidChainIdentityError();
+  }
+  const whole = match[1] ?? "0";
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimals) {
+    throw new InvalidChainIdentityError();
+  }
+  return BigInt(`${whole}${fraction.padEnd(decimals, "0")}`);
+}
+
 export function subtractFloorZero(left: bigint, right: bigint): bigint {
   const difference = left - right;
   return difference < 0n ? 0n : difference;

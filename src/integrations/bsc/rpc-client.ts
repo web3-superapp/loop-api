@@ -4,6 +4,7 @@ import {
   createPublicClient,
   fallback,
   http,
+  InvalidParamsRpcError,
   LimitExceededRpcError,
   type Address,
   type Hex,
@@ -152,10 +153,10 @@ export class BscChainMismatchError extends Error {
 /** Maximum block span of one `eth_getLogs` request. */
 export const bscMaximumLogRange = 2_000n;
 /**
- * Endpoints cap `eth_getLogs` by result size, not only by block span, so a
- * dense token can exceed the cap inside a legal range. The client then halves
- * the range and retries; a single block that still exceeds the cap is a real
- * endpoint limitation and fails closed instead of silently dropping logs.
+ * Endpoints cap `eth_getLogs` by block span and by result size, and report the
+ * two through different JSON-RPC errors. The client halves the range and
+ * retries on either; a single block that still fails is a real endpoint
+ * limitation and fails closed instead of silently dropping logs.
  */
 const bscLogRangeSplitFloor = 1n;
 const healthyLatencyMs = 1_500;
@@ -285,8 +286,11 @@ export function createBscReadClient(
           })),
         );
       } catch (error) {
+        const isRangeRejection =
+          error instanceof LimitExceededRpcError ||
+          error instanceof InvalidParamsRpcError;
         if (
-          !(error instanceof LimitExceededRpcError) ||
+          !isRangeRejection ||
           range.to - range.from < bscLogRangeSplitFloor
         ) {
           throw error;

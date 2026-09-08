@@ -22170,7 +22170,7 @@
         "operationId": "listV2Wallets",
         "summary": "List the account's wallets",
         "tags": ["wallet"],
-        "description": "Privy is authoritative for which wallets exist; the first call projects them into LOOP and issues an opaque walletId. Wallets Privy no longer reports are archived, never deleted. The address is not published here.",
+        "description": "Privy is authoritative for which wallets exist; the first call projects them into LOOP and issues an opaque walletId. Wallets Privy no longer reports are archived, never deleted. Each row carries the wallet's public address as an on-chain fact; only the walletId is ever accepted as an identifier.",
         "parameters": [
           {
             "schema": {
@@ -22225,6 +22225,7 @@
                         "required": [
                           "walletId",
                           "provider",
+                          "address",
                           "kind",
                           "status",
                           "isActive",
@@ -22235,9 +22236,14 @@
                           "walletId": {
                             "type": "string",
                             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                            "description": "Opaque LOOP wallet ID. The wallet address is not published here: it is returned only where the product needs the public chain fact."
+                            "description": "Opaque LOOP wallet ID. It is the only identifier a request may name; the address below is never accepted as one."
                           },
                           "provider": { "type": "string", "enum": ["privy"] },
+                          "address": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$",
+                            "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
+                          },
                           "kind": {
                             "type": "string",
                             "enum": ["embedded", "external"]
@@ -22887,6 +22893,7 @@
                         "required": [
                           "walletId",
                           "provider",
+                          "address",
                           "kind",
                           "status",
                           "isActive",
@@ -22897,9 +22904,14 @@
                           "walletId": {
                             "type": "string",
                             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                            "description": "Opaque LOOP wallet ID. The wallet address is not published here: it is returned only where the product needs the public chain fact."
+                            "description": "Opaque LOOP wallet ID. It is the only identifier a request may name; the address below is never accepted as one."
                           },
                           "provider": { "type": "string", "enum": ["privy"] },
+                          "address": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$",
+                            "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
+                          },
                           "kind": {
                             "type": "string",
                             "enum": ["embedded", "external"]

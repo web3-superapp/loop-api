@@ -902,6 +902,7 @@ export async function buildApp(
       walletReader: privyWalletReader,
       balanceReader: privyBalanceReader,
       cursorCodec: v2CursorCodec,
+      gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
       chainId: bscChainId,
       chainName: "BNB Smart Chain",
       chainReference: bscChainReference,

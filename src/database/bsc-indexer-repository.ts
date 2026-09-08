@@ -191,19 +191,68 @@ const transferColumns = `
   observed_at
 `;
 
+/** Maximum rows per multi-row INSERT; every batch stays in the caller's transaction. */
+export const indexedTransferInsertBatchSize = 500;
+
+const indexedTransferColumnCount = 9;
+
+/**
+ * Writes a segment as multi-row INSERTs rather than one statement per log.
+ * Every batch runs inside the caller's transaction, so the segment and its
+ * checkpoint still commit atomically; batching only removes a round trip per
+ * row on a dense token.
+ */
 async function insertTransfers(
   client: PoolClient,
   chainId: string,
   transfers: readonly IndexedTransferInput[],
 ): Promise<void> {
+  // A multi-row upsert cannot touch the same conflict key twice, so the
+  // segment is de-duplicated on (transaction hash, log index) first. The chain
+  // never emits that pair twice; this only keeps a malformed provider response
+  // from failing the whole transaction.
+  const unique = new Map<string, IndexedTransferInput>();
   for (const transfer of transfers) {
+    unique.set(
+      `${transfer.transactionHash}:${String(transfer.logIndex)}`,
+      transfer,
+    );
+  }
+  const deduplicated = [...unique.values()];
+
+  for (
+    let offset = 0;
+    offset < deduplicated.length;
+    offset += indexedTransferInsertBatchSize
+  ) {
+    const batch = deduplicated.slice(
+      offset,
+      offset + indexedTransferInsertBatchSize,
+    );
+    const values: unknown[] = [chainId];
+    const tuples = batch.map((transfer, index) => {
+      const base = index * indexedTransferColumnCount + 1;
+      values.push(
+        transfer.transactionHash,
+        transfer.logIndex,
+        transfer.blockNumber,
+        transfer.blockHash,
+        transfer.assetId,
+        transfer.fromAddress,
+        transfer.toAddress,
+        transfer.rawValue,
+        false,
+      );
+      return `($1, $${String(base + 1)}, $${String(base + 2)}, $${String(base + 3)}::numeric, $${String(base + 4)}, $${String(base + 5)}, $${String(base + 6)}, $${String(base + 7)}, $${String(base + 8)}::numeric, $${String(base + 9)})`;
+    });
+
     await client.query<Record<string, unknown>>({
       text: `
         insert into public.indexed_transfers (
           chain_id, transaction_hash, log_index, block_number, block_hash,
           asset_id, from_address, to_address, raw_value, removed
         )
-        values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9::numeric, false)
+        values ${tuples.join(", ")}
         on conflict (chain_id, transaction_hash, log_index) do update set
           block_number = excluded.block_number,
           block_hash = excluded.block_hash,
@@ -214,17 +263,7 @@ async function insertTransfers(
           removed = false,
           observed_at = clock_timestamp()
       `,
-      values: [
-        chainId,
-        transfer.transactionHash,
-        transfer.logIndex,
-        transfer.blockNumber,
-        transfer.blockHash,
-        transfer.assetId,
-        transfer.fromAddress,
-        transfer.toAddress,
-        transfer.rawValue,
-      ],
+      values,
     });
   }
 }

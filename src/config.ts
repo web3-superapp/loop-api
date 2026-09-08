@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { parseDecimalAmount } from "./features/chain/chain-contract.js";
 import {
   compareClientVersions,
   isValidClientVersion,
@@ -103,6 +104,7 @@ const environmentSchema = z
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
+    WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -395,6 +397,17 @@ export interface BscChainConfig {
   readonly usd1TokenAddress: string | null;
 }
 
+/**
+ * Native amount held back from `spendableBalance` so a later transfer or Swap
+ * can still pay gas. It is a display-side product policy, not a chain fact,
+ * and is published with its own config version.
+ */
+export interface WalletGasReserveConfig {
+  readonly configVersion: "walletGasReserveV1";
+  readonly decimalBnb: string;
+  readonly rawWei: string;
+}
+
 export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
 }
@@ -430,6 +443,7 @@ export interface AppConfig {
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
   readonly bscChain: BscChainConfig | null;
+  readonly walletGasReserve: WalletGasReserveConfig;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -718,6 +732,34 @@ function parseBscChainConfig(data: {
   });
 }
 
+const maximumGasReserveWei = 1_000_000_000_000_000_000n;
+
+/**
+ * The reserve is configured in BNB and converted with exact integer
+ * arithmetic. A value above one whole BNB is a configuration error, not a
+ * product choice: it would hide most of a normal balance.
+ */
+function parseWalletGasReserve(value: string): WalletGasReserveConfig {
+  let rawWei: bigint;
+  try {
+    rawWei = parseDecimalAmount(value, 18);
+  } catch {
+    throw new ConfigurationError([
+      "WALLET_GAS_RESERVE_BNB: must be a non-negative decimal with at most 18 fraction digits",
+    ]);
+  }
+  if (rawWei > maximumGasReserveWei) {
+    throw new ConfigurationError([
+      "WALLET_GAS_RESERVE_BNB: must not exceed 1 BNB",
+    ]);
+  }
+  return Object.freeze({
+    configVersion: "walletGasReserveV1" as const,
+    decimalBnb: value,
+    rawWei: rawWei.toString(10),
+  });
+}
+
 function assertDatabaseUrl(url: URL): void {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new ConfigurationError([
@@ -790,6 +832,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
     BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
     BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
+    WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -908,6 +951,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     perpReadCursor,
     hyperliquidPrivateReads,
     bscChain: parseBscChainConfig(parsed.data),
+    walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     serviceName: "loop-api",
     serviceVersion,
   });

@@ -59,8 +59,9 @@ X-Loop-Client-Version: 1.0.0
 - **区块高度是字符串**（`blockNumber`、`lastBlockNumber`），可能超过 2^53。
 - `assetId` 是规范 CAIP：`eip155:56:<0x 小写地址>`，原生资产
   `eip155:56:native`。**ticker/symbol 永远不是标识**，不要用它拼路由或做 key。
-- `walletId` 是不透明 UUIDv4。**钱包地址不是账号 ID**，只在 `receive` 与
-  `balances` 响应里出现。
+- `walletId` 是不透明 UUIDv4。钱包地址是公开链上事实，`wallets`、`receive`、
+  `balances` 三个响应都会下发完整地址；**但地址永远不是账号 ID**，任何请求只能
+  用 `walletId` 指向钱包，服务端不接受客户端选择的地址。截断显示由前端做。
 - 时间是带时区的 RFC 3339 字符串。
 
 ## 3. `GET /v2/chain/status` → `networks` 页
@@ -164,6 +165,7 @@ X-Loop-Client-Version: 1.0.0
     {
       "walletId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
       "provider": "privy",
+      "address": "0x00000000000000000000000000000000000000a1",
       "kind": "embedded",
       "status": "active",
       "isActive": true,
@@ -180,9 +182,8 @@ X-Loop-Client-Version: 1.0.0
 - 首次调用会把 Privy 报告的钱包写入 LOOP 并分配 `walletId`；Privy 不再报告的
   钱包变成 `status: "archived"`（不会删除），`isActive` 强制为 `false`。
 - `kind` 是原型里"Privy 嵌入式钱包 / 已连接的外部钱包"两段的依据。
-- **本响应不含地址**（决策 0033）。需要展示地址时调用该钱包的
-  `/receive`。若产品坚持在清单里显示截断地址，需要主代理裁决是否在此响应中
-  加入地址字段。
+- `address` 是完整小写地址（主代理裁决 2026-09-08）。`wallets` 页的截断显示
+  由前端处理；不要把地址当 key 或路由参数。
 - Privy 不可达 → `503 PROVIDER_DISCONNECTED`（可重试），不要显示"没有钱包"。
 
 切换活跃钱包：
@@ -252,7 +253,8 @@ PUT /v2/wallets/active
 - 五个口径互不相等，不要互相推导：`displayBalance`（链上余额）、
   `availableBalance`（本步 = display）、`spendableBalance`（= display −
   `gasReserve`，只有原生资产有保留量）、`gasReserve`、`pending`（indexer 里
-  未确认的**入账**，不计入可用）。
+  未确认的**入账**，不计入可用）。保留量由后端 `WALLET_GAS_RESERVE_BNB` 配置
+  （默认 0.005 BNB），随响应下发 `gasReservePolicy`，前端不要写死。
 - `pending.status === "unavailable"` + `BSC_INDEXER_NOT_STARTED` 表示 indexer
   未运行，显示"待确认金额不可用"，不要显示 0。
 - `crossCheck` 只是与 Privy 对账：`matched` / `disputed`（数值不一致）/

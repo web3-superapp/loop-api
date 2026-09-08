@@ -54,7 +54,7 @@ export function registerV2WalletRoutes(
         operationId: "listV2Wallets",
         summary: "List the account's wallets",
         description:
-          "Privy is authoritative for which wallets exist; the first call projects them into LOOP and issues an opaque walletId. Wallets Privy no longer reports are archived, never deleted. The address is not published here.",
+          "Privy is authoritative for which wallets exist; the first call projects them into LOOP and issues an opaque walletId. Wallets Privy no longer reports are archived, never deleted. Each row carries the wallet's public address as an on-chain fact; only the walletId is ever accepted as an identifier.",
         tags: ["wallet"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
