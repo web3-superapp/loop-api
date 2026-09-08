@@ -364,7 +364,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(27);
+    expect(Object.keys(capabilities)).toHaveLength(30);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -408,6 +408,9 @@ describe("LOOP API V2 meta policy gates", () => {
       walletIntentRuntimeAvailable: false,
       bscWritesEnabled: false,
       privySwapRuntimeAvailable: false,
+      securityRuntimeAvailable: false,
+      settingsRuntimeAvailable: false,
+      supportRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -445,6 +448,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "notifications",
       "profile",
       "watchlist",
+      "security",
+      "settings",
+      "support",
     ]);
 
     const deliveredModuleIds = new Set<string>([
@@ -459,6 +465,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "notifications",
       "profile",
       "watchlist",
+      "security",
+      "settings",
+      "support",
     ]);
     const undelivered = v2ModuleIds.filter((id) => !deliveredModuleIds.has(id));
     const app = await createApp({

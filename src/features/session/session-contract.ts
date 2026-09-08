@@ -93,6 +93,29 @@ export interface V2CommonRequestMetadata {
 }
 
 /**
+ * Read metadata for the device list (Decision 0037): the common headers plus
+ * an optional opaque `X-Loop-Session-ID` so the server can mark the caller's
+ * own session. The header is a presentation hint, never authentication.
+ */
+export interface V2DeviceReadMetadata extends V2CommonRequestMetadata {
+  readonly sessionId: string | null;
+}
+
+export const v2DeviceReadHeadersSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: [...v2CommonHeadersSchema.required],
+  properties: {
+    ...v2CommonHeadersSchema.properties,
+    [v2SessionHeaderNames.sessionId]: {
+      type: "string",
+      pattern:
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    },
+  },
+} as const;
+
+/**
  * Metadata every V2 write may carry. `X-Loop-Platform` and `X-Loop-Device-ID`
  * are optional on writes outside the session module but are validated when
  * present (main-agent ruling, Decision 0034).
@@ -123,6 +146,10 @@ const sessionWriteLoopHeaders = new Set<string>([
 ]);
 const sessionLogoutLoopHeaders = new Set<string>([
   ...sessionWriteLoopHeaders,
+  v2SessionHeaderNames.sessionId,
+]);
+const deviceReadLoopHeaders = new Set<string>([
+  ...commonLoopHeaders,
   v2SessionHeaderNames.sessionId,
 ]);
 
@@ -215,6 +242,21 @@ function readAtMostOneHeader(
     throw V2ApiError.invalidRequest();
   }
   return values[0];
+}
+
+export function parseV2DeviceReadMetadata(
+  rawHeaders: readonly string[],
+): V2DeviceReadMetadata {
+  assertOnlyAllowedLoopHeaders(rawHeaders, deviceReadLoopHeaders);
+  const common = parseV2CommonRequestMetadataUnchecked(rawHeaders);
+  const sessionId = readAtMostOneHeader(
+    rawHeaders,
+    v2SessionHeaderNames.sessionId,
+  );
+  if (sessionId !== null && !canonicalUuidPattern.test(sessionId)) {
+    throw V2ApiError.invalidRequest();
+  }
+  return Object.freeze({ ...common, sessionId });
 }
 
 export function parseV2WriteRequestMetadata(

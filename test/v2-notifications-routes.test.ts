@@ -327,6 +327,16 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
         unreadCount: owned.filter((row) => row.readAt === null).length,
       });
     },
+    listRecentByType: (input) =>
+      Promise.resolve(
+        [...rows.values()]
+          .filter(
+            (row) =>
+              row.ownerUserId === input.ownerUserId && row.type === input.type,
+          )
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+          .slice(0, input.limit),
+      ),
     markRead: (ownerUserId, notificationId) => {
       const row = rows.get(notificationId);
       if (row === undefined || row.ownerUserId !== ownerUserId) {

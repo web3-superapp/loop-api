@@ -92,6 +92,15 @@ export interface ReplaceNotificationPreferencesV2Input {
 
 export interface NotificationRepository {
   listFeed(input: ListNotificationsInput): Promise<NotificationPage>;
+  /**
+   * Newest-first notifications of one category for the security summary
+   * (Decision 0037); bounded by `limit`, never paginated.
+   */
+  listRecentByType(input: {
+    readonly ownerUserId: string;
+    readonly type: NotificationCategory;
+    readonly limit: number;
+  }): Promise<readonly NotificationRecord[]>;
   /** Idempotent: an already-read notification is returned unchanged. */
   markRead(
     ownerUserId: string,
@@ -288,6 +297,27 @@ export function createPostgresNotificationRepository(
       }
     },
 
+    async listRecentByType(input) {
+      try {
+        const ownerUserId = uuidSchema.parse(input.ownerUserId);
+        const type = z.enum(notificationCategories).parse(input.type);
+        const limit = z.number().int().min(1).max(50).parse(input.limit);
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select ${notificationColumns}
+            from public.notifications
+            where owner_user_id = $1 and type = $2
+            order by created_at desc, notification_id desc
+            limit $3
+          `,
+          values: [ownerUserId, type, limit],
+        });
+        return Object.freeze(result.rows.map(mapNotification));
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async markRead(ownerUserId, notificationId) {
       try {
         const result = await pool.query<Record<string, unknown>>({
@@ -411,6 +441,7 @@ function unavailable(): Promise<never> {
 export function createUnavailableNotificationRepository(): NotificationRepository {
   return Object.freeze({
     listFeed: unavailable,
+    listRecentByType: unavailable,
     markRead: unavailable,
     getPreferences: unavailable,
     replacePreferences: unavailable,

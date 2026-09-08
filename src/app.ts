@@ -283,6 +283,24 @@ import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registeredV2ModuleIds, registerV2Routes } from "./routes/v2/index.js";
+import {
+  createDeviceService,
+  type DeviceService,
+} from "./features/security/device-service.js";
+import {
+  createSecurityService,
+  type SecurityService,
+} from "./features/security/security-service.js";
+import {
+  createSettingsService,
+  type SettingsService,
+} from "./features/settings/settings-service.js";
+import { createUnavailableAccountSettingsRepository } from "./features/settings/account-settings-repository.js";
+import {
+  createSupportService,
+  type SupportService,
+} from "./features/support/support-service.js";
+import { createUnavailableSupportTicketRepository } from "./features/support/support-ticket-repository.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 const defaultContentSecurityPolicy =
@@ -379,6 +397,12 @@ export interface BuildAppOptions {
   readonly approvalService?: ApprovalService;
   readonly swapService?: SwapService;
   readonly walletIntentNow?: () => Date;
+  /** Test seams for the D20 modules (Decision 0037). */
+  readonly deviceService?: DeviceService;
+  readonly securityService?: SecurityService;
+  readonly settingsService?: SettingsService;
+  readonly supportService?: SupportService;
+  readonly securityNow?: () => Date;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -1236,6 +1260,55 @@ export async function buildApp(
   const swapService =
     options.swapService ?? createSwapService({ runtime: walletIntentRuntime });
 
+  // D20 (Decision 0037): security reuses the device-session projection and
+  // composes the approvals summary only when that module is registered;
+  // settings and support have their own repositories.
+  const securityRuntimeAvailable =
+    registeredModuleIds.includes("security") &&
+    (options.deviceService !== undefined ||
+      options.securityService !== undefined ||
+      v2SessionRuntimeAvailable);
+  const settingsRuntimeAvailable =
+    registeredModuleIds.includes("settings") &&
+    (options.settingsService !== undefined ||
+      database.accountSettings !== undefined);
+  const supportRuntimeAvailable =
+    registeredModuleIds.includes("support") &&
+    (options.supportService !== undefined ||
+      (database.supportTickets !== undefined && v2CursorCodec !== null));
+  const securityNow = options.securityNow ?? ((): Date => new Date());
+  const deviceService =
+    options.deviceService ??
+    createDeviceService({
+      sessions: database.deviceSessions,
+      now: securityNow,
+    });
+  const securityService =
+    options.securityService ??
+    createSecurityService({
+      sessions: database.deviceSessions,
+      wallets: database.accountWallets ?? null,
+      approvals: registeredModuleIds.includes("sendApprovals")
+        ? approvalService
+        : null,
+      notifications: database.notifications ?? null,
+      now: securityNow,
+    });
+  const settingsService =
+    options.settingsService ??
+    createSettingsService({
+      repository:
+        database.accountSettings ??
+        createUnavailableAccountSettingsRepository(),
+    });
+  const supportService =
+    options.supportService ??
+    createSupportService({
+      repository:
+        database.supportTickets ?? createUnavailableSupportTicketRepository(),
+      cursorCodec: v2CursorCodec,
+    });
+
   // Chain-ID verification is probed once at startup and refreshed lazily by
   // the read client, which owns the state. The capability projection reads it
   // synchronously per request, so a recovery is reflected without a restart.
@@ -1379,6 +1452,9 @@ export async function buildApp(
         walletIntentRuntimeAvailable,
         bscWritesEnabled: config.bscWrites !== null,
         privySwapRuntimeAvailable,
+        securityRuntimeAvailable,
+        settingsRuntimeAvailable,
+        supportRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
@@ -1398,6 +1474,10 @@ export async function buildApp(
       sendService,
       approvalService,
       swapService,
+      deviceService,
+      securityService,
+      settingsService,
+      supportService,
       cursorCodec: v2CursorCodec,
     });
   }

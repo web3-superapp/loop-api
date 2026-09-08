@@ -22,6 +22,12 @@ import {
   clientVersionMinimumLength,
   clientVersionSemver2PatternSource,
 } from "../../features/session/client-version.js";
+import { createV2AboutProjection } from "../../features/meta/about.js";
+import {
+  openSourceAttributionEntries,
+  openSourceAttributionSource,
+  openSourceAttributionSummary,
+} from "../../features/meta/open-source-attribution.js";
 
 const nullableUrlSchema = {
   anyOf: [
@@ -251,6 +257,79 @@ const capabilitiesResponseSchema = {
   },
 } as const;
 
+const aboutResponseSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "contractVersion",
+    "configVersions",
+    "termsGate",
+    "openSource",
+    "clientBuild",
+  ],
+  properties: {
+    contractVersion: { type: "string", const: v2ContractVersion },
+    configVersions: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["module", "configVersion", "effectiveAt"],
+        properties: {
+          module: { type: "string", pattern: "^[a-z][A-Za-z0-9]{0,63}$" },
+          configVersion: configVersionSchema,
+          effectiveAt: {
+            anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+          },
+        },
+      },
+      description:
+        "Every mutable rule snapshot the backend publishes. Consumers display them; they must not pin them.",
+    },
+    termsGate: {
+      oneOf: [termsGateUnavailableSchema, termsGateAvailableSchema],
+    },
+    openSource: {
+      type: "object",
+      additionalProperties: false,
+      required: ["source", "summary", "entries"],
+      properties: {
+        source: { type: "string", const: openSourceAttributionSource },
+        summary: { type: "string", const: openSourceAttributionSummary },
+        entries: {
+          type: "array",
+          minItems: openSourceAttributionEntries.length,
+          maxItems: openSourceAttributionEntries.length,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "version", "purpose", "license"],
+            properties: {
+              name: { type: "string", minLength: 1, maxLength: 128 },
+              version: { type: "string", minLength: 1, maxLength: 64 },
+              purpose: { type: "string", minLength: 1, maxLength: 256 },
+              license: { type: "string", minLength: 1, maxLength: 64 },
+            },
+          },
+        },
+      },
+    },
+    clientBuild: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "reasonCode"],
+      properties: {
+        status: { type: "string", const: "local" },
+        reasonCode: { type: "string", const: "CLIENT_BUILD_IS_DEVICE_LOCAL" },
+      },
+      description:
+        "The app version and build number are known only to the device; the backend never reports them.",
+    },
+  },
+} as const;
+
 const metaErrorResponses = {
   400: v2ErrorResponseSchema(["INVALID_REQUEST"]),
   500: v2ErrorResponseSchema(["INTERNAL_ERROR"]),
@@ -284,6 +363,29 @@ export function registerV2MetaRoutes(
       return reply
         .code(200)
         .send(createV2ClientPolicyProjection(config, new Date()));
+    },
+  );
+
+  app.get(
+    "/v2/meta/about",
+    {
+      schema: {
+        operationId: "getV2About",
+        summary: "Get the public about/legal projection",
+        description:
+          "Public, no token: contract version, every published configVersion, the terms gate slot, and the open-source attribution summary compiled from docs/open-source-attribution.md.",
+        tags: ["meta"],
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: aboutResponseSchema,
+          ...metaErrorResponses,
+        },
+      },
+      preValidation: assertNoBodyOrQuery,
+    },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(createV2AboutProjection(config, new Date()));
     },
   );
 

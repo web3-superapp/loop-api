@@ -26,6 +26,9 @@ export const v2ModuleIds = Object.freeze([
   "notifications",
   "profile",
   "watchlist",
+  "security",
+  "settings",
+  "support",
 ] as const);
 
 export type V2ModuleId = (typeof v2ModuleIds)[number];

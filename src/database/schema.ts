@@ -1,4 +1,4 @@
-export const latestMigrationName = "000022_v2_swap_quotes";
+export const latestMigrationName = "000024_v2_security_settings_support";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -79,4 +79,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.indexed_approvals",
   "public.approval_observations",
   "public.swap_quotes",
+  "public.account_settings",
+  "public.support_tickets",
+  "public.support_ticket_events",
 ] as const);

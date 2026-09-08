@@ -42,6 +42,10 @@ import {
   createPostgresWalletIntentRepository,
   type WalletIntentRepository,
 } from "./wallet-intent-repository.js";
+import { createPostgresAccountSettingsRepository } from "./account-settings-repository.js";
+import { createPostgresSupportTicketRepository } from "./support-ticket-repository.js";
+import type { AccountSettingsRepository } from "../features/settings/account-settings-repository.js";
+import type { SupportTicketRepository } from "../features/support/support-ticket-repository.js";
 import type {
   CommunicationRepository,
   CommunityChannelSyncRepository,
@@ -143,6 +147,10 @@ export interface Database {
   readonly notifications?: NotificationRepository;
   /** Unified send/approve/revoke/swap intents (Decision 0035). */
   readonly walletIntents?: WalletIntentRepository;
+  /** Decision 0037 account settings CAS slot. */
+  readonly accountSettings?: AccountSettingsRepository;
+  /** Decision 0037 support tickets. */
+  readonly supportTickets?: SupportTicketRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -269,6 +277,8 @@ export function createPostgresDatabase(
   const alertsV2 = createPostgresAlertV2Repository(pool);
   const notifications = createPostgresNotificationRepository(pool);
   const walletIntents = createPostgresWalletIntentRepository(pool);
+  const accountSettings = createPostgresAccountSettingsRepository(pool);
+  const supportTickets = createPostgresSupportTicketRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
@@ -311,6 +321,8 @@ export function createPostgresDatabase(
     alertsV2,
     notifications,
     walletIntents,
+    accountSettings,
+    supportTickets,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

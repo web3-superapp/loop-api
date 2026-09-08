@@ -54,12 +54,20 @@ const rowSchema = z
     revoked_at: validDateSchema.nullable(),
   })
   .strict();
+const commandKindSchema = z.enum(["logout", "revoke"]);
+const commandDigestVersions = Object.freeze({
+  logout: "device_session_logout_v1",
+  revoke: "device_session_revoke_v1",
+} as const);
 const commandRowSchema = z
   .object({
     owner_user_id: uuidSchema,
     requested_session_id: uuidSchema,
     resolved_session_id: uuidSchema.nullable(),
-    request_digest_version: z.literal("device_session_logout_v1"),
+    request_digest_version: z.enum([
+      commandDigestVersions.logout,
+      commandDigestVersions.revoke,
+    ]),
     request_sha256: sha256Schema,
     result_status: z.enum(["not_found", "revoked"]),
     result_revoked_at: validDateSchema.nullable(),
@@ -111,8 +119,10 @@ const revokeInputSchema = z
     idempotencyKey: uuidV4Schema,
     requestSha256: sha256Schema,
     requestId: uuidV4Schema,
+    commandKind: commandKindSchema.default("logout"),
   })
   .strict();
+const listLimitSchema = z.number().int().min(1).max(500);
 
 const returningColumns = `
   session_id,
@@ -215,6 +225,7 @@ async function resolveReplayedCommand(
     readonly ownerUserId: string;
     readonly sessionId: string;
     readonly requestSha256: string;
+    readonly commandKind: "logout" | "revoke";
   },
   rawCommand: unknown,
 ): Promise<DeviceSession | null> {
@@ -222,7 +233,8 @@ async function resolveReplayedCommand(
   if (
     command.owner_user_id !== input.ownerUserId ||
     command.requested_session_id !== input.sessionId ||
-    command.request_sha256 !== input.requestSha256
+    command.request_sha256 !== input.requestSha256 ||
+    command.request_digest_version !== commandDigestVersions[input.commandKind]
   ) {
     throw new DeviceSessionIdempotencyConflictError();
   }
@@ -440,16 +452,36 @@ export function createPostgresDeviceSessionRepository(
       return findSession(pool, ownerUserId, sessionId);
     },
 
+    async listByOwner(rawOwnerUserId, rawLimit) {
+      const ownerUserId = uuidSchema.parse(rawOwnerUserId);
+      const limit = listLimitSchema.parse(rawLimit);
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select ${returningColumns}
+          from public.device_sessions
+          where owner_user_id = $1
+          order by
+            (status = 'active') desc,
+            created_at desc,
+            session_id desc
+          limit $2
+        `,
+        values: [ownerUserId, limit],
+      });
+      return Object.freeze(result.rows.map(toDeviceSession));
+    },
+
     async revoke(rawInput) {
       const input = revokeInputSchema.parse(rawInput);
+      const digestVersion = commandDigestVersions[input.commandKind];
       return withTransaction(pool, async (client) => {
         await client.query({
           text: `
             select pg_advisory_xact_lock(
-              hashtextextended('loop:v2:device-session:logout:' || $1, 0)
+              hashtextextended('loop:v2:device-session:' || $2 || ':' || $1, 0)
             )
           `,
-          values: [input.idempotencyKey],
+          values: [input.idempotencyKey, input.commandKind],
         });
 
         const existingCommand = await client.query<Record<string, unknown>>({
@@ -463,10 +495,10 @@ export function createPostgresDeviceSessionRepository(
               result_status,
               result_revoked_at
             from public.device_session_commands
-            where command_kind = 'logout' and idempotency_key = $1
+            where command_kind = $2 and idempotency_key = $1
             for update
           `,
-          values: [input.idempotencyKey],
+          values: [input.idempotencyKey, input.commandKind],
         });
         if (existingCommand.rows[0] !== undefined) {
           return resolveReplayedCommand(client, input, existingCommand.rows[0]);
@@ -541,9 +573,9 @@ export function createPostgresDeviceSessionRepository(
                 $1,
                 $2,
                 null,
-                'logout',
+                $6,
                 $3,
-                'device_session_logout_v1',
+                $7,
                 $4,
                 $5,
                 'not_found',
@@ -556,6 +588,8 @@ export function createPostgresDeviceSessionRepository(
               input.idempotencyKey,
               input.requestSha256,
               input.requestId,
+              input.commandKind,
+              digestVersion,
             ],
           });
           return null;
@@ -601,9 +635,9 @@ export function createPostgresDeviceSessionRepository(
               $1,
               $2,
               $2,
-              'logout',
+              $7,
               $3,
-              'device_session_logout_v1',
+              $8,
               $4,
               $5,
               'revoked',
@@ -617,6 +651,8 @@ export function createPostgresDeviceSessionRepository(
             input.requestSha256,
             input.requestId,
             session.revokedAt,
+            input.commandKind,
+            digestVersion,
           ],
         });
 

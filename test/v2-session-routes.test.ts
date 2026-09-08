@@ -137,6 +137,9 @@ function fakes() {
     findById: vi.fn<DeviceSessionRepository["findById"]>(() =>
       Promise.resolve(null),
     ),
+    listByOwner: vi.fn<DeviceSessionRepository["listByOwner"]>(() =>
+      Promise.resolve([]),
+    ),
     revoke: revokeSession,
   } satisfies DeviceSessionRepository;
   const database = {

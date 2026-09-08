@@ -98,6 +98,9 @@ describe("committed OpenAPI artifact", () => {
       "/v2/community/home",
       "/v2/connections",
       "/v2/connections/follow/{publicProfileId}",
+      "/v2/devices",
+      "/v2/devices/revoke-all",
+      "/v2/devices/{sessionId}/revoke",
       "/v2/market/assets/{assetId}",
       "/v2/market/assets/{assetId}/candles",
       "/v2/market/assets/{assetId}/holders",
@@ -107,6 +110,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/market/smart-money",
       "/v2/message-requests",
       "/v2/message-requests/{messageRequestId}/decision",
+      "/v2/meta/about",
       "/v2/meta/capabilities",
       "/v2/meta/client-policy",
       "/v2/mining/referral/rules",
@@ -118,8 +122,12 @@ describe("committed OpenAPI artifact", () => {
       "/v2/profile/loop-id",
       "/v2/profile/privacy",
       "/v2/search",
+      "/v2/security/capabilities",
+      "/v2/security/summary",
       "/v2/session/bootstrap",
       "/v2/session/logout",
+      "/v2/settings",
+      "/v2/support/tickets",
       "/v2/swap/quote",
       "/v2/video/token",
       "/v2/voice-rooms/{voiceRoomId}",
@@ -148,7 +156,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(93);
+    expect(operationIds).toHaveLength(103);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

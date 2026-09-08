@@ -47,12 +47,21 @@ export interface BootstrapVerifiedPrivyUserResult {
   readonly session: CreatedDeviceSession;
 }
 
+export type DeviceSessionCommandKind = "logout" | "revoke";
+
 export interface RevokeDeviceSessionInput {
   readonly ownerUserId: string;
   readonly sessionId: string;
   readonly idempotencyKey: string;
   readonly requestSha256: string;
   readonly requestId: string;
+  /**
+   * `logout` (the caller's own session, Decision 0027) or `revoke` (another
+   * session of the same owner, Decision 0037). Both write the same
+   * `session_revoked` event; the command kind and digest version keep their
+   * idempotency domains apart. Defaults to `logout`.
+   */
+  readonly commandKind?: DeviceSessionCommandKind;
 }
 
 export interface DeviceSessionRepository {
@@ -64,6 +73,14 @@ export interface DeviceSessionRepository {
     ownerUserId: string,
     sessionId: string,
   ): Promise<DeviceSession | null>;
+  /**
+   * Newest-first sessions of one owner, active rows before revoked rows,
+   * bounded by `limit`. The projection is owner-scoped audit data only.
+   */
+  listByOwner(
+    ownerUserId: string,
+    limit: number,
+  ): Promise<readonly DeviceSession[]>;
   revoke(input: RevokeDeviceSessionInput): Promise<DeviceSession | null>;
 }
 
@@ -97,6 +114,7 @@ export function createUnavailableDeviceSessionRepository(): DeviceSessionReposit
     bootstrapVerifiedPrivyUser: unavailable,
     create: unavailable,
     findById: unavailable,
+    listByOwner: unavailable,
     revoke: unavailable,
   };
 }

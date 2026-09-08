@@ -169,6 +169,16 @@ export interface V2ProductPolicyRuntime {
   readonly bscWritesEnabled: boolean;
   /** Privy credentials composed; the Swap Provider boundary needs them. */
   readonly privySwapRuntimeAvailable: boolean;
+  /**
+   * `security` module enabled with the device-session repository composed
+   * (Decision 0037). Device listing and remote revocation read and write the
+   * same `device_sessions` projection as the session module.
+   */
+  readonly securityRuntimeAvailable: boolean;
+  /** `settings` module enabled with the account-settings repository composed. */
+  readonly settingsRuntimeAvailable: boolean;
+  /** `support` module enabled with the support-ticket repository and cursor codec composed. */
+  readonly supportRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -250,12 +260,25 @@ export const v2BscWritesDisabledReasonCode = "BSC_WRITES_DISABLED" as const;
  */
 export const v2PrivySwapEvidencePendingReasonCode =
   "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING" as const;
+export const v2SecurityModuleDeferredReasonCode =
+  "V2_SECURITY_RUNTIME_DEFERRED" as const;
+export const v2SecurityRuntimeUnavailableReasonCode =
+  "SECURITY_RUNTIME_UNAVAILABLE" as const;
+export const v2SettingsModuleDeferredReasonCode =
+  "V2_SETTINGS_RUNTIME_DEFERRED" as const;
+export const v2SettingsRuntimeUnavailableReasonCode =
+  "SETTINGS_RUNTIME_UNAVAILABLE" as const;
+export const v2SupportModuleDeferredReasonCode =
+  "V2_SUPPORT_RUNTIME_DEFERRED" as const;
+export const v2SupportRuntimeUnavailableReasonCode =
+  "SUPPORT_RUNTIME_UNAVAILABLE" as const;
 
 /**
  * Capability projected by each V2 module gate. `profile` was delivered by
  * Decision 0030, `community` and `search` by Decision 0031, `market` and
  * `notifications` by Decision 0034 (`notifications` additionally projects
- * `priceAlerts` and `notificationsFeed`; `pushNotifications` stays closed).
+ * `priceAlerts` and `notificationsFeed`; `pushNotifications` stays closed),
+ * `security`, `settings`, and `support` by Decision 0037.
  */
 export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
@@ -271,6 +294,9 @@ export const v2ModuleCapabilityIds = Object.freeze({
   notifications: "pushNotifications",
   profile: "profile",
   watchlist: "watchlist",
+  security: "security",
+  settings: "settings",
+  support: "support",
 } as const satisfies Readonly<Record<V2ModuleId, string | null>>);
 
 export const v2CapabilityIds = Object.freeze([
@@ -297,6 +323,9 @@ export const v2CapabilityIds = Object.freeze([
   "pushNotifications",
   "profile",
   "avatarUpload",
+  "security",
+  "settings",
+  "support",
   "pay",
   "bridge",
   "dappExecution",
@@ -807,6 +836,34 @@ export function createV2CapabilitiesProjection(
       v2WatchlistRuntimeUnavailableReasonCode,
     ),
     unavailableCapability("avatarUpload", v2AvatarUploadUnavailableReasonCode),
+    // D20 (Decision 0037): security, settings, and support are local-only
+    // modules. MFA, passkey, recovery, and key export are not capabilities
+    // here; `GET /v2/security/capabilities` reports each one as unavailable
+    // with its pending Privy evidence.
+    deliveredModuleCapability(
+      config,
+      "security",
+      v2ModuleCapabilityIds.security,
+      runtime.securityRuntimeAvailable,
+      v2SecurityModuleDeferredReasonCode,
+      v2SecurityRuntimeUnavailableReasonCode,
+    ),
+    deliveredModuleCapability(
+      config,
+      "settings",
+      v2ModuleCapabilityIds.settings,
+      runtime.settingsRuntimeAvailable,
+      v2SettingsModuleDeferredReasonCode,
+      v2SettingsRuntimeUnavailableReasonCode,
+    ),
+    deliveredModuleCapability(
+      config,
+      "support",
+      v2ModuleCapabilityIds.support,
+      runtime.supportRuntimeAvailable,
+      v2SupportModuleDeferredReasonCode,
+      v2SupportRuntimeUnavailableReasonCode,
+    ),
     deferredCapability("pay", "PAY_RUNTIME_DEFERRED"),
     deferredCapability("bridge", "BRIDGE_RUNTIME_DEFERRED"),
     deferredCapability("dappExecution", "DAPP_EXECUTION_RUNTIME_DEFERRED"),
