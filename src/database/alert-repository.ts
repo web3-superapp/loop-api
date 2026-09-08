@@ -406,6 +406,7 @@ async function readOwnedAlert(
       from public.price_alert_definitions
       where owner_user_id = $1
         and id = $2
+        and asset_key is not null
         ${includeDeleted ? "" : "and deleted_at is null"}
       limit 1
     `,
@@ -474,6 +475,7 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
               select ${alertReturningColumns}
               from public.price_alert_definitions
               where create_idempotency_record_id = $1
+                and asset_key is not null
               limit 1
             `,
             values: [idempotencyId],
@@ -537,7 +539,9 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
           text: `
             select ${alertReturningColumns}
             from public.price_alert_definitions
-            where owner_user_id = $1 and deleted_at is null
+            where owner_user_id = $1
+              and asset_key is not null
+              and deleted_at is null
             order by created_at desc, id desc
             limit $2 offset $3
           `,
@@ -575,7 +579,8 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
             text: `
               select ${alertReturningColumns}
               from public.price_alert_definitions
-              where owner_user_id = $1 and id = $2 and deleted_at is null
+              where owner_user_id = $1 and id = $2
+                and asset_key is not null and deleted_at is null
               for update
             `,
             values: [input.ownerUserId, input.alertId],
@@ -637,7 +642,7 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
             text: `
               select ${alertReturningColumns}
               from public.price_alert_definitions
-              where owner_user_id = $1 and id = $2
+              where owner_user_id = $1 and id = $2 and asset_key is not null
               for update
             `,
             values: [input.ownerUserId, input.alertId],
@@ -853,7 +858,7 @@ export function createPostgresAlertRepository(pool: Pool): AlertRepository {
               observed_at,
               created_at
             from public.price_alert_events
-            where owner_user_id = $1
+            where owner_user_id = $1 and asset_key is not null
             order by created_at desc, id desc
             limit $2 offset $3
           `,
