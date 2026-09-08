@@ -70,7 +70,10 @@ export interface MiningRepository {
   getCommunityWeight(
     communityId: string,
   ): Promise<CommunityWeightRecord | null>;
-  listCommunityWeightInputs(): Promise<readonly MiningCommunityWeightInput[]>;
+  /** Weights reviewed under exactly this formula version. */
+  listCommunityWeightInputs(
+    configVersion: string,
+  ): Promise<readonly MiningCommunityWeightInput[]>;
   getLatestSnapshot(): Promise<MiningSnapshotRecord | null>;
   writeSnapshot(input: WriteMiningSnapshotInput): Promise<MiningSnapshotRecord>;
   /** Latest observed balance per active wallet and readable asset. */

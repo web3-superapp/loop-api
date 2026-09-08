@@ -279,8 +279,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       }
     },
 
-    async listCommunityWeightInputs() {
+    async listCommunityWeightInputs(rawConfigVersion: string) {
       try {
+        const configVersion = configVersionSchema.parse(rawConfigVersion);
         const result = await pool.query({
           text: `
             select
@@ -294,7 +295,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             from public.community_mining_weights as w
             join public.communities as c on c.community_id = w.community_id
             where c.bound_asset_key is not null
+              and w.config_version = $1
           `,
+          values: [configVersion],
         });
         return Object.freeze(
           result.rows.map((raw): MiningCommunityWeightInput => {

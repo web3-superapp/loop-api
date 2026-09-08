@@ -16,6 +16,8 @@ import { parseInviteCode, InvalidInviteCodeError } from "./invite-code.js";
 export const referralCommandDigestVersion = "referral_command_v1" as const;
 export const referralCommandIdempotencyScope = "v2_referral_command" as const;
 export const referralMaximumDepth = 5;
+/** Ancestor-chain scan bound for cycle detection; edges are still capped at 5. */
+export const referralCycleScanDepth = 64;
 /** Days after profile activation during which an invite code may be claimed. */
 export const referralClaimWindowDays = 7;
 

@@ -15,6 +15,7 @@ import {
 } from "../src/mining-snapshot-worker.js";
 
 const loopAssetId = "eip155:56:0x0000000000000000000000000000000000000001";
+const communityAssetId = "eip155:56:0x0000000000000000000000000000000000000002";
 const alice = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const hash = `0x${"b".repeat(64)}`;
 
@@ -73,7 +74,20 @@ function repositoryFake(
         },
       ]),
     ),
-    listCommunityWeightInputs: vi.fn(() => Promise.resolve([])),
+    listCommunityWeightInputs: vi.fn((configVersion: string) =>
+      Promise.resolve(
+        configVersion === approvedTestFormula.configVersion
+          ? []
+          : [
+              {
+                communityId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                assetId: communityAssetId,
+                weight: "0.9",
+                status: "approved" as const,
+              },
+            ],
+      ),
+    ),
     writeSnapshot: vi.fn((input: WriteMiningSnapshotInput) =>
       Promise.resolve({
         snapshotId: input.snapshotId,
@@ -189,6 +203,42 @@ describe("mining-snapshot lane", () => {
         ],
       }),
     );
+  });
+
+  it("asks for community weights of the approved formula version only, so a retired version's weight never enters the snapshot", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+      listBalanceInputs: vi.fn(() =>
+        Promise.resolve([
+          {
+            ownerUserId: alice,
+            walletId: "d64786bb-408d-415d-8a69-6277d56c921b",
+            assetId: communityAssetId,
+            decimals: 18,
+            rawValue: "1000000000000000000",
+            blockNumber: "500",
+            blockHash: hash,
+          },
+        ]),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([])) },
+      prices: priceReader("fresh"),
+    });
+    const result = await worker.runOnce();
+    expect(calls(repository, "listCommunityWeightInputs")).toHaveBeenCalledWith(
+      "miningFormulaTestOnly",
+    );
+    expect(result.kind).toBe("idle");
+    expect(result.skipped).toEqual([
+      {
+        assetId: communityAssetId,
+        reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+      },
+    ]);
+    expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
   });
 
   it("stays idle when the only price is stale or proxied and never writes", async () => {

@@ -143,6 +143,18 @@ describe("referral edge materialisation", () => {
     ).toThrow(ReferralCycleError);
   });
 
+  it("detects a cycle that sits deeper than the five materialised levels", () => {
+    // g ← f ← e ← d ← c ← b ← a: `a` claiming `g`'s code would close a
+    // 7-long ring; the scan looks past depth 5 even though only 5 edges land.
+    expect(() =>
+      materializeReferralEdges({
+        inviteeUserId: a,
+        inviterUserId: g,
+        inviterAncestors: [f, e, d, c, b, a],
+      }),
+    ).toThrow(ReferralCycleError);
+  });
+
   it("materialises depth 1..5 and never deeper", () => {
     const edges = materializeReferralEdges({
       inviteeUserId: g,

@@ -188,6 +188,11 @@ describe("LOOP API V2 referral module", () => {
       },
       contractVersion: "2.0",
     });
+    // The cycle scan walks up to 64 ancestors; edges still stop at depth 5.
+    expect(calls(repository, "getAncestorChain")).toHaveBeenCalledWith(
+      inviterId,
+      64,
+    );
     expect(calls(repository, "claim")).toHaveBeenCalledWith(
       expect.objectContaining({
         inviteeUserId: s7AccountId,

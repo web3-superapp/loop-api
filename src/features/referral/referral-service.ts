@@ -19,6 +19,7 @@ import {
   materializeReferralEdges,
   parseReferralClaimRequest,
   referralCommandDigest,
+  referralCycleScanDepth,
   referralMaximumDepth,
   referralReasonCodes,
   referralValidationStatuses,
@@ -261,7 +262,7 @@ export function createReferralService(dependencies: {
             inviterUserId,
             inviterAncestors: await repository.getAncestorChain(
               inviterUserId,
-              referralMaximumDepth,
+              referralCycleScanDepth,
             ),
           });
         } catch (error) {

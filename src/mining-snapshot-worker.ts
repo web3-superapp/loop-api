@@ -135,7 +135,7 @@ export function createMiningSnapshotWorker(
     }
     const [balances, communityWeights] = await Promise.all([
       options.repository.listBalanceInputs(),
-      options.repository.listCommunityWeightInputs(),
+      options.repository.listCommunityWeightInputs(formula.configVersion),
     ]);
     if (balances.length === 0) {
       return idle(miningReasonCodes.noBalanceInputs);
