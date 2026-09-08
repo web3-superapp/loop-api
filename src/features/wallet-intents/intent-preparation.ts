@@ -56,6 +56,7 @@ import {
   walletIntentIdempotencyScope,
   walletIntentReasonCodes,
   type CanaryPolicyFact,
+  type ExposureBasis,
   type IntentAssetSnapshot,
   type IntentBalanceFact,
   type IntentFeeFact,
@@ -242,10 +243,15 @@ export async function valueInUsd(
   if (runtime.marketFacts === null) {
     throw V2ApiError.capabilityUnavailable();
   }
-  const price = await runtime.marketFacts.readAssetPrice(asset, { signal });
+  // The ceiling is enforced on a fresh Provider price only; a stale price
+  // could under-value the intent and is refused rather than tolerated.
+  const price = await runtime.marketFacts.readAssetPrice(asset, {
+    signal,
+    requireFresh: true,
+  });
   if (
     price.fact.fetchedAt === null ||
-    (price.fact.quality !== "fresh" && price.fact.quality !== "stale") ||
+    price.fact.quality !== "fresh" ||
     price.pair === null ||
     price.pair.priceUsd === null
   ) {
@@ -273,10 +279,18 @@ export function enforceCanaryCeiling(
 export function canaryPolicyFact(
   writes: BscWriteConfig,
   valuation: UsdValuation | null,
+  exposure: {
+    readonly basis: ExposureBasis;
+    readonly raw: bigint | null;
+    readonly blockNumber: string | null;
+  },
 ): CanaryPolicyFact {
   return Object.freeze({
     configVersion: bscWriteCanaryPolicyVersion,
     canaryMaxUsd: writes.canaryMaxUsd,
+    exposureBasis: exposure.basis,
+    exposureRaw: exposure.raw === null ? null : exposure.raw.toString(10),
+    exposureBlockNumber: exposure.blockNumber,
     valueUsd: valuation?.valueUsd ?? null,
     priceSource: valuation?.priceSource ?? null,
     priceFetchedAt: valuation?.fetchedAt ?? null,
@@ -652,9 +666,10 @@ export function projectIntent(
   const signingReason = signingAllowed
     ? null
     : state === "prepared"
-      ? record.simulationStatus === "reverted"
-        ? walletIntentReasonCodes.simulationReverted
-        : walletIntentReasonCodes.simulationUnavailable
+      ? (payload.simulation.reasonCode ??
+        (record.simulationStatus === "reverted"
+          ? walletIntentReasonCodes.simulationReverted
+          : walletIntentReasonCodes.simulationUnavailable))
       : (reasonCode ?? `INTENT_${state.toUpperCase()}`);
   const receipt = record.receipt;
   return Object.freeze({

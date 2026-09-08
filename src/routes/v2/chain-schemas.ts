@@ -855,7 +855,10 @@ export const chainReadErrors = {
     includeBearerChallenge: true,
   }),
   404: v2ErrorResponseSchema(["NOT_FOUND"]),
-  409: v2ErrorResponseSchema(["ACCOUNT_BOOTSTRAP_REQUIRED"]),
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "RESOURCE_CONFLICT",
+  ]),
   422: v2ErrorResponseSchema(["CHAIN_MISMATCH"]),
   500: v2ErrorResponseSchema(["INTERNAL_ERROR"]),
   503: v2ErrorResponseSchema([
@@ -871,6 +874,7 @@ export const chainWriteErrors = {
   403: v2ErrorResponseSchema(["PERMISSION_DENIED"]),
   409: v2ErrorResponseSchema([
     "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "RESOURCE_CONFLICT",
     "VERSION_CONFLICT",
   ]),
   422: v2ErrorResponseSchema(["CHAIN_MISMATCH", "VALIDATION_FAILED"]),
@@ -929,7 +933,7 @@ export function assertDecimalStringFields(
     const body = request.body;
     if (typeof body === "object" && body !== null && !Array.isArray(body)) {
       for (const field of fields) {
-        const value = (body as Record<string, unknown>)[field];
+        const value = readPath(body, field.split("."));
         if (value !== undefined && typeof value !== "string") {
           throw V2ApiError.invalidRequest();
         }
@@ -937,6 +941,22 @@ export function assertDecimalStringFields(
     }
     return Promise.resolve();
   };
+}
+
+/** Reads a dot path (`allowance.amount`); a missing segment is `undefined`. */
+function readPath(root: unknown, segments: readonly string[]): unknown {
+  let current: unknown = root;
+  for (const segment of segments) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }
 
 export function assertNoBodyOrQuery(request: FastifyRequest): Promise<void> {

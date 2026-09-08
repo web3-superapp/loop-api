@@ -9,6 +9,7 @@ import {
   checksumAddress,
   decodeErc20Call,
   InvalidTransactionArgumentError,
+  isUnlimitedAllowance,
   maxUint256,
   parseRecipientAddress,
 } from "../../integrations/bsc/tx-builder.js";
@@ -214,11 +215,7 @@ export function createApprovalService(
         : input.allowance.mode === "zero"
           ? 0n
           : parseIntentAmount(input.allowance.amount, asset.decimals);
-    const isUnlimited = allowanceRaw === maxUint256;
-    if (input.kind === "approve" && isUnlimited) {
-      // A canary ceiling cannot bound an unlimited allowance.
-      throw V2ApiError.fromCode("POLICY_BLOCKED");
-    }
+    const isUnlimited = isUnlimitedAllowance(allowanceRaw);
     const requestId = runtime.createUuid();
     const outcome = await withPrepareIdempotency(
       runtime,
@@ -235,17 +232,22 @@ export function createApprovalService(
         requestId,
       },
       async (operationId): Promise<WalletIntentRecord> => {
+        // The ceiling is enforced on the actual exposure an approval creates:
+        // the spender can never move more than the wallet holds, so the
+        // exposure is min(allowance, balance) at the snapshot block.
+        const balance = await readBalanceSnapshot(runtime, wallet, asset);
+        const exposureRaw =
+          allowanceRaw < balance.rawBalance ? allowanceRaw : balance.rawBalance;
         let valuation: UsdValuation | null = null;
         if (allowanceRaw > 0n) {
           valuation = await valueInUsd(
             runtime,
             asset,
-            allowanceRaw,
+            exposureRaw,
             input.signal,
           );
           enforceCanaryCeiling(writes, valuation.valueUsd);
         }
-        const balance = await readBalanceSnapshot(runtime, wallet, asset);
         let spenderCode: Hex;
         try {
           spenderCode = await runtime.readClient.getCode(spender);
@@ -307,7 +309,12 @@ export function createApprovalService(
           fee: fee.fact,
           balance: balance.fact,
           simulation: execution.simulation,
-          policy: canaryPolicyFact(writes, valuation),
+          policy: canaryPolicyFact(writes, valuation, {
+            basis: input.kind === "revoke" ? "none" : "balance_at_prepare",
+            raw: input.kind === "revoke" ? null : exposureRaw,
+            blockNumber:
+              input.kind === "revoke" ? null : balance.fact.blockNumber,
+          }),
           swap: null,
           signingMode: "device_eth_send_transaction",
           factsObservedAt: now.toISOString(),
@@ -389,14 +396,10 @@ export function createApprovalService(
         allowance = Object.freeze({
           status: "available" as const,
           rawValue: observed.rawValue.toString(10),
-          displayValue:
-            observed.rawValue === maxUint256
-              ? "unlimited"
-              : formatDecimalAmount(
-                  observed.rawValue,
-                  candidate.asset.decimals,
-                ),
-          isUnlimited: observed.rawValue === maxUint256,
+          displayValue: isUnlimitedAllowance(observed.rawValue)
+            ? "unlimited"
+            : formatDecimalAmount(observed.rawValue, candidate.asset.decimals),
+          isUnlimited: isUnlimitedAllowance(observed.rawValue),
           blockNumber: read.head.blockNumber.toString(10),
           blockHash: read.head.blockHash,
           observedAt: read.head.observedAt,
@@ -449,6 +452,7 @@ export function createApprovalService(
         readonly assetId?: unknown;
         readonly spenderAddress?: unknown;
         readonly allowance?: unknown;
+        readonly acknowledgeUnlimited?: unknown;
       };
       if (typeof request.allowance !== "object" || request.allowance === null) {
         throw V2ApiError.invalidRequest();
@@ -456,14 +460,20 @@ export function createApprovalService(
       const allowance = request.allowance as {
         readonly mode?: unknown;
         readonly amount?: unknown;
-        readonly acknowledged?: unknown;
       };
+      if (
+        request.acknowledgeUnlimited !== undefined &&
+        typeof request.acknowledgeUnlimited !== "boolean"
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
       let parsedAllowance:
         | { readonly mode: "unlimited" }
         | { readonly mode: "exact"; readonly amount: unknown };
       if (allowance.mode === "unlimited") {
-        // Unlimited needs the explicit second confirmation the guard shows.
-        if (allowance.acknowledged !== true) {
+        // The guard shows the unlimited notice and asks a second time; the
+        // top-level acknowledgement is that second confirmation.
+        if (request.acknowledgeUnlimited !== true) {
           throw V2ApiError.fromCode("VALIDATION_FAILED");
         }
         parsedAllowance = { mode: "unlimited" };

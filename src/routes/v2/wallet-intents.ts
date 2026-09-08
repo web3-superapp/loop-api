@@ -281,7 +281,7 @@ export function registerV2WalletIntentRoutes(
         operationId: "prepareV2ApproveIntent",
         summary: "Prepare an ERC-20 approve intent",
         description:
-          "Exact allowance by default. An unlimited allowance needs the acknowledged second confirmation and is still POLICY_BLOCKED under the canary policy. The review carries the decoded approve(spender, value) call.",
+          "Exact allowance by default. An unlimited allowance needs the top-level acknowledgeUnlimited second confirmation; the canary ceiling is enforced on the actual exposure min(allowance, balance) at the snapshot block. The review carries the decoded approve(spender, value) call.",
         tags: ["wallet-intents"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -294,7 +294,10 @@ export function registerV2WalletIntentRoutes(
         },
       },
       onRequest: validateIntentCommandHeaders,
-      preValidation: assertNoQuery,
+      preValidation: [
+        assertNoQuery,
+        assertDecimalStringFields(["allowance.amount"]),
+      ],
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {

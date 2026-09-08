@@ -8,6 +8,7 @@ import { isOpaqueId } from "../../core/ids/opaque-id.js";
 import {
   AccountWalletNotFoundError,
   AccountWalletObservationEmptyError,
+  AccountWalletProviderIdConflictError,
   AccountWalletVersionConflictError,
   type AccountWalletRecord,
   type AccountWalletRepository,
@@ -469,6 +470,9 @@ export function createWalletReadService(
       } catch (error) {
         if (error instanceof AccountWalletObservationEmptyError) {
           throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
+        }
+        if (error instanceof AccountWalletProviderIdConflictError) {
+          throw V2ApiError.fromCode("RESOURCE_CONFLICT");
         }
         throw error;
       }

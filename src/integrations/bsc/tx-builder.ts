@@ -22,6 +22,23 @@ import { erc20WriteAbi } from "./erc20-abi.js";
  */
 
 export const maxUint256 = (1n << 256n) - 1n;
+/** Allowances above this are treated as unlimited even when not exactly 2^256 − 1. */
+export const unlimitedAllowanceFloor = 1n << 255n;
+
+/**
+ * An allowance is "unlimited" when it exceeds 2^255 or, when the token's
+ * total supply is known, exceeds that supply. The raw value is still kept and
+ * displayed; only the classification changes.
+ */
+export function isUnlimitedAllowance(
+  value: bigint,
+  totalSupply: bigint | null = null,
+): boolean {
+  return (
+    value > unlimitedAllowanceFloor ||
+    (totalSupply !== null && totalSupply > 0n && value > totalSupply)
+  );
+}
 
 export class InvalidTransactionArgumentError extends Error {
   readonly code = "invalid_transaction_argument";
@@ -141,7 +158,7 @@ export function decodeErc20Call(data: Hex): DecodedErc20Call {
     functionName: "approve" as const,
     spender: normalizeEvmAddress(spender),
     value,
-    isUnlimited: value === maxUint256,
+    isUnlimited: isUnlimitedAllowance(value),
   });
 }
 

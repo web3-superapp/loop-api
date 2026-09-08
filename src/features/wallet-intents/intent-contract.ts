@@ -92,41 +92,28 @@ export const walletIntentListLimits = Object.freeze({
 } as const);
 
 export const walletIntentReasonCodes = Object.freeze({
-  writesDisabled: "BSC_WRITES_DISABLED",
-  chainUnverified: "BSC_CHAIN_VERIFICATION_PENDING",
-  runtimeUnavailable: "WALLET_INTENT_RUNTIME_UNAVAILABLE",
-  privyNotConfigured: "PRIVY_NOT_CONFIGURED",
-  privySwapEvidencePending: "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING",
-  canaryAssetNotAllowed: "CANARY_ASSET_NOT_ALLOWED",
-  canaryMaxUsdExceeded: "CANARY_MAX_USD_EXCEEDED",
-  canaryValueUnpriceable: "CANARY_VALUE_UNPRICEABLE",
-  unlimitedApprovalBlocked: "UNLIMITED_APPROVAL_CANARY_BLOCKED",
-  walletNotSignable: "WALLET_NOT_EMBEDDED",
   simulationReverted: "BSC_CALL_REVERTED",
   simulationUnavailable: "SIMULATION_UNAVAILABLE",
   gasEstimateUnavailable: "GAS_ESTIMATE_UNAVAILABLE",
-  insufficientBalance: "INSUFFICIENT_BALANCE",
-  insufficientGasReserve: "INSUFFICIENT_GAS_RESERVE",
+  swapSimulationPending: "SWAP_SIMULATION_PROVIDER_PENDING",
+  walletNotSignable: "WALLET_NOT_EMBEDDED",
   superseded: "INTENT_SUPERSEDED",
   expired: "INTENT_EXPIRED",
   cancelled: "USER_CANCELLED",
-  policyVersionChanged: "POLICY_VERSION_CHANGED",
   txPayloadMismatch: "TX_PAYLOAD_MISMATCH",
   txPendingVerification: "TX_PENDING_VERIFICATION",
   txNotObserved: "TX_NOT_OBSERVED",
   txReverted: "TX_REVERTED",
+  rpcReceiptUnavailable: "RPC_RECEIPT_UNAVAILABLE",
+  reconciliationReadFailed: "RECONCILIATION_READ_FAILED",
   privyRejected: "PRIVY_SWAP_REJECTED",
   privyFailed: "PRIVY_SWAP_FAILED",
+  privyNotSent: "PRIVY_SWAP_NOT_SENT",
   providerAmbiguous: "PROVIDER_RESULT_AMBIGUOUS",
-  reconciliationBudgetExhausted: "RECONCILIATION_BUDGET_EXHAUSTED",
   screeningNotConfigured: "GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED",
-  contractRecipient: "RECIPIENT_IS_CONTRACT",
   priceImpactUnavailable: "PRICE_IMPACT_UNAVAILABLE",
   priceImpactBlocked: "PRICE_IMPACT_ABOVE_HARD_LIMIT",
   priceImpactConfirm: "PRICE_IMPACT_CONFIRMATION_REQUIRED",
-  quoteExpired: "SWAP_QUOTE_EXPIRED",
-  quoteNotFound: "SWAP_QUOTE_NOT_FOUND",
-  swapSameAsset: "SWAP_SAME_ASSET",
 } as const);
 
 export interface IntentAssetSnapshot {
@@ -159,9 +146,24 @@ export interface SimulationFact {
   readonly reasonCode: string | null;
 }
 
+export const exposureBases = Object.freeze([
+  "amount",
+  "balance_at_prepare",
+  "none",
+] as const);
+export type ExposureBasis = (typeof exposureBases)[number];
+
 export interface CanaryPolicyFact {
   readonly configVersion: typeof bscWriteCanaryPolicyVersion;
   readonly canaryMaxUsd: string;
+  /**
+   * What was priced against the ceiling: the amount itself (send, swap), the
+   * actual exposure `min(allowance, balance)` at the snapshot block (approve),
+   * or nothing (revoke).
+   */
+  readonly exposureBasis: ExposureBasis;
+  readonly exposureRaw: string | null;
+  readonly exposureBlockNumber: string | null;
   /** Null only for a revoke (zero value). */
   readonly valueUsd: string | null;
   readonly priceSource: string | null;
@@ -208,11 +210,15 @@ export interface IntentBalanceFact {
   readonly gasReserveRaw: string;
 }
 
+export const firstRecipientBasis = "indexed_erc20_transfers" as const;
+
 export interface RecipientReview {
   readonly address: string;
   readonly checksumAddress: string;
   readonly isContract: boolean;
+  /** Derived only from indexed ERC-20 transfers out of the wallet. */
   readonly isFirstRecipient: boolean;
+  readonly basis: typeof firstRecipientBasis;
   readonly screening: {
     readonly status: "unavailable";
     readonly reasonCode: string;

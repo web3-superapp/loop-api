@@ -112,6 +112,19 @@ export class AccountWalletObservationEmptyError extends Error {
   }
 }
 
+/**
+ * Privy wallet IDs are globally unique. Two LOOP accounts claiming the same
+ * provider wallet ID is an identity conflict, not an internal failure.
+ */
+export class AccountWalletProviderIdConflictError extends Error {
+  readonly code = "account_wallet_provider_id_conflict";
+
+  constructor() {
+    super("The provider wallet ID already belongs to another account");
+    this.name = "AccountWalletProviderIdConflictError";
+  }
+}
+
 export class AccountWalletNotFoundError extends Error {
   readonly code = "account_wallet_not_found";
 
@@ -119,6 +132,18 @@ export class AccountWalletNotFoundError extends Error {
     super("The wallet does not belong to this account");
     this.name = "AccountWalletNotFoundError";
   }
+}
+
+/** PostgreSQL unique violation on the global provider wallet ID index. */
+function isProviderWalletIdConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "23505" &&
+    "constraint" in error &&
+    error.constraint === "account_wallets_provider_wallet_idx"
+  );
 }
 
 const walletColumns = `
@@ -259,6 +284,9 @@ export function createPostgresAccountWalletRepository(
           } catch {
             // The original failure stays authoritative.
           }
+        }
+        if (isProviderWalletIdConflict(error)) {
+          throw new AccountWalletProviderIdConflictError();
         }
         throw error;
       } finally {

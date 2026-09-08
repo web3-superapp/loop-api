@@ -27,6 +27,8 @@ import {
 } from "../../features/session/session-contract.js";
 import {
   bscWriteCanaryPolicyVersion,
+  exposureBases,
+  firstRecipientBasis,
   signingModes,
   simulationSources,
   simulationStatuses,
@@ -140,6 +142,7 @@ const recipientReviewSchema = {
     "checksumAddress",
     "isContract",
     "isFirstRecipient",
+    "basis",
     "screening",
   ],
   properties: {
@@ -151,6 +154,7 @@ const recipientReviewSchema = {
       description:
         "True when the wallet has no indexed outgoing transfer to this address.",
     },
+    basis: { type: "string", const: firstRecipientBasis },
     screening: unavailableSchema,
   },
 } as const;
@@ -537,6 +541,9 @@ export const walletIntentResourceSchema = {
       required: [
         "configVersion",
         "canaryMaxUsd",
+        "exposureBasis",
+        "exposureRaw",
+        "exposureBlockNumber",
         "valueUsd",
         "priceSource",
         "priceFetchedAt",
@@ -544,6 +551,14 @@ export const walletIntentResourceSchema = {
       properties: {
         configVersion: { type: "string", const: bscWriteCanaryPolicyVersion },
         canaryMaxUsd: decimalAmountSchema,
+        exposureBasis: {
+          type: "string",
+          enum: [...exposureBases],
+          description:
+            "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke.",
+        },
+        exposureRaw: nullableString(rawAmountSchema),
+        exposureBlockNumber: nullableString(blockNumberSchema),
         valueUsd: nullableString(decimalAmountSchema),
         priceSource: nullableString({ type: "string", maxLength: 32 }),
         priceFetchedAt: nullableString(dateTimeSchema),
@@ -702,11 +717,24 @@ export const sendPreflightResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["walletId", "chainId", "recipient", "warnings", "contractVersion"],
+  required: [
+    "walletId",
+    "chainId",
+    "recipient",
+    "basis",
+    "warnings",
+    "contractVersion",
+  ],
   properties: {
     walletId: opaqueIdSchema,
     chainId: { type: "string", pattern: chainIdPatternSource },
     recipient: recipientReviewSchema,
+    basis: {
+      type: "string",
+      const: firstRecipientBasis,
+      description:
+        "isFirstRecipient is derived only from indexed ERC-20 transfers out of this wallet.",
+    },
     warnings: {
       type: "array",
       maxItems: 8,
@@ -758,17 +786,15 @@ export const approvePrepareRequestSchema = {
         {
           type: "object",
           additionalProperties: false,
-          required: ["mode", "acknowledged"],
-          properties: {
-            mode: { type: "string", const: "unlimited" },
-            acknowledged: {
-              type: "boolean",
-              description:
-                "Must be true: the guard has shown the unlimited-allowance notice and the user confirmed a second time. Under the canary policy an unlimited allowance is still POLICY_BLOCKED.",
-            },
-          },
+          required: ["mode"],
+          properties: { mode: { type: "string", const: "unlimited" } },
         },
       ],
+    },
+    acknowledgeUnlimited: {
+      type: "boolean",
+      description:
+        "Required true for allowance.mode = unlimited: the guard has shown the unlimited notice and the user confirmed a second time (VALIDATION_FAILED otherwise). The canary ceiling is enforced on min(allowance, balance).",
     },
   },
 } as const;

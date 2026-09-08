@@ -18,6 +18,7 @@ import {
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
+  firstRecipientBasis,
   sealIntent,
   sendIntentTtlSeconds,
   walletIntentPayloadVersions,
@@ -61,6 +62,8 @@ export interface RecipientPreflightResource {
   readonly walletId: string;
   readonly chainId: string;
   readonly recipient: RecipientReview;
+  /** Where `isFirstRecipient` comes from; nothing else is consulted. */
+  readonly basis: typeof firstRecipientBasis;
   readonly warnings: readonly string[];
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -125,6 +128,7 @@ export async function reviewRecipient(
     checksumAddress: checksumAddress(recipient),
     isContract: code !== "0x",
     isFirstRecipient,
+    basis: firstRecipientBasis,
     // Malicious-address screening needs the GoPlus address endpoint, which
     // is not connected; the sheet shows a strong notice, never a verdict.
     screening: Object.freeze({
@@ -170,6 +174,7 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
         walletId: wallet.walletId,
         chainId: bscChainId,
         recipient: review,
+        basis: firstRecipientBasis,
         warnings: Object.freeze(warnings),
         contractVersion: v2ContractVersion,
       });
@@ -285,7 +290,11 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
             fee: fee.fact,
             balance: balance.fact,
             simulation: execution.simulation,
-            policy: canaryPolicyFact(writes, valuation),
+            policy: canaryPolicyFact(writes, valuation, {
+              basis: "amount",
+              raw: amountRaw,
+              blockNumber: balance.fact.blockNumber,
+            }),
             swap: null,
             signingMode: "device_eth_send_transaction",
             factsObservedAt: now.toISOString(),
