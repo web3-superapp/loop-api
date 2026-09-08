@@ -233,3 +233,23 @@ When 02 arrives, in order:
    activity) against a snapshot block.
 5. Economy: supply/distribution/tax from the contract, never from the
    prototype.
+
+## Revision 2026-09-09 (S7 integration findings)
+
+Source: `docs/integration/S7/report.md` §5.
+
+- **`officialLinks` optional (finding 1).** `POST/PUT /v2/launch/projects`
+  accept a `project` without `officialLinks`; omission equals four `null`
+  links. `PUT` remains a whole-material replacement, so a client that wants to
+  keep links must send them back.
+- **Implicit `PREPARING` rows (finding 2).** `GET …/milestones` publishes the
+  five 03 §8.4 tracks (`lbank/spot`, `binance/alpha`, `binance/perpetual`,
+  `binance/spot`, `bithumb/spot`). A track without a stored row is projected
+  as `{venueMilestoneId: null, state: "PREPARING", evidence: all null,
+version: 0, updatedAt: null}`; nothing is written. Stored rows come first.
+- **Transition table and script arguments (findings 3, 4).** The venue
+  state machine and the `--evidence`/`--reviewer` pairing rule
+  (`--observed-at` only with `--evidence`) are now in
+  `docs/frontend-v2-launch-api.md` §4.8 / §6. No code change.
+- Finding 5 (`pending_wallet` is the reachable referral state without a
+  wallet) is recorded as expected behaviour.

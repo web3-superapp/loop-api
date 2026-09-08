@@ -209,8 +209,16 @@ endpoint must serve `eth_getTransactionReceipt` for the reconciliation lane
 prepare, pre-execution, and the approvals inventory). Prepare builds the
 exact unsigned transaction and pre-executes it over RPC; nothing here signs or
 broadcasts. The approvals inventory needs the `erc20_transfer` lane to have a
-checkpoint (`pnpm indexer:backfill --from <block>` also indexes `Approval`
-logs). The `wallet-intent-reconcile` worker lane
+checkpoint **and** Approval coverage: `indexer_checkpoints.approval_coverage_from_block`
+(migration 000025) is the first block from which `Approval` logs are stored
+contiguously up to the checkpoint. It is set automatically the first time the
+lane advances under approval-aware code; for a lane backfilled before
+migration 000021 (transfers only), run
+`pnpm indexer:backfill --lane erc20_transfer --from <block>` once — it stores
+the missing `Approval` logs downward from the coverage start to `<block>`
+and lowers the coverage start without touching the checkpoint. `GET
+/v2/approvals` is `INDEXING_DELAYED` while coverage is unknown or starts after
+the wallet's earliest indexed transfer. The `wallet-intent-reconcile` worker lane
 (`WALLET_INTENT_RECONCILE_ENABLED=true`) reads receipts and Privy action
 status; it needs `BSC_RPC_URLS` and, for Swap status, the Privy credential
 pair. See `docs/frontend-v2-wallet-intents-api.md` for the client contract.

@@ -29,7 +29,8 @@
   execute / quote 返回 `503 CAPABILITY_UNAVAILABLE`；`preflight`、`GET` 读接口、
   `GET /v2/approvals*` 不受写开关影响。
 - 开启时是 **canary**：只允许 `BSC_WRITE_CANARY_ASSETS` 里的资产，单笔 USD 价值 ≤
-  `BSC_WRITE_CANARY_MAX_USD`（默认 20）；超限或资产不在名单 → `403 POLICY_BLOCKED`。
+  `BSC_WRITE_CANARY_MAX_USD`（默认 20）；超限或资产不在名单 → `403 POLICY_BLOCKED`，
+  `detailsSafe` 说明是哪条规则（见 §7.1）。
   价值无法用**新鲜**行情定价（无行情或 stale）→ `503 CAPABILITY_UNAVAILABLE`，不会假定"很小"。
 
 ## 2. Headers
@@ -249,9 +250,18 @@ intent 保持 `awaiting_signature`）；节点尚未看到该哈希 → 接受�
 `confirmed` 需要 ≥ 15 确认。成功 Toast **只在** `confirmed`。分享入口沿用 chat 域。
 
 `GET /v2/wallet-intents?cursor=|limit=`（1–50，二选一）列表同形状，最新在前。
+**最后一页 `nextCursor: null`**（所有 v2 列表接口统一：服务端多取一行判断是否还有下一页，
+`nextCursor` 非 null 当且仅当还有数据；前端以 `nextCursor === null` 作为终止条件即可，
+不必再请求一次空页）。
 
-`POST /v2/wallet-intents/{intentId}/cancel`：只对 `prepared|awaiting_signature` 生效；
-之后的状态 → `409 DATA_STALE`（可能已上链）。
+`POST /v2/wallet-intents/{intentId}/cancel`（S6 联调实测，语义按此）：
+
+| 当前状态                                                 | 结果                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------ |
+| `prepared` / `awaiting_signature`                        | `200`，转为 `cancelled`，`result.reasonCode = USER_CANCELLED`      |
+| `cancelled`                                              | `200` **幂等**：原样返回，`updatedAt` 不变（重复点击取消是安全的） |
+| 已过期但尚未落库                                         | `200`，投影为 `expired`（不是取消）                                |
+| `expired`（含被新 intent supersede）/ `submitted` 及之后 | `409 DATA_STALE`（可能已上链，页面重新 `GET`）                     |
 
 ## 5. 授权 / 撤销 / 盘点
 
@@ -270,10 +280,16 @@ intent 保持 `awaiting_signature`）；节点尚未看到该哈希 → 接受�
 （缺失/false → `422 VALIDATION_FAILED`，这是原型"仍要无限授权"的二次确认）。canary 上限按
 **实际敞口** `min(allowance, 当前余额) × 价格` 判定（`policy.exposureBasis =
 "balance_at_prepare"`，`exposureRaw`、`exposureBlockNumber` 记录快照），余额超上限 →
-`403 POLICY_BLOCKED`。`allowance.amount` 必须是字符串（数字 → `400`）。
+`403 POLICY_BLOCKED`，`detailsSafe.reasonCode` 为 `UNLIMITED_EXPOSURE_EXCEEDS_CEILING`
+（无限授权）或 `CANARY_CEILING_EXCEEDED`（精确额度），并带 `exposureUsd` / `ceilingUsd`
+（§7.1）。`allowance.amount` 必须是字符串（数字 → `400`）。
 响应里 `review.spender`（`isContract`、`isUnlimited`）与 `review.decodedCall`
-（`approve`，`args.spender/value`）就是原型 approval-guard 要展示的解码字段。原生资产无授权
-面 → `422`。
+（`approve`，`args.spender/value`）就是原型 approval-guard 要展示的解码字段。
+
+**校验顺序**：请求形状（`400`）→ 资产存在且未 blocked → **原生资产无授权面 →
+`422 VALIDATION_FAILED`，`detailsSafe.reasonCode = NATIVE_ASSET_NOT_APPROVABLE`**（在
+canary 名单之前判定，所以不管名单里有没有 native 都是 422）→ canary 名单（`403`）→
+spender 形状/自授权（`400`/`422`）→ 上限（`403`）。
 
 ### 5.2 `POST /v2/wallet-intents/revoke`
 
@@ -282,7 +298,17 @@ intent 保持 `awaiting_signature`）；节点尚未看到该哈希 → 接受�
 
 ### 5.3 `GET /v2/approvals?walletId=` → `approvals`
 
-indexer 尚无 checkpoint → `503 INDEXING_DELAYED`（不要显示"0 个授权"）。有 checkpoint 时：
+**可用条件**：`Approval` 与转账共用 `erc20_transfer` lane 的 checkpoint，但 `Approval` 解码
+只覆盖 `[approvalCoverageFromBlockNumber, indexerBlockNumber]`（迁移 000021 之前回填的区间
+只有转账没有授权）。以下任一情况 → `503 INDEXING_DELAYED`，页面显示 unavailable、可重试，
+**绝不显示"0 个授权"**：
+
+- lane 尚无 checkpoint；
+- `approval_coverage_from_block` 为 null（lane 还没在带 Approval 解码的代码下推进过）；
+- 覆盖起点**高于该钱包最早被索引到的转账块**（钱包在覆盖之前就有活动，中间可能有授权）。
+
+运维用 `pnpm indexer:backfill --lane erc20_transfer --from <block>` 把覆盖起点向下补到 `<block>`
+（只补 `Approval`，不动 checkpoint）。满足条件时：
 
 ```json
 {
@@ -317,6 +343,7 @@ indexer 尚无 checkpoint → `503 INDEXING_DELAYED`（不要显示"0 个授权"
   "summary": { "activeCount": 1, "unlimitedCount": 0 },
   "freshness": {
     "indexerBlockNumber": "…",
+    "approvalCoverageFromBlockNumber": "…",
     "headBlockNumber": "…",
     "observedAt": "…"
   },
@@ -324,7 +351,8 @@ indexer 尚无 checkpoint → `503 INDEXING_DELAYED`（不要显示"0 个授权"
 }
 ```
 
-候选来自链上 `Approval` 事件（与转账同一 indexer lane、同一 checkpoint），每一行的
+`freshness.approvalCoverageFromBlockNumber` 是本次盘点的 `Approval` 覆盖起点（页面可显示
+"授权记录自区块 N 起"）。候选来自链上 `Approval` 事件（与转账同一 indexer lane、同一 checkpoint），每一行的
 `allowance` 都是**当场 RPC 重读**的 `allowance()`；当前额度为 0 的行不列出；读不到 →
 `{status: "unavailable", reasonCode}`，绝不显示为 0。`displayValue` 可能是 `"unlimited"`。
 "回收"走 §5.2。
@@ -424,23 +452,41 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 
 ## 7. 错误码速查
 
-| HTTP | code                     | 出现位置                                                                        | 前端动作                                  |
-| ---- | ------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------- |
-| 400  | `INVALID_REQUEST`        | 未知字段、金额是数字、错误校验和、缺/多 `Idempotency-Key`                       | 修请求                                    |
-| 401  | `AUTH_REQUIRED/INVALID`  | Bearer                                                                          | 重新登录                                  |
-| 403  | `POLICY_BLOCKED`         | canary 名单/上限（授权按实际敞口）、价格影响 ≥5%、资产 blocked                  | 显示策略文案（安全中心 D20 前"暂不可调"） |
-| 404  | `NOT_FOUND`              | 模块未启用、钱包/资产/intent 不存在                                             | 不可枚举                                  |
-| 409  | `IDEMPOTENCY_CONFLICT`   | 同 key 不同 body                                                                | 换 key                                    |
-| 409  | `INSUFFICIENT_BALANCE`   | 余额 / gas 储备                                                                 | 提示余额不足                              |
-| 409  | `SIMULATION_FAILED`      | 对 `prepared` intent 上报 / execute（含全部 Swap）                              | 回到确认页，重新 prepare                  |
-| 409  | `DATA_STALE`             | intent 过期/已进入后续状态、策略版本变化、钱包变化                              | 重新 `GET` 或重新 prepare                 |
-| 409  | `QUOTE_EXPIRED`          | quote 过期/未知、swap intent 过期                                               | 重新报价                                  |
-| 409  | `SUBMISSION_UNKNOWN`     | 重复 execute                                                                    | 只轮询，不重发                            |
-| 422  | `CHAIN_MISMATCH`         | 非 `eip155:56`                                                                  | 修请求                                    |
-| 422  | `VALIDATION_FAILED`      | 外部钱包、自转、原生资产授权、未确认无限授权、哈希 payload 不符、Privy 定性拒绝 | 按场景提示                                |
-| 503  | `CAPABILITY_UNAVAILABLE` | 写开关关闭、链未校验/不可达、无法定价、RPC 事实读不到                           | 整块 unavailable，可重试                  |
-| 503  | `INDEXING_DELAYED`       | 授权盘点无 checkpoint                                                           | unavailable，可重试                       |
-| 503  | `PROVIDER_DISCONNECTED`  | Privy 报价不可达                                                                | 可重试                                    |
+| HTTP | code                     | 出现位置                                                                                                                                  | 前端动作                                  |
+| ---- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| 400  | `INVALID_REQUEST`        | 未知字段、金额是数字、错误校验和、缺/多 `Idempotency-Key`                                                                                 | 修请求                                    |
+| 401  | `AUTH_REQUIRED/INVALID`  | Bearer                                                                                                                                    | 重新登录                                  |
+| 403  | `POLICY_BLOCKED`         | canary 名单/上限（授权按实际敞口）、价格影响 ≥5%、资产 blocked；`detailsSafe.reasonCode` 区分（§7.1）                                     | 显示策略文案（安全中心 D20 前"暂不可调"） |
+| 404  | `NOT_FOUND`              | 模块未启用、钱包/资产/intent 不存在                                                                                                       | 不可枚举                                  |
+| 409  | `IDEMPOTENCY_CONFLICT`   | 同 key 不同 body                                                                                                                          | 换 key                                    |
+| 409  | `INSUFFICIENT_BALANCE`   | 余额 / gas 储备                                                                                                                           | 提示余额不足                              |
+| 409  | `SIMULATION_FAILED`      | 对 `prepared` intent 上报 / execute（含全部 Swap）                                                                                        | 回到确认页，重新 prepare                  |
+| 409  | `DATA_STALE`             | intent 过期/已进入后续状态、策略版本变化、钱包变化                                                                                        | 重新 `GET` 或重新 prepare                 |
+| 409  | `QUOTE_EXPIRED`          | quote 过期/未知、swap intent 过期                                                                                                         | 重新报价                                  |
+| 409  | `SUBMISSION_UNKNOWN`     | 重复 execute                                                                                                                              | 只轮询，不重发                            |
+| 422  | `CHAIN_MISMATCH`         | 非 `eip155:56`                                                                                                                            | 修请求                                    |
+| 422  | `VALIDATION_FAILED`      | 外部钱包、自转、原生资产授权（`detailsSafe.reasonCode = NATIVE_ASSET_NOT_APPROVABLE`）、未确认无限授权、哈希 payload 不符、Privy 定性拒绝 | 按场景提示                                |
+| 503  | `CAPABILITY_UNAVAILABLE` | 写开关关闭、链未校验/不可达、无法定价、RPC 事实读不到                                                                                     | 整块 unavailable，可重试                  |
+| 503  | `INDEXING_DELAYED`       | 授权盘点无 checkpoint / 无 Approval 覆盖 / 覆盖晚于钱包最早活动（§5.3）                                                                   | unavailable，可重试                       |
+| 503  | `PROVIDER_DISCONNECTED`  | Privy 报价不可达                                                                                                                          | 可重试                                    |
+
+### 7.1 `detailsSafe`（策略拒绝的原因槽位）
+
+七字段信封里 `detailsSafe` 平时为 `null`；以下拒绝带一个只含标量的对象，前端按
+`reasonCode` 选文案，其余字段用于渲染数字：
+
+| HTTP / code             | `detailsSafe`                                                                                    | 出现位置                               |
+| ----------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_NOT_IN_CANARY_ALLOWLIST" }`                                              | send / approve / revoke / swap         |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_CEILING_EXCEEDED", "exposureUsd": "750.51", "ceilingUsd": "20" }`       | send、精确额度 approve、swap           |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "UNLIMITED_EXPOSURE_EXCEEDS_CEILING", "exposureUsd": "…", "ceilingUsd": "20" }` | unlimited approve（按实际敞口）        |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_BLOCKED" }`                                                              | 注册表里 `status = blocked` 的资产     |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "PRICE_IMPACT_BLOCKED" }`                                                       | swap（价格影响 ≥ 阈值）                |
+| `422 VALIDATION_FAILED` | `{ "reasonCode": "NATIVE_ASSET_NOT_APPROVABLE" }`                                                | approve / revoke 的 `eip155:56:native` |
+
+`exposureUsd` / `ceilingUsd` 是十进制字符串（不是数字），`exposureUsd` 就是 prepare 时按
+新鲜行情算出的价值 / 实际敞口。其他 `VALIDATION_FAILED`、`POLICY_BLOCKED` 场景 `detailsSafe`
+仍为 `null`；前端不得依赖未列出的键。
 
 ## 8. 本步明确 unavailable / pending 的项
 

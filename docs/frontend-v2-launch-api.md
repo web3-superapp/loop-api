@@ -56,8 +56,9 @@ LOOP"、"0.5% 单地址上限"、"三轮 10%/5%" 等口径；所有合约/公式
 ```
 
 - `name` 1–80 code points（去首尾空白）；`ticker` `^[A-Z0-9]{2,12}$`（前端先大写）；
-  `narrative` 1–2000 或 `null`；`officialLinks` 的 `website|x|telegram|discord` 各为
-  `https://` URL（≤512，不含凭据）或 `null`，缺省视为 `null`。未知键 `400`。
+  `narrative` 1–2000 或 `null`（**键必填**）；`officialLinks` **整个对象可省略**，省略等价于
+  四键全 `null`；给了对象时 `website|x|telegram|discord` 各为 `https://` URL（≤512，不含
+  凭据）或 `null`，缺省的键视为 `null`。未知键 `400`。
 - 附件与 KYB 无 Provider：响应中 `attachments = {status: "unavailable", reasonCode:
 "ATTACHMENT_STORAGE_NOT_SELECTED"}`、`kyb = {status: "unavailable", state: "unavailable",
 reasonCode: "KYB_PROVIDER_NOT_SELECTED"}`；页面显示"待接入"，不提供上传。
@@ -118,6 +119,8 @@ reasonCode: "KYB_PROVIDER_NOT_SELECTED"}`；页面显示"待接入"，不提供�
 - 只允许 `reviewStatus ∈ {draft, returned}`，否则 `409 DATA_STALE`。
 - `expectedVersion` 过期 → `409 VERSION_CONFLICT`（重新 GET 再提交）；每次成功 `version`
   与 `materialVersion` 都 +1。
+- `project` 是**整体替换**：`officialLinks` 可省略（= 四键全 `null`），但"没改链接就不传"会
+  把链接清空——要保留链接必须原样回传。
 - 非本人项目 → `404`。
 
 ### 3.3 `POST /v2/launch/projects/{projectId}/submit`
@@ -137,7 +140,8 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 ### 3.4 `GET /v2/launch/projects?status=&limit=&cursor=`
 
 `status ∈ all|draft|submitted|in_review|returned|approved|rejected`（默认 `all`），
-`limit` 1–50（默认 20）；`cursor` 与 `limit` 互斥、绑定 owner/路由/`status`。
+`limit` 1–50（默认 20）；`cursor` 与 `limit` 互斥、绑定 owner/路由/`status`。最后一页
+`nextCursor: null`（v2 列表统一语义）。
 
 ### 3.5 `GET /v2/launch/projects/{projectId}`
 
@@ -320,6 +324,29 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
 `evidence.recordedAt` = 复核人记录证据时的服务端时钟；`evidence.observedAt` = 操作员提供的
 "证据在平台上可核验的时间"（可空，不从 `recordedAt` 推导）；页面把两者分开显示。
 
+**隐式 `PREPARING` 行**：03 §8.4 的五条赛道（`lbank/spot`、`binance/alpha`、`binance/perpetual`、
+`binance/spot`、`bithumb/spot`）**总是**出现在 `items` 里。没有落库记录的赛道以隐式行下发：
+`venueMilestoneId: null`、`state: "PREPARING"`、`evidence` 四键全 `null`（含 `recordedAt: null`）、
+`version: 0`、`updatedAt: null`。已落库的行在前（按更新时间倒序），隐式行随后按上面顺序。
+页面因此不需要用"空列表"推断"尚未申请"；`venueMilestoneId === null` 即"尚无记录"。
+
+**状态转换表**（`pnpm launch:milestone` 只接受下面的迁移，否则脚本以
+`launch_milestone_failed` 退出；页面不用发起转换，但据此理解为什么某状态"跳不过去"）：
+
+| 当前               | 可转到                                               |
+| ------------------ | ---------------------------------------------------- |
+| `PREPARING`        | `APPLIED`、`DEFERRED`                                |
+| `APPLIED`          | `EVIDENCE_PENDING`、`REJECTED`、`DEFERRED`           |
+| `EVIDENCE_PENDING` | `LISTED`、`FEATURED`、`EVIDENCE_INVALID`、`REJECTED` |
+| `EVIDENCE_INVALID` | `EVIDENCE_PENDING`、`REJECTED`                       |
+| `LISTED`           | `FEATURED`、`DELISTED`                               |
+| `FEATURED`         | `LISTED`、`DELISTED`                                 |
+| `REJECTED`         | `APPLIED`                                            |
+| `DEFERRED`         | `PREPARING`、`APPLIED`                               |
+| `DELISTED`         | —（终态）                                            |
+
+`LISTED` / `FEATURED` 必须经过 `EVIDENCE_PENDING`，且记录时必须带证据与复核人（§6）。
+
 ### 4.9 `GET /v2/launch/economy`（loop-economy）
 
 ```json
@@ -349,4 +376,9 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
 
 - `pnpm launch:review <projectId> approve` → 目录出现该 launch（`unscheduled`）。
 - `pnpm launch:milestone <projectId> lbank spot APPLIED`；`… LISTED --evidence <url> --reviewer ops.alice [--observed-at 2026-09-01T08:00:00+08:00]`。
+  - **`--evidence` 与 `--reviewer` 必须成对**出现（缺一即
+    `launch_milestone_arguments_invalid`）；`--observed-at` 只有在给了 `--evidence` 时才被
+    接受（RFC 3339）。`LISTED` / `FEATURED` 必须带这一对；其他状态可以不带。
+  - `--reviewer` 形如 `^[a-z][a-z0-9_.-]{0,63}$`；证据引用只存 SHA-256 digest，原文不落库。
+  - 不在上表的迁移（例如 `APPLIED → FEATURED`）→ `launch_milestone_failed`。
 - 两者在 `NODE_ENV=production` 下拒绝执行。

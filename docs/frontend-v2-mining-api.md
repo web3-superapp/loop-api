@@ -23,7 +23,7 @@
 
 未启用时对应路径 `404 NOT_FOUND`。`GET /v2/mining/referral/rules` 已从 `community` 模块移入
 `mining` 模块（路径不变）：只启用 `community` 的部署不再有该路径。移动端 capability 枚举需新增
-`referral`（共 28 项）。
+`referral`（S8 合并后共 **31** 项；以 `GET /v2/meta/capabilities` 实际数量为准，不要写死）。
 
 ## 2. Headers
 

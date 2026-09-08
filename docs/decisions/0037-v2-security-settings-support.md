@@ -208,3 +208,27 @@ Remove `security`, `settings`, `support` from `V2_MODULES_ENABLED` (routes
 404, capabilities `deferred`); `GET /v2/meta/about` is always registered with
 the meta routes and has no persistence. The migration's `down` runs only while
 the new tables and the revoke commands are empty.
+
+## Revision 2026-09-09 (S8 integration findings)
+
+Source: `docs/integration/S8/report.md` §4.
+
+- **Capability count (finding 1).** The three frontend contracts now say 31
+  and tell the client to treat `GET /v2/meta/capabilities` as the source of
+  truth rather than a hard-coded count.
+- **Revoke boundary (finding 2).** Documented: a revoke only affects requests
+  that carry the revoked `X-Loop-Session-ID`; the same Privy bearer without
+  the header keeps working until Privy session revocation exists (Go/No-Go).
+- **Guard order (finding 3).** Documented: the self-revoke guard
+  (`403 AUTH_STEP_UP_REQUIRED`) runs before the idempotency check, so a reused
+  key aimed at the caller's own session is 403, not 409.
+- **`newSessions24h` (finding 4).** Now counts only sessions created in the
+  window that are still `active`, in both `GET /v2/devices` and
+  `GET /v2/security/summary`, so the signal falls back after a revoke and
+  shares the active-only basis of `deviceCount` / `activeSessionCount`.
+- **`about` sample (finding 5).** The contract sample lists the current ten
+  `configVersions` entries and repeats that the client renders whatever the
+  server sends.
+- The approvals block of `security/summary` inherits
+  `freshness.approvalCoverageFromBlockNumber` and the coverage-based
+  `INDEXING_DELAYED` from Decision 0035's revision.

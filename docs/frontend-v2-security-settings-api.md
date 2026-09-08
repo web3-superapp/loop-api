@@ -14,8 +14,9 @@
   对应路径返回 `404 NOT_FOUND`（V2 错误体），`GET /v2/meta/capabilities` 里的
   同名 capability 为 `deferred`；启用但运行时未组装时为 `unavailable`
   （`SECURITY_RUNTIME_UNAVAILABLE` / `SETTINGS_RUNTIME_UNAVAILABLE` /
-  `SUPPORT_RUNTIME_UNAVAILABLE`）。capability 列表现在有 **30** 项（新增
-  `security`、`settings`、`support`），移动端枚举同步。
+  `SUPPORT_RUNTIME_UNAVAILABLE`）。capability 列表现在有 **31** 项（S8 合并后实测；新增
+  `security`、`settings`、`support`），移动端枚举同步——但请以 `GET /v2/meta/capabilities`
+  实际下发的数量为准，不要在客户端写死或做穷举断言。
 - **MFA / Passkey / 恢复密码 / 自动恢复 / 社交恢复 / 私钥导出不是 meta
   capability**，只从 `GET /v2/security/capabilities` 读（§3.1），六项恒
   `unavailable`。任何页面都不得本地模拟"已开启"。
@@ -81,6 +82,9 @@ X-Loop-Client-Version: 1.0.0
 
 - 最新在前，`active` 排在 `revoked` 前，最多 100 条（`truncated: true` 表示
   被截断）；没有 cursor。
+- `riskSignals.newSessions24h` = **24 h 内新建且仍 `active`** 的 session 数（撤销后回落；
+  S8 修订前是历史计数）；`deviceCount` / `activeSessionCount` 同样只算活跃，三者口径一致，
+  但 `newSessions24h` 仍不是"当前设备数"，不要拿它渲染设备列表长度。
 - `isCurrent` 只有在请求带了 `X-Loop-Session-ID` 且匹配时为 `true`；不带时
   `currentSessionId: null`、全部 `false`——前端应始终带上。
 - `lastSeenAt` 是 bootstrap 观测时间（决策 0027），**不是**持续活跃时间；原型
@@ -100,15 +104,21 @@ POST /v2/devices/{sessionId}/revoke
 - 200 → `{"session": {"sessionId", "status": "revoked", "revokedAt"}, "effect": "auditOnly", "providerAccessTerminated": false, "contractVersion": "2.0"}`。
 - **撤销的真实效果**：撤销 = LOOP 审计投影置 `revoked` + 写一条 `security.event`
   - LOOP 侧拒绝后续带该 `X-Loop-Session-ID` 的请求（`401 AUTH_INVALID`）。
+    **撤销只对带 `X-Loop-Session-ID` 的请求生效**：同一个 Privy bearer **不带**该
+    header 的请求仍然 200（S8 实测）。也就是说撤销不能阻止一个不自报 session 的
+    客户端继续用同一个 Privy token 访问。
     **不终止对方设备的 Privy 访问令牌**（`providerAccessTerminated: false`）；
     真正把设备踢下线依赖 Privy 会话撤销（Go/No-Go）。UI 文案必须按此表达，
-    不得显示"已下线"。
-- 自撤销守卫（目标 = 当前 session → 403）是表现层规则；服务端事务内还会校验
-  `X-Loop-Session-ID` 是本账号的**活跃** session，否则 `400 INVALID_REQUEST`。
-- 目标 = 当前 session（header `X-Loop-Session-ID`）→ `403 AUTH_STEP_UP_REQUIRED`
-  （MFA 未接，恒返回；本机退出仍走 `POST /v2/session/logout`）。
+    不得显示"已下线"，建议措辞"已从设备列表移除 / 该设备下次同步时需重新登录"。
+- **判定顺序**（S8 实测）：自撤销守卫排在幂等检查**之前**——目标 = 当前 session
+  （header `X-Loop-Session-ID`）→ `403 AUTH_STEP_UP_REQUIRED`（MFA 未接，恒返回，
+  什么都不写；本机退出仍走 `POST /v2/session/logout`），**即使**复用了一个已成功
+  撤销别的 session 的 `Idempotency-Key` 也是 403 而不是 409。
+- 自撤销守卫是表现层规则；服务端事务内还会校验 `X-Loop-Session-ID` 是本账号的
+  **活跃** session，否则 `400 INVALID_REQUEST`。
 - 不存在 / 不属于本账号 → `404 SESSION_NOT_FOUND`（不可枚举）。
-- 同 key 重放 → 200 且 `revokedAt` 相同；同 key 不同目标 → `409 IDEMPOTENCY_CONFLICT`。
+- 同 key 重放 → 200 且 `revokedAt` 相同；同 key 不同目标（非自己）→
+  `409 IDEMPOTENCY_CONFLICT`。
 - 已撤销的 session 再撤销 → 200（幂等）。
 - 配额：与 logout 共用每账号每 24h 40 次命令 → `429 RATE_LIMITED`。
 
@@ -165,6 +175,7 @@ POST /v2/devices/{sessionId}/revoke
     "unlimitedCount": 1,
     "freshness": {
       "indexerBlockNumber": "120659683",
+      "approvalCoverageFromBlockNumber": "120659684",
       "headBlockNumber": "120661145",
       "observedAt": "2026-09-09T02:00:00.000Z"
     }
@@ -250,6 +261,16 @@ POST /v2/devices/{sessionId}/revoke
       "effectiveAt": null
     },
     {
+      "module": "community",
+      "configVersion": "communityV1",
+      "effectiveAt": null
+    },
+    {
+      "module": "marketTrending",
+      "configVersion": "marketTrendingV1",
+      "effectiveAt": null
+    },
+    {
       "module": "deviceRisk",
       "configVersion": "deviceRiskV1",
       "effectiveAt": null
@@ -303,7 +324,8 @@ POST /v2/devices/{sessionId}/revoke
   风险披露的文档 URL 本步**不下发**，原型的法务四行显示为"版本槽位 + unavailable"。
 - `openSource.entries` 就是开源许可页的列表（只有 name/purpose/license，
   不下发版本号）；`summary` 是摘要。
-- `configVersions` 只展示，不要 pin。
+- `configVersions` 只展示，不要 pin；上面的样例是当前的 **10** 项（顺序即服务端顺序），
+  但页面必须按"服务端下发多少行就渲染多少行"实现，不能写死行数。
 
 ## 6. 客服工单 → `support` 页
 

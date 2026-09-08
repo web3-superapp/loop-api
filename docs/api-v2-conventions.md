@@ -217,6 +217,10 @@ operation needs a stronger, module-defined authentication step.
   surfaced as `INTERNAL_ERROR` or retried.
 - New public resource IDs are generated and validated with
   `src/core/ids/opaque-id.ts` (canonical lowercase UUIDv4).
+- A list fetches `limit + 1` rows and publishes `nextCursor` only when the
+  extra row exists; the last page therefore always carries `nextCursor: null`
+  (the client may stop on `null` without requesting an empty page). This is
+  uniform across every V2 list route.
 - Stable ordering includes a unique tie-breaker. Page totals are omitted unless
   the authoritative source can provide a consistent value.
 - Search results carry a result type, stable opaque ID, display snapshot, and

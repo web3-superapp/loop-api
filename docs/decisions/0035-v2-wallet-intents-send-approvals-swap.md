@@ -235,3 +235,39 @@ the four tables and their triggers; no earlier table is touched.
 - **Canary funds and test wallet**: user-provided; no broadcast was performed
   locally.
 - **Multicall3 and the RPC provider** remain on the S5 Go/No-Go list.
+
+## Revision 2026-09-09 (S6 integration findings)
+
+Source: `docs/integration/S6/report.md` §5. No ruling above changes; the
+following are corrections and tightened semantics.
+
+- **Approval coverage (finding 4).** `indexed_approvals` shares the
+  `erc20_transfer` checkpoint, but the table was created by 000021 after the
+  lane had already been backfilled, so "checkpoint exists" did not imply
+  "approvals were decoded". Migration `000025_v2_approval_coverage` adds
+  `indexer_checkpoints.approval_coverage_from_block` (nullable; transfer lane
+  only). Rules: every segment the lane commits carries its own start block
+  and coverage becomes `min(current, segmentStart)`; a null coverage becomes
+  the first approval-aware segment's start; it never rises. `pnpm
+indexer:backfill --lane erc20_transfer --from X` on an existing lane runs a
+  downward approval-only backfill (`commitApprovalCoverageSegment`, 2000-block
+  segments from the coverage start to X) that lowers coverage without moving
+  `last_block_number`, then continues the normal lane. `GET /v2/approvals`
+  is `503 INDEXING_DELAYED` when coverage is null or above the wallet's
+  earliest indexed transfer (`earliestWalletActivityBlockNumber`); otherwise
+  `freshness.approvalCoverageFromBlockNumber` is published. A wallet with no
+  indexed transfer is not blocked by coverage.
+- **Distinguishable policy refusals (findings 1, 2).** `V2ApiError` gains a
+  client-safe scalar `detailsSafe`; the envelope stays seven fields.
+  `POLICY_BLOCKED` carries `reasonCode` ∈ `ASSET_NOT_IN_CANARY_ALLOWLIST` |
+  `CANARY_CEILING_EXCEEDED` | `UNLIMITED_EXPOSURE_EXCEEDS_CEILING` |
+  `ASSET_BLOCKED` | `PRICE_IMPACT_BLOCKED`, with `exposureUsd` / `ceilingUsd`
+  decimal strings on the ceiling codes. A native-asset approve/revoke is
+  `422 VALIDATION_FAILED` with `NATIVE_ASSET_NOT_APPROVABLE`, decided before
+  the canary allowlist (order: shape → native → allowlist → ceiling), so the
+  documented 422 is observable regardless of the allowlist.
+- **Cancel (finding 3).** Documented as implemented: cancelling a
+  `cancelled` intent is an idempotent 200 (`updatedAt` unchanged); an
+  `expired` (including superseded) or later intent is `409 DATA_STALE`.
+- **Pagination (finding 5).** Every V2 list already fetches `limit + 1`;
+  the contracts now state that the last page carries `nextCursor: null`.
