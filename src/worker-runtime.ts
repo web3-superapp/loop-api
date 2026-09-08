@@ -1,4 +1,10 @@
+import {
+  createCommunityChannelSyncWorker,
+  type CommunityChannelSyncWorker,
+  type CreateCommunityChannelSyncWorkerOptions,
+} from "./community-channel-sync-worker.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
+import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
 import {
   createPostgresDatabase,
   type PostgresDatabaseConfig,
@@ -8,6 +14,7 @@ import type { ControlPlaneRepository } from "./database/control-plane-repository
 import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
+import type { CommunityChannelSyncRepository } from "./features/communication/communication-repository.js";
 import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
 import {
   createIssuanceQuotaRetentionWorker,
@@ -49,6 +56,7 @@ export interface ReconciliationWorkerDatabase {
     SpotAgentAuthorizationRepository,
     "expireElapsedPrepared" | "retireElapsedAgentIdentities"
   >;
+  readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -70,6 +78,10 @@ export type IssuanceQuotaRetentionWorkerFactory = (
   options: CreateIssuanceQuotaRetentionWorkerOptions,
 ) => IssuanceQuotaRetentionWorker;
 
+export type CommunityChannelSyncWorkerFactory = (
+  options: CreateCommunityChannelSyncWorkerOptions,
+) => CommunityChannelSyncWorker;
+
 export interface RunReconciliationWorkerOptions {
   readonly config: ReconciliationWorkerConfig;
   readonly logger: ReconciliationWorkerLogger;
@@ -78,6 +90,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createWorker?: ReconciliationWorkerFactory;
   readonly createLifecycleWorker?: SpotAgentLifecycleWorkerFactory;
   readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
+  readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -107,6 +120,9 @@ export async function runReconciliationWorker(
     options.createLifecycleWorker ?? createSpotAgentLifecycleWorker;
   const quotaRetentionWorkerFactory =
     options.createQuotaRetentionWorker ?? createIssuanceQuotaRetentionWorker;
+  const communityChannelSyncWorkerFactory =
+    options.createCommunityChannelSyncWorker ??
+    createCommunityChannelSyncWorker;
   const controller = new AbortController();
   let database: ReconciliationWorkerDatabase | undefined;
   let workerId: string | undefined;
@@ -193,6 +209,23 @@ export async function runReconciliationWorker(
           },
         })
       : null;
+    // The `community-channel-sync` lane is default-off and only constructed
+    // when the complete Stream credential pair is configured (Decision 0032).
+    const communityChannelSyncWorker =
+      options.config.communityChannelSync === null
+        ? null
+        : communityChannelSyncWorkerFactory({
+            repository: database.communityChannelSync,
+            gateway: createStreamCommunityChannelGateway(
+              options.config.communityChannelSync,
+            ),
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -215,6 +248,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               quotaRetentionWorker.run(controller.signal),
+            ),
+          ]),
+      ...(communityChannelSyncWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              communityChannelSyncWorker.run(controller.signal),
             ),
           ]),
     ];

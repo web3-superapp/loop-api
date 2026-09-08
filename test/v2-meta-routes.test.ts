@@ -351,7 +351,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(21);
+    expect(Object.keys(capabilities)).toHaveLength(23);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -383,6 +383,7 @@ describe("LOOP API V2 meta policy gates", () => {
       profileRuntimeAvailable: false,
       communityRuntimeAvailable: false,
       searchRuntimeAvailable: false,
+      communicationRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -410,12 +411,17 @@ describe("LOOP API V2 meta policy gates", () => {
     const config = testConfig({ V2_MODULES_ENABLED: v2ModuleIds.join(",") });
     expect(registeredV2ModuleIds(config)).toEqual([
       "community",
+      "communication",
       "search",
       "profile",
     ]);
 
     const undelivered = v2ModuleIds.filter(
-      (id) => id !== "profile" && id !== "community" && id !== "search",
+      (id) =>
+        id !== "profile" &&
+        id !== "community" &&
+        id !== "communication" &&
+        id !== "search",
     );
     const app = await createApp({
       V2_MODULES_ENABLED: undelivered.join(","),

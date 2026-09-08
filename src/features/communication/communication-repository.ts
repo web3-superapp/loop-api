@@ -1,0 +1,297 @@
+import type {
+  CommunityChannelMemberState,
+  CommunityChannelState,
+  CommunityChannelSyncKind,
+  HandRaiseState,
+  VoiceRoomProvisionState,
+  VoiceRoomRole,
+  VoiceRoomState,
+} from "./communication-contract.js";
+
+/**
+ * PostgreSQL ports for the V2 communication module (Decision 0032). The API
+ * process reads channel/voice state and issues durable commands; the
+ * standalone worker lane leases outbox rows. Neither port performs a provider
+ * call: every Stream write is made by the caller after the transaction has
+ * committed.
+ */
+
+export interface CommunityChannelRecord {
+  readonly communityId: string;
+  readonly streamChannelId: string;
+  readonly state: CommunityChannelState;
+  readonly memberCap: number;
+  readonly provisioned: boolean;
+}
+
+export interface CommunityChannelViewerRecord {
+  readonly channel: CommunityChannelRecord | null;
+  readonly viewerMemberState: CommunityChannelMemberState | null;
+  readonly viewerIsCommunityMember: boolean;
+  /** The community's live room, or null when nothing is broadcasting. */
+  readonly currentVoiceRoomId: string | null;
+  readonly currentVoiceRoomProvisioned: boolean;
+}
+
+export interface VoiceRoomIdentity {
+  readonly publicProfileId: string;
+  readonly loopId: string;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+}
+
+export interface VoiceRoomRecord {
+  readonly voiceRoomId: string;
+  readonly communityId: string;
+  readonly callId: string;
+  readonly state: VoiceRoomState;
+  readonly provisionState: VoiceRoomProvisionState;
+  readonly backstage: boolean;
+  readonly createdAt: string;
+  readonly endedAt: string | null;
+}
+
+export interface VoiceRoomViewerRecord {
+  readonly room: VoiceRoomRecord;
+  readonly viewerRole: VoiceRoomRole | null;
+  readonly viewerHandRaise: HandRaiseProjectionRecord | null;
+  readonly hostStreamUserId: string;
+  readonly speakerCount: number;
+  readonly listenerCount: number;
+}
+
+export interface HandRaiseProjectionRecord {
+  readonly handRaiseId: string;
+  readonly sequence: string;
+  readonly state: HandRaiseState;
+  readonly createdAt: string;
+}
+
+export interface HandRaiseQueueEntryRecord extends HandRaiseProjectionRecord {
+  readonly profile: VoiceRoomIdentity;
+}
+
+export interface VoiceRoomTargetRecord {
+  readonly room: VoiceRoomViewerRecord;
+  readonly targetStreamUserId: string;
+  readonly targetRole: VoiceRoomRole;
+  readonly profile: VoiceRoomIdentity;
+}
+
+export interface CommunicationCommandInput {
+  readonly actorUserId: string;
+  readonly idempotencyKey: string;
+  readonly requestSha256: string;
+  readonly requestId: string;
+}
+
+export interface VoiceRoomCommandInput extends CommunicationCommandInput {
+  readonly voiceRoomId: string;
+}
+
+export interface VoiceRoomTargetCommandInput extends VoiceRoomCommandInput {
+  readonly targetPublicProfileId: string;
+}
+
+export interface CreateVoiceRoomInput extends CommunicationCommandInput {
+  readonly communityId: string;
+}
+
+export interface ChatGroupLeavePreparation {
+  readonly groupId: string;
+  readonly streamChannelId: string;
+  readonly channelCreatedByStreamUserId: string;
+  readonly memberStreamUserId: string;
+}
+
+export interface CommunicationRepository {
+  readCommunityChannel(input: {
+    readonly communityId: string;
+    readonly viewerUserId: string;
+  }): Promise<CommunityChannelViewerRecord>;
+  createVoiceRoom(input: CreateVoiceRoomInput): Promise<VoiceRoomViewerRecord>;
+  recordVoiceRoomProvisioning(input: {
+    readonly voiceRoomId: string;
+    readonly provisionState: VoiceRoomProvisionState;
+    readonly errorCode: string | null;
+  }): Promise<VoiceRoomRecord>;
+  getCurrentVoiceRoom(input: {
+    readonly communityId: string;
+    readonly viewerUserId: string;
+  }): Promise<VoiceRoomViewerRecord | null>;
+  getVoiceRoom(input: {
+    readonly voiceRoomId: string;
+    readonly viewerUserId: string;
+  }): Promise<VoiceRoomViewerRecord>;
+  joinVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  leaveVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  raiseHand(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  cancelHandRaise(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  listHandRaises(input: {
+    readonly voiceRoomId: string;
+    readonly viewerUserId: string;
+    readonly limit: number;
+  }): Promise<readonly HandRaiseQueueEntryRecord[]>;
+  inviteSpeaker(
+    input: VoiceRoomTargetCommandInput,
+  ): Promise<VoiceRoomTargetRecord>;
+  removeSpeaker(
+    input: VoiceRoomTargetCommandInput,
+  ): Promise<VoiceRoomTargetRecord>;
+  recordMuteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  endVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  /**
+   * Authorize a small-group leave and return the exact Stream identities the
+   * caller must remove. It performs no write: removal from Stream is
+   * idempotent, so the provider call is made first and only a confirmed
+   * removal is committed by `commitChatGroupLeave`.
+   */
+  prepareChatGroupLeave(input: {
+    readonly actorUserId: string;
+    readonly groupId: string;
+  }): Promise<ChatGroupLeavePreparation>;
+  commitChatGroupLeave(input: {
+    readonly actorUserId: string;
+    readonly groupId: string;
+    readonly idempotencyKey: string;
+    readonly requestSha256: string;
+    readonly requestId: string;
+  }): Promise<void>;
+}
+
+export interface CommunityChannelSyncJobRecord {
+  readonly communityId: string;
+  readonly ownerUserId: string;
+  readonly streamChannelId: string;
+  readonly channelCreatedByStreamUserId: string;
+  readonly memberStreamUserId: string;
+  readonly kind: CommunityChannelSyncKind;
+  readonly attempts: number;
+  readonly channelProvisioned: boolean;
+  readonly channelName: string;
+  readonly memberCap: number;
+  readonly syncedMemberCount: number;
+}
+
+/**
+ * Worker-side outbox port. `claimDueJobs` takes a fenced lease under
+ * `for update skip locked`, so replicas never claim the same row.
+ */
+export interface CommunityChannelSyncRepository {
+  claimDueJobs(input: {
+    readonly workerId: string;
+    readonly leaseSeconds: number;
+    readonly limit: number;
+  }): Promise<readonly CommunityChannelSyncJobRecord[]>;
+  markChannelProvisioned(input: {
+    readonly communityId: string;
+    readonly workerId: string;
+  }): Promise<void>;
+  completeJob(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly workerId: string;
+    readonly memberState: CommunityChannelMemberState;
+    readonly channelState: CommunityChannelState;
+  }): Promise<void>;
+  retryJob(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly workerId: string;
+    readonly errorCode: string;
+    readonly retryDelaySeconds: number;
+  }): Promise<void>;
+  failJob(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly workerId: string;
+    readonly errorCode: string;
+  }): Promise<void>;
+}
+
+export class CommunicationRepositoryUnavailableError extends Error {
+  readonly code = "communication_repository_unavailable";
+
+  constructor() {
+    super("The V2 communication repository is unavailable");
+    this.name = "CommunicationRepositoryUnavailableError";
+  }
+}
+
+export class CommunicationNotFoundError extends Error {
+  readonly code = "communication_not_found";
+
+  constructor() {
+    super("The V2 communication resource was not found");
+    this.name = "CommunicationNotFoundError";
+  }
+}
+
+export class CommunicationPermissionDeniedError extends Error {
+  readonly code = "communication_permission_denied";
+
+  constructor() {
+    super("The actor may not perform this communication action");
+    this.name = "CommunicationPermissionDeniedError";
+  }
+}
+
+/** The stored state no longer allows the transition (including an ended room). */
+export class CommunicationDataStaleError extends Error {
+  readonly code = "communication_data_stale";
+
+  constructor() {
+    super("The V2 communication state changed before the command was applied");
+    this.name = "CommunicationDataStaleError";
+  }
+}
+
+export class CommunicationIdempotencyConflictError extends Error {
+  readonly code = "communication_idempotency_conflict";
+
+  constructor() {
+    super("The communication idempotency key conflicts");
+    this.name = "CommunicationIdempotencyConflictError";
+  }
+}
+
+export class CommunicationProfileRequiredError extends Error {
+  readonly code = "communication_profile_required";
+
+  constructor() {
+    super("An activated LOOP profile is required for this action");
+    this.name = "CommunicationProfileRequiredError";
+  }
+}
+
+export class CommunicationResourceConflictError extends Error {
+  readonly code = "communication_resource_conflict";
+
+  constructor() {
+    super("A live voice room already exists for this community");
+    this.name = "CommunicationResourceConflictError";
+  }
+}
+
+export function createUnavailableCommunicationRepository(): CommunicationRepository {
+  const unavailable = (): Promise<never> =>
+    Promise.reject(new CommunicationRepositoryUnavailableError());
+  return Object.freeze({
+    readCommunityChannel: unavailable,
+    createVoiceRoom: unavailable,
+    recordVoiceRoomProvisioning: unavailable,
+    getCurrentVoiceRoom: unavailable,
+    getVoiceRoom: unavailable,
+    joinVoiceRoom: unavailable,
+    leaveVoiceRoom: unavailable,
+    raiseHand: unavailable,
+    cancelHandRaise: unavailable,
+    listHandRaises: unavailable,
+    inviteSpeaker: unavailable,
+    removeSpeaker: unavailable,
+    recordMuteAll: unavailable,
+    endVoiceRoom: unavailable,
+    prepareChatGroupLeave: unavailable,
+    commitChatGroupLeave: unavailable,
+  });
+}

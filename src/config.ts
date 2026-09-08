@@ -13,6 +13,7 @@ const serviceVersion = "0.1.0";
  */
 export const v2ModuleIds = Object.freeze([
   "community",
+  "communication",
   "search",
   "market",
   "wallet",
@@ -83,6 +84,7 @@ const environmentSchema = z
     V2_TERMS_REQUIRED_VERSION: optionalCredential(128),
     V2_ALIAS_BLOCKED_TERMS: optionalCredential(8_192),
     V2_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    V2_COMMUNITY_CHANNEL_MEMBER_CAP: positiveIntegerString(1, 200_000),
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     STREAM_API_KEY: optionalCredential(255),
@@ -272,6 +274,9 @@ const reconciliationWorkerEnvironmentSchema = z
     HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: booleanString,
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: booleanString,
     ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: booleanString,
+    COMMUNITY_CHANNEL_SYNC_ENABLED: booleanString,
+    STREAM_API_KEY: optionalCredential(255),
+    STREAM_API_SECRET: optionalOpaqueSecret(1, 4_096),
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
     DATABASE_URL: z.string().trim().min(1),
@@ -291,6 +296,29 @@ const reconciliationWorkerEnvironmentSchema = z
           ? "Hyperliquid reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"
           : "Hyperliquid Spot reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
         path: ["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+      });
+    }
+    if (
+      (value.STREAM_API_KEY !== undefined) !==
+      (value.STREAM_API_SECRET !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "STREAM_API_KEY and STREAM_API_SECRET must be configured together",
+        path: ["STREAM_API_KEY"],
+      });
+    }
+    if (
+      value.COMMUNITY_CHANNEL_SYNC_ENABLED &&
+      (value.STREAM_API_KEY === undefined ||
+        value.STREAM_API_SECRET === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "COMMUNITY_CHANNEL_SYNC_ENABLED requires STREAM_API_KEY and STREAM_API_SECRET",
+        path: ["COMMUNITY_CHANNEL_SYNC_ENABLED"],
       });
     }
   });
@@ -375,6 +403,12 @@ export interface AppConfig {
   readonly v2Cursor: V2CursorConfig | null;
   /** NFKC lower-cased operator-blocked alias substrings; empty by default. */
   readonly v2AliasBlockedTerms: readonly string[];
+  /**
+   * Stream channel member ceiling recorded on a newly provisioned official
+   * community channel (Decision 0032). Above it the LOOP membership still
+   * stands and the channel member is parked as `capacityPending`.
+   */
+  readonly v2CommunityChannelMemberCap: number;
   readonly databaseUrl: string;
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
@@ -401,6 +435,12 @@ export interface ReconciliationWorkerConfig {
   readonly hyperliquidSpotReconciliationReads: HyperliquidPrivateReadsConfig | null;
   readonly spotAgentLifecycleMaintenanceEnabled: boolean;
   readonly issuanceRateRecordCleanupEnabled: boolean;
+  /**
+   * `community-channel-sync` lane (Decision 0032). Default off; enabling it
+   * requires the complete Stream credential pair, which is why this process
+   * now parses Stream configuration at all.
+   */
+  readonly communityChannelSync: StreamConfig | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -628,6 +668,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     V2_TERMS_REQUIRED_VERSION: environment["V2_TERMS_REQUIRED_VERSION"],
     V2_ALIAS_BLOCKED_TERMS: environment["V2_ALIAS_BLOCKED_TERMS"],
     V2_CURSOR_HMAC_SECRET: environment["V2_CURSOR_HMAC_SECRET"],
+    V2_COMMUNITY_CHANNEL_MEMBER_CAP:
+      environment["V2_COMMUNITY_CHANNEL_MEMBER_CAP"] ?? "3000",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     STREAM_API_KEY: environment["STREAM_API_KEY"],
@@ -758,6 +800,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
     databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    v2CommunityChannelMemberCap: parsed.data.V2_COMMUNITY_CHANNEL_MEMBER_CAP,
     privy,
     stream,
     streamTokenQuota,
@@ -788,6 +831,10 @@ export function loadReconciliationWorkerConfig(
       environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
     ISSUANCE_RATE_RECORD_CLEANUP_ENABLED:
       environment["ISSUANCE_RATE_RECORD_CLEANUP_ENABLED"] ?? "true",
+    COMMUNITY_CHANNEL_SYNC_ENABLED:
+      environment["COMMUNITY_CHANNEL_SYNC_ENABLED"] ?? "false",
+    STREAM_API_KEY: environment["STREAM_API_KEY"],
+    STREAM_API_SECRET: environment["STREAM_API_SECRET"],
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
       environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
@@ -847,6 +894,15 @@ export function loadReconciliationWorkerConfig(
       parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
     issuanceRateRecordCleanupEnabled:
       parsed.data.ISSUANCE_RATE_RECORD_CLEANUP_ENABLED,
+    communityChannelSync:
+      parsed.data.COMMUNITY_CHANNEL_SYNC_ENABLED &&
+      parsed.data.STREAM_API_KEY !== undefined &&
+      parsed.data.STREAM_API_SECRET !== undefined
+        ? Object.freeze({
+            apiKey: parsed.data.STREAM_API_KEY,
+            apiSecret: parsed.data.STREAM_API_SECRET,
+          })
+        : null,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

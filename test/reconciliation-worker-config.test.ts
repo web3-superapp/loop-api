@@ -18,6 +18,7 @@ describe("loadReconciliationWorkerConfig", () => {
   it("keeps authoritative provider reads disabled by default", () => {
     const environment = validEnvironment();
     environment["PRIVY_APP_ID"] = "partial-provider-configuration";
+    environment["STREAM_API_KEY"] = "not-for-this-lane";
     environment["STREAM_API_SECRET"] = "not-for-this-process";
     environment["HYPERLIQUID_PRIVATE_READS_ENABLED"] = "malformed";
 
@@ -35,6 +36,7 @@ describe("loadReconciliationWorkerConfig", () => {
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
       issuanceRateRecordCleanupEnabled: true,
+      communityChannelSync: null,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });

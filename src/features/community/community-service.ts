@@ -84,6 +84,18 @@ import {
   referralRulesV1,
   type ReferralRulesProjection,
 } from "./referral-rules.js";
+import {
+  communicationUnavailableReasonCodes,
+  communityChannelCid,
+  unavailableCommunityChat,
+  unavailableCommunityVoice,
+  type CommunityChatProjection,
+  type CommunityVoiceProjection,
+} from "../communication/communication-contract.js";
+import type {
+  CommunicationRepository,
+  CommunityChannelViewerRecord,
+} from "../communication/communication-repository.js";
 
 /**
  * V2 community, social-graph, and search application service
@@ -191,6 +203,14 @@ export interface ViewerProjection extends CommunityViewerPermissions {
 export interface CommunityResource {
   readonly community: CommunitySummary;
   readonly viewer: ViewerProjection;
+  /**
+   * Official community channel state (Decision 0032). `available` requires a
+   * provisioned Stream channel and a `synced` viewer membership, so a member
+   * whose Stream side is still catching up sees "syncing" instead of a CID it
+   * cannot use.
+   */
+  readonly chat: CommunityChatProjection;
+  readonly voice: CommunityVoiceProjection;
   readonly miningPower: UnavailableProjection;
   readonly onlineCount: UnavailableProjection;
   readonly announcements: UnavailableProjection;
@@ -511,10 +531,96 @@ function recommendation(): CommunityRecommendationProjection {
   });
 }
 
-function communityResource(record: CommunityDetailRecord): CommunityResource {
+/**
+ * Project the official-channel and live-voice state for one community. Every
+ * non-available state carries a machine reason code; nothing is invented when
+ * the communication runtime is not composed.
+ */
+function chatProjection(
+  channel: CommunityChannelViewerRecord | null,
+): CommunityChatProjection {
+  if (channel === null) {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.voiceRuntime,
+    );
+  }
+  if (channel.channel === null || !channel.channel.provisioned) {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.channelNotProvisioned,
+      channel.viewerMemberState,
+    );
+  }
+  if (channel.channel.state === "failed") {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.channelFailed,
+      channel.viewerMemberState,
+    );
+  }
+  if (!channel.viewerIsCommunityMember) {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.notMember,
+      channel.viewerMemberState,
+    );
+  }
+  if (channel.viewerMemberState === "capacityPending") {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.channelCapacity,
+      channel.viewerMemberState,
+    );
+  }
+  if (channel.viewerMemberState !== "synced") {
+    return unavailableCommunityChat(
+      communicationUnavailableReasonCodes.channelSyncing,
+      channel.viewerMemberState,
+    );
+  }
+  return Object.freeze({
+    status: "available",
+    channelCid: communityChannelCid(channel.channel.streamChannelId),
+    memberState: "synced",
+    reasonCode: null,
+  });
+}
+
+function voiceProjection(
+  channel: CommunityChannelViewerRecord | null,
+): CommunityVoiceProjection {
+  if (channel === null) {
+    return unavailableCommunityVoice(
+      communicationUnavailableReasonCodes.voiceRuntime,
+    );
+  }
+  if (!channel.viewerIsCommunityMember) {
+    return unavailableCommunityVoice(
+      communicationUnavailableReasonCodes.notMember,
+    );
+  }
+  if (channel.currentVoiceRoomId === null) {
+    return unavailableCommunityVoice(
+      communicationUnavailableReasonCodes.voiceNotLive,
+    );
+  }
+  if (!channel.currentVoiceRoomProvisioned) {
+    return unavailableCommunityVoice(
+      communicationUnavailableReasonCodes.voiceNotProvisioned,
+    );
+  }
+  return Object.freeze({
+    status: "available",
+    currentRoomId: channel.currentVoiceRoomId,
+    reasonCode: null,
+  });
+}
+
+function communityResource(
+  record: CommunityDetailRecord,
+  channel: CommunityChannelViewerRecord | null,
+): CommunityResource {
   return Object.freeze({
     community: summary(record.community),
     viewer: viewerProjection(record.viewerMembership),
+    chat: chatProjection(channel),
+    voice: voiceProjection(channel),
     miningPower: unavailable(communityUnavailableReasonCodes.mining),
     onlineCount: unavailable(communityUnavailableReasonCodes.presence),
     announcements: unavailable(communityUnavailableReasonCodes.announcements),
@@ -530,6 +636,12 @@ interface PageRequest {
 
 export interface CommunityServiceOptions {
   readonly repository: CommunityRepository;
+  /**
+   * Read-only communication projection (Decision 0032). Absent means the
+   * communication runtime is not composed, so chat and voice report
+   * unavailable instead of a state the backend cannot prove.
+   */
+  readonly communicationRepository?: CommunicationRepository | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly searchQuota: AliasSearchQuota;
   readonly aliasPolicy: AliasPolicy;
@@ -538,6 +650,29 @@ export interface CommunityServiceOptions {
 export function createCommunityService(
   options: CommunityServiceOptions,
 ): CommunityService {
+  /**
+   * One extra read per community resource. It is deliberately never inferred
+   * from the community record: a LOOP membership does not imply a Stream
+   * channel membership.
+   */
+  async function channelProjection(
+    viewerUserId: string,
+    communityId: string,
+  ): Promise<CommunityChannelViewerRecord | null> {
+    const repository = options.communicationRepository ?? null;
+    if (repository === null) {
+      return null;
+    }
+    try {
+      return await repository.readCommunityChannel({
+        communityId,
+        viewerUserId,
+      });
+    } catch {
+      return null;
+    }
+  }
+
   function codec(): V2CursorCodec {
     if (options.cursorCodec === null) {
       throw V2ApiError.capabilityUnavailable();
@@ -849,7 +984,10 @@ export function createCommunityService(
           logoRef: values.logoRef,
           boundAssetKey: values.boundAssetKey,
         });
-        return communityResource(record);
+        return communityResource(
+          record,
+          await channelProjection(owner.userId, record.community.communityId),
+        );
       } catch (error) {
         return mapFailure(error);
       }
@@ -863,18 +1001,20 @@ export function createCommunityService(
         if (values.name !== undefined) {
           assertCommunityNameAllowed(values.name);
         }
-        return communityResource(
-          await options.repository.updateCommunity({
-            ownerUserId: owner.userId,
+        const record = await options.repository.updateCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: commandDigest("community", "updateCommunity", [
             communityId,
-            idempotencyKey: input.idempotencyKey,
-            requestSha256: commandDigest("community", "updateCommunity", [
-              communityId,
-              ...updateCommunityDigestParts(values),
-            ]),
-            requestId: input.requestId,
-            values,
-          }),
+            ...updateCommunityDigestParts(values),
+          ]),
+          requestId: input.requestId,
+          values,
+        });
+        return communityResource(
+          record,
+          await channelProjection(owner.userId, communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -884,11 +1024,14 @@ export function createCommunityService(
     async getCommunity(input) {
       const owner = assertPrincipal(input.principal);
       try {
+        const communityId = parseOpaqueUuid(input.communityId);
+        const record = await options.repository.getCommunity({
+          viewerUserId: owner.userId,
+          communityId,
+        });
         return communityResource(
-          await options.repository.getCommunity({
-            viewerUserId: owner.userId,
-            communityId: parseOpaqueUuid(input.communityId),
-          }),
+          record,
+          await channelProjection(owner.userId, communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -899,16 +1042,18 @@ export function createCommunityService(
       const owner = assertPrincipal(input.principal);
       try {
         const communityId = parseOpaqueUuid(input.communityId);
-        return communityResource(
-          await options.repository.joinCommunity({
-            ownerUserId: owner.userId,
+        const record = await options.repository.joinCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: commandDigest("community", "joinCommunity", [
             communityId,
-            idempotencyKey: input.idempotencyKey,
-            requestSha256: commandDigest("community", "joinCommunity", [
-              communityId,
-            ]),
-            requestId: input.requestId,
-          }),
+          ]),
+          requestId: input.requestId,
+        });
+        return communityResource(
+          record,
+          await channelProjection(owner.userId, communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -919,16 +1064,18 @@ export function createCommunityService(
       const owner = assertPrincipal(input.principal);
       try {
         const communityId = parseOpaqueUuid(input.communityId);
-        return communityResource(
-          await options.repository.leaveCommunity({
-            ownerUserId: owner.userId,
+        const record = await options.repository.leaveCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: commandDigest("community", "leaveCommunity", [
             communityId,
-            idempotencyKey: input.idempotencyKey,
-            requestSha256: commandDigest("community", "leaveCommunity", [
-              communityId,
-            ]),
-            requestId: input.requestId,
-          }),
+          ]),
+          requestId: input.requestId,
+        });
+        return communityResource(
+          record,
+          await channelProjection(owner.userId, communityId),
         );
       } catch (error) {
         return mapFailure(error);

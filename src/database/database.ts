@@ -10,8 +10,16 @@ import type { ChatChannelRepository } from "../features/communication/chat-chann
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
 import type { CommunityRepository } from "../features/community/community-repository.js";
+import type {
+  CommunicationRepository,
+  CommunityChannelSyncRepository,
+} from "../features/communication/communication-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
 import { createPostgresCommunityRepository } from "./community-repository.js";
+import {
+  createPostgresCommunicationRepository,
+  createPostgresCommunityChannelSyncRepository,
+} from "./communication-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
 import {
   createPostgresAlertRepository,
@@ -83,6 +91,8 @@ export interface Database {
   readonly profilesV2?: ProfileV2Repository;
   /** V2 community, follow graph, blocks, and search (Decision 0031). */
   readonly community?: CommunityRepository;
+  /** V2 official community channels and voice rooms (Decision 0032). */
+  readonly communication?: CommunicationRepository;
   readonly watchlists: WatchlistRepository;
   readonly alerts: AlertRepository;
   ping(): Promise<void>;
@@ -94,6 +104,7 @@ export interface PostgresDatabase extends Database {
   readonly spotAgentAuthorizations: PostgresSpotAgentAuthorizationRepository;
   readonly spotIntents: PostgresSpotIntentRepository;
   readonly spotReconciliation: SpotReconciliationRepository;
+  readonly communityChannelSync: CommunityChannelSyncRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -102,6 +113,8 @@ export interface PostgresDatabaseConfig {
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
   readonly databaseStatementTimeoutMs: number;
+  /** Optional; the reconciliation worker process does not configure it. */
+  readonly v2CommunityChannelMemberCap?: number;
 }
 
 export interface PostgresDatabaseLogger {
@@ -203,7 +216,15 @@ export function createPostgresDatabase(
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
-  const community = createPostgresCommunityRepository(pool);
+  const community = createPostgresCommunityRepository(
+    pool,
+    config.v2CommunityChannelMemberCap === undefined
+      ? {}
+      : { communityChannelMemberCap: config.v2CommunityChannelMemberCap },
+  );
+  const communication = createPostgresCommunicationRepository(pool);
+  const communityChannelSync =
+    createPostgresCommunityChannelSyncRepository(pool);
 
   return {
     internalUsers,
@@ -222,6 +243,8 @@ export function createPostgresDatabase(
     profiles,
     profilesV2,
     community,
+    communication,
+    communityChannelSync,
     watchlists,
     alerts,
     async ping(): Promise<void> {

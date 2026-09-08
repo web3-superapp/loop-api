@@ -11,6 +11,11 @@ import {
   type IdentityProjection,
 } from "../features/community/community-contract.js";
 import {
+  defaultCommunityChannelMemberCap,
+  deriveCommunityChannelId,
+} from "../features/communication/communication-contract.js";
+import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
+import {
   canPerformSelfAction,
   canPerformTargetAction,
   communityMembershipStatuses,
@@ -724,9 +729,126 @@ async function removeFollowEdges(
   });
 }
 
+/**
+ * Transactional outbox for the official community channel (Decision 0032).
+ * The Stream write itself never happens here: the row records the latest
+ * intended membership change and the standalone `community-channel-sync`
+ * worker lane performs it after this transaction has committed. Communities
+ * without an official channel (not verified yet) enqueue nothing.
+ */
+async function enqueueCommunityChannelSync(
+  client: DatabaseClient,
+  input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly kind: "add" | "remove";
+    readonly requestId: string;
+  },
+): Promise<void> {
+  await client.query({
+    text: `
+      insert into public.community_channel_members (
+        community_id, owner_user_id, stream_user_id, state
+      )
+      select $1, $2, $3, 'pending'
+      where exists (
+        select 1 from public.community_channels where community_id = $1
+      )
+      on conflict (community_id, owner_user_id) do update
+      set state = 'pending', updated_at = clock_timestamp()
+    `,
+    values: [
+      input.communityId,
+      input.ownerUserId,
+      deriveStreamUserId(input.ownerUserId),
+    ],
+  });
+  await client.query({
+    text: `
+      insert into public.community_channel_sync_jobs (
+        community_id, owner_user_id, kind, state, attempts, request_id
+      )
+      select $1, $2, $3, 'pending', 0, $4
+      where exists (
+        select 1 from public.community_channels where community_id = $1
+      )
+      on conflict (community_id, owner_user_id) do update
+      set
+        kind = excluded.kind,
+        state = 'pending',
+        attempts = 0,
+        next_attempt_at = clock_timestamp(),
+        last_error_code = null,
+        lease_worker_id = null,
+        lease_expires_at = null,
+        request_id = excluded.request_id,
+        updated_at = clock_timestamp()
+    `,
+    values: [input.communityId, input.ownerUserId, input.kind, input.requestId],
+  });
+}
+
+/**
+ * Allocate the official channel record when a community becomes verified and
+ * enqueue one `add` job per existing non-banned member. The channel ID is a
+ * pure function of the community ID, so a replay can never allocate a second
+ * channel.
+ */
+async function provisionCommunityChannel(
+  client: DatabaseClient,
+  input: {
+    readonly communityId: string;
+    readonly memberCap: number;
+    readonly requestId: string;
+  },
+): Promise<void> {
+  await client.query({
+    text: `
+      insert into public.community_channels (
+        community_id, stream_channel_id, member_cap, created_by_user_id
+      )
+      select $1, $2, $3, community.created_by_user_id
+      from public.communities as community
+      where community.community_id = $1
+      on conflict (community_id) do nothing
+    `,
+    values: [
+      input.communityId,
+      deriveCommunityChannelId(input.communityId),
+      input.memberCap,
+    ],
+  });
+  const members = await client.query<{ owner_user_id: string }>({
+    text: `
+      select owner_user_id
+      from public.community_memberships
+      where community_id = $1 and status <> 'banned'
+      order by joined_at asc
+    `,
+    values: [input.communityId],
+  });
+  for (const member of members.rows) {
+    await enqueueCommunityChannelSync(client, {
+      communityId: input.communityId,
+      ownerUserId: userIdSchema.parse(member.owner_user_id),
+      kind: "add",
+      requestId: input.requestId,
+    });
+  }
+}
+
+export interface PostgresCommunityRepositoryOptions {
+  /** Stream channel member ceiling recorded on a newly provisioned channel. */
+  readonly communityChannelMemberCap?: number;
+}
+
 export function createPostgresCommunityRepository(
   pool: Pool,
+  options: PostgresCommunityRepositoryOptions = {},
 ): CommunityRepository {
+  const communityChannelMemberCap =
+    options.communityChannelMemberCap ?? defaultCommunityChannelMemberCap;
+
   async function listCommunitiesQuery(
     client: DatabaseClient,
     input: ListCommunitiesInput,
@@ -1105,6 +1227,12 @@ export function createPostgresCommunityRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
+          await enqueueCommunityChannelSync(client, {
+            communityId,
+            ownerUserId,
+            kind: "add",
+            requestId,
+          });
           return readDetail(client, communityId, ownerUserId);
         });
       } catch (error) {
@@ -1170,6 +1298,12 @@ export function createPostgresCommunityRepository(
             fromRole: existing.role,
             fromStatus: existing.status,
             idempotencyRecordId: recordId,
+            requestId,
+          });
+          await enqueueCommunityChannelSync(client, {
+            communityId,
+            ownerUserId,
+            kind: "remove",
             requestId,
           });
           return leftDetail();
@@ -1444,6 +1578,17 @@ export function createPostgresCommunityRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
+          // A ban removes the account from the official channel. An unban does
+          // not add it back: the account rejoins the channel by joining the
+          // community again, so an unban never silently restores chat access.
+          if (action === "ban") {
+            await enqueueCommunityChannelSync(client, {
+              communityId,
+              ownerUserId: targetUserId,
+              kind: "remove",
+              requestId,
+            });
+          }
           return Object.freeze({
             community: await readCommunity(client, communityId),
             actorMembership: actor,
@@ -2386,7 +2531,12 @@ export function createPostgresCommunityRepository(
         return await withTransaction(pool, async (client) => {
           const current = await readCommunity(client, communityId, true);
           if (current.verificationStatus === "verified") {
-            return current;
+            await provisionCommunityChannel(client, {
+              communityId,
+              memberCap: communityChannelMemberCap,
+              requestId,
+            });
+            return readCommunity(client, communityId);
           }
           await client.query({
             text: `
@@ -2407,6 +2557,11 @@ export function createPostgresCommunityRepository(
             eventType: "community_verified",
             reasonCode,
             idempotencyRecordId: null,
+            requestId,
+          });
+          await provisionCommunityChannel(client, {
+            communityId,
+            memberCap: communityChannelMemberCap,
             requestId,
           });
           return readCommunity(client, communityId);

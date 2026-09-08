@@ -43,6 +43,22 @@ import {
   type ChatChannelService,
 } from "./features/communication/chat-channel-service.js";
 import { createUnavailableChatChannelRepository } from "./features/communication/chat-channel-repository.js";
+import { createUnavailableCommunicationRepository } from "./features/communication/communication-repository.js";
+import {
+  createUnavailableV2ChatService,
+  createV2ChatService,
+  type V2ChatService,
+} from "./features/communication/v2-chat-service.js";
+import {
+  createUnavailableVoiceRoomService,
+  createVoiceRoomService,
+  type VoiceRoomService,
+} from "./features/communication/voice-room-service.js";
+import {
+  createStreamCallGateway,
+  createUnavailableStreamCallGateway,
+  type StreamCallGateway,
+} from "./integrations/stream/call-gateway.js";
 import {
   createStreamTokenService,
   StreamTokenUnavailableError,
@@ -128,8 +144,11 @@ import {
 } from "./integrations/hyperliquid/perp-intent-reviewer.js";
 import {
   createStreamChannelGateway,
+  createStreamCommunityChannelGateway,
+  createUnavailableStreamCommunityChannelGateway,
   createUnavailableStreamChannelGateway,
   type StreamChannelGateway,
+  type StreamCommunityChannelGateway,
 } from "./integrations/stream/channel-gateway.js";
 import {
   createStreamGroupMemberGateway,
@@ -236,6 +255,10 @@ export interface BuildAppOptions {
   readonly profileService?: ProfileService;
   readonly profileV2Service?: ProfileV2Service;
   readonly communityService?: CommunityService;
+  readonly chatService?: V2ChatService;
+  readonly voiceRoomService?: VoiceRoomService;
+  readonly streamCommunityChannelGateway?: StreamCommunityChannelGateway;
+  readonly streamCallGateway?: StreamCallGateway;
   readonly watchlistService?: WatchlistService;
   readonly alertService?: AlertService;
   readonly spotMarketService?: SpotMarketService;
@@ -768,12 +791,54 @@ export async function buildApp(
     options.communityService ??
     createCommunityService({
       repository: database.community ?? createUnavailableCommunityRepository(),
+      communicationRepository: database.communication ?? null,
       cursorCodec: v2CursorCodec,
       searchQuota: aliasSearchQuota,
       aliasPolicy: createAliasPolicy({
         blockedTerms: config.v2AliasBlockedTerms,
       }),
     });
+  const streamCommunityChannelGateway =
+    options.streamCommunityChannelGateway ??
+    (config.stream === null
+      ? createUnavailableStreamCommunityChannelGateway()
+      : createStreamCommunityChannelGateway(config.stream));
+  const streamCallGateway =
+    options.streamCallGateway ??
+    (config.stream === null
+      ? createUnavailableStreamCallGateway()
+      : createStreamCallGateway(config.stream));
+  const communicationRepositoryComposed =
+    options.chatService !== undefined ||
+    options.voiceRoomService !== undefined ||
+    database.communication !== undefined;
+  const communicationRuntimeAvailable =
+    registeredV2ModuleIds(config).includes("communication") &&
+    communicationRepositoryComposed &&
+    communityRuntimeAvailable &&
+    (config.stream !== null ||
+      options.streamCallGateway !== undefined ||
+      options.streamCommunityChannelGateway !== undefined);
+  const communicationRepository =
+    database.communication ?? createUnavailableCommunicationRepository();
+  const chatService =
+    options.chatService ??
+    (communicationRuntimeAvailable
+      ? createV2ChatService({
+          chatChannelService,
+          streamTokenService,
+          repository: communicationRepository,
+          channelGateway: streamCommunityChannelGateway,
+        })
+      : createUnavailableV2ChatService());
+  const voiceRoomService =
+    options.voiceRoomService ??
+    (communicationRuntimeAvailable
+      ? createVoiceRoomService({
+          repository: communicationRepository,
+          callGateway: streamCallGateway,
+        })
+      : createUnavailableVoiceRoomService());
   const watchlistService =
     options.watchlistService ??
     createWatchlistService({ repository: database.watchlists });
@@ -900,12 +965,15 @@ export async function buildApp(
         profileRuntimeAvailable: profileV2RuntimeAvailable,
         communityRuntimeAvailable,
         searchRuntimeAvailable,
+        communicationRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
       profileService: profileV2Service,
       communityService,
+      chatService,
+      voiceRoomService,
       cursorCodec: v2CursorCodec,
     });
   }

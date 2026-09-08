@@ -3,9 +3,12 @@ import type { FastifyInstance, preHandlerAsyncHookHandler } from "fastify";
 import { v2ModuleIds, type AppConfig, type V2ModuleId } from "../../config.js";
 import type { V2CursorCodec } from "../../core/http/v2-cursor.js";
 import type { CommunityService } from "../../features/community/community-service.js";
+import type { V2ChatService } from "../../features/communication/v2-chat-service.js";
+import type { VoiceRoomService } from "../../features/communication/voice-room-service.js";
 import type { V2ProductPolicyRuntime } from "../../features/meta/product-policy.js";
 import type { ProfileV2Service } from "../../features/profile/profile-v2-service.js";
 import type { V2SessionService } from "../../features/session/session-service.js";
+import { registerV2CommunicationRoutes } from "./communication.js";
 import { registerV2CommunityRoutes } from "./community.js";
 import { registerV2MetaRoutes } from "./meta.js";
 import { registerV2ProfileRoutes } from "./profile.js";
@@ -25,6 +28,8 @@ export interface V2RouteDependencies {
   readonly sessionService: V2SessionService;
   readonly profileService: ProfileV2Service;
   readonly communityService: CommunityService;
+  readonly chatService: V2ChatService;
+  readonly voiceRoomService: VoiceRoomService;
   readonly cursorCodec: V2CursorCodec | null;
 }
 
@@ -38,12 +43,13 @@ export type V2ModuleRegistrar = (
  * delivered runtime yet: enabling it in V2_MODULES_ENABLED registers no route
  * and its capability reports MODULE_RUNTIME_NOT_REGISTERED. Each delivered
  * module replaces its entry in its own numbered decision (`profile`: 0030;
- * `community` and `search`: 0031).
+ * `community` and `search`: 0031; `communication`: 0032).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
 > = Object.freeze({
   community: registerV2CommunityRoutes,
+  communication: registerV2CommunicationRoutes,
   search: registerV2SearchRoutes,
   market: null,
   wallet: null,

@@ -33,6 +33,10 @@ import {
   communityMembershipStatuses,
   communityRoles,
 } from "../../features/community/community-policy.js";
+import {
+  communityChannelMemberStates,
+  streamChannelCidPatternSource,
+} from "../../features/communication/communication-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
@@ -237,6 +241,60 @@ export const recommendationSchema = {
   },
 } as const;
 
+/**
+ * Official community channel projection (Decision 0032). `available` proves a
+ * provisioned Stream channel *and* a synced viewer membership; every other
+ * state carries a machine reason code so the client can say "syncing" instead
+ * of showing a CID it cannot open.
+ */
+const communityChatSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "channelCid", "memberState", "reasonCode"],
+  properties: {
+    status: { type: "string", enum: ["available", "unavailable"] },
+    channelCid: {
+      anyOf: [
+        { type: "string", pattern: streamChannelCidPatternSource },
+        { type: "null" },
+      ],
+    },
+    memberState: {
+      anyOf: [
+        { type: "string", enum: [...communityChannelMemberStates] },
+        { type: "null" },
+      ],
+    },
+    reasonCode: {
+      anyOf: [
+        { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const communityVoiceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "currentRoomId", "reasonCode"],
+  properties: {
+    status: { type: "string", enum: ["available", "unavailable"] },
+    currentRoomId: {
+      anyOf: [
+        { type: "string", pattern: opaqueIdPatternSource },
+        { type: "null" },
+      ],
+    },
+    reasonCode: {
+      anyOf: [
+        { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
 export const communityResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -244,6 +302,8 @@ export const communityResourceSchema = {
   required: [
     "community",
     "viewer",
+    "chat",
+    "voice",
     "miningPower",
     "onlineCount",
     "announcements",
@@ -253,6 +313,8 @@ export const communityResourceSchema = {
   properties: {
     community: communitySummarySchema,
     viewer: viewerSchema,
+    chat: communityChatSchema,
+    voice: communityVoiceSchema,
     miningPower: unavailableSchema,
     onlineCount: unavailableSchema,
     announcements: unavailableSchema,
