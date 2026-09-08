@@ -23,6 +23,7 @@ export const v2ModuleIds = Object.freeze([
   "sendApprovals",
   "launch",
   "mining",
+  "referral",
   "notifications",
   "profile",
   "watchlist",
@@ -379,6 +380,7 @@ const reconciliationWorkerEnvironmentSchema = z
     ALERT_EVALUATOR_ENABLED: booleanString,
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
+    MINING_SNAPSHOT_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     ...marketEnvironmentShape,
@@ -692,6 +694,12 @@ export interface ReconciliationWorkerConfig {
   readonly walletIntentReconcile: {
     readonly privy: PrivyConfig | null;
   } | null;
+  /**
+   * `mining-snapshot` lane (Decision 0036); default off. Even when enabled
+   * it stays idle until a Mining formula version is `approved`, which only
+   * the operator script can do outside production.
+   */
+  readonly miningSnapshotEnabled: boolean;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -1353,6 +1361,7 @@ export function loadReconciliationWorkerConfig(
       environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
+    MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     ...marketEnvironmentDefaults(environment),
@@ -1448,6 +1457,7 @@ export function loadReconciliationWorkerConfig(
               : null,
         })
       : null,
+    miningSnapshotEnabled: parsed.data.MINING_SNAPSHOT_ENABLED,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

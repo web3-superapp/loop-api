@@ -98,6 +98,18 @@ describe("committed OpenAPI artifact", () => {
       "/v2/community/home",
       "/v2/connections",
       "/v2/connections/follow/{publicProfileId}",
+      "/v2/launch/economy",
+      "/v2/launch/overview",
+      "/v2/launch/projects",
+      "/v2/launch/projects/{projectId}",
+      "/v2/launch/projects/{projectId}/milestones",
+      "/v2/launch/projects/{projectId}/submit",
+      "/v2/launch/stake",
+      "/v2/launch/{launchId}/eligibility",
+      "/v2/launch/{launchId}/history",
+      "/v2/launch/{launchId}/holders",
+      "/v2/launch/{launchId}/intents",
+      "/v2/launches/{launchId}",
       "/v2/market/assets/{assetId}",
       "/v2/market/assets/{assetId}/candles",
       "/v2/market/assets/{assetId}/holders",
@@ -109,7 +121,13 @@ describe("committed OpenAPI artifact", () => {
       "/v2/message-requests/{messageRequestId}/decision",
       "/v2/meta/capabilities",
       "/v2/meta/client-policy",
+      "/v2/mining/assets",
+      "/v2/mining/communities/{communityId}",
+      "/v2/mining/rank",
       "/v2/mining/referral/rules",
+      "/v2/mining/rewards",
+      "/v2/mining/rules",
+      "/v2/mining/summary",
       "/v2/notification-preferences",
       "/v2/notifications/feed",
       "/v2/notifications/{notificationId}/read",
@@ -117,6 +135,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/profile/avatars",
       "/v2/profile/loop-id",
       "/v2/profile/privacy",
+      "/v2/referral",
+      "/v2/referral/claim",
       "/v2/search",
       "/v2/session/bootstrap",
       "/v2/session/logout",
@@ -148,7 +168,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(93);
+    expect(operationIds).toHaveLength(115);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

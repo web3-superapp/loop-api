@@ -19,10 +19,16 @@ import type { ApprovalService } from "../../features/wallet-intents/approval-ser
 import type { SendService } from "../../features/wallet-intents/send-service.js";
 import type { SwapService } from "../../features/wallet-intents/swap-service.js";
 import type { WalletIntentService } from "../../features/wallet-intents/wallet-intent-service.js";
+import type { LaunchService } from "../../features/launch/launch-service.js";
+import type { MiningService } from "../../features/mining/mining-service.js";
+import type { ReferralService } from "../../features/referral/referral-service.js";
 import { registerV2ApprovalRoutes } from "./approvals.js";
 import { registerV2ChainRoutes } from "./chain.js";
 import { registerV2CommunicationRoutes } from "./communication.js";
 import { registerV2CommunityRoutes } from "./community.js";
+import { registerV2LaunchRoutes } from "./launch.js";
+import { registerV2MiningRoutes } from "./mining.js";
+import { registerV2ReferralRoutes } from "./referral.js";
 import { registerV2MarketRoutes } from "./market.js";
 import { registerV2MetaRoutes } from "./meta.js";
 import { registerV2NotificationRoutes } from "./notifications.js";
@@ -60,6 +66,9 @@ export interface V2RouteDependencies {
   readonly sendService: SendService;
   readonly approvalService: ApprovalService;
   readonly swapService: SwapService;
+  readonly launchService: LaunchService;
+  readonly miningService: MiningService;
+  readonly referralService: ReferralService;
   readonly cursorCodec: V2CursorCodec | null;
 }
 
@@ -75,7 +84,7 @@ export type V2ModuleRegistrar = (
  * module replaces its entry in its own numbered decision (`profile`: 0030;
  * `community` and `search`: 0031; `communication`: 0032; `chain`, `wallet`,
  * and `watchlist`: 0033; `market` and `notifications`: 0034; `swap` and
- * `sendApprovals`: 0035).
+ * `sendApprovals`: 0035; `launch`, `mining`, and `referral`: 0036).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
@@ -91,8 +100,9 @@ export const v2ModuleRegistrars: Readonly<
     registerV2WalletIntentRoutes(app, dependencies);
     registerV2ApprovalRoutes(app, dependencies);
   },
-  launch: null,
-  mining: null,
+  launch: registerV2LaunchRoutes,
+  mining: registerV2MiningRoutes,
+  referral: registerV2ReferralRoutes,
   notifications: registerV2NotificationRoutes,
   profile: registerV2ProfileRoutes,
   watchlist: registerV2WatchlistRoutes,

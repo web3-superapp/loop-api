@@ -215,6 +215,30 @@ logs). The `wallet-intent-reconcile` worker lane
 status; it needs `BSC_RPC_URLS` and, for Swap status, the Privy credential
 pair. See `docs/frontend-v2-wallet-intents-api.md` for the client contract.
 
+## V2 Launch, Mining, and referral (Decision 0036)
+
+```sh
+V2_MODULES_ENABLED=profile,launch,mining,referral
+```
+
+The 02 contract document is not available, so every on-chain Launch value and
+every Mining number is `unavailable`; the routes serve the off-chain
+application catalog, the pending rules, and the invite-code graph from
+PostgreSQL (migration `000023_v2_launch_mining`). Operator paths, all refused
+with `NODE_ENV=production`:
+
+```sh
+pnpm launch:review <projectId> approve            # review|approve|return|reject
+pnpm launch:milestone <projectId> lbank spot APPLIED
+pnpm launch:milestone <projectId> lbank spot LISTED --evidence <url> --reviewer ops.alice
+pnpm mining:approve-formula miningFormulaV1-draft --confirm   # do NOT run: unfreezes the snapshot lane
+```
+
+The `mining-snapshot` worker lane (`MINING_SNAPSHOT_ENABLED=true`) needs the
+market fact cache and registry; it stays idle until a formula version is
+approved. See `docs/frontend-v2-launch-api.md` and
+`docs/frontend-v2-mining-api.md`.
+
 ## Standalone reconciliation worker
 
 Run the worker in a second terminal after PostgreSQL migrations are current:

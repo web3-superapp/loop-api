@@ -169,6 +169,12 @@ export interface V2ProductPolicyRuntime {
   readonly bscWritesEnabled: boolean;
   /** Privy credentials composed; the Swap Provider boundary needs them. */
   readonly privySwapRuntimeAvailable: boolean;
+  /** `launch` module enabled with the launch repository and cursor codec (Decision 0036). */
+  readonly launchRuntimeAvailable: boolean;
+  /** `mining` module enabled with the mining repository composed (Decision 0036). */
+  readonly miningRuntimeAvailable: boolean;
+  /** `referral` module enabled with the referral repository composed (Decision 0036). */
+  readonly referralRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -250,6 +256,21 @@ export const v2BscWritesDisabledReasonCode = "BSC_WRITES_DISABLED" as const;
  */
 export const v2PrivySwapEvidencePendingReasonCode =
   "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING" as const;
+export const v2LaunchModuleDeferredReasonCode =
+  "V2_LAUNCH_RUNTIME_DEFERRED" as const;
+export const v2LaunchRuntimeUnavailableReasonCode =
+  "LAUNCH_RUNTIME_UNAVAILABLE" as const;
+/** No 02 contract baseline: every on-chain Launch fact stays unavailable. */
+export const v2LaunchEvidencePendingReasonCode =
+  "LAUNCH_CONTRACT_BASELINE_PENDING" as const;
+export const v2MiningModuleDeferredReasonCode =
+  "V2_MINING_RUNTIME_DEFERRED" as const;
+export const v2MiningRuntimeUnavailableReasonCode =
+  "MINING_RUNTIME_UNAVAILABLE" as const;
+export const v2ReferralModuleDeferredReasonCode =
+  "V2_REFERRAL_RUNTIME_DEFERRED" as const;
+export const v2ReferralRuntimeUnavailableReasonCode =
+  "REFERRAL_RUNTIME_UNAVAILABLE" as const;
 
 /**
  * Capability projected by each V2 module gate. `profile` was delivered by
@@ -268,6 +289,7 @@ export const v2ModuleCapabilityIds = Object.freeze({
   sendApprovals: "sendApprovals",
   launch: "launch",
   mining: "mining",
+  referral: "referral",
   notifications: "pushNotifications",
   profile: "profile",
   watchlist: "watchlist",
@@ -292,6 +314,7 @@ export const v2CapabilityIds = Object.freeze([
   "sendApprovals",
   "launch",
   "mining",
+  "referral",
   "priceAlerts",
   "notificationsFeed",
   "pushNotifications",
@@ -445,31 +468,6 @@ function deferredCapability(
 }
 
 /**
- * A module listed in V2_MODULES_ENABLED moves its capability from `deferred`
- * to `unavailable` with MODULE_RUNTIME_NOT_REGISTERED. Only the module's own
- * delivered route registration may later report `available`.
- */
-function moduleGatedCapability(
-  config: AppConfig,
-  moduleId: V2ModuleId,
-  capabilityId: string,
-  deferredReasonCode: string,
-): V2CapabilityProjection {
-  if (!config.v2ModulesEnabled.has(moduleId)) {
-    return deferredCapability(capabilityId, deferredReasonCode);
-  }
-  return Object.freeze({
-    capabilityId,
-    availability: "unavailable",
-    reasonCode: v2ModuleRuntimeNotRegisteredReasonCode,
-    evidence: Object.freeze({
-      status: "notApplicable",
-      reasonCode: null,
-    }),
-  });
-}
-
-/**
  * A delivered module: its capability is `available` only when the module is
  * enabled and `buildApp` composed every dependency the routes need. A missing
  * dependency is `unavailable` with the module's own reason, never `available`.
@@ -493,6 +491,41 @@ function deliveredModuleCapability(
       status: "notApplicable",
       reasonCode: null,
     }),
+  });
+}
+
+/**
+ * A delivered module whose external baseline is still pending (Decision
+ * 0036): `available` describes the PostgreSQL-backed catalog, application,
+ * or relationship runtime; `evidence` records the missing contract or
+ * formula baseline so the client keeps every derived number unavailable.
+ */
+function evidencePendingModuleCapability(
+  config: AppConfig,
+  moduleId: V2ModuleId,
+  capabilityId: string,
+  runtimeAvailable: boolean,
+  deferredReasonCode: string,
+  unavailableReasonCode: string,
+  evidencePendingReasonCode: string,
+): V2CapabilityProjection {
+  const evidence = Object.freeze({
+    status: "pending" as const,
+    reasonCode: evidencePendingReasonCode,
+  });
+  if (!config.v2ModulesEnabled.has(moduleId)) {
+    return Object.freeze({
+      capabilityId,
+      availability: "deferred",
+      reasonCode: deferredReasonCode,
+      evidence,
+    });
+  }
+  return Object.freeze({
+    capabilityId,
+    availability: runtimeAvailable ? "available" : "unavailable",
+    reasonCode: runtimeAvailable ? null : unavailableReasonCode,
+    evidence,
   });
 }
 
@@ -763,17 +796,35 @@ export function createV2CapabilitiesProjection(
     ),
     walletIntentCapability(config, runtime, "swap"),
     walletIntentCapability(config, runtime, "sendApprovals"),
-    moduleGatedCapability(
+    // Decision 0036: the catalog / application / referral runtimes can be
+    // available while the contract and formula baselines stay pending; the
+    // evidence field carries that separately from the module gate.
+    evidencePendingModuleCapability(
       config,
       "launch",
       v2ModuleCapabilityIds.launch,
-      "LAUNCH_CONTRACT_BASELINE_PENDING",
+      runtime.launchRuntimeAvailable,
+      v2LaunchModuleDeferredReasonCode,
+      v2LaunchRuntimeUnavailableReasonCode,
+      v2LaunchEvidencePendingReasonCode,
     ),
-    moduleGatedCapability(
+    evidencePendingModuleCapability(
       config,
       "mining",
       v2ModuleCapabilityIds.mining,
-      "MINING_FORMULA_BASELINE_PENDING",
+      runtime.miningRuntimeAvailable,
+      v2MiningModuleDeferredReasonCode,
+      v2MiningRuntimeUnavailableReasonCode,
+      v2CommunityMiningUnavailableReasonCode,
+    ),
+    evidencePendingModuleCapability(
+      config,
+      "referral",
+      v2ModuleCapabilityIds.referral,
+      runtime.referralRuntimeAvailable,
+      v2ReferralModuleDeferredReasonCode,
+      v2ReferralRuntimeUnavailableReasonCode,
+      v2CommunityMiningUnavailableReasonCode,
     ),
     deliveredModuleCapability(
       config,
