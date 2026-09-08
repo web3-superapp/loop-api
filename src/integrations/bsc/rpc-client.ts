@@ -4,6 +4,7 @@ import {
   createPublicClient,
   fallback,
   http,
+  LimitExceededRpcError,
   type Address,
   type Hex,
   type PublicClient,
@@ -150,6 +151,13 @@ export class BscChainMismatchError extends Error {
 
 /** Maximum block span of one `eth_getLogs` request. */
 export const bscMaximumLogRange = 2_000n;
+/**
+ * Endpoints cap `eth_getLogs` by result size, not only by block span, so a
+ * dense token can exceed the cap inside a legal range. The client then halves
+ * the range and retries; a single block that still exceeds the cap is a real
+ * endpoint limitation and fails closed instead of silently dropping logs.
+ */
+const bscLogRangeSplitFloor = 1n;
 const healthyLatencyMs = 1_500;
 const requestTimeoutMs = 6_000;
 
@@ -211,6 +219,7 @@ export function createBscReadClient(
     transport: fallback(config.rpcUrls.map((url) => transportFactory(url))),
   });
 
+  let currentLogAddresses: readonly string[] = [];
   let verification: ChainVerificationState = "unknown";
   let verificationInFlight: Promise<ChainVerificationState> | null = null;
 
@@ -250,6 +259,46 @@ export function createBscReadClient(
     if (state !== "verified") {
       throw new BscReadUnavailableError("BSC_RPC_UNREACHABLE");
     }
+  }
+
+  /**
+   * Reads one segment, halving the range whenever the endpoint rejects the
+   * request for exceeding its result limit. The walk is iterative and bounded
+   * by the segment width, and a single block that still exceeds the limit is
+   * rethrown rather than being silently skipped.
+   */
+  async function readLogRange(fromBlock: bigint, toBlock: bigint) {
+    const pending = [{ from: fromBlock, to: toBlock }];
+    const collected = [];
+    while (pending.length > 0) {
+      const range = pending.shift();
+      if (range === undefined) {
+        break;
+      }
+      try {
+        collected.push(
+          ...(await aggregate.getLogs({
+            address: currentLogAddresses.map(asAddress),
+            event: erc20TransferEvent,
+            fromBlock: range.from,
+            toBlock: range.to,
+          })),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof LimitExceededRpcError) ||
+          range.to - range.from < bscLogRangeSplitFloor
+        ) {
+          throw error;
+        }
+        const middle = range.from + (range.to - range.from) / 2n;
+        pending.unshift(
+          { from: range.from, to: middle },
+          { from: middle + 1n, to: range.to },
+        );
+      }
+    }
+    return collected;
   }
 
   async function readHead(client: ViemClient): Promise<BscChainHead> {
@@ -417,12 +466,8 @@ export function createBscReadClient(
       if (query.addresses.length === 0) {
         return Object.freeze([]);
       }
-      const logs = await aggregate.getLogs({
-        address: query.addresses.map(asAddress),
-        event: erc20TransferEvent,
-        fromBlock: query.fromBlock,
-        toBlock: query.toBlock,
-      });
+      currentLogAddresses = query.addresses;
+      const logs = await readLogRange(query.fromBlock, query.toBlock);
       return Object.freeze(
         logs.flatMap((log): BscTransferLog[] => {
           const from = log.args.from;
