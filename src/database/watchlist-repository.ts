@@ -355,6 +355,24 @@ export function createPostgresWatchlistRepository(
           await ensureLockedVersionRow(client, input.ownerUserId);
         }
 
+        // The V2 Watchlist writes the same rows keyed by asset_id. A V1
+        // replacement would delete them through the group cascade, so once an
+        // account has migrated the frozen V1 write refuses instead of
+        // destroying the newer namespace. The client reads V2 and retries
+        // there.
+        const migrated = await client.query<Record<string, unknown>>({
+          text: `
+            select 1
+            from public.watchlist_items
+            where owner_user_id = $1 and asset_id is not null
+            limit 1
+          `,
+          values: [input.ownerUserId],
+        });
+        if (migrated.rows.length > 0) {
+          throw new WatchlistVersionConflictError();
+        }
+
         const current = await loadSnapshot(client, input.ownerUserId);
         if (watchlistGroupsEqual(current.groups, input.groups)) {
           await client.query("commit");

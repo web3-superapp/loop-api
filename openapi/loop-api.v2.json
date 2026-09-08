@@ -23641,7 +23641,11 @@
                     "gasReservePolicy": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["configVersion", "nativeReserveRaw"],
+                      "required": [
+                        "configVersion",
+                        "nativeReserveRaw",
+                        "nativeReserve"
+                      ],
                       "properties": {
                         "configVersion": {
                           "type": "string",
@@ -23651,6 +23655,11 @@
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
                           "description": "Integer amount in the asset's smallest unit, as a string."
+                        },
+                        "nativeReserve": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                          "description": "Exact decimal string; never a JavaScript floating-point value."
                         }
                       }
                     },
@@ -23666,11 +23675,7 @@
                           "name",
                           "decimals",
                           "address",
-                          "rawValue",
-                          "displayBalance",
-                          "availableBalance",
-                          "spendableBalance",
-                          "gasReserve",
+                          "balance",
                           "pending",
                           "valuation",
                           "crossCheck"
@@ -23706,30 +23711,68 @@
                               { "type": "null" }
                             ]
                           },
-                          "rawValue": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})$",
-                            "description": "Integer amount in the asset's smallest unit, as a string."
-                          },
-                          "displayBalance": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                            "description": "Exact decimal string; never a JavaScript floating-point value."
-                          },
-                          "availableBalance": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                            "description": "Exact decimal string; never a JavaScript floating-point value."
-                          },
-                          "spendableBalance": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                            "description": "Exact decimal string; never a JavaScript floating-point value."
-                          },
-                          "gasReserve": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                            "description": "Exact decimal string; never a JavaScript floating-point value."
+                          "balance": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "rawValue",
+                                  "displayBalance",
+                                  "availableBalance",
+                                  "spendableBalance",
+                                  "gasReserve"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "rawValue": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                    "description": "Integer amount in the asset's smallest unit, as a string."
+                                  },
+                                  "displayBalance": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  },
+                                  "availableBalance": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  },
+                                  "spendableBalance": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  },
+                                  "gasReserve": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
+                              }
+                            ],
+                            "description": "Every readable registry asset always yields a row. A failed per-asset chain call reports the amounts as unavailable instead of dropping the asset."
                           },
                           "pending": {
                             "anyOf": [
@@ -23793,13 +23836,23 @@
                           "crossCheck": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["source", "status", "reasonCode"],
+                            "required": [
+                              "source",
+                              "status",
+                              "reasonCode",
+                              "blockDelta"
+                            ],
                             "properties": {
                               "source": { "type": "string", "enum": ["privy"] },
                               "status": {
                                 "type": "string",
-                                "enum": ["matched", "disputed", "unavailable"],
-                                "description": "Cross-check only. A disputed or unavailable cross-check never changes the authoritative RPC balance."
+                                "enum": [
+                                  "matched",
+                                  "unaligned",
+                                  "disputed",
+                                  "unavailable"
+                                ],
+                                "description": "Cross-check only. A difference that cannot be aligned to one block is `unaligned`; nothing here ever changes the authoritative RPC balance."
                               },
                               "reasonCode": {
                                 "anyOf": [
@@ -23809,6 +23862,13 @@
                                   },
                                   { "type": "null" }
                                 ]
+                              },
+                              "blockDelta": {
+                                "anyOf": [
+                                  { "type": "integer" },
+                                  { "type": "null" }
+                                ],
+                                "description": "Block distance between the two observations, or null when the cross-check source does not report its block."
                               }
                             }
                           }

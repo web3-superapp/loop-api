@@ -117,6 +117,7 @@ function readClientFake(options: ReadClientOptions): BscReadClient {
     reorgDepthBlocks: 64,
     endpointRefs: ["rpc-000000000000"],
     verifyChain: () => Promise.resolve("verified"),
+    currentVerification: () => "verified",
     getHead: () =>
       options.headUnavailable === true
         ? Promise.reject(new BscReadUnavailableError("BSC_RPC_UNREACHABLE"))

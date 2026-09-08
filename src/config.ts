@@ -443,6 +443,12 @@ export interface AppConfig {
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
   readonly bscChain: BscChainConfig | null;
+  /**
+   * Chain read policy that applies whether or not an endpoint is configured,
+   * so an unavailable read client still reports the operator's numbers.
+   */
+  readonly bscConfirmations: number;
+  readonly bscReorgDepthBlocks: number;
   readonly walletGasReserve: WalletGasReserveConfig;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
@@ -951,6 +957,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     perpReadCursor,
     hyperliquidPrivateReads,
     bscChain: parseBscChainConfig(parsed.data),
+    bscConfirmations: parsed.data.BSC_CONFIRMATIONS,
+    bscReorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     serviceName: "loop-api",
     serviceVersion,

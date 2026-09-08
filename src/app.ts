@@ -51,7 +51,6 @@ import {
   createBscReadClient,
   createUnavailableBscReadClient,
   type BscReadClient,
-  type ChainVerificationState,
 } from "./integrations/bsc/rpc-client.js";
 import {
   createPrivyBalanceReader,
@@ -855,7 +854,10 @@ export async function buildApp(
   const bscReadClient =
     options.bscReadClient ??
     (config.bscChain === null
-      ? createUnavailableBscReadClient()
+      ? createUnavailableBscReadClient({
+          confirmations: config.bscConfirmations,
+          reorgDepthBlocks: config.bscReorgDepthBlocks,
+        })
       : createBscReadClient({ config: config.bscChain }));
   const chainRegistryRepository =
     database.chainRegistry ?? createUnavailableChainRegistryRepository();
@@ -934,14 +936,14 @@ export async function buildApp(
         database.chainRegistry !== undefined));
 
   // Chain-ID verification is probed once at startup and refreshed lazily by
-  // the read client. A misconfigured endpoint is a loud warning and a closed
-  // capability, never a crash and never a silently wrong chain.
-  let chainVerification: ChainVerificationState = "unknown";
+  // the read client, which owns the state. The capability projection reads it
+  // synchronously per request, so a recovery is reflected without a restart.
+  // A misconfigured endpoint is a loud warning and a closed capability, never
+  // a crash and never a silently wrong chain.
   if (chainRuntimeAvailable) {
     void bscReadClient
       .verifyChain()
       .then((state) => {
-        chainVerification = state;
         if (state !== "verified") {
           app.log.warn(
             { chainId: bscChainId, chainVerification: state },
@@ -950,7 +952,7 @@ export async function buildApp(
         }
       })
       .catch(() => {
-        chainVerification = "unreachable";
+        // The client records the failure; nothing else to do here.
       });
   }
 
@@ -1066,7 +1068,7 @@ export async function buildApp(
         searchRuntimeAvailable,
         bscRpcConfigured,
         chainRuntimeAvailable,
-        bscChainVerification: () => chainVerification,
+        bscChainVerification: () => bscReadClient.currentVerification(),
         walletRuntimeAvailable,
         watchlistRuntimeAvailable,
       }),

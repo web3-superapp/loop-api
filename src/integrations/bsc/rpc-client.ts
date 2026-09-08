@@ -118,6 +118,12 @@ export interface BscReadClient {
   readonly endpointRefs: readonly string[];
   /** Cached chain-ID verification; a mismatch is sticky until reconfigured. */
   verifyChain(): Promise<ChainVerificationState>;
+  /**
+   * The state the last probe actually observed, read synchronously. A
+   * projection that must not block uses this; it reflects a recovery as soon
+   * as the next probe lands.
+   */
+  currentVerification(): ChainVerificationState;
   getHead(): Promise<BscChainHead>;
   getBlockHash(blockNumber: bigint): Promise<string | null>;
   readTokenIdentity(address: string): Promise<BscTokenIdentity>;
@@ -159,6 +165,9 @@ export const bscMaximumLogRange = 2_000n;
  * limitation and fails closed instead of silently dropping logs.
  */
 const bscLogRangeSplitFloor = 1n;
+/** Mirrors the BSC_CONFIRMATIONS and BSC_REORG_DEPTH_BLOCKS defaults. */
+export const defaultBscConfirmations = 15;
+export const defaultBscReorgDepthBlocks = 64;
 const healthyLatencyMs = 1_500;
 const requestTimeoutMs = 6_000;
 
@@ -220,7 +229,6 @@ export function createBscReadClient(
     transport: fallback(config.rpcUrls.map((url) => transportFactory(url))),
   });
 
-  let currentLogAddresses: readonly string[] = [];
   let verification: ChainVerificationState = "unknown";
   let verificationInFlight: Promise<ChainVerificationState> | null = null;
 
@@ -268,7 +276,11 @@ export function createBscReadClient(
    * by the segment width, and a single block that still exceeds the limit is
    * rethrown rather than being silently skipped.
    */
-  async function readLogRange(fromBlock: bigint, toBlock: bigint) {
+  async function readLogRange(
+    addresses: Address[],
+    fromBlock: bigint,
+    toBlock: bigint,
+  ) {
     const pending = [{ from: fromBlock, to: toBlock }];
     const collected = [];
     while (pending.length > 0) {
@@ -279,7 +291,7 @@ export function createBscReadClient(
       try {
         collected.push(
           ...(await aggregate.getLogs({
-            address: currentLogAddresses.map(asAddress),
+            address: addresses,
             event: erc20TransferEvent,
             fromBlock: range.from,
             toBlock: range.to,
@@ -323,6 +335,7 @@ export function createBscReadClient(
       endpoints.map((endpoint) => endpoint.endpointRef),
     ),
     verifyChain,
+    currentVerification: (): ChainVerificationState => verification,
 
     async getHead(): Promise<BscChainHead> {
       await requireVerifiedChain();
@@ -470,8 +483,11 @@ export function createBscReadClient(
       if (query.addresses.length === 0) {
         return Object.freeze([]);
       }
-      currentLogAddresses = query.addresses;
-      const logs = await readLogRange(query.fromBlock, query.toBlock);
+      const logs = await readLogRange(
+        [...query.addresses].map(asAddress),
+        query.fromBlock,
+        query.toBlock,
+      );
       return Object.freeze(
         logs.flatMap((log): BscTransferLog[] => {
           const from = log.args.from;
@@ -580,17 +596,23 @@ export function createBscReadClient(
  * The client used when no RPC endpoint is configured. Every read rejects with
  * a stable reason code; nothing is inferred, cached, or replaced by a fixture.
  */
-export function createUnavailableBscReadClient(): BscReadClient {
+export function createUnavailableBscReadClient(
+  options: {
+    readonly confirmations?: number;
+    readonly reorgDepthBlocks?: number;
+  } = {},
+): BscReadClient {
   const reject = (): Promise<never> =>
     Promise.reject(new BscReadUnavailableError("BSC_RPC_NOT_CONFIGURED"));
   return Object.freeze({
     chainId: "eip155:56" as const,
     chainReference: 56 as const,
-    confirmations: 15,
-    reorgDepthBlocks: 64,
+    confirmations: options.confirmations ?? defaultBscConfirmations,
+    reorgDepthBlocks: options.reorgDepthBlocks ?? defaultBscReorgDepthBlocks,
     endpointRefs: Object.freeze([] as readonly string[]),
     verifyChain: (): Promise<ChainVerificationState> =>
       Promise.resolve("unknown"),
+    currentVerification: (): ChainVerificationState => "unknown",
     getHead: reject,
     getBlockHash: reject,
     readTokenIdentity: reject,

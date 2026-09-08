@@ -2,6 +2,7 @@ import {
   custom,
   decodeFunctionData,
   encodeFunctionResult,
+  LimitExceededRpcError,
   multicall3Abi,
   numberToHex,
   type Transport,
@@ -353,6 +354,78 @@ describe("BSC read client", () => {
     ]);
   });
 
+  it("halves a rejected range until the endpoint accepts it", async () => {
+    const accepted: { from: bigint; to: bigint }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            if (request.method !== "eth_getLogs") {
+              return Promise.reject(new Error(`unmocked ${request.method}`));
+            }
+            const params = request.params as readonly [
+              { readonly fromBlock: string; readonly toBlock: string },
+            ];
+            const from = BigInt(params[0].fromBlock);
+            const to = BigInt(params[0].toBlock);
+            // The endpoint caps the span at 500 blocks.
+            if (to - from + 1n > 500n) {
+              return Promise.reject(
+                new LimitExceededRpcError(new Error("limit exceeded")),
+              );
+            }
+            accepted.push({ from, to });
+            return Promise.resolve([]);
+          },
+        }),
+    });
+
+    await client.readTransferLogs({
+      addresses: [wbnb],
+      fromBlock: 1n,
+      toBlock: 2_000n,
+    });
+
+    // Every block of the requested range is covered exactly once, in order.
+    expect(accepted[0]?.from).toBe(1n);
+    expect(accepted.at(-1)?.to).toBe(2_000n);
+    let expectedNext = 1n;
+    for (const range of accepted) {
+      expect(range.from).toBe(expectedNext);
+      expect(range.to - range.from + 1n).toBeLessThanOrEqual(500n);
+      expectedNext = range.to + 1n;
+    }
+    expect(expectedNext).toBe(2_001n);
+  });
+
+  it("rethrows when even a single block exceeds the endpoint limit", async () => {
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> =>
+            request.method === "eth_chainId"
+              ? Promise.resolve("0x38")
+              : Promise.reject(
+                  new LimitExceededRpcError(new Error("limit exceeded")),
+                ),
+        }),
+    });
+
+    // Returning an empty page here would silently drop real transfers.
+    await expect(
+      client.readTransferLogs({
+        addresses: [wbnb],
+        fromBlock: 10n,
+        toBlock: 13n,
+      }),
+    ).rejects.toBeInstanceOf(LimitExceededRpcError);
+  });
+
   it("probes every endpoint behind an opaque reference", async () => {
     const config = chainConfig();
     const client = createBscReadClient({
@@ -385,5 +458,15 @@ describe("BSC read client", () => {
     await expect(client.getHead()).rejects.toMatchObject({
       reasonCode: "BSC_RPC_NOT_CONFIGURED",
     });
+    expect(client.currentVerification()).toBe("unknown");
+    expect(client.confirmations).toBe(15);
+
+    // The operator's configured policy still shows through a closed client.
+    const configured = createUnavailableBscReadClient({
+      confirmations: 21,
+      reorgDepthBlocks: 96,
+    });
+    expect(configured.confirmations).toBe(21);
+    expect(configured.reorgDepthBlocks).toBe(96);
   });
 });

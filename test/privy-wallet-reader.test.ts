@@ -64,6 +64,30 @@ describe("Privy wallet inventory reader", () => {
     ]);
   });
 
+  it("fails closed on an Ethereum wallet account that breaks the contract", () => {
+    // Skipping it would silently hide a wallet the user owns.
+    expect(() =>
+      parsePrivyEthereumWallets({
+        linked_accounts: [
+          { type: "wallet", chain_type: "ethereum", address: "0xnope" },
+        ],
+      }),
+    ).toThrow(PrivyWalletLookupUnavailableError);
+    expect(() =>
+      parsePrivyEthereumWallets({
+        linked_accounts: [{ type: "wallet", chain_type: "ethereum" }],
+      }),
+    ).toThrow(PrivyWalletLookupUnavailableError);
+    // A non-EVM wallet is simply out of scope, not a failure.
+    expect(
+      parsePrivyEthereumWallets({
+        linked_accounts: [
+          { type: "wallet", chain_type: "solana", address: "notEvm" },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
   it("deduplicates repeated addresses and fails closed on a malformed user", () => {
     const wallets = parsePrivyEthereumWallets({
       linked_accounts: [

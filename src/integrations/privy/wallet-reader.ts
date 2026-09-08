@@ -18,7 +18,7 @@ import type { PrivyUsersLookupClient } from "./user-reader.js";
 
 const walletAccountSchema = z.object({
   type: z.literal("wallet"),
-  chain_type: z.string(),
+  chain_type: z.literal("ethereum"),
   address: z.string().regex(new RegExp(anyCaseEvmAddressPatternSource)),
   id: z.string().min(1).max(128).nullish(),
   connector_type: z.string().nullish(),
@@ -28,6 +28,12 @@ const walletAccountSchema = z.object({
 
 const userSchema = z.object({
   linked_accounts: z.array(z.unknown()),
+});
+
+/** Just enough to decide whether an account claims to be an EVM wallet. */
+const walletAccountShapeSchema = z.object({
+  type: z.literal("wallet"),
+  chain_type: z.literal("ethereum"),
 });
 
 export interface PrivyWalletAccount {
@@ -75,9 +81,15 @@ export function parsePrivyEthereumWallets(
   const wallets: PrivyWalletAccount[] = [];
   const seen = new Set<string>();
   for (const rawAccount of parsedUser.data.linked_accounts) {
-    const parsed = walletAccountSchema.safeParse(rawAccount);
-    if (!parsed.success || parsed.data.chain_type !== "ethereum") {
+    if (!walletAccountShapeSchema.safeParse(rawAccount).success) {
       continue;
+    }
+    const parsed = walletAccountSchema.safeParse(rawAccount);
+    if (!parsed.success) {
+      // The account says it is an Ethereum wallet but does not match the
+      // contract. Skipping it would silently hide a wallet the user owns, so
+      // the whole inventory fails closed instead.
+      throw new PrivyWalletLookupUnavailableError();
     }
     const address = parsed.data.address.toLowerCase();
     if (seen.has(address)) {

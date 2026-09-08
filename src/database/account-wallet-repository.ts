@@ -98,6 +98,20 @@ export class AccountWalletVersionConflictError extends Error {
   }
 }
 
+/**
+ * Privy reported no wallet at all while LOOP still holds active rows. That is
+ * indistinguishable from a Provider outage, so the inventory is left untouched
+ * rather than archiving wallets the user still owns.
+ */
+export class AccountWalletObservationEmptyError extends Error {
+  readonly code = "account_wallet_observation_empty";
+
+  constructor() {
+    super("The wallet inventory observation was empty");
+    this.name = "AccountWalletObservationEmptyError";
+  }
+}
+
 export class AccountWalletNotFoundError extends Error {
   readonly code = "account_wallet_not_found";
 
@@ -151,6 +165,21 @@ export function createPostgresAccountWalletRepository(
       try {
         await client.query("begin");
         inTransaction = true;
+
+        if (input.observed.length === 0) {
+          const active = await client.query<Record<string, unknown>>({
+            text: `
+              select 1
+              from public.account_wallets
+              where owner_user_id = $1 and status = 'active'
+              limit 1
+            `,
+            values: [input.ownerUserId],
+          });
+          if (active.rows.length > 0) {
+            throw new AccountWalletObservationEmptyError();
+          }
+        }
 
         for (const wallet of input.observed) {
           await client.query<Record<string, unknown>>({

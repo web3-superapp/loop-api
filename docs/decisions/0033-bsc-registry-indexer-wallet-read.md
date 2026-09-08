@@ -88,13 +88,38 @@ an `Idempotency-Key` (Decision 0030's rule for versioned replacements). A
 concurrent switch from another device is `VERSION_CONFLICT`, never a silent
 overwrite. The write moves no funds and grants no signing authority.
 
+### Balances keep one row per readable asset
+
+`GET /v2/wallets/{walletId}/balances` always emits exactly one row per readable
+registry asset. The numeric fields live under a discriminated `balance` union
+(`{status: "available", …}` or `{status: "unavailable", reasonCode}`), so a
+per-asset multicall failure reports the failure instead of dropping the asset —
+"we could not read this balance" must never look like "this wallet does not
+hold it".
+
 ### Privy cross-check never overrides the chain
 
 The RPC multicall is authoritative. Privy's balance view is compared only for
 the native asset, because Privy reports named assets rather than token
-addresses and a token match would be a guess. `matched`, `disputed`, and
-`unavailable` are all reported; none of them changes the published RPC value,
-and a failed cross-check never fails the request.
+addresses and a token match would be a guess. Both sides are rescaled to the
+registry asset's `decimals` with integer arithmetic; a source reporting more
+precision than the asset has is only comparable when the extra digits are zero,
+otherwise the comparison is refused rather than rounded.
+
+Privy does not report the block it read, so a difference cannot be attributed
+to a real disagreement rather than to a later block: it is `unaligned` with
+`blockDelta: null`, never `disputed`. `disputed` is reserved for a source that
+reports its block and read the same one. None of `matched`, `unaligned`,
+`disputed`, or `unavailable` changes the published RPC value, and a failed
+cross-check never fails the request.
+
+### Capability projection is evaluated per request
+
+`GET /v2/meta/capabilities` builds its projection on every request, exactly
+like the client policy, and reads chain verification synchronously from the
+read client (`currentVerification()`). Verification is probed asynchronously,
+so a projection captured at composition time would keep reporting a stale
+pending or unreachable state after the endpoint recovered.
 
 ### Gas reserve is a published product policy
 
@@ -138,9 +163,25 @@ The read client halves the range and retries on either; a single block that
 still fails is an endpoint limitation and fails closed rather than silently
 dropping logs.
 
+A reorg rewind touches only the rewinding lane's own table
+(`indexed_transfers`). Each lane owns its own checkpoint, so one lane must
+never mark another lane's rows removed past that lane's checkpoint.
+
 The `pool_event` lane is deliberately not implemented here: its storage,
-ABIs, `pnpm pool:register`, and reorg rewind are in place, but the lane itself
-belongs to S5b, which is the first consumer (candles and trades).
+ABIs, and `pnpm pool:register` are in place, but the lane itself — including
+its own rewind — belongs to S5b, which is the first consumer (candles and
+trades).
+
+### Multicall3
+
+Balance and identity reads use Multicall3 at
+`0xcA11bde05977b3631167028862bE2a173976CA11`, taken from viem 2.44.2's built-in
+`bsc` chain definition (`viem/chains`, `contracts.multicall3`, deployed at
+block 15921452). LOOP does not hardcode it. It is a read-only aggregation
+contract on a path that moves no funds, but it has **not** been independently
+verified against an official BSC source; that verification belongs to the same
+external Go/No-Go item as the RPC provider, and no funds-moving path may use it
+before then.
 
 ### Activity is never an empty success
 
@@ -158,12 +199,21 @@ constraint enforces that exactly one of `asset_key` (V1) and `asset_id` (V2) is
 set per row, with a partial unique index per namespace. The primary key moves
 to a surrogate `item_id` because `asset_key` is now nullable.
 
-Two consequences are deliberate. The frozen V1 projection adds
-`items.asset_key is not null` to its join, so it keeps its exact shape instead
-of failing closed on a row it cannot represent — no V1 request or response
-field changes. And a V2 `PUT` owns the whole owner-level snapshot: it replaces
-legacy V1 rows rather than merging two asset namespaces into one list. The
-client migrates once, in one direction.
+Three consequences are deliberate.
+
+The frozen V1 **read** adds `items.asset_key is not null` to its join, so it
+keeps its exact shape instead of failing closed on a row it cannot represent —
+no V1 request or response field changes. For an account that has migrated, V1
+therefore reports the V2 groups with empty `items` rather than an error.
+
+A V2 `PUT` owns the whole owner-level snapshot: it replaces legacy V1 rows
+rather than merging two asset namespaces into one list.
+
+The frozen V1 **write** refuses once the account holds any `asset_id` row. A V1
+replacement would delete the V2 rows through the group cascade, so it returns
+V1's existing `version_conflict` instead of destroying the newer namespace. No
+V1 field or status code is added; the client reads V2 and retries there. The
+migration is one-way, once.
 
 ## Persistence
 

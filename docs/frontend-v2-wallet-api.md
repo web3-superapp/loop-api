@@ -210,7 +210,8 @@ PUT /v2/wallets/active
   },
   "gasReservePolicy": {
     "configVersion": "walletGasReserveV1",
-    "nativeReserveRaw": "5000000000000000"
+    "nativeReserveRaw": "5000000000000000",
+    "nativeReserve": "0.005"
   },
   "balances": [
     {
@@ -219,11 +220,14 @@ PUT /v2/wallets/active
       "name": "BNB",
       "decimals": 18,
       "address": null,
-      "rawValue": "7000000000000000000",
-      "displayBalance": "7",
-      "availableBalance": "7",
-      "spendableBalance": "6.995",
-      "gasReserve": "0.005",
+      "balance": {
+        "status": "available",
+        "rawValue": "7000000000000000000",
+        "displayBalance": "7",
+        "availableBalance": "7",
+        "spendableBalance": "6.995",
+        "gasReserve": "0.005"
+      },
       "pending": {
         "status": "available",
         "rawValue": "0",
@@ -257,10 +261,17 @@ PUT /v2/wallets/active
   （默认 0.005 BNB），随响应下发 `gasReservePolicy`，前端不要写死。
 - `pending.status === "unavailable"` + `BSC_INDEXER_NOT_STARTED` 表示 indexer
   未运行，显示"待确认金额不可用"，不要显示 0。
-- `crossCheck` 只是与 Privy 对账：`matched` / `disputed`（数值不一致）/
-  `unavailable`（外部钱包无 Privy wallet ID，或代币无法映射）。
-  **`disputed` 不改变 `rawValue`**，UI 可以给一个"数据源存在分歧"的提示，但
-  必须显示 RPC 的值。
+- **每个可读 registry 资产恒定一行**。数值字段收在判别联合 `balance` 下：
+  `{status:"available", rawValue, displayBalance, availableBalance,
+spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
+  单个资产的链上调用失败时该行仍然存在且 `balance.status === "unavailable"`
+  ——**"读不到"和"这个钱包没有该资产"必须区分**，不要把它当 0。
+- `crossCheck` 只是与 Privy 对账：`matched` / `unaligned`（数值不一致，但
+  Privy 不下发它读的区块，无法归因）/ `disputed`（保留给会上报区块的来源）/
+  `unavailable`（外部钱包无 Privy wallet ID、代币无法映射、精度无法对齐）。
+  `blockDelta` 为两次观测的区块差，来源不上报区块时为 `null`。
+  **任何 crossCheck 结果都不改变 `balance` 里的 RPC 数值**，UI 最多给一个
+  "数据源尚未对齐"的提示。
 - `valuation` 与 `netWorth` 在 S5b 接入行情前恒为 `unavailable`。`networth` 页
   的美元总额、24h 涨跌、图表在本步全部显示 unavailable。
 - 链读不可用（未配置 RPC、端点不可达、chainId 不符）→ `503
@@ -386,8 +397,12 @@ PUT /v2/watchlist
 - 已入库但后来变得不可读的资产，`asset` 为 `null` 且
   `reasonCode: "ASSET_NOT_READABLE"`，行仍然列出（让用户能删掉它）。
 - **自选不是行情事实**：价格、涨跌幅要等 S5b 的 `market` 接口，本步不要显示。
-- 该资源与冻结的 V1 `/v1/watchlist` **共用同一个版本号**。V2 的整体替换会覆盖
-  遗留的 V1 行；客户端单向迁移一次即可。
+- 该资源与冻结的 V1 `/v1/watchlist` **共用同一个版本号**，迁移是单向一次性的：
+  - V2 的整体替换会覆盖遗留的 V1 行；
+  - 迁移后 V1 `GET /v1/watchlist` 仍返回 200，但分组的 `items` 为空
+    （V1 只能表示 `asset_key` 行），前端不要把它当"自选被清空"；
+  - 迁移后 V1 `PUT /v1/watchlist` 一律返回 `409 version_conflict`，后端拒绝
+    删除 V2 行。旧版客户端必须升级后走 V2，不要循环重试。
 
 ## 10. 错误码速查
 

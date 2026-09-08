@@ -171,7 +171,10 @@ non-reversible `endpointRef`. With no configured endpoint the route is
 Privy stays authoritative for which wallets exist; LOOP only issues the opaque
 `walletId` and remembers the active selection. A wallet Privy stops reporting
 is archived, never deleted. A wallet address is published as a public on-chain
-fact, but only `walletId` is ever accepted as an identifier. The native gas
+fact, but only `walletId` is ever accepted as an identifier. Balances always
+emit one row per readable registry asset: a per-asset chain-call failure is
+reported as an unavailable `balance`, never as a missing asset. Privy reports
+no block, so a balance difference is `unaligned`, never `disputed`. The native gas
 reserve subtracted from `spendableBalance` is configured by
 `WALLET_GAS_RESERVE_BNB` and published as `walletGasReserveV1`. The RPC
 multicall is the authoritative balance

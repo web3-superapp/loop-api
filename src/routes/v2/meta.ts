@@ -262,8 +262,6 @@ export function registerV2MetaRoutes(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
 ): void {
-  const capabilities = createV2CapabilitiesProjection(config, runtime);
-
   app.get(
     "/v2/meta/client-policy",
     {
@@ -307,8 +305,14 @@ export function registerV2MetaRoutes(
       preValidation: assertNoBodyOrQuery,
     },
     async (_request, reply) => {
+      // Evaluated per request, exactly like the client policy: chain
+      // verification is probed asynchronously, so a projection captured at
+      // composition time would keep reporting a stale pending or unreachable
+      // state after the endpoint recovered.
       reply.header("cache-control", "no-store");
-      return reply.code(200).send(capabilities);
+      return reply
+        .code(200)
+        .send(createV2CapabilitiesProjection(config, runtime));
     },
   );
 }

@@ -85,9 +85,12 @@ export interface CommitTransferSegmentInput {
     readonly startedFromBlockNumber: string;
   };
   /**
-   * When present, every stored log at or above this block is marked removed
-   * inside the same transaction before the segment is replayed. This is the
-   * reorg rewind path.
+   * When present, every stored transfer at or above this block is marked
+   * removed inside the same transaction before the segment is replayed. This
+   * is the reorg rewind path. It touches only this lane's table: the
+   * `pool_event` lane owns its own checkpoint and rewinds itself when S5b
+   * delivers it, so one lane can never rewind another lane's rows past its
+   * checkpoint.
    */
   readonly rewindFromBlockNumber?: string;
 }
@@ -303,14 +306,6 @@ export function createPostgresBscIndexerRepository(
           await client.query<Record<string, unknown>>({
             text: `
               update public.indexed_transfers
-              set removed = true, observed_at = clock_timestamp()
-              where chain_id = $1 and block_number >= $2::numeric
-            `,
-            values: [input.chainId, rewindFrom],
-          });
-          await client.query<Record<string, unknown>>({
-            text: `
-              update public.indexed_pool_events
               set removed = true, observed_at = clock_timestamp()
               where chain_id = $1 and block_number >= $2::numeric
             `,

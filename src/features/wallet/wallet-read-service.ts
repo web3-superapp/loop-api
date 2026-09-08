@@ -7,6 +7,7 @@ import { V2ApiError } from "../../core/http/v2-error.js";
 import { isOpaqueId } from "../../core/ids/opaque-id.js";
 import {
   AccountWalletNotFoundError,
+  AccountWalletObservationEmptyError,
   AccountWalletVersionConflictError,
   type AccountWalletRecord,
   type AccountWalletRepository,
@@ -25,6 +26,7 @@ import type {
 } from "../../integrations/privy/wallet-reader.js";
 import type { AssetRegistryService } from "../chain/asset-registry-service.js";
 import {
+  bscNativeDecimals,
   eip681Uri,
   formatDecimalAmount,
   subtractFloorZero,
@@ -52,6 +54,8 @@ export const walletReasonCodes = Object.freeze({
   privyWalletIdMissing: "PRIVY_WALLET_ID_UNAVAILABLE",
   privyAssetMappingMissing: "PRIVY_ASSET_MAPPING_UNAVAILABLE",
   privyCrossCheckFailed: "PRIVY_BALANCE_CROSS_CHECK_FAILED",
+  privyScaleMismatch: "PRIVY_BALANCE_SCALE_MISMATCH",
+  privyBlockUnaligned: "PRIVY_BALANCE_BLOCK_UNALIGNED",
   balanceCallFailed: "BSC_BALANCE_CALL_FAILED",
 } as const);
 
@@ -93,17 +97,31 @@ export interface WalletListResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+export interface WalletBalanceAmounts {
+  readonly status: "available";
+  readonly rawValue: string;
+  readonly displayBalance: string;
+  readonly availableBalance: string;
+  readonly spendableBalance: string;
+  readonly gasReserve: string;
+}
+
+export type WalletCrossCheckStatus =
+  "matched" | "unaligned" | "disputed" | "unavailable";
+
+/**
+ * One row per readable registry asset, always. When the chain call for a
+ * single asset failed, the row keeps its identity and reports the amounts as
+ * unavailable rather than disappearing, so the client can tell "no balance
+ * data" apart from "not in this wallet".
+ */
 export interface WalletBalanceProjection {
   readonly assetId: string;
   readonly symbol: string;
   readonly name: string;
   readonly decimals: number;
   readonly address: string | null;
-  readonly rawValue: string;
-  readonly displayBalance: string;
-  readonly availableBalance: string;
-  readonly spendableBalance: string;
-  readonly gasReserve: string;
+  readonly balance: WalletBalanceAmounts | UnavailableProjection;
   readonly pending:
     | {
         readonly status: "available";
@@ -114,8 +132,14 @@ export interface WalletBalanceProjection {
   readonly valuation: UnavailableProjection;
   readonly crossCheck: {
     readonly source: "privy";
-    readonly status: "matched" | "disputed" | "unavailable";
+    readonly status: WalletCrossCheckStatus;
     readonly reasonCode: string | null;
+    /**
+     * Block distance between the two observations, or null when the source
+     * does not report the block it read. A difference that cannot be aligned
+     * to one block is `unaligned`, never `disputed`.
+     */
+    readonly blockDelta: number | null;
   };
 }
 
@@ -130,6 +154,7 @@ export interface WalletBalancesResource {
   readonly gasReservePolicy: {
     readonly configVersion: typeof walletGasReserveConfigVersion;
     readonly nativeReserveRaw: string;
+    readonly nativeReserve: string;
   };
   readonly balances: readonly WalletBalanceProjection[];
   readonly netWorth: UnavailableProjection;
@@ -285,25 +310,56 @@ export function createWalletReadService(
    * native asset can be matched today: Privy reports named assets, not token
    * contract addresses, so a token match would be a guess.
    */
+  /**
+   * Rescales an observation to the registry asset's decimals. A source that
+   * reports more precision than the asset has is only comparable when the
+   * extra digits are zero; otherwise the comparison is refused instead of
+   * rounded.
+   */
+  function rescaleObservation(
+    rawValue: string,
+    fromDecimals: number,
+    toDecimals: number,
+  ): bigint | null {
+    const value = BigInt(rawValue);
+    if (fromDecimals === toDecimals) {
+      return value;
+    }
+    if (fromDecimals < toDecimals) {
+      return value * 10n ** BigInt(toDecimals - fromDecimals);
+    }
+    const divisor = 10n ** BigInt(fromDecimals - toDecimals);
+    return value % divisor === 0n ? value / divisor : null;
+  }
+
   async function crossCheckNative(
     wallet: AccountWalletRecord,
     nativeRaw: bigint | null,
+    nativeDecimals: number,
     signal: AbortSignal,
   ): Promise<{
-    readonly status: "matched" | "disputed" | "unavailable";
+    readonly status: WalletCrossCheckStatus;
     readonly reasonCode: string | null;
+    readonly blockDelta: number | null;
   }> {
-    if (wallet.providerWalletId === null) {
-      return Object.freeze({
+    const unavailableCrossCheck = (
+      reasonCode: string,
+    ): {
+      readonly status: WalletCrossCheckStatus;
+      readonly reasonCode: string | null;
+      readonly blockDelta: number | null;
+    } =>
+      Object.freeze({
         status: "unavailable" as const,
-        reasonCode: walletReasonCodes.privyWalletIdMissing,
+        reasonCode,
+        blockDelta: null,
       });
+
+    if (wallet.providerWalletId === null) {
+      return unavailableCrossCheck(walletReasonCodes.privyWalletIdMissing);
     }
     if (nativeRaw === null) {
-      return Object.freeze({
-        status: "unavailable" as const,
-        reasonCode: walletReasonCodes.balanceCallFailed,
-      });
+      return unavailableCrossCheck(walletReasonCodes.balanceCallFailed);
     }
     try {
       const observations = await input.balanceReader.readBscBalances({
@@ -314,23 +370,34 @@ export function createWalletReadService(
         (observation) => observation.asset === "bnb",
       );
       if (native === undefined) {
+        return unavailableCrossCheck(
+          walletReasonCodes.privyAssetMappingMissing,
+        );
+      }
+      const rescaled = rescaleObservation(
+        native.rawValue,
+        native.decimals,
+        nativeDecimals,
+      );
+      if (rescaled === null) {
+        return unavailableCrossCheck(walletReasonCodes.privyScaleMismatch);
+      }
+      if (rescaled === nativeRaw) {
         return Object.freeze({
-          status: "unavailable" as const,
-          reasonCode: walletReasonCodes.privyAssetMappingMissing,
+          status: "matched" as const,
+          reasonCode: null,
+          blockDelta: null,
         });
       }
+      // Privy does not report the block it read, so a difference cannot be
+      // attributed to a real disagreement rather than to a later block.
       return Object.freeze({
-        status:
-          BigInt(native.rawValue) === nativeRaw
-            ? ("matched" as const)
-            : ("disputed" as const),
-        reasonCode: null,
+        status: "unaligned" as const,
+        reasonCode: walletReasonCodes.privyBlockUnaligned,
+        blockDelta: null,
       });
     } catch {
-      return Object.freeze({
-        status: "unavailable" as const,
-        reasonCode: walletReasonCodes.privyCrossCheckFailed,
-      });
+      return unavailableCrossCheck(walletReasonCodes.privyCrossCheckFailed);
     }
   }
 
@@ -351,10 +418,18 @@ export function createWalletReadService(
       } catch {
         throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
       }
-      const records = await input.repository.sync({
-        ownerUserId: principal.userId,
-        observed,
-      });
+      let records;
+      try {
+        records = await input.repository.sync({
+          ownerUserId: principal.userId,
+          observed,
+        });
+      } catch (error) {
+        if (error instanceof AccountWalletObservationEmptyError) {
+          throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
+        }
+        throw error;
+      }
       return projectWalletList(records, now().toISOString());
     },
 
@@ -448,7 +523,12 @@ export function createWalletReadService(
           : (read.balances.find(
               (balance) => balance.assetId === nativeAsset.assetId,
             )?.rawValue ?? null);
-      const crossCheck = await crossCheckNative(wallet, nativeRaw, signal);
+      const crossCheck = await crossCheckNative(
+        wallet,
+        nativeRaw,
+        nativeAsset?.decimals ?? bscNativeDecimals,
+        signal,
+      );
 
       const balances: WalletBalanceProjection[] = [];
       for (const asset of assets) {
@@ -456,17 +536,34 @@ export function createWalletReadService(
           (balance) => balance.assetId === asset.assetId,
         );
         const rawValue = observed?.rawValue ?? null;
-        if (rawValue === null) {
-          continue;
-        }
         const isNative = asset.address === null;
         const gasReserve = isNative ? input.gasReserveRawWei : 0n;
-        const spendable = subtractFloorZero(rawValue, gasReserve);
         const pendingRaw = pendingTotals?.find(
           (total) => total.assetId === asset.assetId,
         );
 
-        await recordSnapshot(asset, rawValue);
+        let balance: WalletBalanceAmounts | UnavailableProjection;
+        if (rawValue === null) {
+          balance = unavailable(
+            observed?.reasonCode ?? walletReasonCodes.balanceCallFailed,
+          );
+        } else {
+          await recordSnapshot(asset, rawValue);
+          balance = Object.freeze({
+            status: "available" as const,
+            rawValue: rawValue.toString(10),
+            displayBalance: formatDecimalAmount(rawValue, asset.decimals),
+            // Nothing locks a balance in this step, so available equals
+            // display. Spendable additionally holds back the native gas
+            // reserve, which is configured in wei.
+            availableBalance: formatDecimalAmount(rawValue, asset.decimals),
+            spendableBalance: formatDecimalAmount(
+              subtractFloorZero(rawValue, gasReserve),
+              asset.decimals,
+            ),
+            gasReserve: formatDecimalAmount(gasReserve, bscNativeDecimals),
+          });
+        }
 
         balances.push(
           Object.freeze({
@@ -475,14 +572,7 @@ export function createWalletReadService(
             name: asset.name,
             decimals: asset.decimals,
             address: asset.address,
-            rawValue: rawValue.toString(10),
-            displayBalance: formatDecimalAmount(rawValue, asset.decimals),
-            // Nothing locks a balance in this step, so available equals
-            // display. Spendable additionally holds back the native gas
-            // reserve.
-            availableBalance: formatDecimalAmount(rawValue, asset.decimals),
-            spendableBalance: formatDecimalAmount(spendable, asset.decimals),
-            gasReserve: formatDecimalAmount(gasReserve, asset.decimals),
+            balance,
             pending:
               pendingTotals === null
                 ? unavailable(walletReasonCodes.indexerNotStarted)
@@ -501,6 +591,7 @@ export function createWalletReadService(
               reasonCode: isNative
                 ? crossCheck.reasonCode
                 : walletReasonCodes.privyAssetMappingMissing,
+              blockDelta: isNative ? crossCheck.blockDelta : null,
             }),
           }),
         );
@@ -517,6 +608,10 @@ export function createWalletReadService(
         gasReservePolicy: Object.freeze({
           configVersion: walletGasReserveConfigVersion,
           nativeReserveRaw: input.gasReserveRawWei.toString(10),
+          nativeReserve: formatDecimalAmount(
+            input.gasReserveRawWei,
+            bscNativeDecimals,
+          ),
         }),
         balances: Object.freeze(balances),
         netWorth: unavailable(walletReasonCodes.priceProviderMissing),

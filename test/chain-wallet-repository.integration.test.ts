@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   AccountWalletNotFoundError,
+  AccountWalletObservationEmptyError,
   AccountWalletVersionConflictError,
   createPostgresAccountWalletRepository,
   type AccountWalletRepository,
@@ -24,7 +25,10 @@ import {
   type WatchlistV2Repository,
 } from "../src/database/watchlist-v2-repository.js";
 import { createPostgresWatchlistRepository } from "../src/database/watchlist-repository.js";
-import { parseWatchlistReplaceRequest } from "../src/features/watchlist/watchlist-contract.js";
+import {
+  parseWatchlistReplaceRequest,
+  WatchlistVersionConflictError,
+} from "../src/features/watchlist/watchlist-contract.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 
 const { Pool } = pg;
@@ -432,6 +436,31 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       { key: "mining", name: "Mining", items: [] },
     ]);
 
+    // The frozen V1 write must refuse rather than delete the V2 rows.
+    await expect(
+      watchlistV1.replace({
+        ownerUserId,
+        expectedVersion: 2,
+        groups: parseWatchlistReplaceRequest({
+          expected_version: 2,
+          groups: [
+            { key: "legacy", name: "Legacy", items: [{ asset_key: "ETH" }] },
+          ],
+        }).groups,
+      }),
+    ).rejects.toBeInstanceOf(WatchlistVersionConflictError);
+
+    const survived = await pool.query<{ count: string }>({
+      text: `
+        select count(*)::text as count
+        from public.watchlist_items
+        where owner_user_id = $1 and asset_id is not null
+      `,
+      values: [ownerUserId],
+    });
+    expect(survived.rows[0]?.count).toBe("1");
+    expect((await watchlistV2.get(ownerUserId)).version).toBe(2);
+
     const idempotent = await watchlistV2.replace({
       ownerUserId,
       expectedVersion: 99,
@@ -440,6 +469,30 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       ],
     });
     expect(idempotent.version).toBe(2);
+  });
+
+  it("refuses to archive an inventory when the observation is empty", async () => {
+    const ownerUserId = await createOwner();
+    await wallets.sync({
+      ownerUserId,
+      observed: [
+        { address: walletA, kind: "embedded", providerWalletId: "wallet_1" },
+      ],
+    });
+
+    await expect(
+      wallets.sync({ ownerUserId, observed: [] }),
+    ).rejects.toBeInstanceOf(AccountWalletObservationEmptyError);
+
+    const kept = await wallets.list(ownerUserId);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ status: "active", isActive: true });
+
+    // An account that genuinely has no wallet yet is not a Provider failure.
+    const fresh = await createOwner();
+    await expect(
+      wallets.sync({ ownerUserId: fresh, observed: [] }),
+    ).resolves.toEqual([]);
   });
 
   it("records a balance snapshot per wallet, asset, and block", async () => {

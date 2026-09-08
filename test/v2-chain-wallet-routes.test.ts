@@ -7,6 +7,7 @@ import { createUnavailableAgentAuthorizationRepository } from "../src/database/a
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import {
   AccountWalletNotFoundError,
+  AccountWalletObservationEmptyError,
   AccountWalletVersionConflictError,
   type AccountWalletRecord,
   type AccountWalletRepository,
@@ -109,6 +110,19 @@ const transferRecord: IndexedTransferRecord = Object.freeze({
   observedAt,
 });
 
+interface BalancesBody {
+  readonly snapshot: { readonly blockNumber: string };
+  readonly gasReservePolicy: Record<string, unknown>;
+  readonly balances: readonly {
+    readonly assetId: string;
+    readonly balance: Record<string, unknown>;
+    readonly pending: Record<string, unknown>;
+    readonly valuation: Record<string, unknown>;
+    readonly crossCheck: Record<string, unknown>;
+  }[];
+  readonly netWorth: Record<string, unknown>;
+}
+
 function testConfig(overrides: Readonly<Record<string, string>> = {}) {
   return loadConfig({
     NODE_ENV: "test",
@@ -196,6 +210,7 @@ function indexerFake(options: { readonly checkpoint?: boolean } = {}) {
 function walletRepositoryFake(
   options: {
     readonly setActiveError?: Error;
+    readonly emptyObservation?: boolean;
   } = {},
 ) {
   const setActive = vi.fn(() =>
@@ -205,7 +220,11 @@ function walletRepositoryFake(
   );
   const recordBalanceSnapshot = vi.fn(() => Promise.resolve());
   const repository: AccountWalletRepository = {
-    sync: vi.fn(() => Promise.resolve([walletRecord])),
+    sync: vi.fn((request: { readonly observed: readonly unknown[] }) =>
+      options.emptyObservation === true && request.observed.length === 0
+        ? Promise.reject(new AccountWalletObservationEmptyError())
+        : Promise.resolve([walletRecord]),
+    ),
     list: vi.fn(() => Promise.resolve([walletRecord])),
     get: vi.fn((_ownerUserId: string, requestedWalletId: string) =>
       Promise.resolve(requestedWalletId === walletId ? walletRecord : null),
@@ -253,7 +272,12 @@ function watchlistRepositoryFake(
   return { repository, replace };
 }
 
-function readClientFake(options: { readonly configured?: boolean } = {}) {
+function readClientFake(
+  options: {
+    readonly configured?: boolean;
+    readonly failTokenBalance?: boolean;
+  } = {},
+) {
   const configured = options.configured !== false;
   const client: BscReadClient = {
     chainId: "eip155:56",
@@ -262,6 +286,7 @@ function readClientFake(options: { readonly configured?: boolean } = {}) {
     reorgDepthBlocks: 64,
     endpointRefs: configured ? ["rpc-abcdefabcdef"] : [],
     verifyChain: () => Promise.resolve(configured ? "verified" : "unknown"),
+    currentVerification: () => (configured ? "verified" : "unknown"),
     getHead: () =>
       configured
         ? Promise.resolve({
@@ -287,11 +312,17 @@ function readClientFake(options: { readonly configured?: boolean } = {}) {
                 rawValue: 7_000_000_000_000_000_000n,
                 reasonCode: null,
               },
-              {
-                assetId: wbnbAssetId,
-                rawValue: 1_500_000_000_000_000_000n,
-                reasonCode: null,
-              },
+              options.failTokenBalance === true
+                ? {
+                    assetId: wbnbAssetId,
+                    rawValue: null,
+                    reasonCode: "BSC_BALANCE_CALL_FAILED",
+                  }
+                : {
+                    assetId: wbnbAssetId,
+                    rawValue: 1_500_000_000_000_000_000n,
+                    reasonCode: null,
+                  },
             ],
           })
         : Promise.reject(new BscReadUnavailableError("BSC_RPC_NOT_CONFIGURED")),
@@ -316,15 +347,21 @@ function readClientFake(options: { readonly configured?: boolean } = {}) {
   return client;
 }
 
-function privyReadersFake(options: { readonly matched?: boolean } = {}) {
+function privyReadersFake(
+  options: { readonly matched?: boolean; readonly empty?: boolean } = {},
+) {
   const listEthereumWallets = vi.fn(() =>
-    Promise.resolve([
-      {
-        address: walletAddress,
-        kind: "embedded" as const,
-        providerWalletId: "wallet_privy_1",
-      },
-    ]),
+    Promise.resolve(
+      options.empty === true
+        ? []
+        : [
+            {
+              address: walletAddress,
+              kind: "embedded" as const,
+              providerWalletId: "wallet_privy_1",
+            },
+          ],
+    ),
   );
   const walletReader: PrivyWalletReader = { listEthereumWallets };
   const balanceReader: PrivyBalanceReader = {
@@ -352,13 +389,16 @@ function fakes(
     readonly setActiveError?: Error;
     readonly watchlistConflict?: boolean;
     readonly assets?: readonly AssetRecord[];
+    readonly failTokenBalance?: boolean;
+    readonly emptyPrivyWallets?: boolean;
   } = {},
 ) {
-  const walletFake = walletRepositoryFake(
-    options.setActiveError === undefined
+  const walletFake = walletRepositoryFake({
+    ...(options.setActiveError === undefined
       ? {}
-      : { setActiveError: options.setActiveError },
-  );
+      : { setActiveError: options.setActiveError }),
+    ...(options.emptyPrivyWallets === true ? { emptyObservation: true } : {}),
+  });
   const watchlistFake = watchlistRepositoryFake(
     options.watchlistConflict === true ? { conflict: true } : {},
   );
@@ -393,16 +433,18 @@ function fakes(
       Promise.resolve({ privyUserId: "did:privy:verified-user" }),
     ),
   } satisfies PrivyAccessTokenVerifier;
-  const readers = privyReadersFake(
-    options.matched === false ? { matched: false } : {},
-  );
+  const readers = privyReadersFake({
+    ...(options.matched === false ? { matched: false } : {}),
+    ...(options.emptyPrivyWallets === true ? { empty: true } : {}),
+  });
 
   return {
     database,
     privyAccessTokenVerifier,
-    bscReadClient: readClientFake(
-      options.configured === false ? { configured: false } : {},
-    ),
+    bscReadClient: readClientFake({
+      ...(options.configured === false ? { configured: false } : {}),
+      ...(options.failTokenBalance === true ? { failTokenBalance: true } : {}),
+    }),
     ...readers,
     ...walletFake,
     watchlistReplace: watchlistFake.replace,
@@ -488,6 +530,64 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(bscRead).toMatchObject({
       availability: "unavailable",
       reasonCode: "BSC_RPC_NOT_CONFIGURED",
+    });
+  });
+
+  it("reports bscRead available once the chain probe verified chain 56", async () => {
+    const { app } = await createApp();
+    const capabilities = await app.inject({
+      method: "GET",
+      url: "/v2/meta/capabilities",
+    });
+    const bscRead = capabilities
+      .json<{
+        readonly capabilities: readonly {
+          readonly capabilityId: string;
+          readonly availability: string;
+          readonly reasonCode: string | null;
+        }[];
+      }>()
+      .capabilities.find((capability) => capability.capabilityId === "bscRead");
+    expect(bscRead).toMatchObject({
+      availability: "available",
+      reasonCode: null,
+    });
+  });
+
+  it("re-reads the live verification state on every capability request", async () => {
+    const dependencies = fakes();
+    let verification: "unknown" | "verified" = "unknown";
+    const client = {
+      ...dependencies.bscReadClient,
+      currentVerification: () => verification,
+    };
+    const { app } = await createApp({ ...dependencies, bscReadClient: client });
+
+    const readBscRead = async (): Promise<Record<string, unknown>> => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      return (
+        response
+          .json<{
+            readonly capabilities: readonly Record<string, unknown>[];
+          }>()
+          .capabilities.find(
+            (capability) => capability["capabilityId"] === "bscRead",
+          ) ?? {}
+      );
+    };
+
+    expect(await readBscRead()).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "BSC_CHAIN_VERIFICATION_PENDING",
+    });
+    // The probe lands after composition; the projection must follow it.
+    verification = "verified";
+    expect(await readBscRead()).toMatchObject({
+      availability: "available",
+      reasonCode: null,
     });
   });
 
@@ -650,42 +750,41 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       headers: commonHeaders(),
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json<{
-      readonly snapshot: { readonly blockNumber: string };
-      readonly balances: readonly {
-        readonly assetId: string;
-        readonly displayBalance: string;
-        readonly availableBalance: string;
-        readonly spendableBalance: string;
-        readonly gasReserve: string;
-        readonly pending: Record<string, unknown>;
-        readonly valuation: Record<string, unknown>;
-        readonly crossCheck: Record<string, unknown>;
-      }[];
-      readonly netWorth: Record<string, unknown>;
-    }>();
+    const body = response.json<BalancesBody>();
 
     expect(body.snapshot.blockNumber).toBe(headNumber.toString(10));
+    expect(body.gasReservePolicy).toMatchObject({
+      nativeReserveRaw: "5000000000000000",
+      nativeReserve: "0.005",
+    });
     const native = body.balances.find(
       (balance) => balance.assetId === "eip155:56:native",
     );
     expect(native).toMatchObject({
-      displayBalance: "7",
-      availableBalance: "7",
-      spendableBalance: "6.995",
-      gasReserve: "0.005",
-      crossCheck: { source: "privy", status: "matched", reasonCode: null },
+      balance: {
+        status: "available",
+        displayBalance: "7",
+        availableBalance: "7",
+        spendableBalance: "6.995",
+        gasReserve: "0.005",
+      },
+      crossCheck: {
+        source: "privy",
+        status: "matched",
+        reasonCode: null,
+        blockDelta: null,
+      },
     });
     const token = body.balances.find(
       (balance) => balance.assetId === wbnbAssetId,
     );
     expect(token).toMatchObject({
-      displayBalance: "1.5",
-      gasReserve: "0",
+      balance: { status: "available", displayBalance: "1.5", gasReserve: "0" },
       pending: { status: "available", displayValue: "0.25" },
       crossCheck: {
         status: "unavailable",
         reasonCode: "PRIVY_ASSET_MAPPING_UNAVAILABLE",
+        blockDelta: null,
       },
     });
     expect(body.netWorth).toEqual({
@@ -704,25 +803,16 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       url: `/v2/wallets/${walletId}/balances`,
       headers: commonHeaders(),
     });
-    const body = response.json<{
-      readonly gasReservePolicy: {
-        readonly configVersion: string;
-        readonly nativeReserveRaw: string;
-      };
-      readonly balances: readonly {
-        readonly assetId: string;
-        readonly gasReserve: string;
-        readonly spendableBalance: string;
-      }[];
-    }>();
+    const body = response.json<BalancesBody>();
     expect(body.gasReservePolicy).toEqual({
       configVersion: "walletGasReserveV1",
       nativeReserveRaw: "20000000000000000",
+      nativeReserve: "0.02",
     });
     const native = body.balances.find(
       (balance) => balance.assetId === "eip155:56:native",
     );
-    expect(native).toMatchObject({
+    expect(native?.balance).toMatchObject({
       gasReserve: "0.02",
       spendableBalance: "6.98",
     });
@@ -737,25 +827,61 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     );
   });
 
-  it("reports a Privy balance mismatch as disputed without changing the RPC value", async () => {
+  it("keeps a row for an asset whose chain call failed", async () => {
+    const { app } = await createApp(fakes({ failTokenBalance: true }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<BalancesBody>();
+    // Every readable registry asset still yields exactly one row.
+    expect(body.balances.map((balance) => balance.assetId)).toEqual([
+      "eip155:56:native",
+      wbnbAssetId,
+    ]);
+    expect(
+      body.balances.find((balance) => balance.assetId === wbnbAssetId)?.balance,
+    ).toEqual({ status: "unavailable", reasonCode: "BSC_BALANCE_CALL_FAILED" });
+    expect(
+      body.balances.find((balance) => balance.assetId === "eip155:56:native")
+        ?.balance,
+    ).toMatchObject({ status: "available", displayBalance: "7" });
+  });
+
+  it("refuses to archive the inventory when Privy reports no wallet", async () => {
+    const { app } = await createApp(fakes({ emptyPrivyWallets: true }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/wallets",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: "PROVIDER_DISCONNECTED" });
+  });
+
+  it("reports a Privy balance mismatch as unaligned without changing the RPC value", async () => {
     const { app } = await createApp(fakes({ matched: false }));
     const response = await app.inject({
       method: "GET",
       url: `/v2/wallets/${walletId}/balances`,
       headers: commonHeaders(),
     });
-    const body = response.json<{
-      readonly balances: readonly {
-        readonly assetId: string;
-        readonly rawValue: string;
-        readonly crossCheck: { readonly status: string };
-      }[];
-    }>();
+    const body = response.json<BalancesBody>();
     const native = body.balances.find(
       (balance) => balance.assetId === "eip155:56:native",
     );
-    expect(native?.crossCheck.status).toBe("disputed");
-    expect(native?.rawValue).toBe("7000000000000000000");
+    // A source that does not report its block can only be `unaligned`.
+    expect(native?.crossCheck).toMatchObject({
+      status: "unaligned",
+      reasonCode: "PRIVY_BALANCE_BLOCK_UNALIGNED",
+      blockDelta: null,
+    });
+    expect(native?.balance).toMatchObject({
+      status: "available",
+      rawValue: "7000000000000000000",
+    });
   });
 
   it("reports pending as unavailable when the indexer never ran", async () => {
@@ -765,11 +891,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       url: `/v2/wallets/${walletId}/balances`,
       headers: commonHeaders(),
     });
-    const body = response.json<{
-      readonly balances: readonly {
-        readonly pending: Record<string, unknown>;
-      }[];
-    }>();
+    const body = response.json<BalancesBody>();
     expect(body.balances[0]?.pending).toEqual({
       status: "unavailable",
       reasonCode: "BSC_INDEXER_NOT_STARTED",

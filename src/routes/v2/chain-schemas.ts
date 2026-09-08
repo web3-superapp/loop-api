@@ -401,13 +401,14 @@ export const walletBalancesResourceSchema = {
     gasReservePolicy: {
       type: "object",
       additionalProperties: false,
-      required: ["configVersion", "nativeReserveRaw"],
+      required: ["configVersion", "nativeReserveRaw", "nativeReserve"],
       properties: {
         configVersion: {
           type: "string",
           const: walletGasReserveConfigVersion,
         },
         nativeReserveRaw: rawAmountSchema,
+        nativeReserve: decimalAmountSchema,
       },
     },
     balances: {
@@ -422,11 +423,7 @@ export const walletBalancesResourceSchema = {
           "name",
           "decimals",
           "address",
-          "rawValue",
-          "displayBalance",
-          "availableBalance",
-          "spendableBalance",
-          "gasReserve",
+          "balance",
           "pending",
           "valuation",
           "crossCheck",
@@ -437,11 +434,33 @@ export const walletBalancesResourceSchema = {
           name: { type: "string", minLength: 1, maxLength: 128 },
           decimals: { type: "integer", minimum: 0, maximum: 36 },
           address: { anyOf: [addressSchema, { type: "null" }] },
-          rawValue: rawAmountSchema,
-          displayBalance: decimalAmountSchema,
-          availableBalance: decimalAmountSchema,
-          spendableBalance: decimalAmountSchema,
-          gasReserve: decimalAmountSchema,
+          balance: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "status",
+                  "rawValue",
+                  "displayBalance",
+                  "availableBalance",
+                  "spendableBalance",
+                  "gasReserve",
+                ],
+                properties: {
+                  status: { type: "string", const: "available" },
+                  rawValue: rawAmountSchema,
+                  displayBalance: decimalAmountSchema,
+                  availableBalance: decimalAmountSchema,
+                  spendableBalance: decimalAmountSchema,
+                  gasReserve: decimalAmountSchema,
+                },
+              },
+              unavailableSchema,
+            ],
+            description:
+              "Every readable registry asset always yields a row. A failed per-asset chain call reports the amounts as unavailable instead of dropping the asset.",
+          },
           pending: {
             anyOf: [
               {
@@ -461,16 +480,21 @@ export const walletBalancesResourceSchema = {
           crossCheck: {
             type: "object",
             additionalProperties: false,
-            required: ["source", "status", "reasonCode"],
+            required: ["source", "status", "reasonCode", "blockDelta"],
             properties: {
               source: { type: "string", const: "privy" },
               status: {
                 type: "string",
-                enum: ["matched", "disputed", "unavailable"],
+                enum: ["matched", "unaligned", "disputed", "unavailable"],
                 description:
-                  "Cross-check only. A disputed or unavailable cross-check never changes the authoritative RPC balance.",
+                  "Cross-check only. A difference that cannot be aligned to one block is `unaligned`; nothing here ever changes the authoritative RPC balance.",
               },
               reasonCode: nullableReasonCodeSchema,
+              blockDelta: {
+                anyOf: [{ type: "integer" }, { type: "null" }],
+                description:
+                  "Block distance between the two observations, or null when the cross-check source does not report its block.",
+              },
             },
           },
         },
