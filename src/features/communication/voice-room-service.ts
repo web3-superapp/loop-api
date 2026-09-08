@@ -9,7 +9,6 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   communicationCommandDigest,
   communicationUnavailableReasonCodes,
-  deriveVoiceCallId,
   parseCommunicationOpaqueId,
   parseCommunicationPublicProfileId,
   voiceCallCid,
@@ -373,7 +372,7 @@ export function createVoiceRoomService(
       let provisionState: VoiceRoomProvisionState;
       try {
         await options.callGateway.createAudioRoom({
-          callId: deriveVoiceCallId(record.room.voiceRoomId),
+          callId: record.room.callId,
           createdByStreamUserId: hostStreamUserId,
           signal: input.signal,
         });

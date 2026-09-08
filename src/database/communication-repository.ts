@@ -38,6 +38,7 @@ import {
   type VoiceRoomTargetRecord,
   type VoiceRoomViewerRecord,
 } from "../features/communication/communication-repository.js";
+import { generateOpaqueId } from "../core/ids/opaque-id.js";
 import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
 
 interface DatabaseClient {
@@ -707,16 +708,15 @@ export function createPostgresCommunicationRepository(
           if (existing.rows[0] !== undefined) {
             throw new CommunicationResourceConflictError();
           }
+          // The call ID is a pure function of the opaque room ID, so a lost
+          // response can never allocate a second Stream call for one room.
+          const voiceRoomId = generateOpaqueId();
           const inserted = await client.query<Record<string, unknown>>({
             text: `
               insert into public.voice_rooms (
-                community_id, call_id, created_by_user_id
+                voice_room_id, community_id, call_id, created_by_user_id
               )
-              values (
-                $1,
-                'loop_voice_' || replace(gen_random_uuid()::text, '-', ''),
-                $2
-              )
+              values ($1, $2, $3, $4)
               returning
                 voice_room_id,
                 community_id,
@@ -727,7 +727,12 @@ export function createPostgresCommunicationRepository(
                 created_at,
                 ended_at
             `,
-            values: [communityId, actorUserId],
+            values: [
+              voiceRoomId,
+              communityId,
+              deriveVoiceCallId(voiceRoomId),
+              actorUserId,
+            ],
           });
           const row = inserted.rows[0];
           if (row === undefined) {
@@ -1667,6 +1672,3 @@ export function createPostgresCommunityChannelSyncRepository(
     },
   });
 }
-
-/** Exported for the operator verify path and integration tests. */
-export const voiceCallIdFor = deriveVoiceCallId;

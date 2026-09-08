@@ -22,6 +22,7 @@ import type { CommunityRepository } from "../src/features/community/community-re
 import {
   communicationCommandDigest,
   deriveCommunityChannelId,
+  deriveVoiceCallId,
 } from "../src/features/communication/communication-contract.js";
 import {
   CommunicationDataStaleError,
@@ -525,6 +526,7 @@ describe("PostgreSQL V2 communication repository", () => {
       state: "live",
       provisionState: "pending",
       backstage: true,
+      callId: deriveVoiceCallId(voiceRoomId),
     });
     expect(record.viewerRole).toBe("host");
 

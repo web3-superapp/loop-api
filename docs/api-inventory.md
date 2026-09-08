@@ -141,6 +141,50 @@ only path that sets
 `verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
 and writes an operator audit row.
 
+### V2 communication module (Decision 0032, `V2_MODULES_ENABLED=communication`)
+
+| Method and path                                         | Request                                         | Success projection                                                    | Interface     | Capability                                                                   |
+| ------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `POST /v2/chat/token`                                   | Write headers incl. UUIDv4 `Idempotency-Key`    | `{apiKey, token, expiresAt, user:{id}}` in camelCase                  | `implemented` | `blocked-provider` without Stream credentials or the persistent quota        |
+| `POST /v2/video/token`                                  | Write headers                                   | Same shape, separate quota bucket                                     | `implemented` | as above                                                                     |
+| `POST /v2/chat/groups`                                  | Write headers; `{name, friendPublicProfileIds}` | V2 projection of the V1 group operation; 202 + `Location` if pending  | `implemented` | `implemented`; friendship stays the only admission rule                      |
+| `POST /v2/chat/direct-channels`                         | Write headers; `{targetPublicProfileId}`        | V2 projection of the V1 direct operation; 202 + `Location` if pending | `implemented` | `implemented`; the unordered pair converges on one CID                       |
+| `GET /v2/chat/operations/{operationId}`                 | Bearer + contract/client headers; no payload    | camelCase operation; `operatorRequired` is terminal and unresolved    | `implemented` | `implemented`; unknown operation and wrong owner share one `NOT_FOUND`       |
+| `DELETE /v2/chat/groups/{groupId}/membership`           | Write headers; no payload                       | `{groupId, membership: null}`                                         | `implemented` | `implemented`; the Stream removal precedes the LOOP commit                   |
+| `POST /v2/communities/{communityId}/voice-rooms`        | Write headers; no payload                       | `201` room resource with the creator as host                          | `implemented` | `implemented`; owner or admin only; one live room per community              |
+| `GET /v2/communities/{communityId}/voice-rooms/current` | Bearer + contract/client headers                | The live room, or `null` with `COMMUNITY_VOICE_ROOM_NOT_LIVE`         | `implemented` | `implemented`; the observed participant count carries its own `observedAt`   |
+| `GET /v2/voice-rooms/{voiceRoomId}`                     | Bearer + contract/client headers                | Room, viewer role, viewer hand raise                                  | `implemented` | `implemented`; non-members are `PERMISSION_DENIED`                           |
+| `GET /v2/voice-rooms/{voiceRoomId}/hand-raises`         | Bearer + contract/client headers                | Pending queue in sequence order; `sequence` is a decimal string       | `implemented` | `implemented`; the order is a PostgreSQL fact, not a client guess            |
+| `POST /v2/voice-rooms/{voiceRoomId}/join`               | Write headers; no payload                       | Room resource with the caller's current role and `expiresAt`          | `implemented` | `implemented`; idempotent; an unprovisioned room is `CAPABILITY_UNAVAILABLE` |
+| `POST /v2/voice-rooms/{voiceRoomId}/leave`              | Write headers; no payload                       | Room resource with `viewer.role: null`                                | `implemented` | `implemented`; the host must end the room instead                            |
+| `POST\|DELETE /v2/voice-rooms/{voiceRoomId}/hand-raise` | Write headers; no payload                       | Room resource with the viewer's hand raise                            | `implemented` | `implemented`; one pending raise per account; a second raise is `DATA_STALE` |
+| `POST\|DELETE /v2/voice-rooms/{id}/speakers/{pid}`      | Write headers; no payload                       | Room resource plus `providerSync`                                     | `implemented` | `implemented`; host-only; grants or revokes Stream `send-audio`              |
+| `POST /v2/voice-rooms/{voiceRoomId}/mute-all`           | Write headers; no payload                       | Room resource plus `providerSync`                                     | `implemented` | `implemented`; host-only                                                     |
+| `POST /v2/voice-rooms/{voiceRoomId}/end`                | Write headers; no payload                       | Ended room; every later write is `DATA_STALE`                         | `implemented` | `implemented`; host-only                                                     |
+
+`GET /v2/communities/{communityId}` (the `community` module) additionally
+carries `chat: {status, channelCid, memberState, reasonCode}` and
+`voice: {status, currentRoomId, reasonCode}`. `chat.status` is `available` only
+when the official Stream channel is provisioned **and** the viewer's channel
+member state is `synced`; a LOOP membership never implies a Stream channel
+membership.
+
+The official channel is created when a community becomes `verified`. Its
+membership is synchronized by the transactional outbox
+`community_channel_sync_jobs`, executed after commit by the default-off
+`community-channel-sync` worker lane (`COMMUNITY_CHANNEL_SYNC_ENABLED`, which
+requires the complete Stream credential pair). Join enqueues `add`; leave and
+ban enqueue `remove`; unban never adds back. Each provider call is attempted
+exactly once per lease, an unknown result becomes `reconciling` with a bounded
+backoff, and the channel member cap
+(`V2_COMMUNITY_CHANNEL_MEMBER_CAP`, default 3000) parks a member as
+`capacityPending` without touching its LOOP membership.
+
+Chat search, message forwarding, long-image merging, and Community AI add no
+LOOP endpoint: the first two are client-side Stream SDK calls and the last is
+`unavailable` (`COMMUNITY_AI_RUNTIME_DEFERRED`). Chat content never enters
+`GET /v2/search`. End-to-end encryption is not claimed anywhere.
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
@@ -152,6 +196,7 @@ only changes its capability projection.
 | Module ID       | Capability projected | Registrar   | Status                                                     |
 | --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
 | `community`     | `community`          | shipped     | routes and capability `implemented` (Decision 0031)        |
+| `communication` | `communityChat`      | shipped     | routes and capability `implemented` (Decision 0032)        |
 | `search`        | `search`             | shipped     | routes and capability `implemented` (Decision 0031)        |
 | `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
 | `wallet`        | `walletRead`         | not shipped | gate `implemented`; routes pending D12                     |
@@ -170,15 +215,23 @@ An enabled module without a registrar reports
 (`STREAM_PRESENCE_NOT_CONNECTED`). `community` and `search` report `available`
 only when the module is enabled and `buildApp` composed the PostgreSQL
 community repository and the V2 cursor codec (plus the public search quota for
-`search`); otherwise they fail closed.
+`search`); otherwise they fail closed. `communication` projects two
+capabilities: `communityChat` and `voiceRooms`, both `available` only with the
+module enabled, the communication repository composed, the community runtime
+available, and Stream credentials present. `voiceRooms.evidence` is always
+`{status: "pending", reasonCode: "AUDIO_ROOM_ROLE_EVIDENCE_PENDING"}` until the
+Decision 0005 Stream Dashboard role export exists, so the mobile locator stays
+unavailable even when the backend is available.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one
 monotonic revocation result or the same non-enumerating `SESSION_NOT_FOUND`
 result. The first delivery intentionally continues to mint Chat and Video
 tokens through frozen `POST /v1/chat/token` and `POST /v1/video/token`; both
-resolve the same internal account created by V2 bootstrap. It does not create a
-second message API or claim a connected Stream client.
+resolve the same internal account created by V2 bootstrap. Decision 0032 adds
+the camelCase `POST /v2/chat/token` and `POST /v2/video/token` projections of
+the same issuance policy and quota; neither creates a second message API nor
+claims a connected Stream client.
 
 ## Implemented routes
 
