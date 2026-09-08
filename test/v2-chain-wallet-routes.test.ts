@@ -41,6 +41,11 @@ import {
 } from "../src/integrations/bsc/rpc-client.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 import type {
+  CachedFact,
+  MarketFactService,
+} from "../src/features/market/market-fact-service.js";
+import type { TokenPairsSnapshot } from "../src/integrations/market/market-data-provider.js";
+import type {
   PrivyBalanceReader,
   PrivyWalletReader,
 } from "../src/integrations/privy/wallet-reader.js";
@@ -465,6 +470,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
   async function createApp(
     dependencies = fakes(),
     overrides: Readonly<Record<string, string>> = {},
+    marketFactService?: MarketFactService,
   ) {
     const app = await buildApp({
       config: testConfig(overrides),
@@ -474,6 +480,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       bscReadClient: dependencies.bscReadClient,
       privyWalletReader: dependencies.walletReader,
       privyBalanceReader: dependencies.balanceReader,
+      ...(marketFactService === undefined ? {} : { marketFactService }),
       logger: false,
     });
     apps.push(app);
@@ -791,11 +798,146 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
         blockDelta: null,
       },
     });
+    expect(token?.valuation).toEqual({
+      status: "unavailable",
+      reasonCode: "MARKET_RUNTIME_UNAVAILABLE",
+    });
     expect(body.netWorth).toEqual({
       status: "unavailable",
-      reasonCode: "MARKET_PRICE_PROVIDER_NOT_CONFIGURED",
+      reasonCode: "MARKET_RUNTIME_UNAVAILABLE",
     });
     expect(recordBalanceSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  function marketFactsFake(
+    quality: "fresh" | "stale" | "unavailable",
+  ): MarketFactService {
+    const fact: CachedFact<TokenPairsSnapshot> = {
+      value:
+        quality === "unavailable"
+          ? null
+          : {
+              tokenAddress: wbnb,
+              pairs: [
+                {
+                  pairAddress: "0x172fcd41e0913e95784454622d1c3724f546f849",
+                  dexId: "pancakeswap",
+                  labels: ["v3"],
+                  baseTokenAddress: wbnb,
+                  baseTokenSymbol: "WBNB",
+                  quoteTokenAddress:
+                    "0x55d398326f99059ff775485246999027b3197955",
+                  quoteTokenSymbol: "USDT",
+                  priceUsd: "747.39",
+                  priceNative: null,
+                  liquidityUsd: "1",
+                  volumeH24: null,
+                  priceChangeH24: null,
+                  fdv: null,
+                  marketCap: null,
+                  buysH24: null,
+                  sellsH24: null,
+                  pairCreatedAt: null,
+                },
+              ],
+            },
+      source: "dexscreener",
+      fetchedAt: quality === "unavailable" ? null : observedAt,
+      ttlSeconds: 30,
+      quality,
+      reasonCode: quality === "fresh" ? null : "MARKET_PROVIDER_RATE_LIMITED",
+      rawDigest: null,
+    };
+    return {
+      readTokenPairs: vi.fn(() => Promise.resolve(fact)),
+      readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
+      readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
+      readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+      candlesProviderEnabled: false,
+    };
+  }
+
+  it("values token rows from a fresh Provider price and reports a partial net worth", async () => {
+    const { app } = await createApp(fakes(), {}, marketFactsFake("fresh"));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<BalancesBody>();
+    const token = body.balances.find((row) => row.assetId === wbnbAssetId);
+    expect(token?.valuation).toEqual({
+      status: "available",
+      priceSource: "dexscreener",
+      fetchedAt: observedAt,
+      quality: "fresh",
+      reasonCode: null,
+      priceUsd: "747.39",
+      valueUsd: "1121.085",
+    });
+    const native = body.balances.find(
+      (row) => row.assetId === "eip155:56:native",
+    );
+    expect(native?.valuation).toEqual({
+      status: "unavailable",
+      reasonCode: "MARKET_NATIVE_ASSET_NOT_SUPPORTED",
+    });
+    // The native row is unpriced, so the total is partial and excludes it.
+    expect(body.netWorth).toEqual({
+      status: "partial",
+      valuationCurrency: "USD",
+      valueUsd: "1121.085",
+      unavailableCount: 1,
+      quality: "fresh",
+      priceSource: "dexscreener",
+      asOf: observedAt,
+      isSpendable: false,
+    });
+  });
+
+  it("passes a stale price through as stale and closes valuation without a usable price", async () => {
+    const stale = await createApp(fakes(), {}, marketFactsFake("stale"));
+    const staleBody = (
+      await stale.app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      })
+    ).json<BalancesBody>();
+    expect(
+      staleBody.balances.find((row) => row.assetId === wbnbAssetId)?.valuation,
+    ).toMatchObject({
+      status: "available",
+      quality: "stale",
+      reasonCode: "MARKET_PROVIDER_RATE_LIMITED",
+      valueUsd: "1121.085",
+    });
+    expect(staleBody.netWorth).toMatchObject({
+      status: "partial",
+      quality: "stale",
+    });
+
+    const closed = await createApp(
+      fakes({ failTokenBalance: true }),
+      {},
+      marketFactsFake("unavailable"),
+    );
+    const closedBody = (
+      await closed.app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      })
+    ).json<BalancesBody>();
+    expect(
+      closedBody.balances.find((row) => row.assetId === wbnbAssetId)?.valuation,
+    ).toEqual({ status: "unavailable", reasonCode: "BALANCE_UNAVAILABLE" });
+    expect(closedBody.netWorth).toMatchObject({
+      status: "partial",
+      valueUsd: "0",
+      unavailableCount: 2,
+    });
   });
 
   it("applies the configured native gas reserve", async () => {

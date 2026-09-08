@@ -33,6 +33,16 @@ import {
   type WalletKind,
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import {
+  addDecimalStrings,
+  marketReasonCodes,
+  multiplyDecimalStrings,
+  type MarketSource,
+} from "../market/market-contract.js";
+import {
+  selectPrimaryPair,
+  type MarketFactService,
+} from "../market/market-fact-service.js";
 
 /**
  * Read-only wallet projections for D12 (Decision 0033).
@@ -51,6 +61,8 @@ export const walletReasonCodes = Object.freeze({
   indexerNotStarted: "BSC_INDEXER_NOT_STARTED",
   nativeTransfersUnsupported: "NATIVE_TRANSFER_SCAN_NOT_SUPPORTED",
   priceProviderMissing: "MARKET_PRICE_PROVIDER_NOT_CONFIGURED",
+  marketRuntimeMissing: "MARKET_RUNTIME_UNAVAILABLE",
+  balanceUnavailable: "BALANCE_UNAVAILABLE",
   privyWalletIdMissing: "PRIVY_WALLET_ID_UNAVAILABLE",
   privyAssetMappingMissing: "PRIVY_ASSET_MAPPING_UNAVAILABLE",
   privyCrossCheckFailed: "PRIVY_BALANCE_CROSS_CHECK_FAILED",
@@ -129,7 +141,7 @@ export interface WalletBalanceProjection {
         readonly displayValue: string;
       }
     | UnavailableProjection;
-  readonly valuation: UnavailableProjection;
+  readonly valuation: WalletValuationProjection | UnavailableProjection;
   readonly crossCheck: {
     readonly source: "privy";
     readonly status: WalletCrossCheckStatus;
@@ -141,6 +153,35 @@ export interface WalletBalanceProjection {
      */
     readonly blockDelta: number | null;
   };
+}
+
+/**
+ * USD valuation of one row from a market Provider price (Decision 0034). It
+ * is display information: `valueUsd` is never a spendable amount and never
+ * feeds a transfer, Swap, or gas computation.
+ */
+export interface WalletValuationProjection {
+  readonly status: "available";
+  readonly priceSource: MarketSource;
+  readonly fetchedAt: string;
+  readonly quality: "fresh" | "stale";
+  readonly reasonCode: string | null;
+  readonly priceUsd: string;
+  readonly valueUsd: string;
+}
+
+export interface WalletNetWorthProjection {
+  readonly status: "available" | "partial";
+  readonly valuationCurrency: "USD";
+  /** Sum of every available row; a partial total excludes the unavailable rows. */
+  readonly valueUsd: string;
+  readonly unavailableCount: number;
+  readonly quality: "fresh" | "stale";
+  readonly priceSource: MarketSource;
+  /** Latest Provider fetch time among the valued rows. */
+  readonly asOf: string;
+  /** Always false: a valuation is display information, not a balance. */
+  readonly isSpendable: false;
 }
 
 export interface WalletBalancesResource {
@@ -157,7 +198,7 @@ export interface WalletBalancesResource {
     readonly nativeReserve: string;
   };
   readonly balances: readonly WalletBalanceProjection[];
-  readonly netWorth: UnavailableProjection;
+  readonly netWorth: WalletNetWorthProjection | UnavailableProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -239,6 +280,8 @@ export interface CreateWalletReadServiceInput {
   readonly walletReader: PrivyWalletReader;
   readonly balanceReader: PrivyBalanceReader;
   readonly cursorCodec: V2CursorCodec | null;
+  /** Market price facts for valuation; `null` when the market runtime is not composed. */
+  readonly marketFacts: MarketFactService | null;
   /** Native reserve in wei, from WALLET_GAS_RESERVE_BNB. */
   readonly gasReserveRawWei: bigint;
   readonly chainId: string;
@@ -531,6 +574,7 @@ export function createWalletReadService(
       );
 
       const balances: WalletBalanceProjection[] = [];
+      const valuations: WalletValuationProjection[] = [];
       for (const asset of assets) {
         const observed = read.balances.find(
           (balance) => balance.assetId === asset.assetId,
@@ -584,7 +628,7 @@ export function createWalletReadService(
                       asset.decimals,
                     ),
                   }),
-            valuation: unavailable(walletReasonCodes.priceProviderMissing),
+            valuation: await valueRow(asset, balance, signal),
             crossCheck: Object.freeze({
               source: "privy" as const,
               status: isNative ? crossCheck.status : ("unavailable" as const),
@@ -614,9 +658,93 @@ export function createWalletReadService(
           ),
         }),
         balances: Object.freeze(balances),
-        netWorth: unavailable(walletReasonCodes.priceProviderMissing),
+        netWorth: projectNetWorth(),
         contractVersion: v2ContractVersion,
       });
+
+      /**
+       * A row is valued only from a `fresh` or `stale` Provider price of the
+       * asset itself; the native asset has no token address and is never
+       * priced through WBNB or any other proxy.
+       */
+      async function valueRow(
+        asset: AssetRecord,
+        balance: WalletBalanceAmounts | UnavailableProjection,
+        abortSignal: AbortSignal,
+      ): Promise<WalletValuationProjection | UnavailableProjection> {
+        if (input.marketFacts === null) {
+          return unavailable(walletReasonCodes.marketRuntimeMissing);
+        }
+        if (balance.status !== "available") {
+          return unavailable(walletReasonCodes.balanceUnavailable);
+        }
+        if (asset.address === null) {
+          return unavailable(marketReasonCodes.nativeAssetUnsupported);
+        }
+        const fact = await input.marketFacts.readTokenPairs(asset.address, {
+          signal: abortSignal,
+        });
+        if (
+          fact.value === null ||
+          fact.fetchedAt === null ||
+          (fact.quality !== "fresh" && fact.quality !== "stale")
+        ) {
+          return unavailable(
+            fact.reasonCode ?? marketReasonCodes.providerUnreachable,
+          );
+        }
+        const pair = selectPrimaryPair(fact.value);
+        if (pair === null || pair.priceUsd === null) {
+          return unavailable(marketReasonCodes.pairNotFound);
+        }
+        const valuation: WalletValuationProjection = Object.freeze({
+          status: "available" as const,
+          priceSource: fact.source,
+          fetchedAt: fact.fetchedAt,
+          quality: fact.quality,
+          reasonCode: fact.reasonCode,
+          priceUsd: pair.priceUsd,
+          valueUsd: multiplyDecimalStrings(
+            balance.displayBalance,
+            pair.priceUsd,
+          ),
+        });
+        valuations.push(valuation);
+        return valuation;
+      }
+
+      function projectNetWorth():
+        WalletNetWorthProjection | UnavailableProjection {
+        if (input.marketFacts === null) {
+          return unavailable(walletReasonCodes.marketRuntimeMissing);
+        }
+        const unavailableCount = balances.length - valuations.length;
+        let valueUsd = "0";
+        let asOf: string | null = null;
+        let quality: "fresh" | "stale" = "fresh";
+        for (const valuation of valuations) {
+          valueUsd = addDecimalStrings(valueUsd, valuation.valueUsd);
+          if (asOf === null || valuation.fetchedAt > asOf) {
+            asOf = valuation.fetchedAt;
+          }
+          if (valuation.quality === "stale") {
+            quality = "stale";
+          }
+        }
+        return Object.freeze({
+          status:
+            unavailableCount === 0
+              ? ("available" as const)
+              : ("partial" as const),
+          valuationCurrency: "USD" as const,
+          valueUsd,
+          unavailableCount,
+          quality,
+          priceSource: "dexscreener" as const,
+          asOf: asOf ?? now().toISOString(),
+          isSpendable: false as const,
+        });
+      }
 
       async function recordSnapshot(
         asset: AssetRecord,

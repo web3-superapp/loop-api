@@ -475,6 +475,19 @@ describe("LOOP API V2 notifications module", () => {
       payload: { ...definition, expiresAt: "2020-01-01T00:00:00.000Z" },
     });
     expect(pastExpiry.statusCode).toBe(422);
+    // The route schema declares threshold as a string; Fastify's default AJV
+    // type coercion turns a JSON number into that string. This is documented
+    // in api-v2-conventions: the server does not reject the number form.
+    const numberThreshold = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders(),
+      payload: { ...definition, threshold: 800.5 },
+    });
+    expect(numberThreshold.statusCode).toBe(201);
+    expect(numberThreshold.json()).toMatchObject({
+      alert: { threshold: "800.5" },
+    });
     const exponentThreshold = await app.inject({
       method: "POST",
       url: "/v2/alerts",

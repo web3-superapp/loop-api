@@ -185,6 +185,13 @@ operation needs a stronger, module-defined authentication step.
   is never reused as an opaque LOOP ID.
 - Unknown, stale, unavailable, and blocked are distinct states. Missing data is
   not converted to zero, an empty success, or a fixture.
+- Amount, price, and threshold request fields must be sent as JSON strings.
+  Route schemas type them as strings with a decimal pattern, but Fastify's
+  default AJV coercion turns a JSON number into that string before validation,
+  so the server does not guarantee rejecting the number form (main-agent
+  ruling, Decision 0034; `POST /v2/alerts` has a test recording the
+  behaviour). A client that sends a number risks IEEE-754 precision loss
+  before the request leaves the device; the server cannot detect it.
 
 ## Lists, cursors, and search
 

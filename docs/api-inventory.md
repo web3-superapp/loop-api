@@ -181,8 +181,13 @@ reserve subtracted from `spendableBalance` is configured by
 multicall is the authoritative balance
 source: Privy's own balance view is a cross-check whose `disputed` or
 `unavailable` result never changes the published value. Valuation and net worth
-stay `unavailable` (`MARKET_PRICE_PROVIDER_NOT_CONFIGURED`) until the wallet
-projection is wired to the D11 market facts (pending main-agent ruling); native
+come from the D11 market facts (Decision 0034): a token row is valued from
+the DexScreener price of the asset itself when it is `fresh` or `stale`
+(`quality` passed through), the native row stays `unavailable`
+(`MARKET_NATIVE_ASSET_NOT_SUPPORTED`; no proxy price), and `netWorth` is
+`available` only when every row is valued, otherwise `partial` with
+`unavailableCount`; both carry `valuationCurrency: USD` and `isSpendable:
+false`. Native
 transfers and cross-chain activity stay `unavailable` in this step. Nothing is
 served from a stored balance snapshot when the chain is unreadable.
 

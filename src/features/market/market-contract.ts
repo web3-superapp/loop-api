@@ -161,6 +161,50 @@ function scaledParts(value: string): {
   };
 }
 
+function decimalParts(value: string): {
+  readonly negative: boolean;
+  readonly digits: bigint;
+  readonly scale: number;
+} {
+  const parts = scaledParts(value);
+  return {
+    negative: parts.digits < 0n,
+    digits: parts.digits < 0n ? -parts.digits : parts.digits,
+    scale: parts.fractionDigits,
+  };
+}
+
+function fromScaled(digits: bigint, scale: number): string {
+  const negative = digits < 0n;
+  const text = (negative ? -digits : digits)
+    .toString(10)
+    .padStart(scale + 1, "0");
+  const whole = text.slice(0, text.length - scale);
+  const fraction = text.slice(text.length - scale).replace(/0+$/, "");
+  const magnitude = fraction.length === 0 ? whole : `${whole}.${fraction}`;
+  return negative && magnitude !== "0" ? `-${magnitude}` : magnitude;
+}
+
+/** Exact product of two canonical decimal strings. */
+export function multiplyDecimalStrings(left: string, right: string): string {
+  const a = decimalParts(left);
+  const b = decimalParts(right);
+  const sign = a.negative !== b.negative ? -1n : 1n;
+  return fromScaled(sign * a.digits * b.digits, a.scale + b.scale);
+}
+
+/** Exact sum of two canonical decimal strings. */
+export function addDecimalStrings(left: string, right: string): string {
+  const a = scaledParts(left);
+  const b = scaledParts(right);
+  const scale = Math.max(a.fractionDigits, b.fractionDigits);
+  return fromScaled(
+    a.digits * 10n ** BigInt(scale - a.fractionDigits) +
+      b.digits * 10n ** BigInt(scale - b.fractionDigits),
+    scale,
+  );
+}
+
 /**
  * Formats `numerator / denominator` as an exact decimal string truncated to
  * `fractionDigits` places, with trailing zeros removed. Pure integer

@@ -30,6 +30,7 @@ import {
   walletGasReserveConfigVersion,
 } from "../../features/wallet/wallet-read-service.js";
 import { indexerLanes } from "../../database/bsc-indexer-repository.js";
+import { marketSources } from "../../features/market/market-contract.js";
 import {
   watchlistV2GroupKeyPatternSource,
   watchlistV2MaximumGroups,
@@ -477,7 +478,35 @@ export const walletBalancesResourceSchema = {
               unavailableSchema,
             ],
           },
-          valuation: unavailableSchema,
+          valuation: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "status",
+                  "priceSource",
+                  "fetchedAt",
+                  "quality",
+                  "reasonCode",
+                  "priceUsd",
+                  "valueUsd",
+                ],
+                properties: {
+                  status: { type: "string", const: "available" },
+                  priceSource: { type: "string", enum: [...marketSources] },
+                  fetchedAt: { type: "string", format: "date-time" },
+                  quality: { type: "string", enum: ["fresh", "stale"] },
+                  reasonCode: nullableReasonCodeSchema,
+                  priceUsd: decimalAmountSchema,
+                  valueUsd: decimalAmountSchema,
+                },
+                description:
+                  "USD valuation from a fresh or stale Provider price of the asset itself. Display information only; never a spendable amount.",
+              },
+              unavailableSchema,
+            ],
+          },
           crossCheck: {
             type: "object",
             additionalProperties: false,
@@ -501,7 +530,45 @@ export const walletBalancesResourceSchema = {
         },
       },
     },
-    netWorth: unavailableSchema,
+    netWorth: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "valuationCurrency",
+            "valueUsd",
+            "unavailableCount",
+            "quality",
+            "priceSource",
+            "asOf",
+            "isSpendable",
+          ],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["available", "partial"],
+              description:
+                "available only when every row is valued; partial excludes unavailableCount rows from the total.",
+            },
+            valuationCurrency: { type: "string", const: "USD" },
+            valueUsd: decimalAmountSchema,
+            unavailableCount: { type: "integer", minimum: 0 },
+            quality: { type: "string", enum: ["fresh", "stale"] },
+            priceSource: { type: "string", enum: [...marketSources] },
+            asOf: { type: "string", format: "date-time" },
+            isSpendable: {
+              type: "boolean",
+              const: false,
+              description:
+                "A net worth is display information, never a balance.",
+            },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

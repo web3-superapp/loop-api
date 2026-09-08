@@ -45852,19 +45852,79 @@
                             ]
                           },
                           "valuation": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "priceSource",
+                                  "fetchedAt",
+                                  "quality",
+                                  "reasonCode",
+                                  "priceUsd",
+                                  "valueUsd"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "priceSource": {
+                                    "type": "string",
+                                    "enum": [
+                                      "dexscreener",
+                                      "goplus",
+                                      "geckoterminal",
+                                      "loop_indexer"
+                                    ]
+                                  },
+                                  "fetchedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "quality": {
+                                    "type": "string",
+                                    "enum": ["fresh", "stale"]
+                                  },
+                                  "reasonCode": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "priceUsd": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  },
+                                  "valueUsd": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                    "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  }
+                                },
+                                "description": "USD valuation from a fresh or stale Provider price of the asset itself. Display information only; never a spendable amount."
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           },
                           "crossCheck": {
                             "type": "object",
@@ -45909,16 +45969,76 @@
                       }
                     },
                     "netWorth": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "valuationCurrency",
+                            "valueUsd",
+                            "unavailableCount",
+                            "quality",
+                            "priceSource",
+                            "asOf",
+                            "isSpendable"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available", "partial"],
+                              "description": "available only when every row is valued; partial excludes unavailableCount rows from the total."
+                            },
+                            "valuationCurrency": {
+                              "type": "string",
+                              "enum": ["USD"]
+                            },
+                            "valueUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Exact decimal string; never a JavaScript floating-point value."
+                            },
+                            "unavailableCount": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "string",
+                              "enum": ["fresh", "stale"]
+                            },
+                            "priceSource": {
+                              "type": "string",
+                              "enum": [
+                                "dexscreener",
+                                "goplus",
+                                "geckoterminal",
+                                "loop_indexer"
+                              ]
+                            },
+                            "asOf": { "type": "string", "format": "date-time" },
+                            "isSpendable": {
+                              "type": "boolean",
+                              "description": "A net worth is display information, never a balance.",
+                              "enum": [false]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }

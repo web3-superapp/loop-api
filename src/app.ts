@@ -1009,21 +1009,6 @@ export async function buildApp(
       chainReference: bscChainReference,
       nativeAssetId: bscNativeAssetId,
     });
-  const walletReadService =
-    options.walletReadService ??
-    createWalletReadService({
-      repository: accountWalletRepository,
-      indexerRepository: bscIndexerRepository,
-      assetRegistry: assetRegistryService,
-      readClient: bscReadClient,
-      walletReader: privyWalletReader,
-      balanceReader: privyBalanceReader,
-      cursorCodec: v2CursorCodec,
-      gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
-      chainId: bscChainId,
-      chainName: "BNB Smart Chain",
-      chainReference: bscChainReference,
-    });
   const watchlistV2Service =
     options.watchlistV2Service ??
     createWatchlistV2Service({
@@ -1075,6 +1060,26 @@ export async function buildApp(
       pairsProvider: marketPairsProvider,
       securityProvider: securityFactsProvider,
       candlesProvider,
+    });
+  const walletReadService =
+    options.walletReadService ??
+    createWalletReadService({
+      repository: accountWalletRepository,
+      indexerRepository: bscIndexerRepository,
+      assetRegistry: assetRegistryService,
+      readClient: bscReadClient,
+      walletReader: privyWalletReader,
+      balanceReader: privyBalanceReader,
+      cursorCodec: v2CursorCodec,
+      marketFacts:
+        options.marketFactService !== undefined ||
+        database.marketFacts !== undefined
+          ? marketFactService
+          : null,
+      gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
+      chainId: bscChainId,
+      chainName: "BNB Smart Chain",
+      chainReference: bscChainReference,
     });
   const marketReadService =
     options.marketReadService ??

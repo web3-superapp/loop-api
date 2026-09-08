@@ -237,7 +237,7 @@ PUT /v2/wallets/active
       },
       "valuation": {
         "status": "unavailable",
-        "reasonCode": "MARKET_PRICE_PROVIDER_NOT_CONFIGURED"
+        "reasonCode": "MARKET_NATIVE_ASSET_NOT_SUPPORTED"
       },
       "crossCheck": {
         "source": "privy",
@@ -247,10 +247,30 @@ PUT /v2/wallets/active
     }
   ],
   "netWorth": {
-    "status": "unavailable",
-    "reasonCode": "MARKET_PRICE_PROVIDER_NOT_CONFIGURED"
+    "status": "partial",
+    "valuationCurrency": "USD",
+    "valueUsd": "1121.085",
+    "unavailableCount": 1,
+    "quality": "fresh",
+    "priceSource": "dexscreener",
+    "asOf": "2026-09-08T07:52:56.738Z",
+    "isSpendable": false
   },
   "contractVersion": "2.0"
+}
+```
+
+代币行的 `valuation`（S5b 接入行情后）：
+
+```json
+"valuation": {
+  "status": "available",
+  "priceSource": "dexscreener",
+  "fetchedAt": "2026-09-08T07:52:56.738Z",
+  "quality": "fresh",
+  "reasonCode": null,
+  "priceUsd": "747.39",
+  "valueUsd": "1121.085"
 }
 ```
 
@@ -274,8 +294,16 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   `blockDelta` 为两次观测的区块差，来源不上报区块时为 `null`。
   **任何 crossCheck 结果都不改变 `balance` 里的 RPC 数值**，UI 最多给一个
   "数据源尚未对齐"的提示。
-- `valuation` 与 `netWorth` 在 S5b 接入行情前恒为 `unavailable`。`networth` 页
-  的美元总额、24h 涨跌、图表在本步全部显示 unavailable。
+- `valuation`（每行）：只用该资产自己的 DexScreener 价格（以其为 base 的最深
+  交易对），`quality: fresh|stale`（stale 透传 `reasonCode`），
+  `valueUsd = displayBalance × priceUsd`（精确十进制字符串）。原生 BNB 行恒
+  `unavailable / MARKET_NATIVE_ASSET_NOT_SUPPORTED`（不用 WBNB 代替）；余额读不到
+  → `BALANCE_UNAVAILABLE`；market 运行时未组装 → `MARKET_RUNTIME_UNAVAILABLE`。
+- `netWorth`：全部行都有估值才是 `available`，否则 `partial` + `unavailableCount`
+  （`valueUsd` 只是已估值行合计，**不要**把它当总资产）；`valuationCurrency: USD`，
+  `asOf` 是最新的 Provider 抓取时间，`quality` 有任一行 stale 即 stale；
+  **`isSpendable: false`——净值是展示信息，不是余额**。`networth` 页的 24h 涨跌、
+  图表仍无后端，显示 unavailable。
 - 链读不可用（未配置 RPC、端点不可达、chainId 不符）→ `503
 CAPABILITY_UNAVAILABLE`。后端**不会**回放历史快照当成当前余额。
 

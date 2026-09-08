@@ -231,10 +231,24 @@ rows are untouched.
 The backend can now publish a price with its source and time, a security fact
 list with its scanner, a swap tape and derived candles with their pool, and a
 triggered alert with the fact that triggered it. What it still cannot do:
-value a wallet (`GET /v2/wallets/{id}/balances` keeps `valuation` and
-`netWorth` unavailable until the wallet module is wired to these facts — a
-main-agent decision on whether that belongs to S5b or D12 follow-up), push a
-notification, screen new pairs, or show holder distribution.
+push a notification, screen new pairs, show holder distribution, or price the
+native asset.
+
+### Wallet valuation (main-agent ruling, S5b patch)
+
+`GET /v2/wallets/{walletId}/balances` values each token row from the
+DexScreener price of that asset (deepest base pair) when the fact is `fresh`
+or `stale`; a stale price is passed through as `quality: stale` with its
+reason. `valueUsd = displayBalance × priceUsd` with exact decimal-string
+arithmetic. The native row is `unavailable`
+(`MARKET_NATIVE_ASSET_NOT_SUPPORTED`): WBNB is never used as a proxy. A row
+whose balance is unavailable is not valued (`BALANCE_UNAVAILABLE`); without
+the market runtime every row and the total are `MARKET_RUNTIME_UNAVAILABLE`.
+`netWorth` is `available` only when every row is valued, otherwise `partial`
+with `unavailableCount` and the sum of the valued rows; both carry
+`valuationCurrency: USD`, `priceSource`, `asOf` (latest fetch time), and
+`isSpendable: false` — a valuation is display information and never a
+balance.
 
 External Go/No-Go items stay open: GoPlus credentials, GeckoTerminal
 commercial terms, a BSC endpoint that serves `eth_getLogs` and log

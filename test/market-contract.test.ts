@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addDecimalStrings,
   compareDecimalStrings,
+  multiplyDecimalStrings,
   formatRational,
   InvalidMarketDecimalError,
   normalizeDecimalString,
@@ -36,6 +38,18 @@ describe("market decimal contract", () => {
     expect(
       compareDecimalStrings("1222740159123456789012", "1222740159123456789011"),
     ).toBe(1);
+  });
+
+  it("multiplies and adds decimal strings exactly", () => {
+    expect(multiplyDecimalStrings("1.5", "747.39")).toBe("1121.085");
+    expect(multiplyDecimalStrings("0.000000000000000001", "747.39")).toBe(
+      "0.00000000000000074739",
+    );
+    expect(multiplyDecimalStrings("2", "0.5")).toBe("1");
+    expect(multiplyDecimalStrings("0", "747.39")).toBe("0");
+    expect(addDecimalStrings("0", "1121.085")).toBe("1121.085");
+    expect(addDecimalStrings("0.1", "0.2")).toBe("0.3");
+    expect(addDecimalStrings("1121.085", "5401795.9")).toBe("5402916.985");
   });
 
   it("formats rationals as truncated decimal strings", () => {
