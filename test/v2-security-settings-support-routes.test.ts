@@ -121,14 +121,27 @@ function notification(
   };
 }
 
-function notificationsFake(
-  seed: readonly NotificationRecord[],
-): NotificationRepository {
-  return {
+function notificationsFake(seed: readonly NotificationRecord[]) {
+  const rows = [...seed];
+  const record = vi.fn<NotificationRepository["record"]>((input) => {
+    if (rows.some((row) => row.dedupeKey === input.dedupeKey)) {
+      return Promise.resolve(null);
+    }
+    const row: NotificationRecord = {
+      ...input,
+      notificationId: randomUUID(),
+      readAt: null,
+      createdAt: now.toISOString(),
+    };
+    rows.unshift(row);
+    return Promise.resolve(row);
+  });
+  const repository: NotificationRepository = {
     listFeed: () => Promise.reject(new Error("not used")),
+    record,
     listRecentByType: (input) =>
       Promise.resolve(
-        seed
+        rows
           .filter(
             (row) =>
               row.ownerUserId === input.ownerUserId && row.type === input.type,
@@ -140,6 +153,7 @@ function notificationsFake(
     replacePreferences: () => Promise.reject(new Error("not used")),
     isCategoryEnabled: () => Promise.resolve(true),
   };
+  return { repository, record, rows };
 }
 
 function settingsFake(): AccountSettingsRepository {
@@ -286,6 +300,7 @@ function fakes(
     ],
   );
   const support = supportFake();
+  const notifications = notificationsFake(options.notifications ?? []);
   const database = {
     alerts: createUnavailableAlertRepository(),
     agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
@@ -297,7 +312,7 @@ function fakes(
     watchlists: createUnavailableWatchlistRepository(),
     ...(options.notifications === null
       ? {}
-      : { notifications: notificationsFake(options.notifications ?? []) }),
+      : { notifications: notifications.repository }),
     ...(options.wallets === undefined
       ? {}
       : { accountWallets: options.wallets }),
@@ -323,7 +338,13 @@ function fakes(
       Promise.resolve({ privyUserId: "did:privy:verified-user" }),
     ),
   } satisfies PrivyAccessTokenVerifier;
-  return { database, privyAccessTokenVerifier, sessions, support };
+  return {
+    database,
+    privyAccessTokenVerifier,
+    sessions,
+    support,
+    notifications,
+  };
 }
 
 const readHeaders = {
@@ -593,6 +614,73 @@ describe("LOOP API V2 security, settings, and support modules", () => {
       });
       expect(replay.statusCode).toBe(200);
       expect(sessions.revoke.mock.calls[1]?.[0].requestSha256).toBe(digest);
+    });
+
+    it("writes one security.event notification per revoked session and day, and the summary lists it", async () => {
+      const { app, notifications } = await createApp();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/devices/${otherSessionId}/revoke`,
+          headers: commandHeaders,
+        });
+        expect(response.statusCode).toBe(200);
+      }
+      expect(notifications.record).toHaveBeenCalledTimes(2);
+      expect(notifications.record).toHaveBeenCalledWith({
+        ownerUserId: accountId,
+        type: "security.event",
+        entityRef: `deviceSession:${otherSessionId}`,
+        contextRoute: "devices",
+        contextParams: { sessionId: otherSessionId },
+        payload: {
+          event: "session_revoked",
+          sessionId: otherSessionId,
+          deviceId: otherDeviceId,
+          platform: "android",
+          revokedAt: now.toISOString(),
+          revokedFromSessionId: currentSessionId,
+        },
+        dedupeKey: `security.event:deviceSession:${otherSessionId}:revoked:2026-09-09`,
+        source: null,
+        observedAt: now.toISOString(),
+      });
+      expect(notifications.rows).toHaveLength(1);
+
+      const summary = await app.inject({
+        method: "GET",
+        url: "/v2/security/summary",
+        headers: readHeaders,
+      });
+      expect(summary.statusCode).toBe(200);
+      expect(
+        summary.json<{
+          readonly recentSecurityEvents: Record<string, unknown>;
+        }>().recentSecurityEvents,
+      ).toMatchObject({
+        status: "available",
+        items: [
+          expect.objectContaining({
+            type: "security.event",
+            entityRef: `deviceSession:${otherSessionId}`,
+            contextRoute: "devices",
+          }),
+        ],
+      });
+    });
+
+    it("keeps the revoke result when the notification write fails", async () => {
+      const dependencies = fakes();
+      dependencies.notifications.record.mockRejectedValueOnce(
+        new Error("feed unavailable"),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/devices/${otherSessionId}/revoke`,
+        headers: commandHeaders,
+      });
+      expect(response.statusCode).toBe(200);
     });
 
     it("refuses to revoke the current session or every session without a step-up", async () => {

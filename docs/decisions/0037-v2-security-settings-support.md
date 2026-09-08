@@ -68,6 +68,13 @@ with `evidence: pending`, and every one is `unavailable` in this step.
   non-enumerating `SESSION_NOT_FOUND` command result; exact replay returns the
   same `revokedAt`; a different digest under the same key is
   `IDEMPOTENCY_CONFLICT`. The 40/owner/day command quota is shared with logout.
+- A successful revoke records one `security.event` notification (main-agent
+  ruling 2026-09-09): `entityRef deviceSession:<sessionId>`, `contextRoute
+devices`, payload `session_revoked` with device, platform, `revokedAt`, and
+  the revoking session; `dedupeKey security.event:deviceSession:<id>:revoked:<UTC day>`
+  so replays and repeated revokes add nothing. The write is best effort after
+  the durable revocation: a feed failure never undoes or hides the revoke.
+  `NotificationRepository.record` is the producer entry point.
 - `POST /v2/devices/revoke-all` is registered so the client can show the
   reason instead of simulating it; it is always `AUTH_STEP_UP_REQUIRED` and
   never writes.

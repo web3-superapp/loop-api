@@ -187,8 +187,11 @@ POST /v2/devices/{sessionId}/revoke
 - `notifications.securityEvents` 恒 `enabled: true, locked: true`（与通知设置
   一致）。
 - `recentSecurityEvents.items` = 最近 10 条 `type === "security.event"` 的通知，
-  条目结构与 `GET /v2/notifications/feed` 相同；本步后端**还没有生产者写入
-  `security.event`**，通常为空数组（空态，不是 unavailable）。
+  条目结构与 `GET /v2/notifications/feed` 相同。本步唯一生产者是撤销他人设备：
+  `entityRef: deviceSession:<sessionId>`、`contextRoute: devices`、
+  `contextParams.sessionId`、`payload.event: session_revoked`（含
+  `deviceId`/`platform`/`revokedAt`/`revokedFromSessionId`），同一 session 同一
+  UTC 日只有一条；没有撤销过则为空数组（空态，不是 unavailable）。
 
 ## 4. `GET/PUT /v2/settings` → `settings` 页
 

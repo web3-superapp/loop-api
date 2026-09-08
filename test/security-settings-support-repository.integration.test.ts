@@ -7,6 +7,7 @@ import { createPostgresAccountSettingsRepository } from "../src/database/account
 import { createPostgresDeviceSessionRepository } from "../src/database/device-session-repository.js";
 import { createPostgresNotificationRepository } from "../src/database/notification-repository.js";
 import { createPostgresSupportTicketRepository } from "../src/database/support-ticket-repository.js";
+import { deviceRevokedNotification } from "../src/features/security/device-service.js";
 import { DeviceSessionIdempotencyConflictError } from "../src/features/session/device-session-repository.js";
 import { AccountSettingsVersionConflictError } from "../src/features/settings/account-settings-repository.js";
 import { supportTicketCreateDigest } from "../src/features/support/support-contract.js";
@@ -422,6 +423,44 @@ describe("security, settings, and support repositories (migration 000024)", () =
   });
 
   describe("security event notifications", () => {
+    it("records the device-revoked security.event once per session and day", async () => {
+      const owner = await createOwner();
+      const session = await createSession(owner);
+      const revoked = await deviceSessions.revoke({
+        ownerUserId: owner,
+        sessionId: session.sessionId,
+        idempotencyKey: randomUUID(),
+        requestSha256: "f".repeat(64),
+        requestId: randomUUID(),
+        commandKind: "revoke",
+      });
+      const notification = deviceRevokedNotification({
+        ownerUserId: owner,
+        sessionId: session.sessionId,
+        deviceId: session.deviceId,
+        platform: session.clientPlatform,
+        revokedAt: revoked?.revokedAt ?? "",
+        revokedFromSessionId: randomUUID(),
+      });
+      const first = await notifications.record(notification);
+      expect(first).toMatchObject({
+        ownerUserId: owner,
+        type: "security.event",
+        entityRef: `deviceSession:${session.sessionId}`,
+        contextRoute: "devices",
+      });
+      expect(first?.payload["event"]).toBe("session_revoked");
+      expect(await notifications.record(notification)).toBeNull();
+      const listed = await notifications.listRecentByType({
+        ownerUserId: owner,
+        type: "security.event",
+        limit: 10,
+      });
+      expect(listed.map((row) => row.notificationId)).toEqual([
+        first?.notificationId,
+      ]);
+    });
+
     it("lists only the requested category, newest first, bounded by limit", async () => {
       const owner = await createOwner();
       for (const [index, type] of [

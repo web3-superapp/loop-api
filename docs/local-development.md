@@ -215,6 +215,19 @@ logs). The `wallet-intent-reconcile` worker lane
 status; it needs `BSC_RPC_URLS` and, for Swap status, the Privy credential
 pair. See `docs/frontend-v2-wallet-intents-api.md` for the client contract.
 
+## V2 support tickets: operator answer (Decision 0037)
+
+The API only creates and lists tickets. Status advances through the Dev
+script, which refuses `NODE_ENV=production` and appends an `operator` event:
+
+```sh
+pnpm support:answer <ticketId> [reply note]      # open → answered
+pnpm support:answer <ticketId> --close [note]    # open|answered → closed
+```
+
+The note follows the alias character rule (1–2000 code points, no control or
+invisible formatting characters).
+
 ## Standalone reconciliation worker
 
 Run the worker in a second terminal after PostgreSQL migrations are current:

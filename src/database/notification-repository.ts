@@ -90,8 +90,26 @@ export interface ReplaceNotificationPreferencesV2Input {
   readonly values: NotificationPreferenceValues;
 }
 
+export interface RecordNotificationInput {
+  readonly ownerUserId: string;
+  readonly type: NotificationCategory;
+  readonly entityRef: string;
+  readonly contextRoute: string;
+  readonly contextParams: Readonly<Record<string, string>>;
+  readonly payload: Readonly<Record<string, string | null>>;
+  readonly dedupeKey: string;
+  readonly source: string | null;
+  readonly observedAt: string | null;
+}
+
 export interface NotificationRepository {
   listFeed(input: ListNotificationsInput): Promise<NotificationPage>;
+  /**
+   * Server-side producer write (Decision 0037: device revocation writes a
+   * `security.event`). Deduplicated on (owner, dedupeKey); a duplicate
+   * returns `null` and writes nothing.
+   */
+  record(input: RecordNotificationInput): Promise<NotificationRecord | null>;
   /**
    * Newest-first notifications of one category for the security summary
    * (Decision 0037); bounded by `limit`, never paginated.
@@ -297,6 +315,37 @@ export function createPostgresNotificationRepository(
       }
     },
 
+    async record(input) {
+      try {
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            insert into public.notifications (
+              owner_user_id, type, entity_ref, context_route, context_params,
+              payload, dedupe_key, source, observed_at
+            )
+            values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz)
+            on conflict (owner_user_id, dedupe_key) do nothing
+            returning ${notificationColumns}
+          `,
+          values: [
+            uuidSchema.parse(input.ownerUserId),
+            z.enum(notificationCategories).parse(input.type),
+            input.entityRef,
+            input.contextRoute,
+            JSON.stringify(input.contextParams),
+            JSON.stringify(input.payload),
+            input.dedupeKey,
+            input.source,
+            input.observedAt,
+          ],
+        });
+        const row = result.rows[0];
+        return row === undefined ? null : mapNotification(row);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async listRecentByType(input) {
       try {
         const ownerUserId = uuidSchema.parse(input.ownerUserId);
@@ -441,6 +490,7 @@ function unavailable(): Promise<never> {
 export function createUnavailableNotificationRepository(): NotificationRepository {
   return Object.freeze({
     listFeed: unavailable,
+    record: unavailable,
     listRecentByType: unavailable,
     markRead: unavailable,
     getPreferences: unavailable,

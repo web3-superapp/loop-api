@@ -1281,6 +1281,7 @@ export async function buildApp(
     options.deviceService ??
     createDeviceService({
       sessions: database.deviceSessions,
+      notifications: database.notifications ?? null,
       now: securityNow,
     });
   const securityService =

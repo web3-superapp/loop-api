@@ -150,6 +150,7 @@ function harness(options: {
   };
   const notifications: NotificationRepository = {
     listFeed: vi.fn(() => Promise.reject(new Error("not used"))),
+    record: vi.fn(() => Promise.reject(new Error("not used"))),
     listRecentByType: vi.fn(() => Promise.reject(new Error("not used"))),
     markRead: vi.fn(() => Promise.reject(new Error("not used"))),
     getPreferences: vi.fn(() => Promise.reject(new Error("not used"))),

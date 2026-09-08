@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import type { NotificationRepository } from "../../database/notification-repository.js";
+import { mandatoryNotificationCategory } from "../alerts/notification-contract.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
@@ -86,7 +88,43 @@ export interface DeviceService {
 
 export interface CreateDeviceServiceInput {
   readonly sessions: DeviceSessionRepository;
+  /** `null` when the notification repository is not composed. */
+  readonly notifications: NotificationRepository | null;
   readonly now?: () => Date;
+}
+
+/**
+ * Security-event notification for a remote revocation (main-agent ruling
+ * 2026-09-09). Deduplicated per session and UTC day so a replayed command or
+ * a second revoke of an already revoked session does not add a row.
+ */
+export function deviceRevokedNotification(input: {
+  readonly ownerUserId: string;
+  readonly sessionId: string;
+  readonly deviceId: string;
+  readonly platform: "android" | "ios";
+  readonly revokedAt: string;
+  readonly revokedFromSessionId: string;
+}) {
+  const day = input.revokedAt.slice(0, 10);
+  return Object.freeze({
+    ownerUserId: input.ownerUserId,
+    type: mandatoryNotificationCategory,
+    entityRef: `deviceSession:${input.sessionId}`,
+    contextRoute: "devices",
+    contextParams: Object.freeze({ sessionId: input.sessionId }),
+    payload: Object.freeze({
+      event: "session_revoked",
+      sessionId: input.sessionId,
+      deviceId: input.deviceId,
+      platform: input.platform,
+      revokedAt: input.revokedAt,
+      revokedFromSessionId: input.revokedFromSessionId,
+    }),
+    dedupeKey: `security.event:deviceSession:${input.sessionId}:revoked:${day}`,
+    source: null,
+    observedAt: input.revokedAt,
+  });
 }
 
 function revokeDigest(
@@ -201,6 +239,25 @@ export function createDeviceService(
       );
       if (session === null || session.revokedAt === null) {
         throw V2ApiError.sessionNotFound();
+      }
+      if (input.notifications !== null) {
+        // Best effort after the durable revocation: a notification write
+        // failure never undoes or hides an already committed revoke, and
+        // the dedupe key makes a retry harmless.
+        try {
+          await input.notifications.record(
+            deviceRevokedNotification({
+              ownerUserId: principal.userId,
+              sessionId: session.sessionId,
+              deviceId: session.deviceId,
+              platform: session.clientPlatform,
+              revokedAt: session.revokedAt,
+              revokedFromSessionId: metadata.sessionId,
+            }),
+          );
+        } catch {
+          // The feed simply lacks this row; the revoke result stands.
+        }
       }
       return Object.freeze({
         session: Object.freeze({

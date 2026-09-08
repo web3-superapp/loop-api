@@ -327,6 +327,7 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
         unreadCount: owned.filter((row) => row.readAt === null).length,
       });
     },
+    record: () => Promise.reject(new Error("not used")),
     listRecentByType: (input) =>
       Promise.resolve(
         [...rows.values()]
