@@ -375,6 +375,7 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
     expect(preflight.json()).toMatchObject({
       walletId,
       chainId: "eip155:56",
+      basis: "indexed_erc20_transfers",
       recipient: { address: recipientAddress, isFirstRecipient: true },
       warnings: [
         "send.recipient.firstTime",
@@ -610,11 +611,23 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
         walletId,
         assetId: usdtAssetId,
         spenderAddress,
-        allowance: { mode: "unlimited", acknowledged: true },
+        allowance: { mode: "unlimited" },
       },
     });
-    expect(unlimited.statusCode).toBe(403);
-    expect(unlimited.json<ErrorBody>().code).toBe("POLICY_BLOCKED");
+    expect(unlimited.statusCode).toBe(422);
+    expect(unlimited.json<ErrorBody>().code).toBe("VALIDATION_FAILED");
+    const numberAllowance = await app.inject({
+      method: "POST",
+      url: "/v2/wallet-intents/approve",
+      headers: commandHeaders(),
+      payload: {
+        walletId,
+        assetId: usdtAssetId,
+        spenderAddress,
+        allowance: { mode: "exact", amount: 3 },
+      },
+    });
+    expect(numberAllowance.statusCode).toBe(400);
 
     const revoke = await app.inject({
       method: "POST",
@@ -669,7 +682,7 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
     expect(missingWallet.statusCode).toBe(400);
   });
 
-  it("quotes, prepares, and executes a swap once through the routes", async () => {
+  it("quotes and prepares a swap through the routes and refuses execute without a simulation", async () => {
     const { app, swap } = await createApp();
     const quote = await app.inject({
       method: "POST",
@@ -711,37 +724,43 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
     }>();
     expect(prepared.json()).toMatchObject({
       kind: "swap",
-      state: "awaiting_signature",
-      signing: { mode: "privy_authorization_signature", allowed: true },
+      state: "prepared",
+      signing: {
+        mode: "privy_authorization_signature",
+        allowed: false,
+        reasonCode: "SWAP_SIMULATION_PROVIDER_PENDING",
+      },
       unsignedTransaction: null,
-      simulation: { status: "passed", source: "provider_quote" },
+      simulation: {
+        status: "unavailable",
+        source: "provider_quote",
+        reasonCode: "SWAP_SIMULATION_PROVIDER_PENDING",
+      },
     });
     expect(intent.authorizationPayload.headers["privy-idempotency-key"]).toBe(
       intent.intentId,
     );
 
+    // No Provider-side simulation exists: execute is refused and nothing is
+    // sent. The single-attempt execute path is covered at the service level.
     const executed = await app.inject({
       method: "POST",
       url: `/v2/wallet-intents/${intent.intentId}/execute`,
       headers: commandHeaders(),
       payload: { authorizationSignature: "device-signature" },
     });
-    expect(executed.statusCode).toBe(200);
-    expect(executed.json()).toMatchObject({
-      state: "submitted",
-      result: { providerActionId: "act_1" },
-    });
-    expect(swap.executeCalls).toHaveLength(1);
+    expect(executed.statusCode).toBe(409);
+    expect(executed.json<ErrorBody>().code).toBe("SIMULATION_FAILED");
+    expect(swap.executeCalls).toHaveLength(0);
 
-    const again = await app.inject({
+    const reuse = await app.inject({
       method: "POST",
-      url: `/v2/wallet-intents/${intent.intentId}/execute`,
+      url: "/v2/wallet-intents/swap",
       headers: commandHeaders(),
-      payload: { authorizationSignature: "device-signature" },
+      payload: { walletId, quoteId: quoted.quote.quoteId },
     });
-    expect(again.statusCode).toBe(409);
-    expect(again.json<ErrorBody>().code).toBe("SUBMISSION_UNKNOWN");
-    expect(swap.executeCalls).toHaveLength(1);
+    expect(reuse.statusCode).toBe(409);
+    expect(reuse.json<ErrorBody>().code).toBe("QUOTE_EXPIRED");
 
     const staleQuote = await app.inject({
       method: "POST",

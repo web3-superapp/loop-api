@@ -68,6 +68,10 @@ async function cleanFixtures(): Promise<void> {
     `alter table public.wallet_intent_events enable trigger wallet_intent_events_append_only`,
   );
   await pool.query({
+    text: `delete from public.swap_quotes where owner_user_id in (${owners})`,
+    values: [`${testPrivyPrefix}%`],
+  });
+  await pool.query({
     text: `delete from public.wallet_intents where owner_user_id in (${owners})`,
     values: [`${testPrivyPrefix}%`],
   });
@@ -182,6 +186,7 @@ function source(intentId: string, walletId: string): IntentSource {
       checksumAddress: recipient,
       isContract: false,
       isFirstRecipient: true,
+      basis: "indexed_erc20_transfers",
       screening: {
         status: "unavailable",
         reasonCode: "GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED",
@@ -221,6 +226,9 @@ function source(intentId: string, walletId: string): IntentSource {
     policy: {
       configVersion: "bscWriteCanaryV1",
       canaryMaxUsd: "20",
+      exposureBasis: "amount",
+      exposureRaw: "1000000000000000000",
+      exposureBlockNumber: "44000000",
       valueUsd: "1",
       priceSource: "dexscreener",
       priceFetchedAt: now.toISOString(),
@@ -585,6 +593,56 @@ describe("PostgreSQL wallet intents, approvals, and migration 000021", () => {
       values: [walletId],
     });
     expect(observations.rows).toEqual([{ raw_value: "3000000000000000000" }]);
+  });
+
+  it("stores a swap quote, consumes it exactly once, and tracks payload verification", async () => {
+    const owner = await createOwner();
+    const walletId = await seedWallet(owner);
+    const quoteId = randomUUID();
+    await intents.storeSwapQuote({
+      quoteId,
+      ownerUserId: owner,
+      walletId,
+      snapshot: { slippageBps: 50 },
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    });
+    expect(await intents.getSwapQuote(owner, quoteId)).toMatchObject({
+      quoteId,
+      walletId,
+      snapshot: { slippageBps: 50 },
+      consumedByIntentId: null,
+    });
+    expect(await intents.getSwapQuote(await createOwner(), quoteId)).toBeNull();
+    const intentId = randomUUID();
+    const consumed = await intents.consumeSwapQuote({
+      ownerUserId: owner,
+      quoteId,
+      intentId,
+    });
+    expect(consumed?.consumedByIntentId).toBe(intentId);
+    expect(
+      await intents.consumeSwapQuote({
+        ownerUserId: owner,
+        quoteId,
+        intentId: randomUUID(),
+      }),
+    ).toBeNull();
+
+    const record = await intents.create(await createInput(owner, walletId));
+    expect(record.payloadVerified).toBe(false);
+    const verified = await intents.transition({
+      ownerUserId: owner,
+      intentId: record.intentId,
+      expectedVersion: record.recordVersion,
+      fromStates: ["awaiting_signature"],
+      toState: "submitted",
+      eventType: "broadcast_reported",
+      actorType: "api",
+      requestId: randomUUID(),
+      transactionHash: `0x${"7".repeat(64)}`,
+      payloadVerified: true,
+    });
+    expect(verified.payloadVerified).toBe(true);
   });
 
   it("refuses non-canonical states, kinds, and hashes at the schema", async () => {

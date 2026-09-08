@@ -247,5 +247,7 @@ This decision does **not** prove a production RPC provider, PancakeSwap or
 USD1 addresses, physical-device Privy wallet behaviour, price data, or any
 funds movement. BSC Mainnet signing and broadcasting remain closed. The
 following stay unverified and belong to the external Go/No-Go list: a BSC RPC
-endpoint that serves `eth_getLogs` under production load, the official USD1
+endpoint that serves `eth_getLogs` under production load and
+`eth_getTransactionReceipt` (publicnode refuses the latter with 403; Decision
+0035's reconciliation lane needs it), the official USD1
 address, GoPlus and GeckoTerminal terms, and FCM/APNs.

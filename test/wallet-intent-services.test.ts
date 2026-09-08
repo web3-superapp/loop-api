@@ -7,10 +7,7 @@ import { digestCanonicalPayload } from "../src/features/wallet-intents/intent-co
 import { createApprovalService } from "../src/features/wallet-intents/approval-service.js";
 import { createWalletIntentReconciler } from "../src/features/wallet-intents/intent-reconciliation.js";
 import { createSendService } from "../src/features/wallet-intents/send-service.js";
-import {
-  createInMemorySwapQuoteStore,
-  createSwapService,
-} from "../src/features/wallet-intents/swap-service.js";
+import { createSwapService } from "../src/features/wallet-intents/swap-service.js";
 import { createWalletIntentService } from "../src/features/wallet-intents/wallet-intent-service.js";
 import {
   checksumAddress,
@@ -79,6 +76,22 @@ function observedTransaction(
     blockNumber: null,
     ...overrides,
   };
+}
+
+/**
+ * Stands in for the Provider-side simulation that does not exist yet: moves a
+ * prepared swap intent to awaiting_signature so the execute path can be
+ * exercised. Production has no such transition.
+ */
+function unlockForSigning(
+  repository: ReturnType<typeof runtimeFake>["repository"],
+  intentId: string,
+): void {
+  const record = repository.records.get(intentId);
+  if (record === undefined) {
+    throw new Error("missing intent");
+  }
+  repository.records.set(intentId, { ...record, state: "awaiting_signature" });
 }
 
 function build(options: RuntimeFakeOptions = {}) {
@@ -599,6 +612,126 @@ describe("broadcast report, cancel, expiry", () => {
     );
   });
 
+  it("accepts a late report for an expired or cancelled intent only when the chain already shows the payload", async () => {
+    const transactions = new Map<string, BscTransactionObservation | null>();
+    let clock = Date.parse("2026-09-08T00:00:00.000Z");
+    const { send, intents, repository } = build({
+      readClient: { transactions },
+      now: () => new Date(clock),
+    });
+    const first = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody(),
+      signal,
+    });
+    const transaction = first.resource.unsignedTransaction;
+    if (transaction === null) {
+      throw new Error("expected an unsigned transaction");
+    }
+    // Superseded by a newer prepare on the same wallet.
+    await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody({ amount: "2" }),
+      signal,
+    });
+    expect(repository.records.get(first.resource.intentId)?.state).toBe(
+      "expired",
+    );
+    // Unobserved: still stale.
+    await expectCode(
+      intents.reportBroadcast({
+        principal,
+        intentId: first.resource.intentId,
+        body: { txHash },
+      }),
+      "DATA_STALE",
+    );
+    // Observed and matching: the chain wins.
+    transactions.set(txHash, observedTransaction(transaction));
+    const late = await intents.reportBroadcast({
+      principal,
+      intentId: first.resource.intentId,
+      body: { txHash },
+    });
+    expect(late.state).toBe("submitted");
+    expect(repository.events.at(-1)).toMatchObject({
+      eventType: "late_broadcast_report",
+      toState: "submitted",
+    });
+    expect(
+      repository.records.get(first.resource.intentId)?.payloadVerified,
+    ).toBe(true);
+
+    // Cancelled, then broadcast anyway with a matching payload.
+    const third = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody({ amount: "3" }),
+      signal,
+    });
+    await intents.cancel({ principal, intentId: third.resource.intentId });
+    const otherHash = `0x${"6".repeat(64)}`;
+    const thirdTransaction = third.resource.unsignedTransaction;
+    if (thirdTransaction === null) {
+      throw new Error("expected an unsigned transaction");
+    }
+    transactions.set(
+      otherHash,
+      observedTransaction(thirdTransaction, { hash: otherHash }),
+    );
+    const cancelledLate = await intents.reportBroadcast({
+      principal,
+      intentId: third.resource.intentId,
+      body: { txHash: otherHash },
+    });
+    expect(cancelledLate.state).toBe("submitted");
+
+    // Expired by the clock with an unobserved hash: expiry is persisted.
+    const fourth = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody({ amount: "4" }),
+      signal,
+    });
+    clock += 121_000;
+    await expectCode(
+      intents.reportBroadcast({
+        principal,
+        intentId: fourth.resource.intentId,
+        body: { txHash: `0x${"5".repeat(64)}` },
+      }),
+      "DATA_STALE",
+    );
+    expect(repository.records.get(fourth.resource.intentId)?.state).toBe(
+      "expired",
+    );
+  });
+
+  it("records a refused late report without calling the chain when writes are off", async () => {
+    const { send, intents, repository, runtime } = build();
+    const { resource } = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody(),
+      signal,
+    });
+    (runtime.config as { bscWrites: unknown }).bscWrites = null;
+    await expectCode(
+      intents.reportBroadcast({
+        principal,
+        intentId: resource.intentId,
+        body: { txHash },
+      }),
+      "CAPABILITY_UNAVAILABLE",
+    );
+    expect(repository.events.at(-1)).toMatchObject({
+      eventType: "broadcast_report_refused",
+      reasonCode: "BSC_WRITES_DISABLED",
+    });
+  });
+
   it("refuses a broadcast report when the policy version changed underneath", async () => {
     const { send, intents, repository } = build();
     const { resource } = await send.prepare({
@@ -627,7 +760,7 @@ describe("broadcast report, cancel, expiry", () => {
 });
 
 describe("approve and revoke intents", () => {
-  it("prepares an exact approve with the decoded call and blocks unlimited under canary", async () => {
+  it("prepares an exact approve with the decoded call and prices unlimited by actual exposure", async () => {
     const { approvals } = build({
       readClient: { code: { [spenderAddress]: "0x60" } },
     });
@@ -655,17 +788,47 @@ describe("approve and revoke intents", () => {
       selector: "0x095ea7b3",
       args: { spender: spenderAddress, value: "3000000000000000000" },
     });
-    expect(resource.policy.valueUsd).toBe("3");
+    expect(resource.policy).toMatchObject({
+      valueUsd: "3",
+      exposureBasis: "balance_at_prepare",
+      exposureRaw: "3000000000000000000",
+      exposureBlockNumber: "44000000",
+    });
 
+    // Unlimited: exposure is the 5 USDT balance (5 USD), under the ceiling.
+    const unlimited = await approvals.prepareApprove({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: {
+        walletId,
+        assetId: usdtAssetId,
+        spenderAddress,
+        allowance: { mode: "unlimited" },
+        acknowledgeUnlimited: true,
+      },
+      signal,
+    });
+    expect(unlimited.resource.review.spender?.isUnlimited).toBe(true);
+    expect(unlimited.resource.review.amount.display).toBe("unlimited");
+    expect(unlimited.resource.policy).toMatchObject({
+      valueUsd: "5",
+      exposureBasis: "balance_at_prepare",
+      exposureRaw: "5000000000000000000",
+    });
+    // A balance above the ceiling makes the same unlimited approval POLICY_BLOCKED.
+    const { approvals: rich } = build({
+      readClient: { tokenBalance: 30_000_000_000_000_000_000n },
+    });
     await expectCode(
-      approvals.prepareApprove({
+      rich.prepareApprove({
         principal,
         idempotencyKey: randomUUID(),
         body: {
           walletId,
           assetId: usdtAssetId,
           spenderAddress,
-          allowance: { mode: "unlimited", acknowledged: true },
+          allowance: { mode: "unlimited" },
+          acknowledgeUnlimited: true,
         },
         signal,
       }),
@@ -679,7 +842,7 @@ describe("approve and revoke intents", () => {
           walletId,
           assetId: usdtAssetId,
           spenderAddress,
-          allowance: { mode: "unlimited", acknowledged: false },
+          allowance: { mode: "unlimited" },
         },
         signal,
       }),
@@ -825,8 +988,7 @@ describe("swap quote, prepare, execute", () => {
       ...options,
       now: () => new Date(clock.value),
     });
-    const quoteStore = createInMemorySwapQuoteStore(fixture.runtime.now);
-    const swap = createSwapService({ runtime: fixture.runtime, quoteStore });
+    const swap = createSwapService({ runtime: fixture.runtime });
     return {
       ...fixture,
       swap,
@@ -914,7 +1076,7 @@ describe("swap quote, prepare, execute", () => {
         minimumOutputAmount: "6620000000000000",
       },
     });
-    const { swap, controlPlane, intents } = swapBuild({
+    const { swap, controlPlane, intents, repository } = swapBuild({
       swapAdapter: adapter.adapter,
     });
     const quoted = await swap.quote({ principal, body: quoteBody, signal });
@@ -927,16 +1089,39 @@ describe("swap quote, prepare, execute", () => {
     });
     const resource = prepared.resource;
     expect(resource.kind).toBe("swap");
-    expect(resource.state).toBe("awaiting_signature");
+    // No Provider-side simulation exists yet: the intent is prepared, never
+    // signable, and execute is SIMULATION_FAILED (main-agent ruling).
+    expect(resource.state).toBe("prepared");
     expect(resource.signing).toEqual({
       mode: "privy_authorization_signature",
-      allowed: true,
-      reasonCode: null,
+      allowed: false,
+      reasonCode: "SWAP_SIMULATION_PROVIDER_PENDING",
     });
     expect(resource.simulation).toMatchObject({
-      status: "passed",
+      status: "unavailable",
       source: "provider_quote",
+      reasonCode: "SWAP_SIMULATION_PROVIDER_PENDING",
     });
+    await expectCode(
+      swap.execute({
+        principal,
+        intentId: resource.intentId,
+        body: { authorizationSignature: "sig-from-device" },
+        signal,
+      }),
+      "SIMULATION_FAILED",
+    );
+    // A second prepare on the same quote is refused: the quote was spent.
+    await expectCode(
+      swap.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: { walletId, quoteId: quoted.quote.quoteId },
+        signal,
+      }),
+      "QUOTE_EXPIRED",
+    );
+    unlockForSigning(repository, resource.intentId);
     expect(resource.unsignedTransaction).toBeNull();
     expect(resource.authorizationPayload).toEqual({
       version: 1,
@@ -1021,7 +1206,7 @@ describe("swap quote, prepare, execute", () => {
       },
       signal,
     });
-    expect(prepared.resource.state).toBe("awaiting_signature");
+    expect(prepared.resource.state).toBe("prepared");
 
     const { swap: blocked } = swapBuild();
     const blockedQuote = await blocked.quote({
@@ -1048,7 +1233,9 @@ describe("swap quote, prepare, execute", () => {
     const adapter = swapAdapterFake({
       quote: { estimatedOutputAmount: "6650000000000000" },
     });
-    const { swap, clock } = swapBuild({ swapAdapter: adapter.adapter });
+    const { swap, clock, repository } = swapBuild({
+      swapAdapter: adapter.adapter,
+    });
     const quoted = await swap.quote({ principal, body: quoteBody, signal });
     const prepared = await swap.prepare({
       principal,
@@ -1056,6 +1243,7 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quoted.quote.quoteId },
       signal,
     });
+    unlockForSigning(repository, prepared.resource.intentId);
     clock.value += 31_000;
     await expectCode(
       swap.execute({
@@ -1098,6 +1286,7 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quotedA.quote.quoteId },
       signal,
     });
+    unlockForSigning(first.repository, preparedA.resource.intentId);
     const failed = await first.swap.execute({
       principal,
       intentId: preparedA.resource.intentId,
@@ -1132,6 +1321,7 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quotedB.quote.quoteId },
       signal,
     });
+    unlockForSigning(second.repository, preparedB.resource.intentId);
     const unknown = await second.swap.execute({
       principal,
       intentId: preparedB.resource.intentId,
@@ -1152,6 +1342,33 @@ describe("swap quote, prepare, execute", () => {
       }),
       "SUBMISSION_UNKNOWN",
     );
+  });
+
+  it("marks a proven-not-sent Provider failure as failed without reconciliation", async () => {
+    const notSent = swapAdapterFake({
+      quote: { estimatedOutputAmount: "6650000000000000" },
+      execute: () =>
+        Promise.reject(
+          new PrivySwapProviderError("unavailable", "PRIVY_NOT_CONFIGURED"),
+        ),
+    });
+    const { swap, repository } = swapBuild({ swapAdapter: notSent.adapter });
+    const quoted = await swap.quote({ principal, body: quoteBody, signal });
+    const prepared = await swap.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: { walletId, quoteId: quoted.quote.quoteId },
+      signal,
+    });
+    unlockForSigning(repository, prepared.resource.intentId);
+    const failed = await swap.execute({
+      principal,
+      intentId: prepared.resource.intentId,
+      body: { authorizationSignature: "sig" },
+      signal,
+    });
+    expect(failed.state).toBe("failed");
+    expect(failed.result.reasonCode).toBe("PRIVY_SWAP_NOT_SENT");
   });
 
   it("fails closed without Privy configuration", async () => {
@@ -1352,6 +1569,115 @@ describe("reconciliation lane", () => {
     ]);
   });
 
+  it("re-verifies the payload before finalising, drops a lost receipt, and survives a failing read", async () => {
+    const transactions = new Map<string, BscTransactionObservation | null>();
+    const receipts = new Map<string, BscTransactionReceiptObservation | null>();
+    const { send, intents, runtime, repository } = build({
+      readClient: { transactions, receipts },
+    });
+    const { resource } = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody(),
+      signal,
+    });
+    const transaction = resource.unsignedTransaction;
+    if (transaction === null) {
+      throw new Error("expected an unsigned transaction");
+    }
+    transactions.set(txHash, observedTransaction(transaction));
+    const reported = await intents.reportBroadcast({
+      principal,
+      intentId: resource.intentId,
+      body: { txHash },
+    });
+    expect(repository.records.get(reported.intentId)?.payloadVerified).toBe(
+      true,
+    );
+    const reconciler = createWalletIntentReconciler({
+      repository: runtime.repository,
+      wallets: runtime.wallets,
+      readClient: runtime.readClient,
+      swapAdapter: runtime.swapAdapter,
+      createUuid: randomUUID,
+    });
+    const reset = (): void => {
+      for (const record of repository.records.values()) {
+        repository.records.set(record.intentId, {
+          ...record,
+          reconcileAfter: null,
+        });
+      }
+    };
+    // A receipt with too few confirmations is stored…
+    receipts.set(txHash, {
+      hash: txHash,
+      status: "success",
+      blockNumber: 43_999_996n,
+      blockHash: `0x${"4".repeat(64)}`,
+      gasUsed: 51_000n,
+      effectiveGasPrice: 1_000_000_000n,
+    });
+    reset();
+    await reconciler.reconcileOnce();
+    expect(repository.records.get(resource.intentId)?.receipt).not.toBeNull();
+    // …and dropped again when the block is reorged out.
+    receipts.delete(txHash);
+    reset();
+    const lost = await reconciler.reconcileOnce();
+    expect(lost.transitions).toEqual([
+      { intentId: resource.intentId, toState: "submitted", reasonCode: null },
+    ]);
+    expect(repository.records.get(resource.intentId)?.receipt).toBeNull();
+    expect(repository.events.at(-1)?.eventType).toBe("receipt_lost");
+
+    // A refused receipt read (403) is recorded and does not stop the batch.
+    const failing = build({ readClient: { transactions } });
+    const other = await failing.send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody(),
+      signal,
+    });
+    const otherTransaction = other.resource.unsignedTransaction;
+    if (otherTransaction === null) {
+      throw new Error("expected an unsigned transaction");
+    }
+    transactions.set(txHash, observedTransaction(otherTransaction));
+    await failing.intents.reportBroadcast({
+      principal,
+      intentId: other.resource.intentId,
+      body: { txHash },
+    });
+    const forbidden = Object.assign(new Error("forbidden"), { status: 403 });
+    const failingReconciler = createWalletIntentReconciler({
+      repository: failing.runtime.repository,
+      wallets: failing.runtime.wallets,
+      readClient: {
+        ...failing.runtime.readClient,
+        getTransactionReceipt: () => Promise.reject(forbidden),
+      },
+      swapAdapter: failing.runtime.swapAdapter,
+      createUuid: randomUUID,
+    });
+    for (const record of failing.repository.records.values()) {
+      failing.repository.records.set(record.intentId, {
+        ...record,
+        reconcileAfter: null,
+      });
+    }
+    const result = await failingReconciler.reconcileOnce();
+    expect(result.leasedCount).toBe(1);
+    expect(result.transitions).toEqual([]);
+    expect(failing.repository.events.at(-1)).toMatchObject({
+      eventType: "reconciliation_read_failed",
+      reasonCode: "RPC_RECEIPT_UNAVAILABLE",
+    });
+    expect(failing.repository.records.get(other.resource.intentId)?.state).toBe(
+      "submitted",
+    );
+  });
+
   it("gives up on a hash that never appears and locks it as unknown", async () => {
     const { send, intents, runtime, repository } = build();
     const { resource } = await send.prepare({
@@ -1418,10 +1744,7 @@ describe("reconciliation lane", () => {
       swapAdapter: adapter.adapter,
       now: () => new Date(clock.value),
     });
-    const swap = createSwapService({
-      runtime: fixture.runtime,
-      quoteStore: createInMemorySwapQuoteStore(fixture.runtime.now),
-    });
+    const swap = createSwapService({ runtime: fixture.runtime });
     const quoted = await swap.quote({
       principal,
       body: {
@@ -1438,6 +1761,7 @@ describe("reconciliation lane", () => {
       body: { walletId, quoteId: quoted.quote.quoteId },
       signal,
     });
+    unlockForSigning(fixture.repository, prepared.resource.intentId);
     await swap.execute({
       principal,
       intentId: prepared.resource.intentId,

@@ -23,6 +23,7 @@ import {
 import {
   WalletIntentStateConflictError,
   type CreateWalletIntentInput,
+  type StoredSwapQuote,
   type WalletIntentRecord,
   type WalletIntentRepository,
 } from "../src/database/wallet-intent-repository.js";
@@ -500,6 +501,7 @@ export function intentRepositoryFake(
 } {
   const records = new Map<string, WalletIntentRecord>();
   const events: RecordedIntentEvent[] = [];
+  const quotes = new Map<string, StoredSwapQuote>();
   const bump = (record: WalletIntentRecord): string =>
     String(Number(record.recordVersion) + 1);
   return {
@@ -546,6 +548,7 @@ export function intentRepositoryFake(
         receipt: null,
         reconcileAfter: null,
         reconcileAttemptCount: 0,
+        payloadVerified: false,
         recordVersion: "1",
         createdAt: now().toISOString(),
         updatedAt: now().toISOString(),
@@ -621,6 +624,10 @@ export function intentRepositoryFake(
           input.reconcileAfter === undefined
             ? record.reconcileAfter
             : input.reconcileAfter,
+        payloadVerified:
+          input.payloadVerified === undefined
+            ? record.payloadVerified
+            : input.payloadVerified,
         recordVersion: bump(record),
         updatedAt: now().toISOString(),
       };
@@ -685,6 +692,37 @@ export function intentRepositoryFake(
       return Promise.resolve(due);
     },
     recordApprovalObservation: () => Promise.resolve(),
+    storeSwapQuote: (input) => {
+      quotes.set(input.quoteId, {
+        quoteId: input.quoteId,
+        ownerUserId: input.ownerUserId,
+        walletId: input.walletId,
+        snapshot: input.snapshot,
+        expiresAt: input.expiresAt,
+        consumedByIntentId: null,
+      });
+      return Promise.resolve();
+    },
+    getSwapQuote: (owner, quoteId) => {
+      const quote = quotes.get(quoteId);
+      return Promise.resolve(
+        quote === undefined || quote.ownerUserId !== owner ? null : quote,
+      );
+    },
+    consumeSwapQuote: (input) => {
+      const quote = quotes.get(input.quoteId);
+      if (
+        quote === undefined ||
+        quote.ownerUserId !== input.ownerUserId ||
+        quote.consumedByIntentId !== null ||
+        Date.parse(quote.expiresAt) <= now().getTime()
+      ) {
+        return Promise.resolve(null);
+      }
+      const consumed = { ...quote, consumedByIntentId: input.intentId };
+      quotes.set(input.quoteId, consumed);
+      return Promise.resolve(consumed);
+    },
   };
 }
 

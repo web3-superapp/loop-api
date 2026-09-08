@@ -102,6 +102,7 @@ describe("database schema readiness contract", () => {
       "public.wallet_intent_events",
       "public.indexed_approvals",
       "public.approval_observations",
+      "public.swap_quotes",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

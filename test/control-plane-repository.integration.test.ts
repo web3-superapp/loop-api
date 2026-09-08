@@ -103,6 +103,7 @@ const truncateControlPlane = `
     public.device_session_events,
     public.device_session_commands,
     public.device_sessions,
+    public.swap_quotes,
     public.wallet_intent_events,
     public.wallet_intents,
     public.approval_observations,

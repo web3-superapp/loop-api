@@ -142,6 +142,7 @@ function source(overrides: Partial<IntentSource> = {}): IntentSource {
       checksumAddress: checksumAddress(recipient),
       isContract: false,
       isFirstRecipient: true,
+      basis: "indexed_erc20_transfers",
       screening: {
         status: "unavailable",
         reasonCode: "GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED",
@@ -190,6 +191,9 @@ function source(overrides: Partial<IntentSource> = {}): IntentSource {
     policy: {
       configVersion: "bscWriteCanaryV1",
       canaryMaxUsd: "20",
+      exposureBasis: "amount",
+      exposureRaw: "1000000000000000000",
+      exposureBlockNumber: "44000000",
       valueUsd: "1",
       priceSource: "dexscreener",
       priceFetchedAt: "2026-09-08T00:00:00.000Z",

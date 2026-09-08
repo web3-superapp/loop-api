@@ -43278,7 +43278,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -43977,7 +43980,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -44617,7 +44623,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -45355,7 +45364,11 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT",
+                        "VERSION_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -46351,7 +46364,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -47112,7 +47128,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -47733,7 +47752,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -48218,6 +48240,7 @@
                                       "checksumAddress",
                                       "isContract",
                                       "isFirstRecipient",
+                                      "basis",
                                       "screening"
                                     ],
                                     "properties": {
@@ -48233,6 +48256,10 @@
                                       "isFirstRecipient": {
                                         "type": "boolean",
                                         "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                      },
+                                      "basis": {
+                                        "type": "string",
+                                        "enum": ["indexed_erc20_transfers"]
                                       },
                                       "screening": {
                                         "type": "object",
@@ -48778,6 +48805,9 @@
                             "required": [
                               "configVersion",
                               "canaryMaxUsd",
+                              "exposureBasis",
+                              "exposureRaw",
+                              "exposureBlockNumber",
                               "valueUsd",
                               "priceSource",
                               "priceFetchedAt"
@@ -48790,6 +48820,33 @@
                               "canaryMaxUsd": {
                                 "type": "string",
                                 "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                              },
+                              "exposureBasis": {
+                                "type": "string",
+                                "enum": [
+                                  "amount",
+                                  "balance_at_prepare",
+                                  "none"
+                                ],
+                                "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                              },
+                              "exposureRaw": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "exposureBlockNumber": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                  },
+                                  { "type": "null" }
+                                ]
                               },
                               "valueUsd": {
                                 "anyOf": [
@@ -49954,6 +50011,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -49969,6 +50027,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -50502,6 +50564,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -50514,6 +50579,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -51654,6 +51742,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -51669,6 +51758,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -52202,6 +52295,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -52214,6 +52310,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -53380,6 +53499,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -53395,6 +53515,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -53928,6 +54052,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -53940,6 +54067,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -56100,6 +56250,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -56115,6 +56266,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -56648,6 +56803,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -56660,6 +56818,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -57168,6 +57349,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -57183,6 +57365,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -57716,6 +57902,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -57728,6 +57917,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -58896,6 +59108,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -58911,6 +59124,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -59444,6 +59661,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -59456,6 +59676,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -60482,6 +60725,7 @@
                     "walletId",
                     "chainId",
                     "recipient",
+                    "basis",
                     "warnings",
                     "contractVersion"
                   ],
@@ -60502,6 +60746,7 @@
                         "checksumAddress",
                         "isContract",
                         "isFirstRecipient",
+                        "basis",
                         "screening"
                       ],
                       "properties": {
@@ -60517,6 +60762,10 @@
                         "isFirstRecipient": {
                           "type": "boolean",
                           "description": "True when the wallet has no indexed outgoing transfer to this address."
+                        },
+                        "basis": {
+                          "type": "string",
+                          "enum": ["indexed_erc20_transfers"]
                         },
                         "screening": {
                           "type": "object",
@@ -60534,6 +60783,11 @@
                           }
                         }
                       }
+                    },
+                    "basis": {
+                      "type": "string",
+                      "description": "isFirstRecipient is derived only from indexed ERC-20 transfers out of this wallet.",
+                      "enum": ["indexed_erc20_transfers"]
                     },
                     "warnings": {
                       "type": "array",
@@ -61366,6 +61620,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -61381,6 +61636,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -61914,6 +62173,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -61926,6 +62188,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -62434,6 +62719,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -62449,6 +62735,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -62982,6 +63272,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -62994,6 +63287,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -63949,7 +64265,7 @@
         "operationId": "prepareV2ApproveIntent",
         "summary": "Prepare an ERC-20 approve intent",
         "tags": ["wallet-intents"],
-        "description": "Exact allowance by default. An unlimited allowance needs the acknowledged second confirmation and is still POLICY_BLOCKED under the canary policy. The review carries the decoded approve(spender, value) call.",
+        "description": "Exact allowance by default. An unlimited allowance needs the top-level acknowledgeUnlimited second confirmation; the canary ceiling is enforced on the actual exposure min(allowance, balance) at the snapshot block. The review carries the decoded approve(spender, value) call.",
         "requestBody": {
           "required": true,
           "content": {
@@ -63993,16 +64309,16 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["mode", "acknowledged"],
+                        "required": ["mode"],
                         "properties": {
-                          "mode": { "type": "string", "enum": ["unlimited"] },
-                          "acknowledged": {
-                            "type": "boolean",
-                            "description": "Must be true: the guard has shown the unlimited-allowance notice and the user confirmed a second time. Under the canary policy an unlimited allowance is still POLICY_BLOCKED."
-                          }
+                          "mode": { "type": "string", "enum": ["unlimited"] }
                         }
                       }
                     ]
+                  },
+                  "acknowledgeUnlimited": {
+                    "type": "boolean",
+                    "description": "Required true for allowance.mode = unlimited: the guard has shown the unlimited notice and the user confirmed a second time (VALIDATION_FAILED otherwise). The canary ceiling is enforced on min(allowance, balance)."
                   }
                 }
               }
@@ -64192,6 +64508,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -64207,6 +64524,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -64740,6 +65061,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -64752,6 +65076,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -65260,6 +65607,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -65275,6 +65623,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -65808,6 +66160,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -65820,6 +66175,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -66984,6 +67362,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -66999,6 +67378,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -67532,6 +67915,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -67544,6 +67930,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -68052,6 +68461,7 @@
                                 "checksumAddress",
                                 "isContract",
                                 "isFirstRecipient",
+                                "basis",
                                 "screening"
                               ],
                               "properties": {
@@ -68067,6 +68477,10 @@
                                 "isFirstRecipient": {
                                   "type": "boolean",
                                   "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
                                 },
                                 "screening": {
                                   "type": "object",
@@ -68600,6 +69014,9 @@
                       "required": [
                         "configVersion",
                         "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
                         "valueUsd",
                         "priceSource",
                         "priceFetchedAt"
@@ -68612,6 +69029,29 @@
                         "canaryMaxUsd": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "valueUsd": {
                           "anyOf": [
@@ -81022,7 +81462,10 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",
@@ -81812,7 +82255,11 @@
                   "properties": {
                     "code": {
                       "type": "string",
-                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "RESOURCE_CONFLICT",
+                        "VERSION_CONFLICT"
+                      ]
                     },
                     "category": {
                       "type": "string",

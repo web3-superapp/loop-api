@@ -30,7 +30,7 @@
   `GET /v2/approvals*` 不受写开关影响。
 - 开启时是 **canary**：只允许 `BSC_WRITE_CANARY_ASSETS` 里的资产，单笔 USD 价值 ≤
   `BSC_WRITE_CANARY_MAX_USD`（默认 20）；超限或资产不在名单 → `403 POLICY_BLOCKED`。
-  价值无法定价（无行情）→ `503 CAPABILITY_UNAVAILABLE`，不会假定"很小"。
+  价值无法用**新鲜**行情定价（无行情或 stale）→ `503 CAPABILITY_UNAVAILABLE`，不会假定"很小"。
 
 ## 2. Headers
 
@@ -70,6 +70,7 @@
       "checksumAddress": "0x000000000000000000000000000000000000dEaD",
       "isContract": false,
       "isFirstRecipient": true,
+      "basis": "indexed_erc20_transfers",
       "screening": {
         "status": "unavailable",
         "reasonCode": "GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED"
@@ -114,6 +115,9 @@
   "policy": {
     "configVersion": "bscWriteCanaryV1",
     "canaryMaxUsd": "20",
+    "exposureBasis": "amount",
+    "exposureRaw": "10000000000000000",
+    "exposureBlockNumber": "120695250",
     "valueUsd": "7.50014",
     "priceSource": "dexscreener",
     "priceFetchedAt": "2026-09-08T13:35:27.916Z"
@@ -162,16 +166,16 @@ prepared | awaiting_signature ──过期 / 同钱包新 intent / 策略版本�
 unknown ──对账 lane──▶ confirmed | reverted | failed（否则锁定给运维）
 ```
 
-| state                 | tx-result 展示  | 说明                                                                           |
-| --------------------- | --------------- | ------------------------------------------------------------------------------ |
-| `prepared`            | —（confirm 页） | `simulation.status` 是 `reverted`/`unavailable`，`signing.allowed=false`       |
-| `awaiting_signature`  | —（Sign sheet） | 唯一 `signing.allowed=true` 的状态；过期后 `GET` 直接投影为 `expired`          |
-| `submitted`           | pending         | 已上报哈希 / Privy 已受理；轮询 `GET` 直到终态                                 |
-| `confirmed`           | 成功 Toast      | Send：回执 success 且 ≥15 确认；Swap：Privy action `succeeded`                 |
-| `reverted`            | 失败            | 链上回执 reverted / Privy step reverted；`result.reasonCode = TX_REVERTED`     |
-| `failed`              | 失败            | Provider 定性拒绝、哈希 payload 不符（`TX_PAYLOAD_MISMATCH`）等                |
-| `unknown`             | 未知（锁定）    | 结果不明；**禁止重复提交**，页面只轮询                                         |
-| `cancelled`/`expired` | 结束            | `result.reasonCode`：`USER_CANCELLED` / `INTENT_EXPIRED` / `INTENT_SUPERSEDED` |
+| state                 | tx-result 展示  | 说明                                                                                          |
+| --------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| `prepared`            | —（confirm 页） | `simulation.status` 是 `reverted`/`unavailable`（Swap 本步一律如此），`signing.allowed=false` |
+| `awaiting_signature`  | —（Sign sheet） | 唯一 `signing.allowed=true` 的状态；过期后 `GET` 直接投影为 `expired`                         |
+| `submitted`           | pending         | 已上报哈希 / Privy 已受理；轮询 `GET` 直到终态                                                |
+| `confirmed`           | 成功 Toast      | Send：回执 success 且 ≥15 确认；Swap：Privy action `succeeded`                                |
+| `reverted`            | 失败            | 链上回执 reverted / Privy step reverted；`result.reasonCode = TX_REVERTED`                    |
+| `failed`              | 失败            | Provider 定性拒绝、哈希 payload 不符（`TX_PAYLOAD_MISMATCH`）等                               |
+| `unknown`             | 未知（锁定）    | 结果不明；**禁止重复提交**，页面只轮询                                                        |
+| `cancelled`/`expired` | 结束            | `result.reasonCode`：`USER_CANCELLED` / `INTENT_EXPIRED` / `INTENT_SUPERSEDED`                |
 
 **签名前必须核对**：把展示用的 `review` 与 `unsignedTransaction`（或 `authorizationPayload`）
 视为同一份后端 canonical；`reviewSha256` 是后端 canonical payload 的 SHA-256。客户端
@@ -232,7 +236,12 @@ nonce → 原生转账还要 `amount + 最大费用 ≤ 原生余额` 且 `amoun
 from / to / input / value / nonce / chainId：不符 → `422 VALIDATION_FAILED`（并记审计事件，
 intent 保持 `awaiting_signature`）；节点尚未看到该哈希 → 接受为 `submitted`，
 `result.reasonCode = TX_PENDING_VERIFICATION`，由对账 lane 再核对。
-`prepared` 上报 → `409 SIMULATION_FAILED`；过期 → `409 DATA_STALE`；同一哈希重复上报 → 200。
+`prepared` 上报 → `409 SIMULATION_FAILED`；同一哈希重复上报 → 200。
+
+**迟到上报**：intent 已 `expired`（`INTENT_EXPIRED` / `INTENT_SUPERSEDED`）或 `cancelled`
+（`USER_CANCELLED`）时，若链上已能看到该哈希且 payload 一致 → 仍接受为 `submitted`
+（事件 `late_broadcast_report`）；链上看不到 → `409 DATA_STALE`。因此**签名/广播后必须先上报
+（或取消），再 prepare 同钱包的新 intent**——新 prepare 会把旧 intent 置为 `expired`。
 
 ### 4.4 `GET /v2/wallet-intents/{intentId}` → `tx-result`
 
@@ -257,8 +266,11 @@ intent 保持 `awaiting_signature`）；节点尚未看到该哈希 → 接受�
 }
 ```
 
-或 `{ "mode": "unlimited", "acknowledged": true }`。`acknowledged` 不为 true → `422`；
-**canary 期间无限额度一律 `403 POLICY_BLOCKED`**（上限无法界定），页面按原型只给"改为限额"。
+或 `"allowance": { "mode": "unlimited" }` **加顶层** `"acknowledgeUnlimited": true`
+（缺失/false → `422 VALIDATION_FAILED`，这是原型"仍要无限授权"的二次确认）。canary 上限按
+**实际敞口** `min(allowance, 当前余额) × 价格` 判定（`policy.exposureBasis =
+"balance_at_prepare"`，`exposureRaw`、`exposureBlockNumber` 记录快照），余额超上限 →
+`403 POLICY_BLOCKED`。`allowance.amount` 必须是字符串（数字 → `400`）。
 响应里 `review.spender`（`isContract`、`isUnlimited`）与 `review.decodedCall`
 （`approve`，`args.spender/value`）就是原型 approval-guard 要展示的解码字段。原生资产无授权
 面 → `422`。
@@ -374,8 +386,11 @@ Privy 不可达 → `503 PROVIDER_DISCONNECTED`。
 `confirmPriceImpact: true`（否则 `422`）；`blocked` → `403`；quote 过期/未知 →
 `409 QUOTE_EXPIRED`。响应是 §3 的 intent，`kind=swap`，`signing.mode =
 "privy_authorization_signature"`，`unsignedTransaction=null`，`review.swap` 带 quote 快照与
-policy，`simulation = {status: "passed", source: "provider_quote"}`（Provider 报价即预执行证据），
-`expiresAt` = quote 过期时间。
+policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模拟**：
+`simulation = {status: "unavailable", source: "provider_quote", reasonCode:
+"SWAP_SIMULATION_PROVIDER_PENDING"}`，intent 停在 `prepared`，`signing.allowed=false`，
+`execute` 返回 `409 SIMULATION_FAILED`。Swap 页可以报价、可以展示 review，确认按钮禁用。
+一个 quote 只能 prepare 一次（第二次 → `409 QUOTE_EXPIRED`）。
 
 `authorizationPayload` 是设备用 `generateAuthorizationSignature` 签名的对象，原样、不改字段：
 
@@ -413,11 +428,11 @@ policy，`simulation = {status: "passed", source: "provider_quote"}`（Provider 
 | ---- | ------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------- |
 | 400  | `INVALID_REQUEST`        | 未知字段、金额是数字、错误校验和、缺/多 `Idempotency-Key`                       | 修请求                                    |
 | 401  | `AUTH_REQUIRED/INVALID`  | Bearer                                                                          | 重新登录                                  |
-| 403  | `POLICY_BLOCKED`         | canary 名单/上限、无限授权、价格影响 ≥5%、资产 blocked                          | 显示策略文案（安全中心 D20 前"暂不可调"） |
+| 403  | `POLICY_BLOCKED`         | canary 名单/上限（授权按实际敞口）、价格影响 ≥5%、资产 blocked                  | 显示策略文案（安全中心 D20 前"暂不可调"） |
 | 404  | `NOT_FOUND`              | 模块未启用、钱包/资产/intent 不存在                                             | 不可枚举                                  |
 | 409  | `IDEMPOTENCY_CONFLICT`   | 同 key 不同 body                                                                | 换 key                                    |
 | 409  | `INSUFFICIENT_BALANCE`   | 余额 / gas 储备                                                                 | 提示余额不足                              |
-| 409  | `SIMULATION_FAILED`      | 对 `prepared`（模拟失败）intent 上报                                            | 回到确认页，重新 prepare                  |
+| 409  | `SIMULATION_FAILED`      | 对 `prepared` intent 上报 / execute（含全部 Swap）                              | 回到确认页，重新 prepare                  |
 | 409  | `DATA_STALE`             | intent 过期/已进入后续状态、策略版本变化、钱包变化                              | 重新 `GET` 或重新 prepare                 |
 | 409  | `QUOTE_EXPIRED`          | quote 过期/未知、swap intent 过期                                               | 重新报价                                  |
 | 409  | `SUBMISSION_UNKNOWN`     | 重复 execute                                                                    | 只轮询，不重发                            |

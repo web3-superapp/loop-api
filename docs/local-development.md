@@ -202,8 +202,11 @@ BSC_WRITE_CANARY_ASSETS=eip155:56:native,eip155:56:0x…   # allowlist
 BSC_WRITE_CANARY_MAX_USD=20
 ```
 
-`market` is needed because the canary ceiling is enforced on the USD value of
-every intent; an amount that cannot be priced is refused. Prepare builds the
+`market` is needed because the canary ceiling is enforced on the fresh USD
+value of every intent; an amount that cannot be priced is refused. The RPC
+endpoint must serve `eth_getTransactionReceipt` for the reconciliation lane
+(`https://bsc-rpc.publicnode.com` answers 403 for it and is only good for
+prepare, pre-execution, and the approvals inventory). Prepare builds the
 exact unsigned transaction and pre-executes it over RPC; nothing here signs or
 broadcasts. The approvals inventory needs the `erc20_transfer` lane to have a
 checkpoint (`pnpm indexer:backfill --from <block>` also indexes `Approval`
