@@ -36716,6 +36716,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -36788,6 +36789,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -36985,6 +36987,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -37057,6 +37060,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -37129,6 +37133,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -37201,6 +37206,7 @@
                                           "fresh",
                                           "stale",
                                           "derived",
+                                          "proxied",
                                           "unavailable"
                                         ]
                                       },
@@ -38043,7 +38049,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38107,7 +38119,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38171,7 +38189,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38235,7 +38259,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38299,7 +38329,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38363,7 +38399,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -38629,7 +38671,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -39343,7 +39391,8 @@
                                   "low",
                                   "close",
                                   "volume",
-                                  "swapCount"
+                                  "swapCount",
+                                  "isOpen"
                                 ],
                                 "properties": {
                                   "openTime": {
@@ -39379,6 +39428,10 @@
                                       { "type": "integer", "minimum": 1 },
                                       { "type": "null" }
                                     ]
+                                  },
+                                  "isOpen": {
+                                    "type": "boolean",
+                                    "description": "True for the bucket that has not closed yet; its close/high/low can still change."
                                   }
                                 }
                               }
@@ -40040,8 +40093,7 @@
                                   "quoteSymbol",
                                   "priceAfter",
                                   "poolAddress",
-                                  "sender",
-                                  "recipient"
+                                  "isOwn"
                                 ],
                                 "properties": {
                                   "transactionHash": {
@@ -40109,23 +40161,9 @@
                                     "type": "string",
                                     "pattern": "^0x[0-9a-f]{40}$"
                                   },
-                                  "sender": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string",
-                                        "pattern": "^0x[0-9a-f]{40}$"
-                                      },
-                                      { "type": "null" }
-                                    ]
-                                  },
-                                  "recipient": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string",
-                                        "pattern": "^0x[0-9a-f]{40}$"
-                                      },
-                                      { "type": "null" }
-                                    ]
+                                  "isOwn": {
+                                    "type": "boolean",
+                                    "description": "True when the swap's sender or recipient is one of the caller's own wallets. Counterparty addresses are never published."
                                   }
                                 }
                               }
@@ -40829,7 +40867,13 @@
                         },
                         "quality": {
                           "type": "string",
-                          "enum": ["fresh", "stale", "derived", "unavailable"]
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "derived",
+                            "proxied",
+                            "unavailable"
+                          ]
                         },
                         "reasonCode": {
                           "anyOf": [
@@ -45862,6 +45906,7 @@
                                   "fetchedAt",
                                   "quality",
                                   "reasonCode",
+                                  "proxyAsset",
                                   "priceUsd",
                                   "valueUsd"
                                 ],
@@ -45885,13 +45930,24 @@
                                   },
                                   "quality": {
                                     "type": "string",
-                                    "enum": ["fresh", "stale"]
+                                    "enum": ["fresh", "stale", "proxied"],
+                                    "description": "proxied: the native asset valued through proxyAsset (WBNB); reasonCode carries a stale underlying price."
                                   },
                                   "reasonCode": {
                                     "anyOf": [
                                       {
                                         "type": "string",
                                         "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "proxyAsset": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                                        "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
                                       },
                                       { "type": "null" }
                                     ]

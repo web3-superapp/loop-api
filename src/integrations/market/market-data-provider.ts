@@ -25,6 +25,8 @@ export class MarketProviderError extends Error {
   constructor(
     readonly code: MarketProviderErrorCode,
     readonly reasonCode: string,
+    /** HTTP status when the Provider answered; never its body or URL. */
+    readonly httpStatus: number | null = null,
   ) {
     super(`Market Provider request failed (${code})`);
     this.name = "MarketProviderError";
@@ -69,12 +71,20 @@ export interface TokenPairsSnapshot {
   readonly pairs: readonly TokenPairSnapshot[];
 }
 
+/** Documented ceiling of addresses per DexScreener batch request. */
+export const marketPairsBatchLimit = 30;
+
 export interface MarketPairsProvider {
   readonly source: MarketSource;
   readTokenPairs(
     tokenAddress: string,
     options?: ProviderReadOptions,
   ): Promise<ProviderObservation<TokenPairsSnapshot>>;
+  /** One request for up to `marketPairsBatchLimit` tokens; every requested token gets a snapshot. */
+  readTokenPairsBatch(
+    tokenAddresses: readonly string[],
+    options?: ProviderReadOptions,
+  ): Promise<ProviderObservation<readonly TokenPairsSnapshot[]>>;
 }
 
 /**
@@ -182,7 +192,11 @@ export function createUnavailableMarketPairsProvider(
   reasonCode: string,
   source: MarketSource = "dexscreener",
 ): MarketPairsProvider {
-  return Object.freeze({ source, readTokenPairs: disabled(reasonCode) });
+  return Object.freeze({
+    source,
+    readTokenPairs: disabled(reasonCode),
+    readTokenPairsBatch: disabled(reasonCode),
+  });
 }
 
 export function createUnavailableSecurityFactsProvider(

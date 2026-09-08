@@ -19,7 +19,11 @@ const wbnb = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
 const usdt = "0x55d398326f99059ff775485246999027b3197955";
 
 const config: MarketConfig = Object.freeze({
-  dexscreener: { enabled: true, rateLimitPerMinute: 300 },
+  dexscreener: {
+    enabled: true,
+    budgetApiPerMinute: 120,
+    budgetWorkerPerMinute: 120,
+  },
   geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
   goplus: null,
   priceTtlSeconds: 30,
@@ -94,18 +98,33 @@ function snapshot(priceUsd: string): TokenPairsSnapshot {
 }
 
 function cacheFake(initial: MarketFactCacheRecord | null = null) {
-  let stored = initial;
-  const get = vi.fn(() => Promise.resolve(stored));
+  const rows = new Map<string, MarketFactCacheRecord>();
+  const keyOf = (subjectKey: string, factKind: string, source: string) =>
+    `${subjectKey}|${factKind}|${source}`;
+  if (initial !== null) {
+    rows.set(
+      keyOf(initial.subjectKey, initial.factKind, initial.source),
+      initial,
+    );
+  }
+  const get = vi.fn((subjectKey: string, factKind: string, source: string) =>
+    Promise.resolve(rows.get(keyOf(subjectKey, factKind, source)) ?? null),
+  );
   const repository: MarketFactCacheRepository = {
     get,
     put: vi.fn((input: MarketFactCacheRecord) => {
       const record: MarketFactCacheRecord = { ...input };
-      stored = record;
+      rows.set(keyOf(input.subjectKey, input.factKind, input.source), record);
       return Promise.resolve(record);
     }),
     findVerifiedCommunityByAssetId: vi.fn(() => Promise.resolve(null)),
   };
-  return { repository, get, current: () => stored };
+  return {
+    repository,
+    get,
+    current: () =>
+      rows.get(keyOf(`token:${wbnb}`, "token_pairs", "dexscreener")) ?? null,
+  };
 }
 
 function providerFake(
@@ -123,6 +142,17 @@ function providerFake(
         source: "dexscreener" as const,
         fetchedAt,
         rawDigest: "a".repeat(64),
+      });
+    },
+    readTokenPairsBatch: (addresses) => {
+      calls += 1;
+      return Promise.resolve({
+        value: addresses.map((tokenAddress) =>
+          tokenAddress === wbnb ? behaviour() : { tokenAddress, pairs: [] },
+        ),
+        source: "dexscreener" as const,
+        fetchedAt,
+        rawDigest: "b".repeat(64),
       });
     },
   };
@@ -220,6 +250,7 @@ describe("market fact service", () => {
             "MARKET_PROVIDER_RATE_LIMITED",
           ),
         ),
+      readTokenPairsBatch: () => Promise.reject(new Error("not used")),
     };
     const cache = cacheFake({
       subjectKey: `token:${wbnb}`,
@@ -262,6 +293,7 @@ describe("market fact service", () => {
             "MARKET_PROVIDER_UNREACHABLE",
           ),
         ),
+      readTokenPairsBatch: () => Promise.reject(new Error("not used")),
     };
     const cache = cacheFake({
       subjectKey: `token:${wbnb}`,
@@ -284,5 +316,81 @@ describe("market fact service", () => {
       quality: "unavailable",
       reasonCode: "MARKET_PROVIDER_UNREACHABLE",
     });
+  });
+
+  it("shares one in-flight Provider read between concurrent callers", async () => {
+    const provider = providerFake(() => snapshot("747.39"));
+    const cache = cacheFake();
+    const service = createMarketFactService({
+      config,
+      cache: cache.repository,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+    });
+    const [first, second] = await Promise.all([
+      service.readTokenPairs(wbnb),
+      service.readTokenPairs(wbnb),
+    ]);
+    expect(first.quality).toBe("fresh");
+    expect(second.quality).toBe("fresh");
+    expect(provider.calls()).toBe(1);
+  });
+
+  it("reads a batch through one Provider request and serves cache hits without one", async () => {
+    const provider = providerFake(() => snapshot("747.39"));
+    const cache = cacheFake({
+      subjectKey: `token:${usdt}`,
+      factKind: "token_pairs",
+      source: "dexscreener",
+      value: { tokenAddress: usdt, pairs: [] } as unknown as Record<
+        string,
+        unknown
+      >,
+      rawDigest: "c".repeat(64),
+      fetchedAt: "2026-09-08T00:00:00.000Z",
+      ttlSeconds: 30,
+    });
+    const service = createMarketFactService({
+      config,
+      cache: cache.repository,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+      now: () => new Date("2026-09-08T00:00:10.000Z"),
+    });
+    const facts = await service.readTokenPairsBatch([wbnb, usdt, wbnb]);
+    expect(facts.size).toBe(2);
+    expect(facts.get(wbnb)?.quality).toBe("fresh");
+    expect(facts.get(wbnb)?.rawDigest).toBe("b".repeat(64));
+    expect(facts.get(usdt)?.rawDigest).toBe("c".repeat(64));
+    expect(provider.calls()).toBe(1);
+  });
+
+  it("prices the native asset through WBNB and names the proxy", async () => {
+    const provider = providerFake(() => snapshot("747.39"));
+    const service = createMarketFactService({
+      config,
+      cache: cacheFake().repository,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+    });
+    const native = await service.readAssetPrice({
+      address: null,
+      status: "verified",
+    });
+    expect(native.proxyAsset).toBe(`eip155:56:${wbnb}`);
+    expect(native.pair?.priceUsd).toBe("746.63");
+    const token = await service.readAssetPrice({
+      address: wbnb,
+      status: "pending",
+    });
+    expect(token.proxyAsset).toBeNull();
+    const blocked = await service.readAssetPrice({
+      address: wbnb,
+      status: "blocked",
+    });
+    expect(blocked.fact.reasonCode).toBe("ASSET_BLOCKED");
   });
 });

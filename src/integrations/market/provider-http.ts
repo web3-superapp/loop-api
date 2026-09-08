@@ -166,6 +166,7 @@ export function createProviderHttpKernel(
         throw new MarketProviderError(
           "market_provider_rejected",
           "MARKET_PROVIDER_REQUEST_REJECTED",
+          response.status,
         );
       }
       let text: string;

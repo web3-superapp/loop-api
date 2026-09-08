@@ -348,6 +348,17 @@ function pairsProviderFake(): MarketPairsProvider & {
   return {
     source: "dexscreener",
     calls: () => calls,
+    readTokenPairsBatch: (addresses: readonly string[]) => {
+      calls += 1;
+      return Promise.resolve({
+        value: addresses.map((tokenAddress) =>
+          tokenAddress === wbnb ? pairsSnapshot() : { tokenAddress, pairs: [] },
+        ),
+        source: "dexscreener" as const,
+        fetchedAt,
+        rawDigest: "d".repeat(64),
+      });
+    },
     readTokenPairs: (tokenAddress: string) => {
       calls += 1;
       if (tokenAddress !== wbnb) {
@@ -682,9 +693,11 @@ describe("LOOP API V2 market module", () => {
       "eip155:56:native",
     ]);
     expect(body.watchlist.items[0]?.price.value).toBe("746.63");
+    // The native row is priced through WBNB and labelled as a proxy.
     expect(body.watchlist.items[1]?.price).toMatchObject({
-      value: null,
-      reasonCode: "MARKET_NATIVE_ASSET_NOT_SUPPORTED",
+      value: "746.63",
+      source: "dexscreener",
+      quality: "proxied",
     });
     expect(body.trending.status).toBe("available");
     expect(body.trending.recommendationId).toMatch(/^[0-9a-f-]{36}$/);
@@ -743,6 +756,7 @@ describe("LOOP API V2 market module", () => {
             close: "1",
             volume: "2.5",
             swapCount: 7,
+            isOpen: false,
           },
         ],
       },
@@ -789,8 +803,11 @@ describe("LOOP API V2 market module", () => {
       confirmations: 101,
       status: "confirmed",
       poolAddress,
-      sender: "0x0000000000000000000000000000000000000001",
+      isOwn: false,
     });
+    expect(response.body).not.toContain(
+      "0x0000000000000000000000000000000000000001",
+    );
     expect(body.trades.freshness).toMatchObject({
       indexerBlockNumber: (headNumber - 5n).toString(10),
       headBlockNumber: headNumber.toString(10),
@@ -833,6 +850,44 @@ describe("LOOP API V2 market module", () => {
         reasonCode: "BSC_POOL_INDEXER_NOT_STARTED",
       },
     });
+  });
+
+  it("marks swaps that touch the caller's own wallet as isOwn", async () => {
+    const dependencies = fakes({ pools: [pool] });
+    const database = {
+      ...dependencies.database,
+      accountWallets: {
+        sync: vi.fn(() => Promise.reject(new Error("not used"))),
+        list: vi.fn(() =>
+          Promise.resolve([
+            {
+              walletId: "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+              providerWalletId: null,
+              address: "0x0000000000000000000000000000000000000002",
+              kind: "external" as const,
+              status: "active" as const,
+              isActive: true,
+              firstSeenAt: observedAt,
+              lastSeenAt: observedAt,
+            },
+          ]),
+        ),
+        get: vi.fn(() => Promise.resolve(null)),
+        setActive: vi.fn(() => Promise.reject(new Error("not used"))),
+        recordBalanceSnapshot: vi.fn(() => Promise.resolve()),
+      },
+    } satisfies Database;
+    const { app } = await createApp({ ...dependencies, database });
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/market/assets/${wbnbAssetId}/trades?limit=1`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(
+      response.json<{ trades: { items: { isOwn: boolean }[] } }>().trades
+        .items[0]?.isOwn,
+    ).toBe(true);
   });
 
   it("rejects unknown assets, other chains, and stray headers", async () => {

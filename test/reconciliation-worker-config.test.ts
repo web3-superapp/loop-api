@@ -40,7 +40,11 @@ describe("loadReconciliationWorkerConfig", () => {
       issuanceRateRecordCleanupEnabled: true,
       communityChannelSync: null,
       market: {
-        dexscreener: { enabled: true, rateLimitPerMinute: 300 },
+        dexscreener: {
+          enabled: true,
+          budgetApiPerMinute: 120,
+          budgetWorkerPerMinute: 120,
+        },
         geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
         goplus: null,
         priceTtlSeconds: 30,

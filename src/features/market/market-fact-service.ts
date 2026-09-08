@@ -5,6 +5,7 @@ import {
   type MarketFactCacheRepository,
 } from "../../database/market-fact-cache-repository.js";
 import {
+  marketPairsBatchLimit,
   MarketProviderError,
   type CandlesProvider,
   type MarketPairsProvider,
@@ -17,7 +18,10 @@ import {
   type TokenPairsSnapshot,
   type TokenSecuritySnapshot,
 } from "../../integrations/market/market-data-provider.js";
+import type { AssetRecord } from "../../database/chain-registry-repository.js";
 import {
+  bscWrappedNativeAddress,
+  bscWrappedNativeAssetId,
   compareDecimalStrings,
   marketReasonCodes,
   type MarketFactQuality,
@@ -51,11 +55,34 @@ export interface ReadFactOptions {
   readonly signal?: AbortSignal;
 }
 
+/**
+ * The price of one registry asset: the deepest base pair of the asset, or
+ * for the native asset the wrapped native token's pair with `proxyAsset`
+ * named. `pair` is null when no usable pair exists.
+ */
+export interface AssetPriceFact {
+  readonly fact: CachedFact<TokenPairsSnapshot>;
+  readonly pair: TokenPairSnapshot | null;
+  readonly proxyAsset: string | null;
+}
+
 export interface MarketFactService {
   readTokenPairs(
     tokenAddress: string,
     options?: ReadFactOptions,
   ): Promise<CachedFact<TokenPairsSnapshot>>;
+  /**
+   * Pair snapshots for many tokens through the Provider's batch endpoint.
+   * Cache hits are served without a request; misses are fetched in chunks.
+   */
+  readTokenPairsBatch(
+    tokenAddresses: readonly string[],
+    options?: ReadFactOptions,
+  ): Promise<ReadonlyMap<string, CachedFact<TokenPairsSnapshot>>>;
+  readAssetPrice(
+    asset: Pick<AssetRecord, "address" | "status">,
+    options?: ReadFactOptions,
+  ): Promise<AssetPriceFact>;
   readTokenSecurity(
     tokenAddress: string,
     options?: ReadFactOptions,
@@ -143,6 +170,25 @@ export function createMarketFactService(
   input: CreateMarketFactServiceInput,
 ): MarketFactService {
   const now = input.now ?? ((): Date => new Date());
+  /** In-flight Provider reads keyed by subject so concurrent readers share one request. */
+  const inFlight = new Map<string, Promise<CachedFact<object>>>();
+
+  function dedupe<T extends object>(
+    key: string,
+    readFact: () => Promise<CachedFact<T>>,
+  ): Promise<CachedFact<T>> {
+    const pending = inFlight.get(key);
+    if (pending !== undefined) {
+      return pending as Promise<CachedFact<T>>;
+    }
+    const tracked = readFact().finally(() => {
+      if (inFlight.get(key) === tracked) {
+        inFlight.delete(key);
+      }
+    });
+    inFlight.set(key, tracked);
+    return tracked;
+  }
 
   async function read<T extends object>(request: {
     readonly subjectKey: string;
@@ -246,26 +292,214 @@ export function createMarketFactService(
     });
   }
 
+  function pairsFact(
+    cached: MarketFactCacheRecord,
+    quality: "fresh" | "stale",
+    reasonCode: string | null,
+  ): CachedFact<TokenPairsSnapshot> {
+    return Object.freeze({
+      value: cached.value as unknown as TokenPairsSnapshot,
+      source: "dexscreener" as const,
+      fetchedAt: cached.fetchedAt,
+      ttlSeconds: cached.ttlSeconds,
+      quality,
+      reasonCode,
+      rawDigest: cached.rawDigest,
+    });
+  }
+
   const service: MarketFactService = {
     readTokenPairs(tokenAddress: string, options: ReadFactOptions = {}) {
       const provider = input.pairsProvider;
-      return read<TokenPairsSnapshot>({
-        subjectKey: `token:${tokenAddress}`,
-        factKind: marketFactKinds.tokenPairs,
-        source: "dexscreener",
-        ttlSeconds: input.config.priceTtlSeconds,
-        disabledReasonCode: marketReasonCodes.dexscreenerDisabled,
-        fetch:
-          provider === null
-            ? null
-            : () =>
-                provider.readTokenPairs(
-                  tokenAddress,
-                  options.signal === undefined
-                    ? {}
-                    : { signal: options.signal },
-                ),
+      const key = `token:${tokenAddress}|${marketFactKinds.tokenPairs}|${String(options.requireFresh === true)}`;
+      return dedupe(key, () =>
+        read<TokenPairsSnapshot>({
+          subjectKey: `token:${tokenAddress}`,
+          factKind: marketFactKinds.tokenPairs,
+          source: "dexscreener",
+          ttlSeconds: input.config.priceTtlSeconds,
+          disabledReasonCode: marketReasonCodes.dexscreenerDisabled,
+          fetch:
+            provider === null
+              ? null
+              : () =>
+                  provider.readTokenPairs(
+                    tokenAddress,
+                    options.signal === undefined
+                      ? {}
+                      : { signal: options.signal },
+                  ),
+          options,
+        }),
+      );
+    },
+
+    async readTokenPairsBatch(
+      tokenAddresses: readonly string[],
+      options: ReadFactOptions = {},
+    ) {
+      const provider = input.pairsProvider;
+      const results = new Map<string, CachedFact<TokenPairsSnapshot>>();
+      const unique = [...new Set(tokenAddresses)];
+      if (provider === null) {
+        for (const address of unique) {
+          results.set(
+            address,
+            unavailableFact(
+              "dexscreener",
+              input.config.priceTtlSeconds,
+              marketReasonCodes.dexscreenerDisabled,
+            ),
+          );
+        }
+        return results;
+      }
+      const nowMs = now().getTime();
+      const misses: {
+        readonly address: string;
+        readonly cached: MarketFactCacheRecord | null;
+        readonly ageSeconds: number;
+      }[] = [];
+      for (const address of unique) {
+        let cached: MarketFactCacheRecord | null;
+        try {
+          cached = await input.cache.get(
+            `token:${address}`,
+            marketFactKinds.tokenPairs,
+            "dexscreener",
+          );
+        } catch (error) {
+          if (!(error instanceof MarketFactCacheUnavailableError)) {
+            throw error;
+          }
+          results.set(
+            address,
+            unavailableFact(
+              "dexscreener",
+              input.config.priceTtlSeconds,
+              marketReasonCodes.cacheUnavailable,
+            ),
+          );
+          continue;
+        }
+        const ageSeconds =
+          cached === null
+            ? Number.POSITIVE_INFINITY
+            : (nowMs - Date.parse(cached.fetchedAt)) / 1_000;
+        if (
+          cached !== null &&
+          ageSeconds >= 0 &&
+          ageSeconds < cached.ttlSeconds
+        ) {
+          results.set(address, pairsFact(cached, "fresh", null));
+          continue;
+        }
+        misses.push({ address, cached, ageSeconds });
+      }
+      for (
+        let offset = 0;
+        offset < misses.length;
+        offset += marketPairsBatchLimit
+      ) {
+        const chunk = misses.slice(offset, offset + marketPairsBatchLimit);
+        let observation: ProviderObservation<
+          readonly TokenPairsSnapshot[]
+        > | null = null;
+        let reasonCode: string = marketReasonCodes.providerUnreachable;
+        try {
+          observation = await provider.readTokenPairsBatch(
+            chunk.map((miss) => miss.address),
+            options.signal === undefined ? {} : { signal: options.signal },
+          );
+        } catch (error) {
+          if (!(error instanceof MarketProviderError)) {
+            throw error;
+          }
+          reasonCode = error.reasonCode;
+        }
+        for (const miss of chunk) {
+          const snapshot = observation?.value.find(
+            (entry) => entry.tokenAddress === miss.address,
+          );
+          if (observation !== null && snapshot !== undefined) {
+            try {
+              await input.cache.put({
+                subjectKey: `token:${miss.address}`,
+                factKind: marketFactKinds.tokenPairs,
+                source: "dexscreener",
+                value: snapshot as unknown as Record<string, unknown>,
+                rawDigest: observation.rawDigest,
+                fetchedAt: observation.fetchedAt,
+                ttlSeconds: input.config.priceTtlSeconds,
+              });
+            } catch (error) {
+              if (!(error instanceof MarketFactCacheUnavailableError)) {
+                throw error;
+              }
+            }
+            results.set(
+              miss.address,
+              Object.freeze({
+                value: snapshot,
+                source: "dexscreener" as const,
+                fetchedAt: observation.fetchedAt,
+                ttlSeconds: input.config.priceTtlSeconds,
+                quality: "fresh" as const,
+                reasonCode: null,
+                rawDigest: observation.rawDigest,
+              }),
+            );
+            continue;
+          }
+          if (
+            miss.cached !== null &&
+            options.requireFresh !== true &&
+            miss.ageSeconds <
+              miss.cached.ttlSeconds + input.config.staleGraceSeconds
+          ) {
+            results.set(
+              miss.address,
+              pairsFact(miss.cached, "stale", reasonCode),
+            );
+            continue;
+          }
+          results.set(
+            miss.address,
+            unavailableFact(
+              "dexscreener",
+              input.config.priceTtlSeconds,
+              reasonCode,
+            ),
+          );
+        }
+      }
+      return results;
+    },
+
+    async readAssetPrice(
+      asset: Pick<AssetRecord, "address" | "status">,
+      options: ReadFactOptions = {},
+    ) {
+      if (asset.status === "blocked") {
+        return Object.freeze({
+          fact: unavailableFact<TokenPairsSnapshot>(
+            "dexscreener",
+            input.config.priceTtlSeconds,
+            "ASSET_BLOCKED",
+          ),
+          pair: null,
+          proxyAsset: null,
+        });
+      }
+      const proxied = asset.address === null;
+      const fact = await service.readTokenPairs(
+        asset.address ?? bscWrappedNativeAddress,
         options,
+      );
+      return Object.freeze({
+        fact,
+        pair: fact.value === null ? null : selectPrimaryPair(fact.value),
+        proxyAsset: proxied ? bscWrappedNativeAssetId : null,
       });
     },
 

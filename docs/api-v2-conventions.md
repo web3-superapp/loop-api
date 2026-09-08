@@ -52,6 +52,10 @@ Every V2 write requires:
 - `X-Loop-Client-Version`: the calling application semantic version;
 - `X-Loop-Contract-Version: 2.0`;
 - `X-Loop-Platform: ios|android` for a mobile operation.
+- Every V2 write (command or compare-and-swap) accepts `X-Loop-Platform` and
+  `X-Loop-Device-ID` and validates them when present (`ios|android`, canonical
+  UUIDv4); the session module still requires them. Reads reject them like any
+  other `X-Loop-*` header they do not expect.
 
 Route schemas reject missing, duplicate, malformed, and unknown security-
 sensitive inputs. The server still generates a new request ID for every replay.
@@ -186,12 +190,11 @@ operation needs a stronger, module-defined authentication step.
 - Unknown, stale, unavailable, and blocked are distinct states. Missing data is
   not converted to zero, an empty success, or a fixture.
 - Amount, price, and threshold request fields must be sent as JSON strings.
-  Route schemas type them as strings with a decimal pattern, but Fastify's
-  default AJV coercion turns a JSON number into that string before validation,
-  so the server does not guarantee rejecting the number form (main-agent
-  ruling, Decision 0034; `POST /v2/alerts` has a test recording the
-  behaviour). A client that sends a number risks IEEE-754 precision loss
-  before the request leaves the device; the server cannot detect it.
+  A JSON number in such a field is `INVALID_REQUEST`: a route-level
+  `preValidation` hook (`assertDecimalStringFields`) refuses it before AJV
+  type coercion runs, so the number form is never silently accepted
+  (main-agent ruling, Decision 0034; `POST /v2/alerts` tests a number, and a
+  36-digit string that survives unchanged).
 
 ## Lists, cursors, and search
 

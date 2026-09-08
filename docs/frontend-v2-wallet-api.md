@@ -236,8 +236,14 @@ PUT /v2/wallets/active
         "displayValue": "0"
       },
       "valuation": {
-        "status": "unavailable",
-        "reasonCode": "MARKET_NATIVE_ASSET_NOT_SUPPORTED"
+        "status": "available",
+        "priceSource": "dexscreener",
+        "fetchedAt": "2026-09-08T07:52:56.738Z",
+        "quality": "proxied",
+        "reasonCode": null,
+        "proxyAsset": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "priceUsd": "747.39",
+        "valueUsd": "5231.73"
       },
       "crossCheck": {
         "source": "privy",
@@ -247,10 +253,10 @@ PUT /v2/wallets/active
     }
   ],
   "netWorth": {
-    "status": "partial",
+    "status": "available",
     "valuationCurrency": "USD",
-    "valueUsd": "1121.085",
-    "unavailableCount": 1,
+    "valueUsd": "6352.815",
+    "unavailableCount": 0,
     "quality": "fresh",
     "priceSource": "dexscreener",
     "asOf": "2026-09-08T07:52:56.738Z",
@@ -269,6 +275,7 @@ PUT /v2/wallets/active
   "fetchedAt": "2026-09-08T07:52:56.738Z",
   "quality": "fresh",
   "reasonCode": null,
+  "proxyAsset": null,
   "priceUsd": "747.39",
   "valueUsd": "1121.085"
 }
@@ -296,10 +303,11 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   "数据源尚未对齐"的提示。
 - `valuation`（每行）：只用该资产自己的 DexScreener 价格（以其为 base 的最深
   交易对），`quality: fresh|stale`（stale 透传 `reasonCode`），
-  `valueUsd = displayBalance × priceUsd`（精确十进制字符串）。原生 BNB 行恒
-  `unavailable / MARKET_NATIVE_ASSET_NOT_SUPPORTED`（不用 WBNB 代替）；余额读不到
-  → `BALANCE_UNAVAILABLE`；market 运行时未组装 → `MARKET_RUNTIME_UNAVAILABLE`。
-- `netWorth`：全部行都有估值才是 `available`，否则 `partial` + `unavailableCount`
+  `valueUsd = displayBalance × priceUsd`（精确十进制字符串）。原生 BNB 行用 WBNB
+  价格代理：`quality: proxied` + `proxyAsset`（WBNB 的 assetId），UI 标注"以 WBNB
+  计价"；余额读不到 → `BALANCE_UNAVAILABLE`；market 运行时未组装 →
+  `MARKET_RUNTIME_UNAVAILABLE`。
+- `netWorth`：全部行都有估值（含 proxied）才是 `available`，否则 `partial` + `unavailableCount`
   （`valueUsd` 只是已估值行合计，**不要**把它当总资产）；`valuationCurrency: USD`，
   `asOf` 是最新的 Provider 抓取时间，`quality` 有任一行 stale 即 stale；
   **`isSpendable: false`——净值是展示信息，不是余额**。`networth` 页的 24h 涨跌、

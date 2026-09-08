@@ -338,7 +338,10 @@ export async function runReconciliationWorker(
             facts: createMarketFactService({
               config: options.config.market,
               cache: database.marketFacts,
-              pairsProvider: createMarketProviders(options.config.market).pairs,
+              pairsProvider: createMarketProviders(
+                options.config.market,
+                "worker",
+              ).pairs,
               securityProvider: null,
               candlesProvider: null,
             }),

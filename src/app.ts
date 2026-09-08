@@ -1037,7 +1037,7 @@ export async function buildApp(
 
   // Market Providers (Decision 0034). Each is `null` when disabled or
   // uncredentialed; the fact service then publishes its facts as unavailable.
-  const providers = createMarketProviders(config.market);
+  const providers = createMarketProviders(config.market, "api");
   const marketPairsProvider =
     options.marketPairsProvider === undefined
       ? providers.pairs
@@ -1061,6 +1061,13 @@ export async function buildApp(
       securityProvider: securityFactsProvider,
       candlesProvider,
     });
+  const marketRuntimeAvailable =
+    registeredModuleIds.includes("market") &&
+    (options.marketReadService !== undefined ||
+      (database.chainRegistry !== undefined &&
+        database.marketFacts !== undefined &&
+        database.bscIndexer !== undefined &&
+        v2CursorCodec !== null));
   const walletReadService =
     options.walletReadService ??
     createWalletReadService({
@@ -1072,10 +1079,11 @@ export async function buildApp(
       balanceReader: privyBalanceReader,
       cursorCodec: v2CursorCodec,
       marketFacts:
-        options.marketFactService !== undefined ||
-        database.marketFacts !== undefined
+        options.marketFactService !== undefined
           ? marketFactService
-          : null,
+          : marketRuntimeAvailable
+            ? marketFactService
+            : null,
       gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
       chainId: bscChainId,
       chainName: "BNB Smart Chain",
@@ -1089,22 +1097,20 @@ export async function buildApp(
       cache: marketFactCacheRepository,
       indexerRepository: bscIndexerRepository,
       watchlist: database.watchlistsV2 ?? null,
+      wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
       cursorCodec: v2CursorCodec,
       chainId: bscChainId,
     });
-  const marketRuntimeAvailable =
-    registeredModuleIds.includes("market") &&
-    (options.marketReadService !== undefined ||
-      (database.chainRegistry !== undefined &&
-        database.marketFacts !== undefined &&
-        database.bscIndexer !== undefined &&
-        v2CursorCodec !== null));
   const alertV2Service =
     options.alertV2Service ??
     createAlertV2Service({
       repository: database.alertsV2 ?? createUnavailableAlertV2Repository(),
       registry: chainRegistryRepository,
+      facts:
+        options.marketFactService !== undefined || marketRuntimeAvailable
+          ? marketFactService
+          : null,
       cursorCodec: v2CursorCodec,
       chainId: bscChainId,
     });

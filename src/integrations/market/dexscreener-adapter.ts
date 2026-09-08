@@ -9,6 +9,8 @@ import {
   InvalidChainIdentityError,
 } from "../../features/chain/chain-contract.js";
 import {
+  marketPairsBatchLimit,
+  MarketProviderError,
   type MarketPairsProvider,
   type ProviderObservation,
   type ProviderReadOptions,
@@ -145,10 +147,7 @@ function address(value: string): string {
   }
 }
 
-export function normalizeDexscreenerPairs(
-  json: unknown,
-  tokenAddress: string,
-): TokenPairsSnapshot {
+function normalizePairList(json: unknown): readonly TokenPairSnapshot[] {
   const parsed = responseSchema.safeParse(json);
   if (!parsed.success) {
     return malformed();
@@ -180,7 +179,39 @@ export function normalizeDexscreenerPairs(
       }),
     );
   }
-  return Object.freeze({ tokenAddress, pairs: Object.freeze(pairs) });
+  return Object.freeze(pairs);
+}
+
+export function normalizeDexscreenerPairs(
+  json: unknown,
+  tokenAddress: string,
+): TokenPairsSnapshot {
+  return Object.freeze({ tokenAddress, pairs: normalizePairList(json) });
+}
+
+/**
+ * The batch endpoint returns every pair of every requested token in one
+ * list; each token's snapshot keeps the pairs in which it is base or quote.
+ */
+export function normalizeDexscreenerBatch(
+  json: unknown,
+  tokenAddresses: readonly string[],
+): readonly TokenPairsSnapshot[] {
+  const pairs = normalizePairList(json);
+  return Object.freeze(
+    tokenAddresses.map((tokenAddress) =>
+      Object.freeze({
+        tokenAddress,
+        pairs: Object.freeze(
+          pairs.filter(
+            (pair) =>
+              pair.baseTokenAddress === tokenAddress ||
+              pair.quoteTokenAddress === tokenAddress,
+          ),
+        ),
+      }),
+    ),
+  );
 }
 
 export interface CreateDexscreenerAdapterInput {
@@ -220,6 +251,34 @@ export function createDexscreenerAdapter(
       });
       return Object.freeze({
         value: normalizeDexscreenerPairs(result.json, tokenAddress),
+        source: "dexscreener" as const,
+        fetchedAt: now().toISOString(),
+        rawDigest: result.rawDigest,
+      });
+    },
+
+    async readTokenPairsBatch(
+      rawTokenAddresses: readonly string[],
+      options: ProviderReadOptions = {},
+    ): Promise<ProviderObservation<readonly TokenPairsSnapshot[]>> {
+      const tokenAddresses = [
+        ...new Set(rawTokenAddresses.map(normalizeEvmAddress)),
+      ];
+      if (
+        tokenAddresses.length === 0 ||
+        tokenAddresses.length > marketPairsBatchLimit
+      ) {
+        throw new MarketProviderError(
+          "market_provider_rejected",
+          "MARKET_PROVIDER_REQUEST_REJECTED",
+        );
+      }
+      const result = await kernel.requestJson({
+        url: `${baseUrl}/tokens/v1/${dexscreenerChainSlug}/${tokenAddresses.join(",")}`,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      return Object.freeze({
+        value: normalizeDexscreenerBatch(result.json, tokenAddresses),
         source: "dexscreener" as const,
         fetchedAt: now().toISOString(),
         rawDigest: result.rawDigest,

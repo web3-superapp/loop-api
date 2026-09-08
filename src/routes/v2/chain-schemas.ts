@@ -23,6 +23,7 @@ import {
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
   parseV2CommonRequestMetadata,
+  parseV2WriteRequestMetadata,
   v2CommonHeadersSchema,
 } from "../../features/session/session-contract.js";
 import {
@@ -489,6 +490,7 @@ export const walletBalancesResourceSchema = {
                   "fetchedAt",
                   "quality",
                   "reasonCode",
+                  "proxyAsset",
                   "priceUsd",
                   "valueUsd",
                 ],
@@ -496,8 +498,14 @@ export const walletBalancesResourceSchema = {
                   status: { type: "string", const: "available" },
                   priceSource: { type: "string", enum: [...marketSources] },
                   fetchedAt: { type: "string", format: "date-time" },
-                  quality: { type: "string", enum: ["fresh", "stale"] },
+                  quality: {
+                    type: "string",
+                    enum: ["fresh", "stale", "proxied"],
+                    description:
+                      "proxied: the native asset valued through proxyAsset (WBNB); reasonCode carries a stale underlying price.",
+                  },
                   reasonCode: nullableReasonCodeSchema,
+                  proxyAsset: { anyOf: [assetIdSchema, { type: "null" }] },
                   priceUsd: decimalAmountSchema,
                   valueUsd: decimalAmountSchema,
                 },
@@ -888,6 +896,48 @@ export const validateChainHeaders: onRequestHookHandler = (
     done(error instanceof Error ? error : V2ApiError.invalidRequest());
   }
 };
+
+/**
+ * Compare-and-swap writes: no `Idempotency-Key`, but `X-Loop-Platform` and
+ * `X-Loop-Device-ID` are accepted and validated when present.
+ */
+export const validateChainWriteHeaders: onRequestHookHandler = (
+  request,
+  _reply,
+  done,
+): void => {
+  try {
+    parseV2WriteRequestMetadata(request.raw.rawHeaders);
+    if (hasIdempotencyKeyHeader(request.raw.rawHeaders)) {
+      throw V2ApiError.invalidRequest();
+    }
+    done();
+  } catch (error) {
+    done(error instanceof Error ? error : V2ApiError.invalidRequest());
+  }
+};
+
+/**
+ * V2 amount, price, and threshold fields must arrive as JSON strings. AJV
+ * type coercion runs after this hook, so a JSON number is refused here
+ * before it can be turned into a string (main-agent ruling, Decision 0034).
+ */
+export function assertDecimalStringFields(
+  fields: readonly string[],
+): (request: FastifyRequest) => Promise<void> {
+  return (request) => {
+    const body = request.body;
+    if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+      for (const field of fields) {
+        const value = (body as Record<string, unknown>)[field];
+        if (value !== undefined && typeof value !== "string") {
+          throw V2ApiError.invalidRequest();
+        }
+      }
+    }
+    return Promise.resolve();
+  };
+}
 
 export function assertNoBodyOrQuery(request: FastifyRequest): Promise<void> {
   const query = request.query as Record<string, unknown>;

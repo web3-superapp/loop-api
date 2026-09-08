@@ -20,8 +20,13 @@ import {
   type MarketFactCacheRepository,
 } from "../../database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../../database/watchlist-v2-repository.js";
+import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
+import { bscWrappedNativeAddress } from "./market-contract.js";
 import type { BscReadClient } from "../../integrations/bsc/rpc-client.js";
-import type { TokenPairSnapshot } from "../../integrations/market/market-data-provider.js";
+import type {
+  TokenPairSnapshot,
+  TokenPairsSnapshot,
+} from "../../integrations/market/market-data-provider.js";
 import {
   decomposeAssetId,
   formatDecimalAmount,
@@ -173,6 +178,8 @@ export interface CandleProjection {
   readonly close: string;
   readonly volume: string;
   readonly swapCount: number | null;
+  /** True for the bucket whose closeTime is still in the future. */
+  readonly isOpen: boolean;
 }
 
 export interface MarketCandlesResource {
@@ -213,8 +220,8 @@ export interface TradeProjection {
   readonly quoteSymbol: string;
   readonly priceAfter: string | null;
   readonly poolAddress: string;
-  readonly sender: string | null;
-  readonly recipient: string | null;
+  /** True when the swap's sender or recipient is one of the caller's wallets. */
+  readonly isOwn: boolean;
 }
 
 export interface MarketTradesResource {
@@ -313,6 +320,8 @@ export interface CreateMarketReadServiceInput {
   readonly cache: MarketFactCacheRepository;
   readonly indexerRepository: BscIndexerRepository;
   readonly watchlist: WatchlistV2Repository | null;
+  /** Account wallets for `isOwn` on trades; `null` when the wallet module is not composed. */
+  readonly wallets: AccountWalletRepository | null;
   readonly readClient: BscReadClient;
   readonly cursorCodec: V2CursorCodec | null;
   readonly chainId: string;
@@ -372,6 +381,7 @@ function pairFactsFromSnapshot(
     readonly tokenAddress: string;
     readonly pairs: readonly TokenPairSnapshot[];
   }>,
+  proxied = false,
 ): PairFacts {
   const allUnavailable = (reasonCode: string): PairFacts =>
     Object.freeze({
@@ -393,7 +403,11 @@ function pairFactsFromSnapshot(
   if (pair === null) {
     return allUnavailable(marketReasonCodes.pairNotFound);
   }
-  const quality = fact.quality === "stale" ? "stale" : "fresh";
+  const quality = proxied
+    ? "proxied"
+    : fact.quality === "stale"
+      ? "stale"
+      : "fresh";
   const project = (value: string | null): MarketFactProjection =>
     value === null
       ? unavailableFact(marketReasonCodes.factMissing)
@@ -447,6 +461,7 @@ export function createMarketReadService(
   async function pairFactsFor(
     asset: AssetRecord,
     signal: AbortSignal | undefined,
+    prefetched?: ReadonlyMap<string, CachedFact<TokenPairsSnapshot>>,
   ): Promise<PairFacts> {
     if (asset.status === "blocked") {
       return pairFactsFromSnapshot({
@@ -459,22 +474,16 @@ export function createMarketReadService(
         rawDigest: null,
       });
     }
-    if (asset.address === null) {
-      return pairFactsFromSnapshot({
-        value: null,
-        source: "dexscreener",
-        fetchedAt: null,
-        ttlSeconds: 0,
-        quality: "unavailable",
-        reasonCode: marketReasonCodes.nativeAssetUnsupported,
-        rawDigest: null,
-      });
-    }
-    const fact = await input.facts.readTokenPairs(
-      asset.address,
-      signal === undefined ? {} : { signal },
-    );
-    return pairFactsFromSnapshot(fact);
+    // The native asset is priced through the wrapped native token and
+    // published as `proxied`; nothing else is ever substituted.
+    const address = asset.address ?? bscWrappedNativeAddress;
+    const fact =
+      prefetched?.get(address) ??
+      (await input.facts.readTokenPairs(
+        address,
+        signal === undefined ? {} : { signal },
+      ));
+    return pairFactsFromSnapshot(fact, asset.address === null);
   }
 
   async function chainHead(): Promise<{
@@ -504,6 +513,24 @@ export function createMarketReadService(
       const observedAt = now().toISOString();
       const readable = await input.registry.listReadableAssets(input.chainId);
       const byId = new Map(readable.map((asset) => [asset.assetId, asset]));
+      // One batched Provider read covers the watchlist and the trending scan.
+      const scanned = readable.slice(0, trendingScanLimit);
+      const watchlistIds = new Set<string>();
+      if (input.watchlist !== null) {
+        for (const group of (await input.watchlist.get(principal.userId))
+          .groups) {
+          for (const item of group.items) {
+            watchlistIds.add(item.assetId);
+          }
+        }
+      }
+      const prefetched = await input.facts.readTokenPairsBatch(
+        [
+          ...scanned,
+          ...readable.filter((asset) => watchlistIds.has(asset.assetId)),
+        ].map((asset) => asset.address ?? bscWrappedNativeAddress),
+        signal === undefined ? {} : { signal },
+      );
 
       let watchlist: MarketOverviewResource["watchlist"];
       if (input.watchlist === null) {
@@ -530,7 +557,7 @@ export function createMarketReadService(
               );
               continue;
             }
-            const facts = await pairFactsFor(asset, signal);
+            const facts = await pairFactsFor(asset, signal, prefetched);
             rows.push(
               Object.freeze({
                 assetId: asset.assetId,
@@ -549,12 +576,15 @@ export function createMarketReadService(
       }
 
       const candidates: TrendingRow[] = [];
-      for (const asset of readable.slice(0, trendingScanLimit)) {
+      let lastTrendingReason: string | null = null;
+      for (const asset of scanned) {
         if (asset.address === null) {
           continue;
         }
-        const facts = await pairFactsFor(asset, signal);
+        const facts = await pairFactsFor(asset, signal, prefetched);
         if (facts.volumeForOrdering === null) {
+          lastTrendingReason =
+            facts.volume24h.reasonCode ?? marketReasonCodes.factMissing;
           continue;
         }
         candidates.push(
@@ -579,7 +609,9 @@ export function createMarketReadService(
       )
         ? unavailableBlock("ASSET_REGISTRY_EMPTY")
         : candidates.length === 0
-          ? unavailableBlock(marketReasonCodes.dexscreenerDisabled)
+          ? unavailableBlock(
+              lastTrendingReason ?? marketReasonCodes.dexscreenerDisabled,
+            )
           : Object.freeze({
               status: "available",
               recommendationId: createRecommendationId(),
@@ -789,6 +821,9 @@ export function createMarketReadService(
                       close: candle.close,
                       volume: candle.volume,
                       swapCount: null,
+                      isOpen:
+                        Date.parse(candle.openTime) + intervalSeconds * 1_000 >
+                        now().getTime(),
                     }),
                   ),
                 ),
@@ -880,6 +915,9 @@ export function createMarketReadService(
                 asset.decimals,
               ),
               swapCount: bucket.swapCount,
+              isOpen:
+                Date.parse(bucket.bucketStart) + intervalSeconds * 1_000 >
+                nowMs,
             }),
           );
         }
@@ -991,6 +1029,13 @@ export function createMarketReadService(
 
       const poolsById = new Map(pools.map((pool) => [pool.poolId, pool]));
       const quoteCache = new Map<string, AssetRecord | null>();
+      const ownAddresses = new Set(
+        input.wallets === null
+          ? []
+          : (await input.wallets.list(principal.userId)).map(
+              (wallet) => wallet.address,
+            ),
+      );
       const page = await input.indexerRepository.listPoolSwaps({
         poolIds: pools.map((pool) => pool.poolId),
         limit: pageSize,
@@ -1129,8 +1174,9 @@ export function createMarketReadService(
             assetIsToken0,
           }),
           poolAddress: pool.address,
-          sender: swap.payload["sender"] ?? null,
-          recipient: swap.payload["recipient"] ?? null,
+          isOwn:
+            ownAddresses.has(swap.payload["sender"] ?? "") ||
+            ownAddresses.has(swap.payload["recipient"] ?? ""),
         });
       }
     },

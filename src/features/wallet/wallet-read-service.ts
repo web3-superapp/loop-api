@@ -39,10 +39,7 @@ import {
   multiplyDecimalStrings,
   type MarketSource,
 } from "../market/market-contract.js";
-import {
-  selectPrimaryPair,
-  type MarketFactService,
-} from "../market/market-fact-service.js";
+import type { MarketFactService } from "../market/market-fact-service.js";
 
 /**
  * Read-only wallet projections for D12 (Decision 0033).
@@ -164,8 +161,10 @@ export interface WalletValuationProjection {
   readonly status: "available";
   readonly priceSource: MarketSource;
   readonly fetchedAt: string;
-  readonly quality: "fresh" | "stale";
+  /** `proxied`: the native asset priced through `proxyAsset` (WBNB). */
+  readonly quality: "fresh" | "stale" | "proxied";
   readonly reasonCode: string | null;
+  readonly proxyAsset: string | null;
   readonly priceUsd: string;
   readonly valueUsd: string;
 }
@@ -678,12 +677,10 @@ export function createWalletReadService(
         if (balance.status !== "available") {
           return unavailable(walletReasonCodes.balanceUnavailable);
         }
-        if (asset.address === null) {
-          return unavailable(marketReasonCodes.nativeAssetUnsupported);
-        }
-        const fact = await input.marketFacts.readTokenPairs(asset.address, {
-          signal: abortSignal,
-        });
+        const { fact, pair, proxyAsset } =
+          await input.marketFacts.readAssetPrice(asset, {
+            signal: abortSignal,
+          });
         if (
           fact.value === null ||
           fact.fetchedAt === null ||
@@ -693,7 +690,6 @@ export function createWalletReadService(
             fact.reasonCode ?? marketReasonCodes.providerUnreachable,
           );
         }
-        const pair = selectPrimaryPair(fact.value);
         if (pair === null || pair.priceUsd === null) {
           return unavailable(marketReasonCodes.pairNotFound);
         }
@@ -701,8 +697,9 @@ export function createWalletReadService(
           status: "available" as const,
           priceSource: fact.source,
           fetchedAt: fact.fetchedAt,
-          quality: fact.quality,
+          quality: proxyAsset === null ? fact.quality : ("proxied" as const),
           reasonCode: fact.reasonCode,
+          proxyAsset,
           priceUsd: pair.priceUsd,
           valueUsd: multiplyDecimalStrings(
             balance.displayBalance,
@@ -727,7 +724,8 @@ export function createWalletReadService(
           if (asOf === null || valuation.fetchedAt > asOf) {
             asOf = valuation.fetchedAt;
           }
-          if (valuation.quality === "stale") {
+          if (valuation.reasonCode !== null) {
+            // A stale underlying price (direct or proxied) carries a reason.
             quality = "stale";
           }
         }

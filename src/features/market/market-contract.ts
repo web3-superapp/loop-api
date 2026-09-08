@@ -11,8 +11,19 @@ export const marketFactQualities = Object.freeze([
   "fresh",
   "stale",
   "derived",
+  "proxied",
   "unavailable",
 ] as const);
+
+/**
+ * The native asset has no token address a DEX Provider can price. Its price
+ * is the wrapped native token's price, always published as `quality:
+ * proxied` with the proxy asset named (main-agent ruling, Decision 0034).
+ */
+export const bscWrappedNativeAddress =
+  "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" as const;
+export const bscWrappedNativeAssetId =
+  `eip155:56:${bscWrappedNativeAddress}` as const;
 export type MarketFactQuality = (typeof marketFactQualities)[number];
 
 export const marketSources = Object.freeze([
@@ -294,7 +305,7 @@ export function availableFact(input: {
   readonly source: MarketSource;
   readonly fetchedAt: string;
   readonly ttlSeconds: number;
-  readonly quality: "fresh" | "stale" | "derived";
+  readonly quality: "fresh" | "stale" | "derived" | "proxied";
   readonly reasonCode?: string | null;
 }): MarketFactProjection {
   return Object.freeze({

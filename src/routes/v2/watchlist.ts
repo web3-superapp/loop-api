@@ -10,6 +10,7 @@ import {
   replaceWatchlistRequestSchema,
   v2CommonHeadersSchema,
   validateChainHeaders,
+  validateChainWriteHeaders,
   watchlistResourceSchema,
 } from "./chain-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
@@ -70,7 +71,7 @@ export function registerV2WatchlistRoutes(
         body: replaceWatchlistRequestSchema,
         response: { 200: watchlistResourceSchema, ...chainWriteErrors },
       },
-      onRequest: validateChainHeaders,
+      onRequest: validateChainWriteHeaders,
       preValidation: assertNoQuery,
       preHandler: authenticateLoopBearer,
     },

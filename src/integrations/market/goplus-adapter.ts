@@ -38,6 +38,13 @@ import {
 export const goplusBaseUrl = "https://api.gopluslabs.io";
 export const goplusDefaultRateLimitPerMinute = 30;
 export const goplusChainReference = "56";
+export const goplusMaximumTokenLifetimeSeconds = 86_400;
+/** Body codes GoPlus documents for an invalid or expired access token (unverified). */
+export const goplusTokenRejectedCodes: ReadonlySet<string> = new Set([
+  "4010",
+  "4011",
+  "4012",
+]);
 
 const flagFacts = Object.freeze({
   is_open_source: "openSource",
@@ -230,14 +237,40 @@ export function createGoplusAdapter(
       String(parsed.data.result.expires_in),
       10,
     );
+    // The token lifetime is capped at 24 hours regardless of what the
+    // Provider reports; the exact GoPlus lifetime is unverified.
+    const lifetimeSeconds = Math.min(
+      Number.isSafeInteger(expiresIn) && expiresIn > 0 ? expiresIn : 300,
+      goplusMaximumTokenLifetimeSeconds,
+    );
     accessToken = Object.freeze({
       value: parsed.data.result.access_token,
-      expiresAtMs:
-        nowMs +
-        (Number.isSafeInteger(expiresIn) && expiresIn > 0 ? expiresIn : 300) *
-          1_000,
+      expiresAtMs: nowMs + lifetimeSeconds * 1_000,
     });
     return accessToken.value;
+  }
+
+  /** A rejected bearer clears the cached token so one retry can re-sign. */
+  function isTokenRejection(error: unknown, json: unknown): boolean {
+    if (error instanceof MarketProviderError) {
+      return error.httpStatus === 401 || error.httpStatus === 403;
+    }
+    const parsed = tokenSecurityResponseSchema.safeParse(json);
+    return (
+      parsed.success && goplusTokenRejectedCodes.has(String(parsed.data.code))
+    );
+  }
+
+  async function readSecurityOnce(
+    tokenAddress: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{ readonly json: unknown; readonly rawDigest: string }> {
+    const token = await ensureAccessToken(signal);
+    return kernel.requestJson({
+      url: `${baseUrl}/api/v1/token_security/${goplusChainReference}?contract_addresses=${tokenAddress}`,
+      headers: { authorization: token },
+      ...(signal === undefined ? {} : { signal }),
+    });
   }
 
   return Object.freeze({
@@ -247,12 +280,20 @@ export function createGoplusAdapter(
       options: ProviderReadOptions = {},
     ): Promise<ProviderObservation<TokenSecuritySnapshot>> {
       const tokenAddress = normalizeEvmAddress(rawTokenAddress);
-      const token = await ensureAccessToken(options.signal);
-      const result = await kernel.requestJson({
-        url: `${baseUrl}/api/v1/token_security/${goplusChainReference}?contract_addresses=${tokenAddress}`,
-        headers: { authorization: token },
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
+      let result: { readonly json: unknown; readonly rawDigest: string };
+      try {
+        result = await readSecurityOnce(tokenAddress, options.signal);
+        if (isTokenRejection(null, result.json)) {
+          accessToken = null;
+          result = await readSecurityOnce(tokenAddress, options.signal);
+        }
+      } catch (error) {
+        if (!isTokenRejection(error, null)) {
+          throw error;
+        }
+        accessToken = null;
+        result = await readSecurityOnce(tokenAddress, options.signal);
+      }
       return Object.freeze({
         value: normalizeGoplusTokenSecurity(result.json, tokenAddress),
         source: "goplus" as const,

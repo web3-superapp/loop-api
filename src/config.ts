@@ -66,7 +66,8 @@ const optionalOpaqueSecret = (minimumLength: number, maximumLength: number) =>
 const marketEnvironmentShape = {
   MARKET_PROVIDER_DEXSCREENER_ENABLED: booleanString,
   MARKET_PROVIDER_GECKOTERMINAL_ENABLED: booleanString,
-  MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
+  MARKET_DEXSCREENER_BUDGET_API: positiveIntegerString(1, 300),
+  MARKET_DEXSCREENER_BUDGET_WORKER: positiveIntegerString(1, 300),
   MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 30),
   MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
   MARKET_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
@@ -81,9 +82,23 @@ function refineMarketEnvironment(
   value: {
     readonly GOPLUS_APP_KEY?: string | undefined;
     readonly GOPLUS_APP_SECRET?: string | undefined;
+    readonly MARKET_DEXSCREENER_BUDGET_API: number;
+    readonly MARKET_DEXSCREENER_BUDGET_WORKER: number;
   },
   context: z.RefinementCtx,
 ): void {
+  if (
+    value.MARKET_DEXSCREENER_BUDGET_API +
+      value.MARKET_DEXSCREENER_BUDGET_WORKER >
+    300
+  ) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "MARKET_DEXSCREENER_BUDGET_API + MARKET_DEXSCREENER_BUDGET_WORKER must not exceed the documented 300 requests per minute",
+      path: ["MARKET_DEXSCREENER_BUDGET_API"],
+    });
+  }
   if (
     (value.GOPLUS_APP_KEY !== undefined) !==
     (value.GOPLUS_APP_SECRET !== undefined)
@@ -511,7 +526,9 @@ export interface GoplusConfig {
 export interface MarketConfig {
   readonly dexscreener: {
     readonly enabled: boolean;
-    readonly rateLimitPerMinute: number;
+    /** Per-process minute budgets; api + worker never exceed the documented 300. */
+    readonly budgetApiPerMinute: number;
+    readonly budgetWorkerPerMinute: number;
   };
   readonly geckoterminal: {
     readonly enabled: boolean;
@@ -907,8 +924,10 @@ function marketEnvironmentDefaults(
       environment["MARKET_PROVIDER_DEXSCREENER_ENABLED"] ?? "true",
     MARKET_PROVIDER_GECKOTERMINAL_ENABLED:
       environment["MARKET_PROVIDER_GECKOTERMINAL_ENABLED"] ?? "false",
-    MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE:
-      environment["MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE"] ?? "300",
+    MARKET_DEXSCREENER_BUDGET_API:
+      environment["MARKET_DEXSCREENER_BUDGET_API"] ?? "120",
+    MARKET_DEXSCREENER_BUDGET_WORKER:
+      environment["MARKET_DEXSCREENER_BUDGET_WORKER"] ?? "120",
     MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE:
       environment["MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE"] ?? "30",
     MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE:
@@ -928,7 +947,8 @@ function marketEnvironmentDefaults(
 function parseMarketConfig(data: {
   readonly MARKET_PROVIDER_DEXSCREENER_ENABLED: boolean;
   readonly MARKET_PROVIDER_GECKOTERMINAL_ENABLED: boolean;
-  readonly MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_DEXSCREENER_BUDGET_API: number;
+  readonly MARKET_DEXSCREENER_BUDGET_WORKER: number;
   readonly MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: number;
   readonly MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: number;
   readonly MARKET_PRICE_TTL_SECONDS: number;
@@ -941,7 +961,8 @@ function parseMarketConfig(data: {
   return Object.freeze({
     dexscreener: Object.freeze({
       enabled: data.MARKET_PROVIDER_DEXSCREENER_ENABLED,
-      rateLimitPerMinute: data.MARKET_DEXSCREENER_RATE_LIMIT_PER_MINUTE,
+      budgetApiPerMinute: data.MARKET_DEXSCREENER_BUDGET_API,
+      budgetWorkerPerMinute: data.MARKET_DEXSCREENER_BUDGET_WORKER,
     }),
     geckoterminal: Object.freeze({
       enabled: data.MARKET_PROVIDER_GECKOTERMINAL_ENABLED,

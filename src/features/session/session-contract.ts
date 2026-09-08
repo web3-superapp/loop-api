@@ -92,6 +92,16 @@ export interface V2CommonRequestMetadata {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/**
+ * Metadata every V2 write may carry. `X-Loop-Platform` and `X-Loop-Device-ID`
+ * are optional on writes outside the session module but are validated when
+ * present (main-agent ruling, Decision 0034).
+ */
+export interface V2WriteRequestMetadata extends V2CommonRequestMetadata {
+  readonly deviceId: string | null;
+  readonly platform: DeviceSessionClientPlatform | null;
+}
+
 export interface V2SessionWriteMetadata extends V2CommonRequestMetadata {
   readonly deviceId: string;
   readonly idempotencyKey: string;
@@ -191,6 +201,46 @@ export function parseV2CommonRequestMetadata(
 ): V2CommonRequestMetadata {
   assertOnlyAllowedLoopHeaders(rawHeaders, commonLoopHeaders);
   return parseV2CommonRequestMetadataUnchecked(rawHeaders);
+}
+
+function readAtMostOneHeader(
+  rawHeaders: readonly string[],
+  expectedName: string,
+): string | null {
+  const values = collectRawHeaderValues(rawHeaders, expectedName);
+  if (values.length === 0) {
+    return null;
+  }
+  if (values.length !== 1 || values[0] === undefined) {
+    throw V2ApiError.invalidRequest();
+  }
+  return values[0];
+}
+
+export function parseV2WriteRequestMetadata(
+  rawHeaders: readonly string[],
+): V2WriteRequestMetadata {
+  assertOnlyAllowedLoopHeaders(rawHeaders, sessionWriteLoopHeaders);
+  const common = parseV2CommonRequestMetadataUnchecked(rawHeaders);
+  const deviceId = readAtMostOneHeader(
+    rawHeaders,
+    v2SessionHeaderNames.deviceId,
+  );
+  const platform = readAtMostOneHeader(
+    rawHeaders,
+    v2SessionHeaderNames.platform,
+  );
+  if (
+    (deviceId !== null && !canonicalUuidV4Pattern.test(deviceId)) ||
+    (platform !== null && platform !== "android" && platform !== "ios")
+  ) {
+    throw V2ApiError.invalidRequest();
+  }
+  return Object.freeze({
+    ...common,
+    deviceId,
+    platform,
+  });
 }
 
 export function parseV2SessionWriteMetadata(

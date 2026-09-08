@@ -44,6 +44,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `quality`     | 含义                                                                           | UI                                |
 | ------------- | ------------------------------------------------------------------------------ | --------------------------------- |
 | `fresh`       | 在 TTL 内由 Provider 报告                                                      | 正常显示，附来源与 `fetchedAt`    |
+| `proxied`     | 原生 BNB 通过 WBNB 价格代理（只此一种代理）                                    | 显示并标注"以 WBNB 计价"          |
 | `stale`       | 已过 TTL，但 Provider 暂时不可达/被限速，仍在宽限期内（`reasonCode` 给出原因） | 显示数值 + "数据可能过期"标记     |
 | `derived`     | LOOP 由链上事件聚合（只用于 K 线）                                             | 显示并标注"链上成交聚合"          |
 | `unavailable` | `value` 为 `null`，`reasonCode` 说明原因                                       | 该块 unavailable，不要显示 0 或 — |
@@ -53,21 +54,21 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 常见 `reasonCode`：
 
-| reasonCode                               | 含义                                            |
-| ---------------------------------------- | ----------------------------------------------- |
-| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                          |
-| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）        |
-| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）        |
-| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                         |
-| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                          |
-| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失） |
-| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对        |
-| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段             |
-| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有代币地址；不会用 WBNB 代替         |
-| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池            |
-| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                      |
-| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                |
-| `ASSET_BLOCKED`                          | registry 标记为 blocked                         |
+| reasonCode                               | 含义                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                                                 |
+| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）                               |
+| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）                               |
+| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                                                |
+| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                                                 |
+| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失）                        |
+| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                               |
+| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                    |
+| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交/K 线不可用（价格走 `proxied`） |
+| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                   |
+| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                             |
+| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                       |
+| `ASSET_BLOCKED`                          | registry 标记为 blocked                                                |
 
 ## 3. `GET /v2/market/overview` → `market` 页
 
@@ -192,6 +193,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     `BSC_POOL_INDEXER_NOT_STARTED` / `MARKET_NO_SWAPS_IN_RANGE` / `MARKET_PROVIDER_GECKOTERMINAL_DISABLED`）。
 - `items` 按 `openTime` 升序，只包含有成交的桶（空桶不补 0）。`1w` 按 epoch 周
   （周四 00:00 UTC）对齐。`limit` 默认 120，最大 300。
+- 每根带 `isOpen`：`true` 表示该桶尚未收盘（close/high/low 还会变），前端把它画成
+  "进行中"的最后一根，不要缓存。
 - OHLC 是字符串，绘图前在前端归一化为 `double`；O/H/L/C 文本显示用 `Decimal`。
 - 原型 `chart-full` 的 `1m`、MA/EMA/MACD/RSI 指标没有后端，前端本地计算或不显示。
 
@@ -236,9 +239,11 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 ```
 
 - `direction` 相对于该资产：`buy` = 资产从池子流出（有人买入）。金额为绝对值字符串。
+- **不下发对手方地址**：`isOwn: true` 表示该笔 swap 的 sender/recipient 是当前账号的
+  某个钱包（服务端按 `account_wallets` 计算），用于原型里"我"的标记。
 - `status`：`confirmed`（确认数 ≥ 15）/ `pending` / `reorged`（行保留，前端把已显示的该条标记为已回滚）。
 - 原型的"大单 / 聪明钱"分段没有后端：`大单` 由前端按 `amountQuote` 阈值本地筛选，
-  `聪明钱` 段 unavailable。"我"的标记由前端用自己的钱包地址匹配 `sender/recipient`。
+  `聪明钱` 段 unavailable。
 - `cursor` 与 `limit` 互斥；cursor 绑定账号 + assetId，跨资产使用 → `400 INVALID_REQUEST`。
 - 未登记池 / lane 未运行 → `trades.status: unavailable`（不是空列表）。
 

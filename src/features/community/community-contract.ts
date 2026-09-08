@@ -6,10 +6,10 @@ import { V2ApiError } from "../../core/http/v2-error.js";
 import { loopIdPatternSource } from "../identity/loop-id.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
-  parseV2CommonRequestMetadata,
   v2CommonHeadersSchema,
   v2SessionHeaderNames,
-  type V2CommonRequestMetadata,
+  parseV2WriteRequestMetadata,
+  type V2WriteRequestMetadata,
 } from "../session/session-contract.js";
 import {
   communityMembershipStatuses,
@@ -418,14 +418,14 @@ export const v2CommandHeadersSchema = {
   },
 } as const;
 
-export interface V2CommandMetadata extends V2CommonRequestMetadata {
+export interface V2CommandMetadata extends V2WriteRequestMetadata {
   readonly idempotencyKey: string;
 }
 
 export function parseV2CommandMetadata(
   rawHeaders: readonly string[],
 ): V2CommandMetadata {
-  const common = parseV2CommonRequestMetadata(rawHeaders);
+  const common = parseV2WriteRequestMetadata(rawHeaders);
   const values: string[] = [];
   for (let index = 0; index < rawHeaders.length; index += 2) {
     if (

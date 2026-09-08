@@ -183,8 +183,8 @@ source: Privy's own balance view is a cross-check whose `disputed` or
 `unavailable` result never changes the published value. Valuation and net worth
 come from the D11 market facts (Decision 0034): a token row is valued from
 the DexScreener price of the asset itself when it is `fresh` or `stale`
-(`quality` passed through), the native row stays `unavailable`
-(`MARKET_NATIVE_ASSET_NOT_SUPPORTED`; no proxy price), and `netWorth` is
+(`quality` passed through), the native row is valued through WBNB
+(`quality: proxied`, `proxyAsset` named), and `netWorth` is
 `available` only when every row is valued, otherwise `partial` with
 `unavailableCount`; both carry `valuationCurrency: USD` and `isSpendable:
 false`. Native

@@ -29,6 +29,7 @@ import {
 } from "../../features/profile/profile-v2-contract.js";
 import {
   parseV2CommonRequestMetadata,
+  parseV2WriteRequestMetadata,
   parseV2SessionWriteMetadata,
   v2CommonHeadersSchema,
   v2SessionHeaderNames,
@@ -371,7 +372,7 @@ const validateCasWriteHeaders: onRequestHookHandler = (
   done,
 ): void => {
   try {
-    parseV2CommonRequestMetadata(request.raw.rawHeaders);
+    parseV2WriteRequestMetadata(request.raw.rawHeaders);
     if (hasRawHeader(request, v2SessionHeaderNames.idempotencyKey)) {
       throw V2ApiError.invalidRequest();
     }

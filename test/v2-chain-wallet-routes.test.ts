@@ -850,6 +850,14 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     };
     return {
       readTokenPairs: vi.fn(() => Promise.resolve(fact)),
+      readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+      readAssetPrice: vi.fn((asset: { readonly address: string | null }) =>
+        Promise.resolve({
+          fact,
+          pair: fact.value?.pairs[0] ?? null,
+          proxyAsset: asset.address === null ? wbnbAssetId : null,
+        }),
+      ),
       readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
       readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
       readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
@@ -857,7 +865,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     };
   }
 
-  it("values token rows from a fresh Provider price and reports a partial net worth", async () => {
+  it("values token rows from a fresh Provider price and the native row through the WBNB proxy", async () => {
     const { app } = await createApp(fakes(), {}, marketFactsFake("fresh"));
     const response = await app.inject({
       method: "GET",
@@ -873,6 +881,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       fetchedAt: observedAt,
       quality: "fresh",
       reasonCode: null,
+      proxyAsset: null,
       priceUsd: "747.39",
       valueUsd: "1121.085",
     });
@@ -880,15 +889,20 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       (row) => row.assetId === "eip155:56:native",
     );
     expect(native?.valuation).toEqual({
-      status: "unavailable",
-      reasonCode: "MARKET_NATIVE_ASSET_NOT_SUPPORTED",
+      status: "available",
+      priceSource: "dexscreener",
+      fetchedAt: observedAt,
+      quality: "proxied",
+      reasonCode: null,
+      proxyAsset: wbnbAssetId,
+      priceUsd: "747.39",
+      valueUsd: "5231.73",
     });
-    // The native row is unpriced, so the total is partial and excludes it.
     expect(body.netWorth).toEqual({
-      status: "partial",
+      status: "available",
       valuationCurrency: "USD",
-      valueUsd: "1121.085",
-      unavailableCount: 1,
+      valueUsd: "6352.815",
+      unavailableCount: 0,
       quality: "fresh",
       priceSource: "dexscreener",
       asOf: observedAt,
@@ -914,7 +928,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       valueUsd: "1121.085",
     });
     expect(staleBody.netWorth).toMatchObject({
-      status: "partial",
+      status: "available",
       quality: "stale",
     });
 

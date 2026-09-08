@@ -20,8 +20,15 @@ export interface MarketProviders {
   readonly candles: CandlesProvider | null;
 }
 
+/**
+ * `api` and `worker` are separate processes with separate DexScreener
+ * budgets; their sum is capped at the documented 300/min by configuration.
+ */
+export type MarketProviderRole = "api" | "worker";
+
 export function createMarketProviders(
   config: MarketConfig,
+  role: MarketProviderRole,
   options: { readonly fetch?: ProviderFetch } = {},
 ): MarketProviders {
   const fetchOption =
@@ -29,7 +36,10 @@ export function createMarketProviders(
   return Object.freeze({
     pairs: config.dexscreener.enabled
       ? createDexscreenerAdapter({
-          rateLimitPerMinute: config.dexscreener.rateLimitPerMinute,
+          rateLimitPerMinute:
+            role === "api"
+              ? config.dexscreener.budgetApiPerMinute
+              : config.dexscreener.budgetWorkerPerMinute,
           ...fetchOption,
         })
       : null,

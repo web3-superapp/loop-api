@@ -138,6 +138,45 @@ token address; WBNB is never substituted) are all `unavailable` blocks.
 effectiveAt, ordering: dexscreener_volume_h24_desc}`. No engagement, mining, or
 community signal enters the ordering.
 
+### Review rulings (main agent, 2026-09-08)
+
+- **Native proxy.** Fact quality gains `proxied`. The native asset's price is
+  the wrapped native token's (WBNB) price in every market and wallet
+  projection; wallet valuations carry `proxyAsset` and `quality: proxied`,
+  market facts carry `quality: proxied`. `netWorth` is `available` when every
+  row is `available` (direct or proxied). Nothing else is ever substituted.
+- **Alerts on the native asset** are allowed and evaluated through the proxy;
+  the event's `sourceFactRef` is `dexscreener:<pair>:proxy:<wbnb>` and the
+  notification payload carries `proxyAsset`. An alert whose asset has no
+  DexScreener base pair is `VALIDATION_FAILED` at create/replace; a Provider
+  outage at write time is `CAPABILITY_UNAVAILABLE` (retryable), so the
+  evaluator never holds an alert it can never price.
+- **DexScreener budget and batching.** `MARKET_DEXSCREENER_BUDGET_API` and
+  `MARKET_DEXSCREENER_BUDGET_WORKER` (default 120/min each; configuration
+  refuses a sum above 300). The overview and trending scan read one batch
+  request (`/tokens/v1/bsc/{≤30 addresses}`); concurrent reads of one
+  subject share a single in-flight Provider request.
+- **Evaluator paging.** `listEvaluable` orders by `last_evaluated_at nulls
+first, created_at, id` and the tick pages with an exclusion list until the
+  active set is exhausted.
+- **Trades publish `isOwn`,** computed server-side from the caller's
+  `account_wallets`, instead of counterparty addresses.
+- **Wallet valuation** receives the market facts only when the market runtime
+  is composed; otherwise every row is `MARKET_RUNTIME_UNAVAILABLE`.
+- **Trending** with no priceable candidate reports the last fact's reason.
+- **Amount fields are JSON strings** enforced by a `preValidation` hook before
+  AJV coercion (`INVALID_REQUEST` for a number); the earlier "coercion is
+  accepted" wording is withdrawn.
+- **`POST /v2/notifications/{id}/read`** keeps its unbound `Idempotency-Key`
+  (accepted).
+- **Write headers.** Every V2 write accepts `X-Loop-Platform` and
+  `X-Loop-Device-ID`, validated when present (`parseV2WriteRequestMetadata`).
+- **GoPlus** clears a rejected access token (HTTP 401/403 or body code
+  4010–4012 — unverified against the live API) and retries once; token
+  lifetime is capped at 24 h.
+- **Derived candles** mark the bucket that has not closed with `isOpen: true`
+  (named `isOpen` because `open` is the opening price).
+
 ### Alerts V2 share the table, not the namespace
 
 `price_alert_definitions` gains `asset_id`, `triggered_at`, and

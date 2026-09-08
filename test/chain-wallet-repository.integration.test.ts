@@ -94,6 +94,12 @@ async function cleanFixtures(): Promise<void> {
     text: `delete from public.loop_users where privy_user_id like $1`,
     values: [`${testPrivyPrefix}%`],
   });
+  // Pools (S5b) reference registry assets; drop any pool on the fixture
+  // assets before the assets themselves so suite order cannot matter.
+  await pool.query(
+    `delete from public.indexed_pool_events where chain_id = 'eip155:56'`,
+  );
+  await pool.query(`delete from public.pools where chain_id = 'eip155:56'`);
   await pool.query({
     text: `delete from public.assets where asset_id = any($1::text[])`,
     values: [[wbnbAssetId, usd1AssetId]],

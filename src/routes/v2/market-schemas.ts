@@ -409,6 +409,7 @@ export const marketCandlesResourceSchema = {
                   "close",
                   "volume",
                   "swapCount",
+                  "isOpen",
                 ],
                 properties: {
                   openTime: dateTimeSchema,
@@ -420,6 +421,11 @@ export const marketCandlesResourceSchema = {
                   volume: unsignedDecimalSchema,
                   swapCount: {
                     anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+                  },
+                  isOpen: {
+                    type: "boolean",
+                    description:
+                      "True for the bucket that has not closed yet; its close/high/low can still change.",
                   },
                 },
               },
@@ -470,8 +476,7 @@ export const marketTradesResourceSchema = {
                   "quoteSymbol",
                   "priceAfter",
                   "poolAddress",
-                  "sender",
-                  "recipient",
+                  "isOwn",
                 ],
                 properties: {
                   transactionHash: {
@@ -512,17 +517,10 @@ export const marketTradesResourceSchema = {
                     type: "string",
                     pattern: evmAddressPatternSource,
                   },
-                  sender: {
-                    anyOf: [
-                      { type: "string", pattern: evmAddressPatternSource },
-                      { type: "null" },
-                    ],
-                  },
-                  recipient: {
-                    anyOf: [
-                      { type: "string", pattern: evmAddressPatternSource },
-                      { type: "null" },
-                    ],
+                  isOwn: {
+                    type: "boolean",
+                    description:
+                      "True when the swap's sender or recipient is one of the caller's own wallets. Counterparty addresses are never published.",
                   },
                 },
               },

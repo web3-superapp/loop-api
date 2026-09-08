@@ -393,4 +393,66 @@ describe("GeckoTerminal adapter", () => {
     // The cap is enforced by the kernel limiter created with min(300, 30).
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it("normalises a batch response per requested token", async () => {
+    const stub = fetchStub(() => ({ body: dexscreenerBody }));
+    const adapter = createDexscreenerAdapter({ fetch: stub.fetch });
+    const observation = await adapter.readTokenPairsBatch([wbnb, usdt]);
+    expect(stub.calls).toEqual([
+      `https://api.dexscreener.com/tokens/v1/bsc/${wbnb},${usdt}`,
+    ]);
+    expect(observation.value.map((entry) => entry.tokenAddress)).toEqual([
+      wbnb,
+      usdt,
+    ]);
+    expect(observation.value[0]?.pairs).toHaveLength(2);
+    expect(observation.value[1]?.pairs).toHaveLength(2);
+    await expect(adapter.readTokenPairsBatch([])).rejects.toBeInstanceOf(
+      MarketProviderError,
+    );
+  });
+
+  it("re-signs once when GoPlus rejects the cached access token", async () => {
+    let tokens = 0;
+    let securityCalls = 0;
+    const stub = fetchStub((url) => {
+      if (url.endsWith("/api/v1/token")) {
+        tokens += 1;
+        return {
+          body: JSON.stringify({
+            code: 1,
+            result: {
+              access_token: `tok${String(tokens)}`,
+              expires_in: 999_999,
+            },
+          }),
+        };
+      }
+      securityCalls += 1;
+      if (securityCalls === 1) {
+        return {
+          body: JSON.stringify({
+            code: 4011,
+            message: "token expired",
+            result: null,
+          }),
+        };
+      }
+      return {
+        body: JSON.stringify({
+          code: 1,
+          result: { [wbnb]: { holder_count: "1" } },
+        }),
+      };
+    });
+    const adapter = createGoplusAdapter({
+      appKey: "app",
+      appSecret: "secret",
+      fetch: stub.fetch,
+    });
+    const observation = await adapter.readTokenSecurity(wbnb);
+    expect(observation.value.holderCount).toBe("1");
+    expect(tokens).toBe(2);
+    expect(securityCalls).toBe(2);
+  });
 });

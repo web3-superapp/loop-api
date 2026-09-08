@@ -20,11 +20,12 @@
 
 ## 2. Headers
 
-| 接口                                                                | 必带                                                                       |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 所有 GET                                                            | Bearer、`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`            |
-| `POST /v2/alerts`、`POST …/read`                                    | 以上 + `Idempotency-Key`（UUIDv4，每个逻辑操作一个）                       |
-| `PUT /v2/alerts/{id}`、`DELETE`、`PUT /v2/notification-preferences` | 以上，**不带** `Idempotency-Key`（带了 → `400`），靠 `expectedVersion` CAS |
+| 接口                                                                | 必带                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 所有 GET                                                            | Bearer、`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`                                         |
+| `POST /v2/alerts`、`POST …/read`                                    | 以上 + `Idempotency-Key`（UUIDv4，每个逻辑操作一个）                                                    |
+| `PUT /v2/alerts/{id}`、`DELETE`、`PUT /v2/notification-preferences` | 以上，**不带** `Idempotency-Key`（带了 → `400`），靠 `expectedVersion` CAS                              |
+| 所有写操作（可选）                                                  | `X-Loop-Platform: ios\|android`、`X-Loop-Device-ID`（UUIDv4）；存在即校验，格式错 → `400`；读接口不接受 |
 
 ## 3. 价格提醒资源
 
@@ -59,8 +60,11 @@
 
 - `condition`：`above | at_or_above | below | at_or_below`，对比的是 DexScreener
   以该资产为 base 的最深交易对的 `priceUsd`（USD）。
-- `threshold` 是正十进制字符串（最多 18 位小数）；`"0"`、负数 → `422 VALIDATION_FAILED`；
-  科学计数法 → `400`。
+- `threshold` **必须是 JSON 字符串**（正十进制，最多 18 位小数）：JSON 数字 → `400 INVALID_REQUEST`
+  （服务端在类型强转前拒绝）；`"0"`、负数 → `422 VALIDATION_FAILED`；科学计数法 → `400`。
+- 资产必须可定价：无 DexScreener 主对的代币 → `422 VALIDATION_FAILED`；原生 BNB 允许，
+  用 WBNB 代理价评估（触发通知 `payload.proxyAsset` = WBNB 的 assetId）；创建时 Provider
+  不可达 → `503 CAPABILITY_UNAVAILABLE`（可重试）。
 - `state`：`active`（等待评估）/ `triggered`（已触发一次，**一次性**，`PUT` 后重新变为
   `active`）/ `expired`（过了 `expiresAt` 未触发，只读投影）。
 - `lastEvaluatedAt: null` 表示评估器还没看过这条（评估器是后端 worker 的开关
