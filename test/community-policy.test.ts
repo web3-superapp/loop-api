@@ -218,9 +218,11 @@ describe("V2 community permission matrix", () => {
       role: "member",
       status: "banned",
     });
+    // An unban restores an active member instead of removing the row, so the
+    // membership (and its join date) survives a ban.
     expect(
       membershipAfterAction("unban", { role: "member", status: "banned" }),
-    ).toBeNull();
+    ).toEqual({ role: "member", status: "active" });
   });
 
   it("rejects transitions the stored state does not allow", () => {

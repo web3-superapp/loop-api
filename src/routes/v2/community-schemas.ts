@@ -821,7 +821,12 @@ export const memberListQuerySchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    role: { type: "string", enum: [...memberRoleFilters] },
+    role: {
+      type: "string",
+      enum: [...memberRoleFilters],
+      description:
+        "`all`, `owner`, and `admin` list active and muted memberships only. `banned` is the governance view of the banned memberships and is available to an owner or admin only; any other viewer receives PERMISSION_DENIED. The segment counts stay the counts of the non-banned directory.",
+    },
     cursor: cursorSchema,
     limit: listLimitSchema,
   },

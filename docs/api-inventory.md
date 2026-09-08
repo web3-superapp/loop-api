@@ -174,7 +174,8 @@ membership is synchronized by the transactional outbox
 `community_channel_sync_jobs`, executed after commit by the default-off
 `community-channel-sync` worker lane (`COMMUNITY_CHANNEL_SYNC_ENABLED`, which
 requires the complete Stream credential pair). Join enqueues `add`; leave and
-ban enqueue `remove`; unban never adds back. Each provider call is attempted
+ban enqueue `remove`; an unban restores the membership and enqueues `add`
+(revision, 2026-09-08). Each provider call is attempted
 exactly once per lease, an unknown result becomes `reconciling` with a bounded
 backoff, and the channel member cap
 (`V2_COMMUNITY_CHANNEL_MEMBER_CAP`, default 3000) parks a member as
@@ -219,7 +220,7 @@ community repository and the V2 cursor codec (plus the public search quota for
 capabilities: `communityChat` and `voiceRooms`, both `available` only with the
 module enabled, the communication repository composed, the community runtime
 available, and Stream credentials present. `voiceRooms.evidence` is always
-`{status: "pending", reasonCode: "AUDIO_ROOM_ROLE_EVIDENCE_PENDING"}` until the
+`{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until the
 Decision 0005 Stream Dashboard role export exists, so the mobile locator stays
 unavailable even when the backend is available.
 

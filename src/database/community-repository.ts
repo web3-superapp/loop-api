@@ -22,6 +22,7 @@ import {
   communityRoles,
   membershipAfterAction,
   targetStateAllowsAction,
+  viewerPermissions,
   type CommunityRole,
   type CommunityTargetAction,
 } from "../features/community/community-policy.js";
@@ -1363,10 +1364,23 @@ export function createPostgresCommunityRepository(
           `,
           values: [viewerUserId],
         });
+        // `banned` is a governance view of the same directory: it lists the
+        // memberships the other filters exclude, and only an account that may
+        // ban (owner or admin) may read it. Every filter is a fixed literal,
+        // never interpolated caller input.
+        const bannedView = rawInput.role === "banned";
+        if (bannedView && !viewerPermissions(viewerMembership).canBan) {
+          throw new CommunityPermissionDeniedError();
+        }
         const roleFilterSql =
-          rawInput.role === "all"
-            ? ""
-            : `and membership.role = '${rawInput.role === "owner" ? "owner" : "admin"}'`;
+          rawInput.role === "owner"
+            ? "and membership.role = 'owner'"
+            : rawInput.role === "admin"
+              ? "and membership.role = 'admin'"
+              : "";
+        const statusFilterSql = bannedView
+          ? "and membership.status = 'banned'"
+          : "and membership.status <> 'banned'";
         const values: unknown[] = [communityId, limit];
         let keyset = "";
         const after = rawInput.after;
@@ -1399,7 +1413,7 @@ export function createPostgresCommunityRepository(
             join public.loop_users as account
               on account.id = membership.owner_user_id
             where membership.community_id = $1
-              and membership.status <> 'banned'
+              ${statusFilterSql}
               ${roleFilterSql}
               ${keyset}
             order by
@@ -1543,40 +1557,32 @@ export function createPostgresCommunityRepository(
           if (!targetStateAllowsAction(action, targetMembership)) {
             throw new CommunityDataStaleError();
           }
+          // Every governance action keeps the membership row, so `joined_at`
+          // survives a ban and the unban that follows it.
           const next = membershipAfterAction(action, targetMembership);
-          if (next === null) {
-            await client.query({
-              text: `
-                delete from public.community_memberships
-                where community_id = $1 and owner_user_id = $2
-              `,
-              values: [communityId, targetUserId],
-            });
-          } else {
-            if (action === "transferOwnership") {
-              await client.query({
-                text: `
-                  update public.community_memberships
-                  set role = 'admin', updated_at = clock_timestamp(),
-                      record_version = record_version + 1
-                  where community_id = $1 and owner_user_id = $2
-                `,
-                values: [communityId, actorUserId],
-              });
-            }
+          if (action === "transferOwnership") {
             await client.query({
               text: `
                 update public.community_memberships
-                set
-                  role = $3,
-                  status = $4,
-                  updated_at = clock_timestamp(),
-                  record_version = record_version + 1
+                set role = 'admin', updated_at = clock_timestamp(),
+                    record_version = record_version + 1
                 where community_id = $1 and owner_user_id = $2
               `,
-              values: [communityId, targetUserId, next.role, next.status],
+              values: [communityId, actorUserId],
             });
           }
+          await client.query({
+            text: `
+              update public.community_memberships
+              set
+                role = $3,
+                status = $4,
+                updated_at = clock_timestamp(),
+                record_version = record_version + 1
+              where community_id = $1 and owner_user_id = $2
+            `,
+            values: [communityId, targetUserId, next.role, next.status],
+          });
           const eventType =
             action === "mute"
               ? "member_muted"
@@ -1595,41 +1601,38 @@ export function createPostgresCommunityRepository(
             targetUserId,
             eventType,
             fromRole: targetMembership.role,
-            toRole: next?.role ?? null,
+            toRole: next.role,
             fromStatus: targetMembership.status,
-            toStatus: next?.status ?? null,
+            toStatus: next.status,
             reasonCode: `action_${action.toLowerCase()}`,
             idempotencyRecordId: recordId,
             requestId,
           });
-          // A ban removes the account from the official channel. An unban does
-          // not add it back: the account rejoins the channel by joining the
-          // community again, so an unban never silently restores chat access.
-          if (action === "ban") {
+          // A ban removes the account from the official channel; an unban
+          // restores the membership, so it enqueues the matching `add`. Both
+          // jobs are no-ops until the community has a provisioned channel.
+          if (action === "ban" || action === "unban") {
             await enqueueCommunityChannelSync(client, {
               communityId,
               ownerUserId: targetUserId,
-              kind: "remove",
+              kind: action === "ban" ? "remove" : "add",
               requestId,
             });
           }
           return Object.freeze({
             community: await readCommunity(client, communityId),
             actorMembership: actor,
-            target:
-              next === null
-                ? null
-                : Object.freeze({
-                    membershipId: opaqueIdSchema.parse(target["membership_id"]),
-                    ...next,
-                    joinedAt: targetMembership.joinedAt,
-                    profile: toIdentity({
-                      public_profile_id: target["public_profile_id"],
-                      loop_id: target["loop_id"],
-                      alias: target["alias"],
-                      avatar_ref: target["avatar_ref"],
-                    }),
-                  }),
+            target: Object.freeze({
+              membershipId: opaqueIdSchema.parse(target["membership_id"]),
+              ...next,
+              joinedAt: targetMembership.joinedAt,
+              profile: toIdentity({
+                public_profile_id: target["public_profile_id"],
+                loop_id: target["loop_id"],
+                alias: target["alias"],
+                avatar_ref: target["avatar_ref"],
+              }),
+            }),
           });
         });
       } catch (error) {

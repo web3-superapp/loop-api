@@ -76,7 +76,13 @@ export type CommunityVerificationFilter =
 export const communityMembershipFilters = ["all", "joined"] as const;
 export type CommunityMembershipFilter =
   (typeof communityMembershipFilters)[number];
-export const memberRoleFilters = ["all", "owner", "admin"] as const;
+/**
+ * Member directory filters. `banned` is a governance view: it lists the
+ * memberships a ban parked at `status = "banned"`, which the default views
+ * exclude, and only an owner or admin may ask for it (S3 integration,
+ * FINDING-1: without it an unban has no entry point).
+ */
+export const memberRoleFilters = ["all", "owner", "admin", "banned"] as const;
 export type MemberRoleFilter = (typeof memberRoleFilters)[number];
 
 export const connectionDirections = ["following", "followers"] as const;

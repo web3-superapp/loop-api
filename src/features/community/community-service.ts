@@ -42,6 +42,7 @@ import {
   searchFilter,
   updateCommunityDigestParts,
   searchResultLimits,
+  memberRoleFilters,
   unavailable,
   unavailableSearchDomains,
   communityUnavailableReasonCodes,
@@ -775,7 +776,7 @@ export function createCommunityService(
   ): Promise<CommunityMemberListResource> {
     const role = parseEnumValue<MemberRoleFilter>(
       rawRole,
-      ["all", "owner", "admin"],
+      [...memberRoleFilters],
       "all",
     );
     const filter = communityMembersFilter(communityId, role);

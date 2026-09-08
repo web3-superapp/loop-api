@@ -171,11 +171,17 @@ export function viewerPermissions(
 export const communityRoleRank: Readonly<Record<CommunityRole, number>> =
   Object.freeze({ owner: 0, admin: 1, member: 2 });
 
-/** Membership status after each action; `null` means the row is removed. */
+/**
+ * Membership after each action. Every governance action keeps the membership
+ * row: an unban restores the account as an active member (S3 integration,
+ * FINDING-2 — deleting the row made an unban silently mean "removed from the
+ * community", and the join date was lost with it). Leaving the community is
+ * the only path that removes a membership, and it is a self action.
+ */
 export function membershipAfterAction(
   action: CommunityTargetAction,
   current: CommunityActorMembership,
-): CommunityActorMembership | null {
+): CommunityActorMembership {
   switch (action) {
     case "assignAdmin":
       return { role: "admin", status: current.status };
@@ -190,7 +196,7 @@ export function membershipAfterAction(
     case "ban":
       return { role: "member", status: "banned" };
     case "unban":
-      return null;
+      return { role: "member", status: "active" };
   }
 }
 

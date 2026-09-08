@@ -295,7 +295,7 @@ describe("PostgreSQL V2 communication repository", () => {
     expect(rows.rows[0]).toMatchObject({ kind: "remove" });
   });
 
-  it("enqueues a remove on ban and nothing on unban", async () => {
+  it("enqueues a remove on ban and an add on unban", async () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);
     await verifyCommunity(communityId);
@@ -345,9 +345,11 @@ describe("PostgreSQL V2 communication repository", () => {
       ]),
       requestId: randomUUID(),
     });
-    // Unban must not silently restore chat access.
+    // An unban restores the membership, so chat access is restored with it.
     expect(await jobRow(communityId, member.userId)).toMatchObject({
-      kind: "remove",
+      kind: "add",
+      state: "pending",
+      attempts: 0,
     });
   });
 

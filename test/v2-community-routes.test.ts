@@ -24,6 +24,7 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
+  type CommunityMemberPageRecord,
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
@@ -132,6 +133,23 @@ function communityRepositoryFake() {
     }),
   );
   const listCommunitiesMock = vi.fn(() => Promise.resolve([community]));
+  const listMembersMock = vi.fn((): Promise<CommunityMemberPageRecord> =>
+    Promise.resolve({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "owner" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    }),
+  );
   const repository: CommunityRepository = {
     listCommunities: listCommunitiesMock,
     getCommunityHome: vi.fn(() =>
@@ -153,23 +171,7 @@ function communityRepositoryFake() {
     leaveCommunity: vi.fn(() =>
       Promise.resolve({ community, viewerMembership: null }),
     ),
-    listMembers: vi.fn(() =>
-      Promise.resolve({
-        community,
-        viewerMembership: ownerMembership,
-        viewerPublicProfileId: targetProfileId,
-        items: [
-          {
-            membershipId: communityId,
-            role: "owner" as const,
-            status: "active" as const,
-            joinedAt: createdAt,
-            profile,
-          },
-        ],
-        counts: { all: 2, owner: 1, admin: 0 },
-      }),
-    ),
+    listMembers: listMembersMock,
     governMember: governMemberMock,
     follow: vi.fn(() =>
       Promise.resolve({ profile, createdAt, viewerFollows: true }),
@@ -233,6 +235,7 @@ function communityRepositoryFake() {
   return {
     repository,
     listCommunitiesMock,
+    listMembersMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -256,6 +259,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
   const {
     repository: communityRepository,
     listCommunitiesMock,
+    listMembersMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -289,6 +293,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
   return {
     communityRepository,
     listCommunitiesMock,
+    listMembersMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -496,6 +501,57 @@ describe("LOOP API V2 community, social, and search modules", () => {
       canMute: true,
       canBan: true,
     });
+  });
+
+  it("passes the banned governance filter through and projects the banned status", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "member" as const,
+          status: "banned" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app, listMembersMock } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "banned" }),
+    );
+    expect(
+      response.json<{ items: { status: string }[] }>().items[0]?.status,
+    ).toBe("banned");
+  });
+
+  it("denies the banned governance filter to a viewer who may not ban", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockRejectedValue(
+      new CommunityPermissionDeniedError(),
+    );
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: "PERMISSION_DENIED" });
   });
 
   it("requires exactly one canonical Idempotency-Key on every write", async () => {
