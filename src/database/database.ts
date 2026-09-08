@@ -9,7 +9,9 @@ import type { DeviceSessionRepository } from "../features/session/device-session
 import type { ChatChannelRepository } from "../features/communication/chat-channel-repository.js";
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
+import type { CommunityRepository } from "../features/community/community-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
+import { createPostgresCommunityRepository } from "./community-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
 import {
   createPostgresAlertRepository,
@@ -79,6 +81,8 @@ export interface Database {
   readonly profiles: ProfileRepository;
   /** V2 LOOP ID profile and privacy (Decision 0030); absent means unavailable. */
   readonly profilesV2?: ProfileV2Repository;
+  /** V2 community, follow graph, blocks, and search (Decision 0031). */
+  readonly community?: CommunityRepository;
   readonly watchlists: WatchlistRepository;
   readonly alerts: AlertRepository;
   ping(): Promise<void>;
@@ -199,6 +203,7 @@ export function createPostgresDatabase(
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
+  const community = createPostgresCommunityRepository(pool);
 
   return {
     internalUsers,
@@ -216,6 +221,7 @@ export function createPostgresDatabase(
     spotReconciliation,
     profiles,
     profilesV2,
+    community,
     watchlists,
     alerts,
     async ping(): Promise<void> {

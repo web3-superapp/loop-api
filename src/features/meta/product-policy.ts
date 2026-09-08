@@ -118,6 +118,14 @@ export interface V2ProductPolicyRuntime {
   readonly sessionRuntimeAvailable: boolean;
   /** `profile` module enabled, registrar delivered, and repository composed. */
   readonly profileRuntimeAvailable: boolean;
+  /**
+   * `community` module enabled with the PostgreSQL community repository and
+   * the V2 cursor codec composed (Decision 0031). Without a cursor secret the
+   * owner-bound list pagination cannot be signed, so the module fails closed.
+   */
+  readonly communityRuntimeAvailable: boolean;
+  /** `search` module enabled with the repository, cursor codec, and quota. */
+  readonly searchRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -128,16 +136,28 @@ export const v2ProfileRuntimeUnavailableReasonCode =
   "PROFILE_RUNTIME_UNAVAILABLE" as const;
 export const v2AvatarUploadUnavailableReasonCode =
   "AVATAR_STORAGE_NOT_SELECTED" as const;
+export const v2CommunityModuleDeferredReasonCode =
+  "V2_COMMUNITY_RUNTIME_DEFERRED" as const;
+export const v2CommunityRuntimeUnavailableReasonCode =
+  "COMMUNITY_RUNTIME_UNAVAILABLE" as const;
+export const v2SearchModuleDeferredReasonCode =
+  "V2_SEARCH_RUNTIME_DEFERRED" as const;
+export const v2SearchRuntimeUnavailableReasonCode =
+  "SEARCH_RUNTIME_UNAVAILABLE" as const;
+export const v2CommunityMiningUnavailableReasonCode =
+  "MINING_FORMULA_BASELINE_PENDING" as const;
+export const v2CommunityPresenceUnavailableReasonCode =
+  "STREAM_PRESENCE_NOT_CONNECTED" as const;
 
 /**
  * Capability projected by each V2 module gate. A module without a capability
- * entry (search, market) is still gated for route registration; its
- * capability is introduced with consumer review when the module is delivered.
- * `profile` was delivered by Decision 0030.
+ * entry (market) is still gated for route registration; its capability is
+ * introduced with consumer review when the module is delivered. `profile` was
+ * delivered by Decision 0030, `community` and `search` by Decision 0031.
  */
 export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
-  search: null,
+  search: "search",
   market: null,
   wallet: "walletRead",
   swap: "privySwap",
@@ -154,6 +174,9 @@ export const v2CapabilityIds = Object.freeze([
   "streamChatToken",
   "streamVideoToken",
   "community",
+  "communityMining",
+  "communityPresence",
+  "search",
   "bscRead",
   "walletRead",
   "privySwap",
@@ -336,6 +359,33 @@ function moduleGatedCapability(
 }
 
 /**
+ * A delivered module: its capability is `available` only when the module is
+ * enabled and `buildApp` composed every dependency the routes need. A missing
+ * dependency is `unavailable` with the module's own reason, never `available`.
+ */
+function deliveredModuleCapability(
+  config: AppConfig,
+  moduleId: V2ModuleId,
+  capabilityId: string,
+  runtimeAvailable: boolean,
+  deferredReasonCode: string,
+  unavailableReasonCode: string,
+): V2CapabilityProjection {
+  if (!config.v2ModulesEnabled.has(moduleId)) {
+    return deferredCapability(capabilityId, deferredReasonCode);
+  }
+  return Object.freeze({
+    capabilityId,
+    availability: runtimeAvailable ? "available" : "unavailable",
+    reasonCode: runtimeAvailable ? null : unavailableReasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable",
+      reasonCode: null,
+    }),
+  });
+}
+
+/**
  * The `profile` module is delivered (Decision 0030). Its capability is
  * `available` only when the module is enabled and `buildApp` composed the
  * PostgreSQL profile repository; otherwise it reports why.
@@ -420,11 +470,29 @@ export function createV2CapabilitiesProjection(
         : "STREAM_NOT_CONFIGURED",
       "PHYSICAL_DEVICE_STREAM_CONNECTION_EVIDENCE_PENDING",
     ),
-    moduleGatedCapability(
+    deliveredModuleCapability(
       config,
       "community",
       v2ModuleCapabilityIds.community,
-      "V2_COMMUNITY_RUNTIME_DEFERRED",
+      runtime.communityRuntimeAvailable,
+      v2CommunityModuleDeferredReasonCode,
+      v2CommunityRuntimeUnavailableReasonCode,
+    ),
+    unavailableCapability(
+      "communityMining",
+      v2CommunityMiningUnavailableReasonCode,
+    ),
+    unavailableCapability(
+      "communityPresence",
+      v2CommunityPresenceUnavailableReasonCode,
+    ),
+    deliveredModuleCapability(
+      config,
+      "search",
+      v2ModuleCapabilityIds.search,
+      runtime.searchRuntimeAvailable,
+      v2SearchModuleDeferredReasonCode,
+      v2SearchRuntimeUnavailableReasonCode,
     ),
     deferredCapability("bscRead", "BSC_PROVIDER_SELECTION_DEFERRED"),
     moduleGatedCapability(

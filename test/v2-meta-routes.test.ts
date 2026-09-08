@@ -325,6 +325,7 @@ describe("LOOP API V2 meta policy gates", () => {
     }
     for (const capabilityId of [
       "community",
+      "search",
       "privySwap",
       "sendApprovals",
       "launch",
@@ -346,8 +347,11 @@ describe("LOOP API V2 meta policy gates", () => {
       reasonCode: "AVATAR_STORAGE_NOT_SELECTED",
       evidence: { status: "notApplicable", reasonCode: null },
     });
+    for (const capabilityId of ["communityMining", "communityPresence"]) {
+      expect(capabilities[capabilityId]?.availability).toBe("unavailable");
+    }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(18);
+    expect(Object.keys(capabilities)).toHaveLength(21);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -377,6 +381,8 @@ describe("LOOP API V2 meta policy gates", () => {
     const runtime = {
       sessionRuntimeAvailable: false,
       profileRuntimeAvailable: false,
+      communityRuntimeAvailable: false,
+      searchRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -402,15 +408,21 @@ describe("LOOP API V2 meta policy gates", () => {
 
   it("registers only delivered module routes and keeps undelivered modules at 404", async () => {
     const config = testConfig({ V2_MODULES_ENABLED: v2ModuleIds.join(",") });
-    expect(registeredV2ModuleIds(config)).toEqual(["profile"]);
+    expect(registeredV2ModuleIds(config)).toEqual([
+      "community",
+      "search",
+      "profile",
+    ]);
 
-    const withoutProfile = v2ModuleIds.filter((id) => id !== "profile");
+    const undelivered = v2ModuleIds.filter(
+      (id) => id !== "profile" && id !== "community" && id !== "search",
+    );
     const app = await createApp({
-      V2_MODULES_ENABLED: withoutProfile.join(","),
+      V2_MODULES_ENABLED: undelivered.join(","),
     });
     expect(
       registeredV2ModuleIds(
-        testConfig({ V2_MODULES_ENABLED: withoutProfile.join(",") }),
+        testConfig({ V2_MODULES_ENABLED: undelivered.join(",") }),
       ),
     ).toEqual([]);
     for (const path of [

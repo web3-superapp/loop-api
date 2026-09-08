@@ -22,6 +22,11 @@ import {
   registerAuthenticationHooks,
 } from "./core/http/authentication.js";
 import { createPostgresDatabase, type Database } from "./database/database.js";
+import { createUnavailableCommunityRepository } from "./features/community/community-repository.js";
+import {
+  createCommunityService,
+  type CommunityService,
+} from "./features/community/community-service.js";
 import { createUnavailableAliasDirectoryRepository } from "./database/alias-directory-repository.js";
 import { createUnavailableSocialRepository } from "./database/social-repository.js";
 import {
@@ -230,6 +235,7 @@ export interface BuildAppOptions {
   readonly agentAuthorizationMutationGate?: AgentAuthorizationMutationGate;
   readonly profileService?: ProfileService;
   readonly profileV2Service?: ProfileV2Service;
+  readonly communityService?: CommunityService;
   readonly watchlistService?: WatchlistService;
   readonly alertService?: AlertService;
   readonly spotMarketService?: SpotMarketService;
@@ -740,6 +746,34 @@ export async function buildApp(
         blockedTerms: config.v2AliasBlockedTerms,
       }),
     });
+  const v2CursorCodec =
+    config.v2Cursor === null
+      ? null
+      : createV2CursorCodec({
+          secret: new TextEncoder().encode(config.v2Cursor.hmacSecret),
+          ttlSeconds: config.v2Cursor.ttlSeconds,
+        });
+  const communityRepositoryComposed =
+    options.communityService !== undefined || database.community !== undefined;
+  const communityRuntimeAvailable =
+    registeredV2ModuleIds(config).includes("community") &&
+    communityRepositoryComposed &&
+    v2CursorCodec !== null;
+  const searchRuntimeAvailable =
+    registeredV2ModuleIds(config).includes("search") &&
+    communityRepositoryComposed &&
+    v2CursorCodec !== null &&
+    config.streamTokenQuota !== null;
+  const communityService =
+    options.communityService ??
+    createCommunityService({
+      repository: database.community ?? createUnavailableCommunityRepository(),
+      cursorCodec: v2CursorCodec,
+      searchQuota: aliasSearchQuota,
+      aliasPolicy: createAliasPolicy({
+        blockedTerms: config.v2AliasBlockedTerms,
+      }),
+    });
   const watchlistService =
     options.watchlistService ??
     createWatchlistService({ repository: database.watchlists });
@@ -864,18 +898,15 @@ export async function buildApp(
       runtime: Object.freeze({
         sessionRuntimeAvailable: v2SessionRuntimeAvailable,
         profileRuntimeAvailable: profileV2RuntimeAvailable,
+        communityRuntimeAvailable,
+        searchRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
       profileService: profileV2Service,
-      cursorCodec:
-        config.v2Cursor === null
-          ? null
-          : createV2CursorCodec({
-              secret: new TextEncoder().encode(config.v2Cursor.hmacSecret),
-              ttlSeconds: config.v2Cursor.ttlSeconds,
-            }),
+      communityService,
+      cursorCodec: v2CursorCodec,
     });
   }
 

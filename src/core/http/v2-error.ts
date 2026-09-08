@@ -158,6 +158,13 @@ export const v2ErrorCatalog = Object.freeze({
     userMessageKey: "errors.policy.blocked",
     includeBearerChallenge: false,
   },
+  PROFILE_ACTIVATION_REQUIRED: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.profile.activationRequired",
+    includeBearerChallenge: false,
+  },
   PROVIDER_DISCONNECTED: {
     statusCode: 503,
     category: "availability",

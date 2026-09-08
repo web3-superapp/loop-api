@@ -70,17 +70,33 @@ describe("committed OpenAPI artifact", () => {
       "/health/live",
       "/health/ready",
       "/v2/account/me",
+      "/v2/blocks",
+      "/v2/communities",
+      "/v2/communities/{communityId}",
+      "/v2/communities/{communityId}/join",
+      "/v2/communities/{communityId}/members",
+      "/v2/communities/{communityId}/members/{publicProfileId}/ban",
+      "/v2/communities/{communityId}/members/{publicProfileId}/mute",
+      "/v2/communities/{communityId}/members/{publicProfileId}/role",
+      "/v2/communities/{communityId}/membership",
+      "/v2/community/home",
+      "/v2/connections",
+      "/v2/connections/follow/{publicProfileId}",
+      "/v2/message-requests",
+      "/v2/message-requests/{messageRequestId}/decision",
       "/v2/meta/capabilities",
       "/v2/meta/client-policy",
+      "/v2/mining/referral/rules",
       "/v2/profile",
       "/v2/profile/avatars",
       "/v2/profile/loop-id",
       "/v2/profile/privacy",
+      "/v2/search",
       "/v2/session/bootstrap",
       "/v2/session/logout",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(13);
+    expect(operationIds).toHaveLength(35);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

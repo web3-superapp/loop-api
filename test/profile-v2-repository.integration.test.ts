@@ -252,6 +252,10 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
   });
 
   it("refuses to roll back 000015 while any account holds a LOOP ID", async () => {
+    // Migrations after 000015 (000016 community/social, Decision 0031) hold no
+    // data in this fixture, so they roll back cleanly and leave 000015 at the
+    // head; only then is its own guard the one under test.
+    await migrate(temporaryDatabaseUrl, 1, "down");
     await expect(migrate(temporaryDatabaseUrl, 1, "down")).rejects.toThrow(
       /an assigned LOOP ID is immutable/,
     );
