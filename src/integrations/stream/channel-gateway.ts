@@ -88,6 +88,21 @@ export class StreamChannelProjectionMismatchError extends Error {
   }
 }
 
+/**
+ * A deterministic provider rejection: Stream answered with a client error that
+ * the identical request will keep producing (a malformed member, an unknown
+ * channel, a revoked permission). It is terminal, so the caller must not spend
+ * its retry budget on it.
+ */
+export class StreamChannelRequestRejectedError extends Error {
+  readonly code = "stream_channel_request_rejected";
+
+  constructor() {
+    super("Stream rejected the channel request deterministically");
+    this.name = "StreamChannelRequestRejectedError";
+  }
+}
+
 function unavailable(): never {
   throw new StreamChannelGatewayUnavailableError();
 }
@@ -481,6 +496,346 @@ export function createStreamChannelGateway(
         }
         return sanitizeProviderFailure(error, input.signal);
       }
+    },
+  });
+}
+
+/**
+ * Official community channel (Decision 0032). It is the same `messaging`
+ * channel type with `loop_channel_kind = "community"`, but unlike `group` and
+ * `direct` it is never validated against an exact member set: membership is
+ * synchronized incrementally through `addMembers`/`removeMembers`, and a
+ * member that is already in (or already out of) the channel is a success.
+ * The `group` and `direct` contracts above are unchanged.
+ */
+const communityChannelIdPattern = /^loop_community_[0-9a-f]{32}$/;
+/**
+ * Membership mutation also covers the small `group` channels created by
+ * Decision 0025, because `DELETE /v2/chat/groups/{groupId}/membership`
+ * removes exactly one member from one of them.
+ */
+const membershipChannelIdPattern = /^loop_(community|group)_[0-9a-f]{32}$/;
+
+export interface UpsertStreamCommunityChannelInput {
+  readonly channelId: string;
+  readonly createdByStreamUserId: string;
+  readonly name: string;
+  readonly signal: AbortSignal;
+}
+
+export interface StreamCommunityChannelMemberInput {
+  readonly channelId: string;
+  readonly actingStreamUserId: string;
+  readonly memberStreamUserIds: readonly string[];
+  readonly signal: AbortSignal;
+}
+
+export interface StreamCommunityChannelProjection {
+  readonly channelId: string;
+  readonly streamCid: string;
+  /** Stream's own member count when it publishes one; otherwise null. */
+  readonly memberCount: number | null;
+}
+
+export interface StreamCommunityChannelGateway {
+  upsertCommunityChannel(
+    input: UpsertStreamCommunityChannelInput,
+  ): Promise<StreamCommunityChannelProjection>;
+  addMembers(
+    input: StreamCommunityChannelMemberInput,
+  ): Promise<StreamCommunityChannelProjection>;
+  removeMembers(
+    input: StreamCommunityChannelMemberInput,
+  ): Promise<StreamCommunityChannelProjection>;
+}
+
+const maximumCommunityChannelMemberBatch = 100;
+
+/**
+ * Status codes Stream returns for a client error that is worth retrying: a
+ * quota window (429), a request timeout (408), and the "too early" replay
+ * hint (425). Every other 4xx is deterministic.
+ */
+const retryableClientStatusCodes: readonly number[] = Object.freeze([
+  408, 425, 429,
+]);
+
+function isDeterministicProviderRejection(error: unknown): boolean {
+  if (!isRecord(error) || !isRecord(error["metadata"])) {
+    return false;
+  }
+  const responseCode = error["metadata"]["responseCode"];
+  return (
+    typeof responseCode === "number" &&
+    responseCode >= 400 &&
+    responseCode < 500 &&
+    !retryableClientStatusCodes.includes(responseCode)
+  );
+}
+
+/**
+ * Community-channel failure classification. An aborted request stays an abort,
+ * a deterministic 4xx becomes terminal, and everything else (5xx, timeout,
+ * transport failure, quota) stays "unavailable" so the outbox retries it.
+ */
+function sanitizeCommunityProviderFailure(
+  error: unknown,
+  signal: AbortSignal,
+): never {
+  signal.throwIfAborted();
+  if (isDeterministicProviderRejection(error)) {
+    throw new StreamChannelRequestRejectedError();
+  }
+  return unavailable();
+}
+
+function isCommunityChannelId(value: unknown): value is string {
+  return typeof value === "string" && communityChannelIdPattern.test(value);
+}
+
+function isMembershipChannelId(value: unknown): value is string {
+  return typeof value === "string" && membershipChannelIdPattern.test(value);
+}
+
+function parseUpsertCommunityInput(
+  value: unknown,
+): UpsertStreamCommunityChannelInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "channelId",
+      "createdByStreamUserId",
+      "name",
+      "signal",
+    ]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !isStreamUserId(value["createdByStreamUserId"]) ||
+    !isCanonicalGroupName(value["name"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    createdByStreamUserId: value["createdByStreamUserId"],
+    name: value["name"],
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+function parseCommunityMemberInput(
+  value: unknown,
+): StreamCommunityChannelMemberInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "channelId",
+      "actingStreamUserId",
+      "memberStreamUserIds",
+      "signal",
+    ]) ||
+    !isMembershipChannelId(value["channelId"]) ||
+    !isStreamUserId(value["actingStreamUserId"]) ||
+    !Array.isArray(value["memberStreamUserIds"]) ||
+    value["memberStreamUserIds"].length < 1 ||
+    value["memberStreamUserIds"].length > maximumCommunityChannelMemberBatch ||
+    !value["memberStreamUserIds"].every(isStreamUserId) ||
+    new Set(value["memberStreamUserIds"]).size !==
+      value["memberStreamUserIds"].length
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    actingStreamUserId: value["actingStreamUserId"],
+    memberStreamUserIds: Object.freeze([...value["memberStreamUserIds"]]),
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+/**
+ * A community channel projection is accepted only when the authoritative
+ * response proves the exact channel ID, type, CID, and LOOP channel kind. The
+ * member set is deliberately not compared: a `community` channel can hold
+ * thousands of members and one page of a Stream response is not evidence
+ * about the whole set.
+ */
+function validateMembershipChannelResponse(
+  value: unknown,
+  channelId: string,
+): StreamCommunityChannelProjection {
+  if (!isRecord(value) || !isRecord(value["channel"])) {
+    return projectionMismatch();
+  }
+  const channel = value["channel"];
+  const streamCid = `${streamChannelType}:${channelId}`;
+  const kind = channelId.startsWith("loop_community_") ? "community" : "group";
+  if (
+    channel["id"] !== channelId ||
+    channel["type"] !== streamChannelType ||
+    channel["cid"] !== streamCid ||
+    !isRecord(channel["custom"]) ||
+    channel["custom"]["loop_channel_kind"] !== kind ||
+    channel["custom"]["loop_channel_schema_version"] !==
+      streamChannelSchemaVersion
+  ) {
+    return projectionMismatch();
+  }
+  const memberCount = channel["member_count"];
+  return Object.freeze({
+    channelId,
+    streamCid,
+    memberCount:
+      Number.isSafeInteger(memberCount) && (memberCount as number) >= 0
+        ? (memberCount as number)
+        : null,
+  });
+}
+
+function validateCommunityChannelResponse(
+  value: unknown,
+  channelId: string,
+): StreamCommunityChannelProjection {
+  if (!isRecord(value) || !isRecord(value["channel"])) {
+    return projectionMismatch();
+  }
+  const channel = value["channel"];
+  const streamCid = `${streamChannelType}:${channelId}`;
+  if (
+    channel["id"] !== channelId ||
+    channel["type"] !== streamChannelType ||
+    channel["cid"] !== streamCid ||
+    !isRecord(channel["custom"]) ||
+    channel["custom"]["loop_channel_kind"] !== "community" ||
+    channel["custom"]["loop_channel_schema_version"] !==
+      streamChannelSchemaVersion
+  ) {
+    return projectionMismatch();
+  }
+  const memberCount = channel["member_count"];
+  return Object.freeze({
+    channelId,
+    streamCid,
+    memberCount:
+      Number.isSafeInteger(memberCount) && (memberCount as number) >= 0
+        ? (memberCount as number)
+        : null,
+  });
+}
+
+export function createUnavailableStreamCommunityChannelGateway(): StreamCommunityChannelGateway {
+  return Object.freeze({
+    upsertCommunityChannel: unavailablePromise,
+    addMembers: unavailablePromise,
+    removeMembers: unavailablePromise,
+  });
+}
+
+export function createStreamCommunityChannelGateway(
+  config: StreamConfig,
+): StreamCommunityChannelGateway {
+  if (!isValidConfig(config)) {
+    return createUnavailableStreamCommunityChannelGateway();
+  }
+  const client = new StreamClient(config.apiKey, config.apiSecret, {
+    timeout: streamProviderTimeoutMilliseconds,
+  });
+
+  async function mutateMembers(
+    rawInput: StreamCommunityChannelMemberInput,
+    direction: "add" | "remove",
+  ): Promise<StreamCommunityChannelProjection> {
+    const input = parseCommunityMemberInput(rawInput);
+    try {
+      input.signal.throwIfAborted();
+      if (direction === "add") {
+        // Stream rejects `add_members` for a user object it has never seen
+        // ("users ... don't exist"), which is exactly the account that joins a
+        // community before it ever connects to Stream. The joiner is upserted
+        // with the same `{id}`-only shape used when the channel is created:
+        // LOOP publishes no profile facts to Stream.
+        const usersResponse = await client.upsertUsers(
+          input.memberStreamUserIds.map((id) => ({ id })),
+        );
+        input.signal.throwIfAborted();
+        validateUpsertedUsers(usersResponse, input.memberStreamUserIds);
+        input.signal.throwIfAborted();
+      }
+      const response = await client.chat
+        .channel(streamChannelType, input.channelId)
+        .update(
+          direction === "add"
+            ? {
+                user_id: input.actingStreamUserId,
+                add_members: input.memberStreamUserIds.map((userId) => ({
+                  user_id: userId,
+                })),
+              }
+            : {
+                user_id: input.actingStreamUserId,
+                remove_members: [...input.memberStreamUserIds],
+              },
+        );
+      input.signal.throwIfAborted();
+      return validateMembershipChannelResponse(response, input.channelId);
+    } catch (error) {
+      if (error instanceof StreamChannelProjectionMismatchError) {
+        throw error;
+      }
+      return sanitizeCommunityProviderFailure(error, input.signal);
+    }
+  }
+
+  return Object.freeze({
+    async upsertCommunityChannel(
+      rawInput: UpsertStreamCommunityChannelInput,
+    ): Promise<StreamCommunityChannelProjection> {
+      const input = parseUpsertCommunityInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        const usersResponse = await client.upsertUsers([
+          { id: input.createdByStreamUserId },
+        ]);
+        input.signal.throwIfAborted();
+        validateUpsertedUsers(usersResponse, [input.createdByStreamUserId]);
+
+        input.signal.throwIfAborted();
+        const response = await client.chat
+          .channel(streamChannelType, input.channelId)
+          .getOrCreate({
+            state: true,
+            data: {
+              created_by_id: input.createdByStreamUserId,
+              members: [{ user_id: input.createdByStreamUserId }],
+              custom: {
+                loop_channel_kind: "community",
+                loop_channel_schema_version: streamChannelSchemaVersion,
+                name: input.name,
+              },
+            },
+            members: { limit: 1 },
+            messages: { limit: 0 },
+            watchers: { limit: 0 },
+          });
+        input.signal.throwIfAborted();
+        return validateCommunityChannelResponse(response, input.channelId);
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    addMembers(
+      rawInput: StreamCommunityChannelMemberInput,
+    ): Promise<StreamCommunityChannelProjection> {
+      return mutateMembers(rawInput, "add");
+    },
+
+    removeMembers(
+      rawInput: StreamCommunityChannelMemberInput,
+    ): Promise<StreamCommunityChannelProjection> {
+      return mutateMembers(rawInput, "remove");
     },
   });
 }

@@ -142,6 +142,13 @@ export interface V2ProductPolicyRuntime {
   readonly walletRuntimeAvailable: boolean;
   /** `watchlist` module enabled with the V2 watchlist repository composed. */
   readonly watchlistRuntimeAvailable: boolean;
+  /**
+   * `communication` module enabled with the PostgreSQL communication
+   * repository, the delivered community runtime, and the complete Stream
+   * credential pair (Decision 0032). Without Stream credentials the module
+   * fails closed rather than publishing a channel or call it cannot reach.
+   */
+  readonly communicationRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -182,6 +189,20 @@ export const v2WatchlistModuleDeferredReasonCode =
   "V2_WATCHLIST_RUNTIME_DEFERRED" as const;
 export const v2WatchlistRuntimeUnavailableReasonCode =
   "WATCHLIST_RUNTIME_UNAVAILABLE" as const;
+export const v2CommunicationModuleDeferredReasonCode =
+  "V2_COMMUNICATION_RUNTIME_DEFERRED" as const;
+export const v2CommunicationRuntimeUnavailableReasonCode =
+  "COMMUNICATION_RUNTIME_UNAVAILABLE" as const;
+/**
+ * Decision 0005 pre-condition: Stream Dashboard evidence that the `audio_room`
+ * `user` role does not carry `create-call`. `user` is the role a LOOP listener
+ * is given (S4 integration, BUG-03: the application defines no `listener`
+ * role), so it is that role's permission set the evidence must cover. Until it
+ * is exported the capability stays evidence-pending even when the backend is
+ * available.
+ */
+export const v2VoiceRoomEvidencePendingReasonCode =
+  "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
 
 /**
  * Capability projected by each V2 module gate. A module without a capability
@@ -191,6 +212,7 @@ export const v2WatchlistRuntimeUnavailableReasonCode =
  */
 export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
+  communication: "communityChat",
   search: "search",
   market: null,
   chain: "bscRead",
@@ -210,6 +232,8 @@ export const v2CapabilityIds = Object.freeze([
   "streamChatToken",
   "streamVideoToken",
   "community",
+  "communityChat",
+  "voiceRooms",
   "communityMining",
   "communityPresence",
   "search",
@@ -500,6 +524,39 @@ function chainVerificationReasonCode(
   }
 }
 
+/**
+ * Voice rooms share the `communication` module gate, but they additionally
+ * carry the outstanding Decision 0005 Dashboard evidence: the backend can be
+ * available while the client locator must still stay unavailable.
+ */
+function voiceRoomsCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const evidence = Object.freeze({
+    status: "pending" as const,
+    reasonCode: v2VoiceRoomEvidencePendingReasonCode,
+  });
+  if (!config.v2ModulesEnabled.has("communication")) {
+    return Object.freeze({
+      capabilityId: "voiceRooms",
+      availability: "deferred",
+      reasonCode: v2CommunicationModuleDeferredReasonCode,
+      evidence,
+    });
+  }
+  return Object.freeze({
+    capabilityId: "voiceRooms",
+    availability: runtime.communicationRuntimeAvailable
+      ? "available"
+      : "unavailable",
+    reasonCode: runtime.communicationRuntimeAvailable
+      ? null
+      : v2CommunicationRuntimeUnavailableReasonCode,
+    evidence,
+  });
+}
+
 function unavailableCapability(
   capabilityId: string,
   reasonCode: string,
@@ -565,6 +622,15 @@ export function createV2CapabilitiesProjection(
       v2CommunityModuleDeferredReasonCode,
       v2CommunityRuntimeUnavailableReasonCode,
     ),
+    deliveredModuleCapability(
+      config,
+      "communication",
+      v2ModuleCapabilityIds.communication,
+      runtime.communicationRuntimeAvailable,
+      v2CommunicationModuleDeferredReasonCode,
+      v2CommunicationRuntimeUnavailableReasonCode,
+    ),
+    voiceRoomsCapability(config, runtime),
     unavailableCapability(
       "communityMining",
       v2CommunityMiningUnavailableReasonCode,

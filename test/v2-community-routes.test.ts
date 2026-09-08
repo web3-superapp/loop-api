@@ -24,6 +24,7 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
+  type CommunityMemberPageRecord,
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
@@ -132,6 +133,31 @@ function communityRepositoryFake() {
     }),
   );
   const listCommunitiesMock = vi.fn(() => Promise.resolve([community]));
+  const sendMessageRequestMock = vi.fn(() =>
+    Promise.resolve({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+    }),
+  );
+  const listMembersMock = vi.fn((): Promise<CommunityMemberPageRecord> =>
+    Promise.resolve({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "owner" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    }),
+  );
   const repository: CommunityRepository = {
     listCommunities: listCommunitiesMock,
     getCommunityHome: vi.fn(() =>
@@ -153,23 +179,7 @@ function communityRepositoryFake() {
     leaveCommunity: vi.fn(() =>
       Promise.resolve({ community, viewerMembership: null }),
     ),
-    listMembers: vi.fn(() =>
-      Promise.resolve({
-        community,
-        viewerMembership: ownerMembership,
-        viewerPublicProfileId: targetProfileId,
-        items: [
-          {
-            membershipId: communityId,
-            role: "owner" as const,
-            status: "active" as const,
-            joinedAt: createdAt,
-            profile,
-          },
-        ],
-        counts: { all: 2, owner: 1, admin: 0 },
-      }),
-    ),
+    listMembers: listMembersMock,
     governMember: governMemberMock,
     follow: vi.fn(() =>
       Promise.resolve({ profile, createdAt, viewerFollows: true }),
@@ -213,6 +223,7 @@ function communityRepositoryFake() {
         },
       ]),
     ),
+    sendMessageRequest: sendMessageRequestMock,
     decideMessageRequest: vi.fn(() =>
       Promise.resolve({
         messageRequestId,
@@ -233,6 +244,8 @@ function communityRepositoryFake() {
   return {
     repository,
     listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -256,6 +269,8 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
   const {
     repository: communityRepository,
     listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -289,6 +304,8 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
   return {
     communityRepository,
     listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
     governMemberMock,
@@ -498,6 +515,57 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
   });
 
+  it("passes the banned governance filter through and projects the banned status", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "member" as const,
+          status: "banned" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app, listMembersMock } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "banned" }),
+    );
+    expect(
+      response.json<{ items: { status: string }[] }>().items[0]?.status,
+    ).toBe("banned");
+  });
+
+  it("denies the banned governance filter to a viewer who may not ban", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockRejectedValue(
+      new CommunityPermissionDeniedError(),
+    );
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
   it("requires exactly one canonical Idempotency-Key on every write", async () => {
     const { app } = await createApp();
     for (const headers of [
@@ -645,6 +713,73 @@ describe("LOOP API V2 community, social, and search modules", () => {
       blocked: true,
       contractVersion: "2.0",
     });
+  });
+
+  it("sends a message request and projects it like a directory item", async () => {
+    const { app, sendMessageRequestMock } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/message-requests",
+      headers: commandHeaders(),
+      payload: { targetPublicProfileId: targetProfileId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+      preview: {
+        status: "unavailable",
+        reasonCode: "MESSAGE_PREVIEW_DEFERRED",
+      },
+      aiModeration: {
+        status: "unavailable",
+        reasonCode: "AI_MODERATION_DEFERRED",
+      },
+      contractVersion: "2.0",
+    });
+    expect(sendMessageRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPublicProfileId: targetProfileId }),
+    );
+  });
+
+  it("rejects a malformed or unknown-property message-request body", async () => {
+    const { app } = await createApp();
+    for (const payload of [
+      {},
+      { targetPublicProfileId: "not-a-uuid" },
+      { targetPublicProfileId: targetProfileId, note: "hi" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("maps an ineligible message-request target onto NOT_FOUND and a stale pair onto DATA_STALE", async () => {
+    for (const [error, status, code] of [
+      [new CommunityTargetUnavailableError(), 404, "NOT_FOUND"],
+      [new CommunityDataStaleError(), 409, "DATA_STALE"],
+    ] as const) {
+      const dependencies = fakes();
+      dependencies.sendMessageRequestMock.mockRejectedValue(error);
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload: { targetPublicProfileId: targetProfileId },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
   });
 
   it("hides message preview and AI moderation behind unavailable", async () => {

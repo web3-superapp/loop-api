@@ -5,12 +5,15 @@ import type { V2CursorCodec } from "../../core/http/v2-cursor.js";
 import type { AssetRegistryService } from "../../features/chain/asset-registry-service.js";
 import type { ChainStatusService } from "../../features/chain/chain-status-service.js";
 import type { CommunityService } from "../../features/community/community-service.js";
+import type { V2ChatService } from "../../features/communication/v2-chat-service.js";
+import type { VoiceRoomService } from "../../features/communication/voice-room-service.js";
 import type { V2ProductPolicyRuntime } from "../../features/meta/product-policy.js";
 import type { ProfileV2Service } from "../../features/profile/profile-v2-service.js";
 import type { V2SessionService } from "../../features/session/session-service.js";
 import type { WalletReadService } from "../../features/wallet/wallet-read-service.js";
 import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-service.js";
 import { registerV2ChainRoutes } from "./chain.js";
+import { registerV2CommunicationRoutes } from "./communication.js";
 import { registerV2CommunityRoutes } from "./community.js";
 import { registerV2MetaRoutes } from "./meta.js";
 import { registerV2ProfileRoutes } from "./profile.js";
@@ -36,6 +39,8 @@ export interface V2RouteDependencies {
   readonly assetRegistryService: AssetRegistryService;
   readonly walletReadService: WalletReadService;
   readonly watchlistV2Service: WatchlistV2Service;
+  readonly chatService: V2ChatService;
+  readonly voiceRoomService: VoiceRoomService;
   readonly cursorCodec: V2CursorCodec | null;
 }
 
@@ -50,11 +55,13 @@ export type V2ModuleRegistrar = (
  * and its capability reports MODULE_RUNTIME_NOT_REGISTERED. Each delivered
  * module replaces its entry in its own numbered decision (`profile`: 0030;
  * `community` and `search`: 0031; `chain`, `wallet`, and `watchlist`: 0033).
+ * `community` and `search`: 0031; `communication`: 0032).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
 > = Object.freeze({
   community: registerV2CommunityRoutes,
+  communication: registerV2CommunicationRoutes,
   search: registerV2SearchRoutes,
   market: null,
   chain: registerV2ChainRoutes,

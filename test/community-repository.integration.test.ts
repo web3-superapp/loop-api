@@ -483,6 +483,118 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ]);
   });
 
+  it("shows banned memberships only to governance and restores them on unban", async () => {
+    const owner = await createAccount("unban-owner");
+    const member = await createAccount("unban-member");
+    const bystander = await createAccount("unban-bystander");
+    const communityId = await createCommunity(owner.userId, "unbans");
+    await join(member.userId, communityId);
+    await join(bystander.userId, communityId);
+    const joinedAt = (
+      await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+      })
+    ).items.find(
+      (item) => item.profile.publicProfileId === member.publicProfileId,
+    )?.joinedAt;
+    expect(joinedAt).toBeDefined();
+
+    const govern = (actorUserId: string, action: "ban" | "unban") =>
+      repository.governMember({
+        actorUserId,
+        communityId,
+        targetPublicProfileId: member.publicProfileId,
+        action,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          member.publicProfileId,
+          action,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    await govern(owner.userId, "ban");
+
+    const bannedView = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "banned",
+      limit: 50,
+    });
+    expect(bannedView.items).toHaveLength(1);
+    expect(bannedView.items[0]).toMatchObject({
+      status: "banned",
+      role: "member",
+      joinedAt,
+    });
+    // The banned view never changes the non-banned segment counts.
+    expect(bannedView.counts.all).toBe(2);
+    const defaultView = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(defaultView.items.some((item) => item.status === "banned")).toBe(
+      false,
+    );
+    // A plain member may not read the governance view.
+    await expect(
+      repository.listMembers({
+        viewerUserId: bystander.userId,
+        communityId,
+        role: "banned",
+        limit: 50,
+      }),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+
+    const unbanned = await govern(owner.userId, "unban");
+    expect(unbanned.target).toMatchObject({
+      role: "member",
+      status: "active",
+      joinedAt,
+    });
+    const afterUnban = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(afterUnban.counts.all).toBe(3);
+    expect(
+      afterUnban.items.find(
+        (item) => item.profile.publicProfileId === member.publicProfileId,
+      ),
+    ).toMatchObject({ role: "member", status: "active", joinedAt });
+    expect(
+      (
+        await repository.listMembers({
+          viewerUserId: owner.userId,
+          communityId,
+          role: "banned",
+          limit: 50,
+        })
+      ).items,
+    ).toHaveLength(0);
+
+    const events = await pool.query<{ event_type: string }>({
+      text: `
+        select event_type
+        from public.community_role_events
+        where community_id = $1
+        order by occurred_at, event_id
+      `,
+      values: [communityId],
+    });
+    expect(events.rows.map((row) => row.event_type)).toContain(
+      "member_unbanned",
+    );
+  });
+
   it("keeps a banned account out and refuses an owner leaving", async () => {
     const owner = await createAccount("ban-owner");
     const member = await createAccount("ban-member");
@@ -642,6 +754,102 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         (item) => item.profile.publicProfileId === hidden.publicProfileId,
       ),
     ).toBe(false);
+  });
+
+  it("sends a message request under the V2 admission rules and replays by key", async () => {
+    const sender = await createAccount("send-sender");
+    const recipient = await createAccount("send-recipient");
+    const hidden = await createAccount("send-hidden");
+    await pool.query({
+      text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
+      values: [hidden.userId],
+    });
+
+    const send = (
+      targetPublicProfileId: string,
+      idempotencyKey = randomUUID(),
+    ) =>
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId,
+        idempotencyKey,
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          targetPublicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    // A non-discoverable target and the sender itself are both the same
+    // non-enumerating failure.
+    await expect(send(hidden.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(sender.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+
+    const key = randomUUID();
+    const sent = await send(recipient.publicProfileId, key);
+    expect(sent.profile.publicProfileId).toBe(recipient.publicProfileId);
+    expect(Date.parse(sent.expiresAt)).toBeGreaterThan(
+      Date.parse(sent.createdAt),
+    );
+
+    // The recipient sees exactly that request, projected from the sender side.
+    const inbox = await repository.listMessageRequests({
+      ownerUserId: recipient.userId,
+      limit: 20,
+    });
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.messageRequestId).toBe(sent.messageRequestId);
+    expect(inbox[0]?.profile.publicProfileId).toBe(sender.publicProfileId);
+
+    // The same key returns the original request; a new key hits the pending row.
+    await expect(send(recipient.publicProfileId, key)).resolves.toEqual(sent);
+    await expect(send(recipient.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityDataStaleError,
+    );
+
+    const events = await pool.query<{ event_type: string; subject_id: string }>(
+      {
+        text: `
+        select event_type, subject_id
+        from public.social_graph_events
+        where actor_user_id = $1 and event_type = 'message_request_sent'
+      `,
+        values: [sender.userId],
+      },
+    );
+    expect(events.rows).toEqual([
+      { event_type: "message_request_sent", subject_id: sent.messageRequestId },
+    ]);
+  });
+
+  it("refuses a message request across a block in either direction", async () => {
+    const sender = await createAccount("send-blocked-sender");
+    const recipient = await createAccount("send-blocked-recipient");
+    await repository.blockUser({
+      ownerUserId: recipient.userId,
+      stableId: sender.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        sender.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId: recipient.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          recipient.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
   });
 
   it("reports a message request as reject plus block plus audit in one transaction", async () => {

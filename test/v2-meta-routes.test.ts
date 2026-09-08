@@ -353,7 +353,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(22);
+    expect(Object.keys(capabilities)).toHaveLength(24);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -390,6 +390,7 @@ describe("LOOP API V2 meta policy gates", () => {
       bscChainVerification: () => "unknown" as const,
       walletRuntimeAvailable: false,
       watchlistRuntimeAvailable: false,
+      communicationRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -417,6 +418,7 @@ describe("LOOP API V2 meta policy gates", () => {
     const config = testConfig({ V2_MODULES_ENABLED: v2ModuleIds.join(",") });
     expect(registeredV2ModuleIds(config)).toEqual([
       "community",
+      "communication",
       "search",
       "chain",
       "wallet",
@@ -424,8 +426,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "watchlist",
     ]);
 
-    const deliveredModuleIds = new Set([
+    const deliveredModuleIds = new Set<string>([
       "community",
+      "communication",
       "search",
       "chain",
       "wallet",

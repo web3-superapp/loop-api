@@ -88,6 +88,8 @@ function fakeDatabase(events: string[]): ReconciliationWorkerDatabase {
     controlPlane: {} as ReconciliationWorkerDatabase["controlPlane"],
     perpReconciliation: {} as PerpReconciliationRepository,
     spotReconciliation: {} as SpotReconciliationRepository,
+    communityChannelSync:
+      {} as ReconciliationWorkerDatabase["communityChannelSync"],
     spotAgentAuthorizations: {
       expireElapsedPrepared: vi.fn(() => Promise.resolve({ expiredCount: 0 })),
       retireElapsedAgentIdentities: vi.fn(() =>

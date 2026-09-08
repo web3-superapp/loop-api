@@ -12,6 +12,12 @@ import {
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 import {
+  createCommunityChannelSyncWorker,
+  type CommunityChannelSyncWorker,
+  type CreateCommunityChannelSyncWorkerOptions,
+} from "./community-channel-sync-worker.js";
+import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
+import {
   createPostgresDatabase,
   type PostgresDatabaseConfig,
   type PostgresDatabaseLogger,
@@ -20,6 +26,7 @@ import type { ControlPlaneRepository } from "./database/control-plane-repository
 import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
+import type { CommunityChannelSyncRepository } from "./features/communication/communication-repository.js";
 import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
 import {
   createIssuanceQuotaRetentionWorker,
@@ -63,6 +70,7 @@ export interface ReconciliationWorkerDatabase {
   >;
   readonly chainRegistry?: ChainRegistryRepository;
   readonly bscIndexer?: BscIndexerRepository;
+  readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -91,6 +99,9 @@ export type BscIndexerWorkerFactory = (
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
+export type CommunityChannelSyncWorkerFactory = (
+  options: CreateCommunityChannelSyncWorkerOptions,
+) => CommunityChannelSyncWorker;
 
 export interface RunReconciliationWorkerOptions {
   readonly config: ReconciliationWorkerConfig;
@@ -102,6 +113,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
   readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
+  readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -136,6 +148,9 @@ export async function runReconciliationWorker(
   const readClientFactory =
     options.createBscReadClient ??
     ((config): BscReadClient => createBscReadClient({ config }));
+  const communityChannelSyncWorkerFactory =
+    options.createCommunityChannelSyncWorker ??
+    createCommunityChannelSyncWorker;
   const controller = new AbortController();
   let database: ReconciliationWorkerDatabase | undefined;
   let workerId: string | undefined;
@@ -248,6 +263,23 @@ export async function runReconciliationWorker(
               );
             },
           });
+    // The `community-channel-sync` lane is default-off and only constructed
+    // when the complete Stream credential pair is configured (Decision 0032).
+    const communityChannelSyncWorker =
+      options.config.communityChannelSync === null
+        ? null
+        : communityChannelSyncWorkerFactory({
+            repository: database.communityChannelSync,
+            gateway: createStreamCommunityChannelGateway(
+              options.config.communityChannelSync,
+            ),
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -275,6 +307,13 @@ export async function runReconciliationWorker(
       ...(indexerWorker === null
         ? []
         : [Promise.resolve().then(() => indexerWorker.run(controller.signal))]),
+      ...(communityChannelSyncWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              communityChannelSyncWorker.run(controller.signal),
+            ),
+          ]),
     ];
 
     try {

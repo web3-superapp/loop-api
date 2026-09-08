@@ -11,12 +11,18 @@ import {
   type IdentityProjection,
 } from "../features/community/community-contract.js";
 import {
+  defaultCommunityChannelMemberCap,
+  deriveCommunityChannelId,
+} from "../features/communication/communication-contract.js";
+import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
+import {
   canPerformSelfAction,
   canPerformTargetAction,
   communityMembershipStatuses,
   communityRoles,
   membershipAfterAction,
   targetStateAllowsAction,
+  viewerPermissions,
   type CommunityRole,
   type CommunityTargetAction,
 } from "../features/community/community-policy.js";
@@ -54,6 +60,7 @@ import {
   type ListMessageRequestsInput,
   type MembershipRecord,
   type MessageRequestDecisionRecord,
+  type SendMessageRequestInput,
   type MessageRequestRecord,
   type SearchCommunitiesInput,
   type SearchCommunityRecord,
@@ -73,6 +80,8 @@ import {
  */
 
 const rejectionCooldownSql = "24 hours";
+/** The V1 friend-request lifetime, reused verbatim by the V2 send path. */
+const messageRequestLifetimeSql = "7 days";
 const uniqueViolation = "23505";
 
 const canonicalUuidPattern =
@@ -689,6 +698,50 @@ async function resolveTarget(
   });
 }
 
+/**
+ * Project one `friend_requests` row in the shape of a V2 message-request item.
+ * The identity is the **recipient**: this projection answers the sender, while
+ * `listMessageRequests` answers the recipient and therefore projects the
+ * requester. Both carry the same fields.
+ */
+async function readMessageRequest(
+  client: DatabaseClient,
+  messageRequestId: string,
+): Promise<MessageRequestRecord> {
+  const result = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        request.friend_request_id,
+        request.created_at,
+        request.expires_at,
+        ${identityColumns}
+      from public.friend_requests as request
+      join public.user_profiles as profile
+        on profile.owner_user_id = request.recipient_user_id
+      join public.loop_users as account
+        on account.id = request.recipient_user_id
+      where request.friend_request_id = $1
+      limit 1
+    `,
+    values: [messageRequestId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new CommunityRepositoryUnavailableError();
+  }
+  return Object.freeze({
+    messageRequestId: opaqueIdSchema.parse(row["friend_request_id"]),
+    profile: toIdentity({
+      public_profile_id: row["public_profile_id"],
+      loop_id: row["loop_id"],
+      alias: row["alias"],
+      avatar_ref: row["avatar_ref"],
+    }),
+    createdAt: dateSchema.parse(row["created_at"]).toISOString(),
+    expiresAt: dateSchema.parse(row["expires_at"]).toISOString(),
+  });
+}
+
 async function readIdentityByUserId(
   client: DatabaseClient,
   userId: string,
@@ -724,9 +777,150 @@ async function removeFollowEdges(
   });
 }
 
+/**
+ * Transactional outbox for the official community channel (Decision 0032).
+ * The Stream write itself never happens here: the row records the latest
+ * intended membership change and the standalone `community-channel-sync`
+ * worker lane performs it after this transaction has committed. Communities
+ * without an official channel (not verified yet) enqueue nothing.
+ */
+async function enqueueCommunityChannelSync(
+  client: DatabaseClient,
+  input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly kind: "add" | "remove";
+    readonly requestId: string;
+    /**
+     * `reset` records a new intent and restarts the job. `fillGap` only
+     * creates what is missing: it never resets an already `synced` member and
+     * never restarts a job that already exists, so re-running verification is
+     * a repair rather than a re-synchronization of the whole community.
+     */
+    readonly mode?: "reset" | "fillGap";
+  },
+): Promise<void> {
+  const fillGap = input.mode === "fillGap";
+  await client.query({
+    text: `
+      insert into public.community_channel_members (
+        community_id, owner_user_id, stream_user_id, state
+      )
+      select $1, $2, $3, 'pending'
+      where exists (
+        select 1 from public.community_channels where community_id = $1
+      )
+      on conflict (community_id, owner_user_id) do update
+      set state = 'pending', updated_at = clock_timestamp()
+      ${fillGap ? "where false" : ""}
+    `,
+    values: [
+      input.communityId,
+      input.ownerUserId,
+      deriveStreamUserId(input.ownerUserId),
+    ],
+  });
+  await client.query({
+    text: `
+      insert into public.community_channel_sync_jobs (
+        community_id, owner_user_id, kind, state, attempts, request_id
+      )
+      select $1, $2, $3, 'pending', 0, $4
+      where exists (
+        select 1 from public.community_channels where community_id = $1
+      )
+      on conflict (community_id, owner_user_id) do ${
+        fillGap
+          ? "nothing"
+          : `update
+      set
+        kind = excluded.kind,
+        state = 'pending',
+        attempts = 0,
+        next_attempt_at = clock_timestamp(),
+        last_error_code = null,
+        lease_worker_id = null,
+        lease_expires_at = null,
+        request_id = excluded.request_id,
+        updated_at = clock_timestamp()`
+      }
+    `,
+    values: [input.communityId, input.ownerUserId, input.kind, input.requestId],
+  });
+}
+
+/**
+ * Allocate the official channel record when a community becomes verified and
+ * enqueue one `add` job per existing non-banned member. The channel ID is a
+ * pure function of the community ID, so a replay can never allocate a second
+ * channel.
+ */
+async function provisionCommunityChannel(
+  client: DatabaseClient,
+  input: {
+    readonly communityId: string;
+    readonly memberCap: number;
+    readonly requestId: string;
+    /** `repair` re-runs verification without disturbing synced members. */
+    readonly mode?: "initial" | "repair";
+  },
+): Promise<void> {
+  await client.query({
+    text: `
+      insert into public.community_channels (
+        community_id, stream_channel_id, member_cap, created_by_user_id
+      )
+      select $1, $2, $3, community.created_by_user_id
+      from public.communities as community
+      where community.community_id = $1
+      on conflict (community_id) do nothing
+    `,
+    values: [
+      input.communityId,
+      deriveCommunityChannelId(input.communityId),
+      input.memberCap,
+    ],
+  });
+  const repair = input.mode === "repair";
+  // A repair only looks at memberships whose channel projection is missing or
+  // not yet `synced`; an account Stream already accepted is left alone.
+  const members = await client.query<{ owner_user_id: string }>({
+    text: `
+      select membership.owner_user_id
+      from public.community_memberships as membership
+      left join public.community_channel_members as member
+        on member.community_id = membership.community_id
+        and member.owner_user_id = membership.owner_user_id
+      where membership.community_id = $1
+        and membership.status <> 'banned'
+        and ($2::boolean is false or member.state is distinct from 'synced')
+      order by membership.joined_at asc
+    `,
+    values: [input.communityId, repair],
+  });
+  for (const member of members.rows) {
+    await enqueueCommunityChannelSync(client, {
+      communityId: input.communityId,
+      ownerUserId: userIdSchema.parse(member.owner_user_id),
+      kind: "add",
+      requestId: input.requestId,
+      mode: repair ? "fillGap" : "reset",
+    });
+  }
+}
+
+export interface PostgresCommunityRepositoryOptions {
+  /** Stream channel member ceiling recorded on a newly provisioned channel. */
+  readonly communityChannelMemberCap?: number;
+}
+
 export function createPostgresCommunityRepository(
   pool: Pool,
+  options: PostgresCommunityRepositoryOptions = {},
 ): CommunityRepository {
+  const communityChannelMemberCap =
+    options.communityChannelMemberCap ?? defaultCommunityChannelMemberCap;
+
   async function listCommunitiesQuery(
     client: DatabaseClient,
     input: ListCommunitiesInput,
@@ -1105,6 +1299,12 @@ export function createPostgresCommunityRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
+          await enqueueCommunityChannelSync(client, {
+            communityId,
+            ownerUserId,
+            kind: "add",
+            requestId,
+          });
           return readDetail(client, communityId, ownerUserId);
         });
       } catch (error) {
@@ -1172,6 +1372,12 @@ export function createPostgresCommunityRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
+          await enqueueCommunityChannelSync(client, {
+            communityId,
+            ownerUserId,
+            kind: "remove",
+            requestId,
+          });
           return leftDetail();
         });
       } catch (error) {
@@ -1205,10 +1411,23 @@ export function createPostgresCommunityRepository(
           `,
           values: [viewerUserId],
         });
+        // `banned` is a governance view of the same directory: it lists the
+        // memberships the other filters exclude, and only an account that may
+        // ban (owner or admin) may read it. Every filter is a fixed literal,
+        // never interpolated caller input.
+        const bannedView = rawInput.role === "banned";
+        if (bannedView && !viewerPermissions(viewerMembership).canBan) {
+          throw new CommunityPermissionDeniedError();
+        }
         const roleFilterSql =
-          rawInput.role === "all"
-            ? ""
-            : `and membership.role = '${rawInput.role === "owner" ? "owner" : "admin"}'`;
+          rawInput.role === "owner"
+            ? "and membership.role = 'owner'"
+            : rawInput.role === "admin"
+              ? "and membership.role = 'admin'"
+              : "";
+        const statusFilterSql = bannedView
+          ? "and membership.status = 'banned'"
+          : "and membership.status <> 'banned'";
         const values: unknown[] = [communityId, limit];
         let keyset = "";
         const after = rawInput.after;
@@ -1241,7 +1460,7 @@ export function createPostgresCommunityRepository(
             join public.loop_users as account
               on account.id = membership.owner_user_id
             where membership.community_id = $1
-              and membership.status <> 'banned'
+              ${statusFilterSql}
               ${roleFilterSql}
               ${keyset}
             order by
@@ -1385,40 +1604,32 @@ export function createPostgresCommunityRepository(
           if (!targetStateAllowsAction(action, targetMembership)) {
             throw new CommunityDataStaleError();
           }
+          // Every governance action keeps the membership row, so `joined_at`
+          // survives a ban and the unban that follows it.
           const next = membershipAfterAction(action, targetMembership);
-          if (next === null) {
-            await client.query({
-              text: `
-                delete from public.community_memberships
-                where community_id = $1 and owner_user_id = $2
-              `,
-              values: [communityId, targetUserId],
-            });
-          } else {
-            if (action === "transferOwnership") {
-              await client.query({
-                text: `
-                  update public.community_memberships
-                  set role = 'admin', updated_at = clock_timestamp(),
-                      record_version = record_version + 1
-                  where community_id = $1 and owner_user_id = $2
-                `,
-                values: [communityId, actorUserId],
-              });
-            }
+          if (action === "transferOwnership") {
             await client.query({
               text: `
                 update public.community_memberships
-                set
-                  role = $3,
-                  status = $4,
-                  updated_at = clock_timestamp(),
-                  record_version = record_version + 1
+                set role = 'admin', updated_at = clock_timestamp(),
+                    record_version = record_version + 1
                 where community_id = $1 and owner_user_id = $2
               `,
-              values: [communityId, targetUserId, next.role, next.status],
+              values: [communityId, actorUserId],
             });
           }
+          await client.query({
+            text: `
+              update public.community_memberships
+              set
+                role = $3,
+                status = $4,
+                updated_at = clock_timestamp(),
+                record_version = record_version + 1
+              where community_id = $1 and owner_user_id = $2
+            `,
+            values: [communityId, targetUserId, next.role, next.status],
+          });
           const eventType =
             action === "mute"
               ? "member_muted"
@@ -1437,30 +1648,38 @@ export function createPostgresCommunityRepository(
             targetUserId,
             eventType,
             fromRole: targetMembership.role,
-            toRole: next?.role ?? null,
+            toRole: next.role,
             fromStatus: targetMembership.status,
-            toStatus: next?.status ?? null,
+            toStatus: next.status,
             reasonCode: `action_${action.toLowerCase()}`,
             idempotencyRecordId: recordId,
             requestId,
           });
+          // A ban removes the account from the official channel; an unban
+          // restores the membership, so it enqueues the matching `add`. Both
+          // jobs are no-ops until the community has a provisioned channel.
+          if (action === "ban" || action === "unban") {
+            await enqueueCommunityChannelSync(client, {
+              communityId,
+              ownerUserId: targetUserId,
+              kind: action === "ban" ? "remove" : "add",
+              requestId,
+            });
+          }
           return Object.freeze({
             community: await readCommunity(client, communityId),
             actorMembership: actor,
-            target:
-              next === null
-                ? null
-                : Object.freeze({
-                    membershipId: opaqueIdSchema.parse(target["membership_id"]),
-                    ...next,
-                    joinedAt: targetMembership.joinedAt,
-                    profile: toIdentity({
-                      public_profile_id: target["public_profile_id"],
-                      loop_id: target["loop_id"],
-                      alias: target["alias"],
-                      avatar_ref: target["avatar_ref"],
-                    }),
-                  }),
+            target: Object.freeze({
+              membershipId: opaqueIdSchema.parse(target["membership_id"]),
+              ...next,
+              joinedAt: targetMembership.joinedAt,
+              profile: toIdentity({
+                public_profile_id: target["public_profile_id"],
+                loop_id: target["loop_id"],
+                alias: target["alias"],
+                avatar_ref: target["avatar_ref"],
+              }),
+            }),
           });
         });
       } catch (error) {
@@ -2007,6 +2226,143 @@ export function createPostgresCommunityRepository(
       }
     },
 
+    /**
+     * Send a stranger message request (Decision 0031 revision, 2026-09-08).
+     * It writes the frozen V1 `friend_requests` storage and obeys the V1 state
+     * machine (one pending row per pair, the seven-day lifetime, the rejection
+     * cooldown), but admission is the V2 rule set: an active profile,
+     * `privacy_preferences_v2.discoverable`, and no block in either direction.
+     * Every ineligible target answers the same non-enumerating NOT_FOUND.
+     */
+    async sendMessageRequest(
+      rawInput: SendMessageRequestInput,
+    ): Promise<MessageRequestRecord> {
+      try {
+        const ownerUserId = userIdSchema.parse(rawInput.ownerUserId);
+        const targetPublicProfileId = opaqueIdSchema.parse(
+          rawInput.targetPublicProfileId,
+        );
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimSocialGraphCommand(client, {
+            ownerUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          const replay = await findSocialGraphAudit(client, recordId);
+          if (replay !== null && replay.subjectId !== null) {
+            // A replay reports the request the first call created, even after
+            // the recipient has decided it.
+            return await readMessageRequest(client, replay.subjectId);
+          }
+          await requireActiveProfile(client, ownerUserId);
+          const target = await resolveTarget(client, {
+            viewerUserId: ownerUserId,
+            targetPublicProfileId,
+            requireDiscoverable: true,
+            requireUnblocked: true,
+          });
+          // The same pair lock the V1 sender takes, so two concurrent sends
+          // cannot both pass the pending check.
+          await client.query({
+            text: `
+              select id
+              from public.loop_users
+              where id in ($1, $2)
+              order by id
+              for update
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          await client.query({
+            text: `
+              update public.friend_requests
+              set
+                status = 'expired',
+                decided_at = greatest(clock_timestamp(), created_at),
+                updated_at = greatest(clock_timestamp(), updated_at)
+              where pair_user_id_low = least($1::uuid, $2::uuid)
+                and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                and status = 'pending'
+                and expires_at <= clock_timestamp()
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          const blocking = await client.query<{
+            friendship: boolean;
+            pending: boolean;
+            cooldown: boolean;
+          }>({
+            text: `
+              select
+                exists (
+                  select 1
+                  from public.friendships
+                  where user_id_low = least($1::uuid, $2::uuid)
+                    and user_id_high = greatest($1::uuid, $2::uuid)
+                ) as friendship,
+                exists (
+                  select 1
+                  from public.friend_requests
+                  where pair_user_id_low = least($1::uuid, $2::uuid)
+                    and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                    and status = 'pending'
+                ) as pending,
+                exists (
+                  select 1
+                  from public.friend_requests
+                  where pair_user_id_low = least($1::uuid, $2::uuid)
+                    and pair_user_id_high = greatest($1::uuid, $2::uuid)
+                    and status = 'rejected'
+                    and rejection_cooldown_until > clock_timestamp()
+                ) as cooldown
+            `,
+            values: [ownerUserId, target.userId],
+          });
+          const state = blocking.rows[0];
+          if (state === undefined) {
+            throw new CommunityRepositoryUnavailableError();
+          }
+          // An existing friendship, a pending request in either direction, and
+          // an active rejection cooldown are all "refresh before deciding
+          // again": the caller's view of the pair is stale.
+          if (state.friendship || state.pending || state.cooldown) {
+            throw new CommunityDataStaleError();
+          }
+          const inserted = await client.query<{ friend_request_id: string }>({
+            text: `
+              insert into public.friend_requests (
+                requester_user_id,
+                recipient_user_id,
+                expires_at
+              )
+              values ($1, $2, clock_timestamp() + $3::interval)
+              returning friend_request_id
+            `,
+            values: [ownerUserId, target.userId, messageRequestLifetimeSql],
+          });
+          const messageRequestId = opaqueIdSchema.parse(
+            inserted.rows[0]?.friend_request_id,
+          );
+          await appendSocialGraphAudit(client, {
+            actorUserId: ownerUserId,
+            eventType: "message_request_sent",
+            targetUserId: target.userId,
+            subjectId: messageRequestId,
+            resultStatus: "sent",
+            reasonCode: null,
+            idempotencyRecordId: recordId,
+            requestId,
+          });
+          return await readMessageRequest(client, messageRequestId);
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
     async decideMessageRequest(
       rawInput: DecideMessageRequestInput,
     ): Promise<MessageRequestDecisionRecord> {
@@ -2386,7 +2742,13 @@ export function createPostgresCommunityRepository(
         return await withTransaction(pool, async (client) => {
           const current = await readCommunity(client, communityId, true);
           if (current.verificationStatus === "verified") {
-            return current;
+            await provisionCommunityChannel(client, {
+              communityId,
+              memberCap: communityChannelMemberCap,
+              requestId,
+              mode: "repair",
+            });
+            return readCommunity(client, communityId);
           }
           await client.query({
             text: `
@@ -2407,6 +2769,11 @@ export function createPostgresCommunityRepository(
             eventType: "community_verified",
             reasonCode,
             idempotencyRecordId: null,
+            requestId,
+          });
+          await provisionCommunityChannel(client, {
+            communityId,
+            memberCap: communityChannelMemberCap,
             requestId,
           });
           return readCommunity(client, communityId);

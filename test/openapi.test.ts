@@ -76,6 +76,11 @@ describe("committed OpenAPI artifact", () => {
       "/v2/assets/{assetId}",
       "/v2/blocks",
       "/v2/chain/status",
+      "/v2/chat/direct-channels",
+      "/v2/chat/groups",
+      "/v2/chat/groups/{groupId}/membership",
+      "/v2/chat/operations/{operationId}",
+      "/v2/chat/token",
       "/v2/communities",
       "/v2/communities/{communityId}",
       "/v2/communities/{communityId}/join",
@@ -84,6 +89,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/communities/{communityId}/members/{publicProfileId}/mute",
       "/v2/communities/{communityId}/members/{publicProfileId}/role",
       "/v2/communities/{communityId}/membership",
+      "/v2/communities/{communityId}/voice-rooms",
+      "/v2/communities/{communityId}/voice-rooms/current",
       "/v2/community/home",
       "/v2/connections",
       "/v2/connections/follow/{publicProfileId}",
@@ -99,6 +106,15 @@ describe("committed OpenAPI artifact", () => {
       "/v2/search",
       "/v2/session/bootstrap",
       "/v2/session/logout",
+      "/v2/video/token",
+      "/v2/voice-rooms/{voiceRoomId}",
+      "/v2/voice-rooms/{voiceRoomId}/end",
+      "/v2/voice-rooms/{voiceRoomId}/hand-raise",
+      "/v2/voice-rooms/{voiceRoomId}/hand-raises",
+      "/v2/voice-rooms/{voiceRoomId}/join",
+      "/v2/voice-rooms/{voiceRoomId}/leave",
+      "/v2/voice-rooms/{voiceRoomId}/mute-all",
+      "/v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}",
       "/v2/wallets",
       "/v2/wallets/active",
       "/v2/wallets/{walletId}/activity",
@@ -107,7 +123,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(45);
+    expect(operationIds).toHaveLength(64);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

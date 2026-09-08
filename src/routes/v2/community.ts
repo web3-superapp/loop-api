@@ -291,7 +291,7 @@ export function registerV2CommunityRoutes(
         operationId: "listV2CommunityMembers",
         summary: "List community members grouped by role",
         description:
-          "Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server. Per-member mining power and the online count stay unavailable.",
+          'Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: "banned"`), which no other view contains.',
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -390,7 +390,7 @@ export function registerV2CommunityRoutes(
           operationId,
           summary,
           description:
-            "Owner or admin governance action. An admin may only act on members; an owner is never a valid target. A transition the stored state does not allow is DATA_STALE, and a ban also removes the follow edges between the two accounts.",
+            'Owner or admin governance action. An admin may only act on members; an owner is never a valid target. A transition the stored state does not allow is DATA_STALE. A ban keeps the membership row at `status: "banned"` (visible through `GET .../members?role=banned`) and removes the account from the official channel; an unban restores it as `role: "member", status: "active"` with its original join date and re-adds it to the channel. Both are community scoped: neither touches the personal follow graph.',
           tags: ["community"],
           security: [{ privyBearer: [] }],
           headers: v2CommandHeadersSchema,

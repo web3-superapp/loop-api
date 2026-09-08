@@ -99,25 +99,26 @@ never an authorization key. `GET /v2/account/me` is unchanged.
 
 ### V2 community and social-graph module (Decision 0031, `V2_MODULES_ENABLED=community`)
 
-| Method and path                                            | Request                                                                        | Success projection                                                           | Interface     | Capability                                                            |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------- |
-| `GET /v2/community/home`                                   | Bearer + contract/client headers; no payload                                   | `joined[]`, `discover[]` (≤5), `unread`/`liveVoice` unavailable, `freshness` | `implemented` | `implemented`; Stream-derived counts stay `unavailable`               |
-| `GET /v2/communities`                                      | `sort=members\|newest`, `verification=verified\|all`, cursor page              | Community summaries plus `recommendation` (`rule:verified-members-v1`)       | `implemented` | `implemented`; only member count and creation time order the list     |
-| `POST /v2/communities`                                     | Write headers incl. UUIDv4 `Idempotency-Key`; name/slug/description/logo/asset | `201` with a `pending` community owned by the applicant                      | `implemented` | `implemented`; verification is operator-only                          |
-| `GET /v2/communities/{communityId}`                        | Bearer + contract/client headers; no payload                                   | Community record, viewer membership and permission flags                     | `implemented` | `implemented`; mining/presence/announcements/links `unavailable`      |
-| `POST /v2/communities/{communityId}/join`                  | Write headers; no payload                                                      | Community resource with the viewer membership                                | `implemented` | `implemented`; `member_count` maintained in the same transaction      |
-| `DELETE /v2/communities/{communityId}/membership`          | Write headers; no payload                                                      | Community resource with `membership: null`                                   | `implemented` | `implemented`; an owner must transfer first                           |
-| `GET /v2/communities/{communityId}/members`                | `role=all\|owner\|admin`, cursor page                                          | Owner→admin→member grouping, server counts, viewer permission flags          | `implemented` | `implemented`; per-member mining power and online count `unavailable` |
-| `POST /v2/communities/{id}/members/{publicProfileId}/role` | Write headers; `{role}`                                                        | Refreshed member directory                                                   | `implemented` | `implemented`; owner-only; audited as `role_changed`                  |
-| `POST\|DELETE /v2/communities/{id}/members/{pid}/mute`     | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; owner or admin per the permission matrix               |
-| `POST\|DELETE /v2/communities/{id}/members/{pid}/ban`      | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; a ban also drops the follow edges                      |
-| `POST\|DELETE /v2/connections/follow/{publicProfileId}`    | Write headers; no payload                                                      | `{profile, viewerFollows}`                                                   | `implemented` | `implemented`; target must be activated and `discoverable`            |
-| `GET /v2/connections`                                      | `direction=following\|followers`, cursor page                                  | Connections, `counts.following/followers`                                    | `implemented` | `implemented`; blocked accounts are omitted                           |
-| `GET /v2/blocks`                                           | `kind=user`, cursor page                                                       | Block rows plus `counts.user`                                                | `implemented` | `implemented`; `contract`/`domain` are `CAPABILITY_UNAVAILABLE`       |
-| `POST\|DELETE /v2/blocks`                                  | Write headers; `{kind, stableId}`                                              | `{block}` or `{block: null}`                                                 | `implemented` | `implemented`; a block removes both follow edges                      |
-| `GET /v2/message-requests`                                 | Cursor page                                                                    | Pending incoming requests over the frozen V1 `friend_requests` storage       | `implemented` | `implemented`; preview and AI moderation `unavailable`                |
-| `POST /v2/message-requests/{id}/decision`                  | Write headers; `{decision}`                                                    | `{messageRequestId, decision, blocked}`                                      | `implemented` | `implemented`; `report` = reject + block + audit in one transaction   |
-| `GET /v2/mining/referral/rules`                            | Bearer + contract/client headers; no payload                                   | Versioned five-level Mining Power boost snapshot                             | `implemented` | `implemented`; `edges` and `inviteCode` `unavailable` until D19       |
+| Method and path                                            | Request                                                                        | Success projection                                                           | Interface     | Capability                                                                   |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `GET /v2/community/home`                                   | Bearer + contract/client headers; no payload                                   | `joined[]`, `discover[]` (≤5), `unread`/`liveVoice` unavailable, `freshness` | `implemented` | `implemented`; Stream-derived counts stay `unavailable`                      |
+| `GET /v2/communities`                                      | `sort=members\|newest`, `verification=verified\|all`, cursor page              | Community summaries plus `recommendation` (`rule:verified-members-v1`)       | `implemented` | `implemented`; only member count and creation time order the list            |
+| `POST /v2/communities`                                     | Write headers incl. UUIDv4 `Idempotency-Key`; name/slug/description/logo/asset | `201` with a `pending` community owned by the applicant                      | `implemented` | `implemented`; verification is operator-only                                 |
+| `GET /v2/communities/{communityId}`                        | Bearer + contract/client headers; no payload                                   | Community record, viewer membership and permission flags                     | `implemented` | `implemented`; mining/presence/announcements/links `unavailable`             |
+| `POST /v2/communities/{communityId}/join`                  | Write headers; no payload                                                      | Community resource with the viewer membership                                | `implemented` | `implemented`; `member_count` maintained in the same transaction             |
+| `DELETE /v2/communities/{communityId}/membership`          | Write headers; no payload                                                      | Community resource with `membership: null`                                   | `implemented` | `implemented`; an owner must transfer first                                  |
+| `GET /v2/communities/{communityId}/members`                | `role=all\|owner\|admin`, cursor page                                          | Owner→admin→member grouping, server counts, viewer permission flags          | `implemented` | `implemented`; per-member mining power and online count `unavailable`        |
+| `POST /v2/communities/{id}/members/{publicProfileId}/role` | Write headers; `{role}`                                                        | Refreshed member directory                                                   | `implemented` | `implemented`; owner-only; audited as `role_changed`                         |
+| `POST\|DELETE /v2/communities/{id}/members/{pid}/mute`     | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; owner or admin per the permission matrix                      |
+| `POST\|DELETE /v2/communities/{id}/members/{pid}/ban`      | Write headers; no payload                                                      | Refreshed member directory                                                   | `implemented` | `implemented`; a ban also drops the follow edges                             |
+| `POST\|DELETE /v2/connections/follow/{publicProfileId}`    | Write headers; no payload                                                      | `{profile, viewerFollows}`                                                   | `implemented` | `implemented`; target must be activated and `discoverable`                   |
+| `GET /v2/connections`                                      | `direction=following\|followers`, cursor page                                  | Connections, `counts.following/followers`                                    | `implemented` | `implemented`; blocked accounts are omitted                                  |
+| `GET /v2/blocks`                                           | `kind=user`, cursor page                                                       | Block rows plus `counts.user`                                                | `implemented` | `implemented`; `contract`/`domain` are `CAPABILITY_UNAVAILABLE`              |
+| `POST\|DELETE /v2/blocks`                                  | Write headers; `{kind, stableId}`                                              | `{block}` or `{block: null}`                                                 | `implemented` | `implemented`; a block removes both follow edges                             |
+| `GET /v2/message-requests`                                 | Cursor page                                                                    | Pending incoming requests over the frozen V1 `friend_requests` storage       | `implemented` | `implemented`; preview and AI moderation `unavailable`                       |
+| `POST /v2/message-requests`                                | Write headers; `{targetPublicProfileId}`                                       | One message-request item: the V2 producer for the V1 `friend_requests` store | `implemented` | `implemented`; follow-grade admission, NOT_FOUND for every ineligible target |
+| `POST /v2/message-requests/{id}/decision`                  | Write headers; `{decision}`                                                    | `{messageRequestId, decision, blocked}`                                      | `implemented` | `implemented`; `report` = reject + block + audit in one transaction          |
+| `GET /v2/mining/referral/rules`                            | Bearer + contract/client headers; no payload                                   | Versioned five-level Mining Power boost snapshot                             | `implemented` | `implemented`; `edges` and `inviteCode` `unavailable` until D19              |
 
 ### V2 search module (Decision 0031, `V2_MODULES_ENABLED=search`)
 
@@ -199,18 +200,66 @@ owns the whole owner-level snapshot, so it replaces legacy V1 rows rather than
 merging two asset namespaces. A watchlist entry is a user preference and never
 evidence that a market, price, or trading path exists.
 
+### V2 communication module (Decision 0032, `V2_MODULES_ENABLED=communication`)
+
+| Method and path                                         | Request                                         | Success projection                                                    | Interface     | Capability                                                                   |
+| ------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `POST /v2/chat/token`                                   | Write headers incl. UUIDv4 `Idempotency-Key`    | `{apiKey, token, expiresAt, user:{id}}` in camelCase                  | `implemented` | `blocked-provider` without Stream credentials or the persistent quota        |
+| `POST /v2/video/token`                                  | Write headers                                   | Same shape, separate quota bucket                                     | `implemented` | as above                                                                     |
+| `POST /v2/chat/groups`                                  | Write headers; `{name, friendPublicProfileIds}` | V2 projection of the V1 group operation; 202 + `Location` if pending  | `implemented` | `implemented`; friendship stays the only admission rule                      |
+| `POST /v2/chat/direct-channels`                         | Write headers; `{targetPublicProfileId}`        | V2 projection of the V1 direct operation; 202 + `Location` if pending | `implemented` | `implemented`; the unordered pair converges on one CID                       |
+| `GET /v2/chat/operations/{operationId}`                 | Bearer + contract/client headers; no payload    | camelCase operation; `operatorRequired` is terminal and unresolved    | `implemented` | `implemented`; unknown operation and wrong owner share one `NOT_FOUND`       |
+| `DELETE /v2/chat/groups/{groupId}/membership`           | Write headers; no payload                       | `{groupId, membership: null}`                                         | `implemented` | `implemented`; the Stream removal precedes the LOOP commit                   |
+| `POST /v2/communities/{communityId}/voice-rooms`        | Write headers; no payload                       | `201` room resource with the creator as host                          | `implemented` | `implemented`; owner or admin only; one live room per community              |
+| `GET /v2/communities/{communityId}/voice-rooms/current` | Bearer + contract/client headers                | The live room, or `null` with `COMMUNITY_VOICE_ROOM_NOT_LIVE`         | `implemented` | `implemented`; the observed participant count carries its own `observedAt`   |
+| `GET /v2/voice-rooms/{voiceRoomId}`                     | Bearer + contract/client headers                | Room, viewer role, viewer hand raise                                  | `implemented` | `implemented`; non-members are `PERMISSION_DENIED`                           |
+| `GET /v2/voice-rooms/{voiceRoomId}/hand-raises`         | Bearer + contract/client headers                | Pending queue in sequence order; `sequence` is a decimal string       | `implemented` | `implemented`; the order is a PostgreSQL fact, not a client guess            |
+| `POST /v2/voice-rooms/{voiceRoomId}/join`               | Write headers; no payload                       | Room resource with the caller's current role and `expiresAt`          | `implemented` | `implemented`; idempotent; an unprovisioned room is `CAPABILITY_UNAVAILABLE` |
+| `POST /v2/voice-rooms/{voiceRoomId}/leave`              | Write headers; no payload                       | Room resource with `viewer.role: null`                                | `implemented` | `implemented`; the host must end the room instead                            |
+| `POST\|DELETE /v2/voice-rooms/{voiceRoomId}/hand-raise` | Write headers; no payload                       | Room resource with the viewer's hand raise                            | `implemented` | `implemented`; one pending raise per account; a second raise is `DATA_STALE` |
+| `POST\|DELETE /v2/voice-rooms/{id}/speakers/{pid}`      | Write headers; no payload                       | Room resource plus `providerSync`                                     | `implemented` | `implemented`; host-only; grants or revokes Stream `send-audio`              |
+| `POST /v2/voice-rooms/{voiceRoomId}/mute-all`           | Write headers; no payload                       | Room resource plus `providerSync`                                     | `implemented` | `implemented`; host-only                                                     |
+| `POST /v2/voice-rooms/{voiceRoomId}/end`                | Write headers; no payload                       | Ended room; every later write is `DATA_STALE`                         | `implemented` | `implemented`; host-only                                                     |
+
+`GET /v2/communities/{communityId}` (the `community` module) additionally
+carries `chat: {status, channelCid, memberState, reasonCode}` and
+`voice: {status, currentRoomId, reasonCode}`. `chat.status` is
+`available | syncing | unavailable` (revision, 2026-09-08): `available` only
+when the official Stream channel is provisioned **and** the viewer's channel
+member state is `synced`, `syncing` while the allocated channel or the viewer's
+membership is still on its way to Stream, and `unavailable` when nothing is in
+flight. A LOOP membership never implies a Stream channel membership.
+
+The official channel is created when a community becomes `verified`. Its
+membership is synchronized by the transactional outbox
+`community_channel_sync_jobs`, executed after commit by the default-off
+`community-channel-sync` worker lane (`COMMUNITY_CHANNEL_SYNC_ENABLED`, which
+requires the complete Stream credential pair). Join enqueues `add`; leave and
+ban enqueue `remove`; an unban restores the membership and enqueues `add`
+(revision, 2026-09-08). Each provider call is attempted
+exactly once per lease, an unknown result becomes `reconciling` with a bounded
+backoff, and the channel member cap
+(`V2_COMMUNITY_CHANNEL_MEMBER_CAP`, default 3000) parks a member as
+`capacityPending` without touching its LOOP membership.
+
+Chat search, message forwarding, long-image merging, and Community AI add no
+LOOP endpoint: the first two are client-side Stream SDK calls and the last is
+`unavailable` (`COMMUNITY_AI_RUNTIME_DEFERRED`). Chat content never enters
+`GET /v2/search`. End-to-end encryption is not claimed anywhere.
+
 ### V2 module gate (Decision 0029)
 
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
 point. `V2_MODULES_ENABLED` selects which module routes may register.
-`profile` (Decision 0030), `community` and `search` (0031), and `chain`,
-`wallet`, and `watchlist` (0033) ship their registrars; every other module
-below has none yet, so enabling it registers no route and only changes its
-capability projection.
+`profile` (Decision 0030), `community` and `search` (0031), `communication`
+(0032), and `chain`, `wallet`, and `watchlist` (0033) ship their registrars;
+every other module below has none yet, so enabling it registers no route and
+only changes its capability projection.
 
 | Module ID       | Capability projected | Registrar   | Status                                                     |
 | --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
 | `community`     | `community`          | shipped     | routes and capability `implemented` (Decision 0031)        |
+| `communication` | `communityChat`      | shipped     | routes and capability `implemented` (Decision 0032)        |
 | `search`        | `search`             | shipped     | routes and capability `implemented` (Decision 0031)        |
 | `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
 | `chain`         | `bscRead`            | shipped     | routes and capability `implemented` (Decision 0033)        |
@@ -236,14 +285,23 @@ community repository and the V2 cursor codec (plus the public search quota for
 repository is composed, and `eth_chainId` was actually observed to equal 56; an
 unprobed, unreachable, or mismatched chain fails closed with its own reason
 code. `walletRead` additionally needs Privy credentials and the cursor codec.
+`search`); otherwise they fail closed. `communication` projects two
+capabilities: `communityChat` and `voiceRooms`, both `available` only with the
+module enabled, the communication repository composed, the community runtime
+available, and Stream credentials present. `voiceRooms.evidence` is always
+`{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until the
+Decision 0005 Stream Dashboard role export exists, so the mobile locator stays
+unavailable even when the backend is available.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one
 monotonic revocation result or the same non-enumerating `SESSION_NOT_FOUND`
 result. The first delivery intentionally continues to mint Chat and Video
 tokens through frozen `POST /v1/chat/token` and `POST /v1/video/token`; both
-resolve the same internal account created by V2 bootstrap. It does not create a
-second message API or claim a connected Stream client.
+resolve the same internal account created by V2 bootstrap. Decision 0032 adds
+the camelCase `POST /v2/chat/token` and `POST /v2/video/token` projections of
+the same issuance policy and quota; neither creates a second message API nor
+claims a connected Stream client.
 
 ## Implemented routes
 

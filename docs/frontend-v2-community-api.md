@@ -275,11 +275,11 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 
 ### 4.6 `GET /v2/communities/{id}/members` — `community-members` 页
 
-| query    | 取值                        | 默认  |
-| -------- | --------------------------- | ----- |
-| `role`   | `all` \| `owner` \| `admin` | `all` |
-| `limit`  | 1–50                        | 20    |
-| `cursor` | 上一页 `nextCursor`         | —     |
+| query    | 取值                                    | 默认  |
+| -------- | --------------------------------------- | ----- |
+| `role`   | `all` \| `owner` \| `admin` \| `banned` | `all` |
+| `limit`  | 1–50                                    | 20    |
+| `cursor` | 上一页 `nextCursor`                     | —     |
 
 ```json
 {
@@ -309,6 +309,14 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 排序固定 owner → admin → member，同组按 `joinedAt` 升序。seg 计数用
 `counts.all/owner/admin`，"在线"seg 禁用。
 
+**`role=banned`（解封入口，2026-09-08 新增）**：`all`/`owner`/`admin` 三种视图
+只列 `status` 为 `active`/`muted` 的成员，**不含被封禁者**；要拿到被封禁成员，
+必须显式传 `role=banned`，此时 `items[].status` 全部是 `"banned"`。该视图只对
+`viewer.canBan === true`（owner/admin）开放，其他调用者返回
+`403 PERMISSION_DENIED`。`counts.all/owner/admin` 始终是**非封禁**目录的计数，
+不随 `role=banned` 改变（被封禁者不计入），所以"已封禁"seg 不要显示计数徽标，
+用翻页结果本身呈现。cursor 与 `role` 绑定，切换 seg 必须丢弃旧 cursor。
+
 成员行的 `profile.publicProfileId` 可能为 `null`（该成员没有资料行）：这种行仍会
 列出并计入 `counts`，保证计数与可翻页行数一致，但 **不可作为任何治理动作的目标**，
 前端要隐藏该行的操作入口，用 `loopId` 显示。
@@ -324,10 +332,25 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 | `POST`   | `/v2/communities/{id}/members/{publicProfileId}/role` | `{"role"}` | `admin` 任命 / `member` 撤销 / `owner` 转让 |
 | `POST`   | `/v2/communities/{id}/members/{publicProfileId}/mute` | 无         | 禁言                                        |
 | `DELETE` | `/v2/communities/{id}/members/{publicProfileId}/mute` | 无         | 解除禁言                                    |
-| `POST`   | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 封禁（同时断开双向关注）                    |
-| `DELETE` | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 解除封禁                                    |
+| `POST`   | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 封禁                                        |
+| `DELETE` | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 解除封禁 = 恢复为活跃成员                   |
 
 全部返回 4.6 的成员列表首页，前端直接用它刷新页面。
+
+**封禁 / 解封的成员资格语义（2026-09-08 修订）**：
+
+- 封禁 **不删除**成员行：成员保持在库里，`status` 变成 `banned`，`role` 归为
+  `member`，`joinedAt` 不变；被封禁者自己读 `GET /v2/communities/{id}` 仍能看到
+  `viewer.membership.status === "banned"`。默认成员目录不含这一行，只有
+  `role=banned` 视图能看到。后端同时把该账号从社区官方 Stream 频道移除。
+- 解封 **恢复成员资格**：该行变回 `role: "member"`, `status: "active"`，
+  `joinedAt` 仍是最初加入时间（不会被重置），**不需要**重新 join；后端同时把该
+  账号重新加回官方频道（频道尚未 provisioned 时该动作为空操作）。解封后
+  `viewer.membership` 不再是 `null`。
+- 封禁与解封都是**社区范围**的：都不改动个人关注图（关注/取关只受
+  `POST /v2/blocks` 影响）。
+
+（此前的行为是"解封=删除成员行"，前端必须按上面的新语义实现解封 UI。）
 
 权限矩阵（服务端唯一真相，前端只做可见性）：
 
@@ -446,6 +469,35 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 - `report`：拒绝 + 屏蔽发起人 + 写审计，同一事务；`blocked: true`。成功后 Toast
   "已举报并屏蔽"，并从列表移除。
 - 已处理或已过期 → `409 DATA_STALE`；不存在或不属于当前账号 → `404 NOT_FOUND`。
+
+**`POST /v2/message-requests`（2026-09-08 新增，发起陌生人请求）**
+
+body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
+响应就是上面 `items[]` 的**单条**加 `contractVersion`：
+
+```json
+{
+  "messageRequestId": "…",
+  "profile": { … },
+  "createdAt": "…",
+  "expiresAt": "…",
+  "preview": { "status": "unavailable", "reasonCode": "MESSAGE_PREVIEW_DEFERRED" },
+  "aiModeration": { "status": "unavailable", "reasonCode": "AI_MODERATION_DEFERRED" },
+  "contractVersion": "2.0"
+}
+```
+
+- `profile` 是**对方（收件人）**的身份投影；列表接口里的 `profile` 是发起人，
+  因为那是收件人视角。两者字段完全一致。
+- 准入与「关注」完全一致：对方资料已激活、`discoverable=true`、双方均未屏蔽、
+  不能是自己。**任何不可达都返回同一个 `404 NOT_FOUND`**（不可枚举），前端不要
+  据此推断对方是否存在。
+- 已是好友、任一方向已有 pending 请求、处于 24 小时拒绝冷却 → `409 DATA_STALE`，
+  提示刷新后再试。
+- 同一个 `Idempotency-Key` 重放返回**首次创建的那条**请求（即使对方已处理）。
+- 请求有效期 7 天（`expiresAt`），由后端固定，前端不要自己算。
+- 不要再调用 v1 `POST /v1/friend-requests`：它按 v1 隐私表判定资格，V2 账号一律
+  拿到 404。
 
 ### 4.12 `GET /v2/search` — `search` 页（`search` 模块）
 
