@@ -19,7 +19,6 @@ import {
   memberListResourceSchema,
   memberParamsSchema,
   readErrors,
-  referralRulesResourceSchema,
   roleChangeRequestSchema,
   updateCommunityRequestSchema,
   v2CommandHeadersSchema,
@@ -417,30 +416,6 @@ export function registerV2CommunityRoutes(
       },
     );
   }
-
-  app.get(
-    "/v2/mining/referral/rules",
-    {
-      schema: {
-        operationId: "getV2ReferralRules",
-        summary: "Get the versioned referral boost rules",
-        description:
-          "Read-only static rule snapshot published under the community module. The five levels are Mining Power boosts, never revenue or commission; relationship counts and invite codes have no backend and stay unavailable.",
-        tags: ["community"],
-        security: [{ privyBearer: [] }],
-        headers: v2CommonHeadersSchema,
-        querystring: emptyQueryStringSchema,
-        response: { 200: referralRulesResourceSchema, ...readErrors },
-      },
-      onRequest: validateCommonHeaders,
-      preValidation: assertNoBodyOrQueryV2,
-      preHandler: authenticateLoopBearer,
-    },
-    async (_request, reply) => {
-      reply.header("cache-control", "no-store");
-      return reply.code(200).send(service.referralRules());
-    },
-  );
 
   registerV2SocialRoutes(app, dependencies);
 }

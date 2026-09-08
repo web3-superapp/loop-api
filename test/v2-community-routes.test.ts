@@ -983,58 +983,6 @@ describe("LOOP API V2 community, social, and search modules", () => {
     expect(replayed.json()).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
-  it("publishes the versioned referral rules as a Mining Power boost only", async () => {
-    const { app } = await createApp();
-    const response = await app.inject({
-      method: "GET",
-      url: "/v2/mining/referral/rules",
-      headers: commonHeaders(),
-    });
-    expect(response.statusCode).toBe(200);
-    expectOperationalHeaders(response);
-    expect(response.json()).toEqual({
-      configVersion: "referralRulesV1",
-      effectiveAt: "2026-09-01T00:00:00.000Z",
-      appliesTo: "miningPower",
-      levels: [
-        {
-          level: 1,
-          boostPercent: "10",
-          descriptionKey: "mining.referral.level1",
-        },
-        {
-          level: 2,
-          boostPercent: "5",
-          descriptionKey: "mining.referral.level2",
-        },
-        {
-          level: 3,
-          boostPercent: "3",
-          descriptionKey: "mining.referral.level3",
-        },
-        {
-          level: 4,
-          boostPercent: "2",
-          descriptionKey: "mining.referral.level4",
-        },
-        {
-          level: 5,
-          boostPercent: "1",
-          descriptionKey: "mining.referral.level5",
-        },
-      ],
-      edges: {
-        status: "unavailable",
-        reasonCode: "REFERRAL_GRAPH_DEFERRED",
-      },
-      inviteCode: {
-        status: "unavailable",
-        reasonCode: "INVITE_CODE_DEFERRED",
-      },
-      contractVersion: "2.0",
-    });
-  });
-
   it("passes each governance verb to the repository as its matrix action", async () => {
     const { app, governMemberMock } = await createApp();
     const cases = [

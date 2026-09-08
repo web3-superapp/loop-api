@@ -27,6 +27,12 @@ import {
   createUnavailablePrivySwapAdapter,
 } from "./integrations/privy/swap-adapter.js";
 import type { MarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
+import type { MiningRepository } from "./features/mining/mining-repository.js";
+import {
+  createMiningSnapshotWorker,
+  type CreateMiningSnapshotWorkerOptions,
+  type MiningSnapshotWorker,
+} from "./mining-snapshot-worker.js";
 import type { NotificationRepository } from "./database/notification-repository.js";
 import { createMarketFactService } from "./features/market/market-fact-service.js";
 import { createMarketProviders } from "./integrations/market/provider-factory.js";
@@ -103,6 +109,7 @@ export interface ReconciliationWorkerDatabase {
   readonly notifications?: NotificationRepository;
   readonly accountWallets?: AccountWalletRepository;
   readonly walletIntents?: WalletIntentRepository;
+  readonly mining?: MiningRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
@@ -141,6 +148,10 @@ export type WalletIntentReconcileWorkerFactory = (
   options: CreateWalletIntentReconcileWorkerOptions,
 ) => WalletIntentReconcileWorker;
 
+export type MiningSnapshotWorkerFactory = (
+  options: CreateMiningSnapshotWorkerOptions,
+) => MiningSnapshotWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -160,6 +171,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createBscPoolIndexerWorker?: BscPoolIndexerWorkerFactory;
   readonly createAlertEvaluatorWorker?: AlertEvaluatorWorkerFactory;
   readonly createWalletIntentReconcileWorker?: WalletIntentReconcileWorkerFactory;
+  readonly createMiningSnapshotWorker?: MiningSnapshotWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
@@ -200,6 +212,8 @@ export async function runReconciliationWorker(
   const walletIntentReconcileWorkerFactory =
     options.createWalletIntentReconcileWorker ??
     createWalletIntentReconcileWorker;
+  const miningSnapshotWorkerFactory =
+    options.createMiningSnapshotWorker ?? createMiningSnapshotWorker;
   const readClientFactory =
     options.createBscReadClient ??
     ((config): BscReadClient => createBscReadClient({ config }));
@@ -404,6 +418,36 @@ export async function runReconciliationWorker(
               );
             },
           });
+    // The `mining-snapshot` lane (Decision 0036) is default-off. Even when
+    // enabled it is idle until a Mining formula version is approved; it
+    // reads fresh DexScreener prices through the same fact service and never
+    // settles or claims a reward.
+    const miningSnapshotWorker =
+      !options.config.miningSnapshotEnabled ||
+      database.mining === undefined ||
+      database.chainRegistry === undefined ||
+      database.marketFacts === undefined
+        ? null
+        : miningSnapshotWorkerFactory({
+            repository: database.mining,
+            registry: database.chainRegistry,
+            prices: createMarketFactService({
+              config: options.config.market,
+              cache: database.marketFacts,
+              pairsProvider: createMarketProviders(
+                options.config.market,
+                "worker",
+              ).pairs,
+              securityProvider: null,
+              candlesProvider: null,
+            }),
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).
     const communityChannelSyncWorker =
@@ -474,6 +518,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               walletIntentReconcileWorker.run(controller.signal),
+            ),
+          ]),
+      ...(miningSnapshotWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              miningSnapshotWorker.run(controller.signal),
             ),
           ]),
     ];
