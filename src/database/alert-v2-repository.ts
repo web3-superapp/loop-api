@@ -167,8 +167,15 @@ export interface AlertV2Repository {
     input: ReplacePriceAlertV2Input,
   ): Promise<PriceAlertV2Record | null>;
   softDeleteOwned(input: DeletePriceAlertV2Input): Promise<boolean>;
-  /** Active, unexpired, undeleted V2 alerts across owners for the evaluator lane. */
-  listEvaluable(limit: number): Promise<readonly PriceAlertV2Record[]>;
+  /**
+   * Active, unexpired, undeleted V2 alerts across owners for the evaluator
+   * lane, least recently evaluated first. `excludeIds` lets one tick page
+   * through the set without re-reading alerts it already handled.
+   */
+  listEvaluable(input: {
+    readonly limit: number;
+    readonly excludeIds: readonly string[];
+  }): Promise<readonly PriceAlertV2Record[]>;
   markEvaluated(
     alertIds: readonly string[],
     evaluatedAt: string,
@@ -515,7 +522,7 @@ export function createPostgresAlertV2Repository(pool: Pool): AlertV2Repository {
       }
     },
 
-    async listEvaluable(limit) {
+    async listEvaluable(input) {
       try {
         const result = await pool.query<Record<string, unknown>>({
           text: `
@@ -525,10 +532,11 @@ export function createPostgresAlertV2Repository(pool: Pool): AlertV2Repository {
               and deleted_at is null
               and state = 'active'
               and (expires_at is null or expires_at > clock_timestamp())
-            order by asset_id asc, created_at asc, id asc
+              and not (id = any($2::uuid[]))
+            order by last_evaluated_at asc nulls first, created_at asc, id asc
             limit $1
           `,
-          values: [limit],
+          values: [input.limit, [...input.excludeIds]],
         });
         return Object.freeze(result.rows.map(mapRow));
       } catch (error) {

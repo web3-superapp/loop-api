@@ -35,6 +35,11 @@ import { bscChainId } from "../src/features/chain/chain-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import type {
+  CachedFact,
+  MarketFactService,
+} from "../src/features/market/market-fact-service.js";
+import type { TokenPairsSnapshot } from "../src/integrations/market/market-data-provider.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const validToken = "header.payload.signature";
@@ -90,15 +95,95 @@ function commonHeaders(
   return headers;
 }
 
-function commandHeaders(idempotencyKey = randomUUID()): Record<string, string> {
-  return commonHeaders({ "idempotency-key": idempotencyKey });
+function commandHeaders(
+  extra: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  return commonHeaders({ "idempotency-key": randomUUID(), ...extra });
+}
+
+const nativeAsset: AssetRecord = Object.freeze({
+  ...wbnbAsset,
+  assetId: "eip155:56:native",
+  address: null,
+  symbol: "BNB",
+  name: "BNB",
+  status: "verified",
+  sourceKind: "chain_native",
+});
+const unpricedAsset: AssetRecord = Object.freeze({
+  ...wbnbAsset,
+  assetId: "eip155:56:0x00000000000000000000000000000000000000ee",
+  address: "0x00000000000000000000000000000000000000ee",
+  symbol: "NOPAIR",
+});
+
+function marketFactsFake(available = true): MarketFactService {
+  const pairsFor = (address: string): CachedFact<TokenPairsSnapshot> => ({
+    value: available
+      ? {
+          tokenAddress: address,
+          pairs:
+            address === unpricedAsset.address
+              ? []
+              : [
+                  {
+                    pairAddress: "0x172fcd41e0913e95784454622d1c3724f546f849",
+                    dexId: "pancakeswap",
+                    labels: ["v3"],
+                    baseTokenAddress: address,
+                    baseTokenSymbol: "WBNB",
+                    quoteTokenAddress:
+                      "0x55d398326f99059ff775485246999027b3197955",
+                    quoteTokenSymbol: "USDT",
+                    priceUsd: "747.39",
+                    priceNative: null,
+                    liquidityUsd: "1",
+                    volumeH24: null,
+                    priceChangeH24: null,
+                    fdv: null,
+                    marketCap: null,
+                    buysH24: null,
+                    sellsH24: null,
+                    pairCreatedAt: null,
+                  },
+                ],
+        }
+      : null,
+    source: "dexscreener",
+    fetchedAt: available ? observedAt : null,
+    ttlSeconds: 30,
+    quality: available ? "fresh" : "unavailable",
+    reasonCode: available ? null : "MARKET_PROVIDER_UNREACHABLE",
+    rawDigest: null,
+  });
+  return {
+    readTokenPairs: vi.fn((address: string) =>
+      Promise.resolve(pairsFor(address)),
+    ),
+    readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+    readAssetPrice: vi.fn((asset: { readonly address: string | null }) => {
+      const fact = pairsFor(asset.address ?? wbnb);
+      return Promise.resolve({
+        fact,
+        pair: fact.value?.pairs[0] ?? null,
+        proxyAsset: asset.address === null ? wbnbAssetId : null,
+      });
+    }),
+    readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
+    readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
+    readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+    candlesProviderEnabled: false,
+  };
 }
 
 function registryFake(): ChainRegistryRepository {
+  const assets = [wbnbAsset, nativeAsset, unpricedAsset];
   return {
     getChain: vi.fn(() => Promise.resolve(null)),
     getAsset: vi.fn((assetId: string) =>
-      Promise.resolve(assetId === wbnbAssetId ? wbnbAsset : null),
+      Promise.resolve(
+        assets.find((asset) => asset.assetId === assetId) ?? null,
+      ),
     ),
     listAssets: vi.fn((assetIds: readonly string[]) =>
       Promise.resolve(assetIds.includes(wbnbAssetId) ? [wbnbAsset] : []),
@@ -353,12 +438,14 @@ describe("LOOP API V2 notifications module", () => {
   async function createApp(
     dependencies = fakes(),
     overrides: Readonly<Record<string, string>> = {},
+    marketFactService: MarketFactService = marketFactsFake(),
   ) {
     const app = await buildApp({
       config: testConfig(overrides),
       contractSurface: "v2",
       database: dependencies.database,
       privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      marketFactService,
       logger: false,
     });
     apps.push(app);
@@ -401,7 +488,7 @@ describe("LOOP API V2 notifications module", () => {
 
   it("creates an alert idempotently and refuses a different body under the same key", async () => {
     const { app } = await createApp();
-    const key = randomUUID();
+    const key = { "idempotency-key": randomUUID() };
     const created = await app.inject({
       method: "POST",
       url: "/v2/alerts",
@@ -475,19 +562,42 @@ describe("LOOP API V2 notifications module", () => {
       payload: { ...definition, expiresAt: "2020-01-01T00:00:00.000Z" },
     });
     expect(pastExpiry.statusCode).toBe(422);
-    // The route schema declares threshold as a string; Fastify's default AJV
-    // type coercion turns a JSON number into that string. This is documented
-    // in api-v2-conventions: the server does not reject the number form.
+    // A JSON number threshold is refused before AJV coercion can turn it
+    // into a string (api-v2-conventions: amounts are always JSON strings).
     const numberThreshold = await app.inject({
       method: "POST",
       url: "/v2/alerts",
       headers: commandHeaders(),
       payload: { ...definition, threshold: 800.5 },
     });
-    expect(numberThreshold.statusCode).toBe(201);
-    expect(numberThreshold.json()).toMatchObject({
-      alert: { threshold: "800.5" },
+    expect(numberThreshold.statusCode).toBe(400);
+    expect(numberThreshold.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    const precise = "123456789012345678.123456789012345678";
+    const preciseThreshold = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders(),
+      payload: { ...definition, threshold: precise },
     });
+    expect(preciseThreshold.statusCode).toBe(201);
+    expect(preciseThreshold.json()).toMatchObject({
+      alert: { threshold: precise },
+    });
+    const unpriced = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders(),
+      payload: { ...definition, assetId: unpricedAsset.assetId },
+    });
+    expect(unpriced.statusCode).toBe(422);
+    expect(unpriced.json()).toMatchObject({ code: "VALIDATION_FAILED" });
+    const native = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders(),
+      payload: { ...definition, assetId: nativeAsset.assetId },
+    });
+    expect(native.statusCode).toBe(201);
     const exponentThreshold = await app.inject({
       method: "POST",
       url: "/v2/alerts",
@@ -763,6 +873,61 @@ describe("LOOP API V2 notifications module", () => {
       payload: { expectedVersion: 1, categories },
     });
     expect(keyed.statusCode).toBe(400);
+  });
+
+  it("fails closed when the price Provider cannot answer at write time", async () => {
+    const { app } = await createApp(fakes(), {}, marketFactsFake(false));
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders(),
+      payload: definition,
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+  });
+
+  it("accepts and validates optional platform and device headers on writes", async () => {
+    const { app } = await createApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders({
+        "x-loop-platform": "ios",
+        "x-loop-device-id": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      }),
+      payload: definition,
+    });
+    expect(created.statusCode).toBe(201);
+    const alertId = created.json<{ alert: { alertId: string } }>().alert
+      .alertId;
+    const replaced = await app.inject({
+      method: "PUT",
+      url: `/v2/alerts/${alertId}`,
+      headers: commonHeaders({ "x-loop-platform": "android" }),
+      payload: { expectedVersion: 1, ...definition, threshold: "900" },
+    });
+    expect(replaced.statusCode).toBe(200);
+    const badPlatform = await app.inject({
+      method: "POST",
+      url: "/v2/alerts",
+      headers: commandHeaders({ "x-loop-platform": "web" }),
+      payload: definition,
+    });
+    expect(badPlatform.statusCode).toBe(400);
+    const badDevice = await app.inject({
+      method: "PUT",
+      url: `/v2/alerts/${alertId}`,
+      headers: commonHeaders({ "x-loop-device-id": "not-a-uuid" }),
+      payload: { expectedVersion: 2, ...definition, threshold: "950" },
+    });
+    expect(badDevice.statusCode).toBe(400);
+    const onRead = await app.inject({
+      method: "GET",
+      url: "/v2/alerts",
+      headers: commonHeaders({ "x-loop-platform": "ios" }),
+    });
+    expect(onRead.statusCode).toBe(400);
   });
 
   it("fails closed without the cursor codec", async () => {

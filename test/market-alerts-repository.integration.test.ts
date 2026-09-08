@@ -513,10 +513,21 @@ describe("PostgreSQL market facts, pool lane, V2 alerts, and notifications", () 
     expect(v1.records).toEqual([]);
     expect(await alertsV1.findOwned(owner, created.alert.alertId)).toBeNull();
 
-    const evaluable = await alertsV2.listEvaluable(10);
+    const evaluable = await alertsV2.listEvaluable({
+      limit: 10,
+      excludeIds: [],
+    });
     expect(evaluable.map((alert) => alert.alertId)).toContain(
       created.alert.alertId,
     );
+    expect(
+      (
+        await alertsV2.listEvaluable({
+          limit: 10,
+          excludeIds: [created.alert.alertId],
+        })
+      ).map((alert) => alert.alertId),
+    ).not.toContain(created.alert.alertId);
     await alertsV2.markEvaluated(
       [created.alert.alertId],
       "2026-09-08T00:00:01.000Z",

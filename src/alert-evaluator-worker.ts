@@ -8,11 +8,11 @@ import type {
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
 import type { NotificationRepository } from "./database/notification-repository.js";
 import { priceAlertContextRoute } from "./features/alerts/notification-contract.js";
-import { compareDecimalStrings } from "./features/market/market-contract.js";
 import {
-  selectPrimaryPair,
-  type MarketFactService,
-} from "./features/market/market-fact-service.js";
+  bscWrappedNativeAddress,
+  compareDecimalStrings,
+} from "./features/market/market-contract.js";
+import type { MarketFactService } from "./features/market/market-fact-service.js";
 
 /**
  * The `alert_evaluator` lane (Decision 0034), default off behind
@@ -142,10 +142,124 @@ export function createAlertEvaluatorWorker(
   async function execute(
     signal?: AbortSignal,
   ): Promise<AlertEvaluatorRunResult> {
-    const alerts = await options.alerts.listEvaluable(
-      ALERT_EVALUATOR_BATCH_LIMIT,
-    );
-    if (alerts.length === 0) {
+    let evaluatedCount = 0;
+    let triggeredCount = 0;
+    let skippedCount = 0;
+    const skippedReasonCodes: string[] = [];
+    const evaluatedIds: string[] = [];
+    /** Every alert this tick already handled, so paging reaches exhaustion. */
+    const handledIds: string[] = [];
+    let batches = 0;
+
+    for (;;) {
+      const alerts = await options.alerts.listEvaluable({
+        limit: ALERT_EVALUATOR_BATCH_LIMIT,
+        excludeIds: handledIds,
+      });
+      if (alerts.length === 0) {
+        break;
+      }
+      batches += 1;
+      const byAsset = new Map<string, PriceAlertV2Record[]>();
+      for (const alert of alerts) {
+        handledIds.push(alert.alertId);
+        const list = byAsset.get(alert.assetId) ?? [];
+        list.push(alert);
+        byAsset.set(alert.assetId, list);
+      }
+
+      for (const [assetId, group] of byAsset) {
+        if (isAborted(signal)) {
+          return Object.freeze({
+            kind: "aborted",
+            evaluatedCount,
+            triggeredCount,
+            skippedCount,
+            skippedReasonCodes: Object.freeze(skippedReasonCodes),
+          });
+        }
+        const asset = await options.registry.getAsset(assetId);
+        if (asset === null || asset.status === "blocked") {
+          skippedCount += group.length;
+          skippedReasonCodes.push("ASSET_NOT_READABLE");
+          continue;
+        }
+        // The native asset is evaluated through its proxy price (WBNB).
+        const { fact, pair, proxyAsset } = await options.facts.readAssetPrice(
+          asset,
+          { requireFresh: true },
+        );
+        if (
+          fact.quality !== "fresh" ||
+          fact.value === null ||
+          fact.fetchedAt === null
+        ) {
+          skippedCount += group.length;
+          skippedReasonCodes.push(fact.reasonCode ?? "MARKET_FACT_NOT_FRESH");
+          continue;
+        }
+        if (pair === null || pair.priceUsd === null) {
+          skippedCount += group.length;
+          skippedReasonCodes.push("MARKET_PAIR_NOT_FOUND");
+          continue;
+        }
+        const observed = pair.priceUsd;
+        const observedAt = fact.fetchedAt;
+        const sourceFactRef =
+          proxyAsset === null
+            ? `dexscreener:${pair.pairAddress}`
+            : `dexscreener:${pair.pairAddress}:proxy:${bscWrappedNativeAddress}`;
+
+        for (const alert of group) {
+          evaluatedCount += 1;
+          if (!conditionSatisfied(alert.condition, observed, alert.threshold)) {
+            evaluatedIds.push(alert.alertId);
+            continue;
+          }
+          const enabled = await options.notifications.isCategoryEnabled(
+            alert.ownerUserId,
+            "trade.priceAlert",
+          );
+          const notification: TriggerNotificationInput | null = enabled
+            ? Object.freeze({
+                type: "trade.priceAlert" as const,
+                entityRef: `priceAlert:${alert.alertId}`,
+                contextRoute: priceAlertContextRoute,
+                contextParams: Object.freeze({ assetId: alert.assetId }),
+                payload: Object.freeze({
+                  assetId: alert.assetId,
+                  symbol: asset.symbol,
+                  condition: alert.condition,
+                  threshold: alert.threshold,
+                  observedValue: observed,
+                  source: fact.source,
+                  observedAt,
+                  proxyAsset,
+                }),
+                dedupeKey: priceAlertDedupeKey(
+                  alert.alertId,
+                  observedAt,
+                  options.notificationDedupeSeconds,
+                ),
+              })
+            : null;
+          const result = await options.alerts.recordTrigger({
+            alertId: alert.alertId,
+            ownerUserId: alert.ownerUserId,
+            valueDecimal: observed,
+            source: fact.source,
+            sourceFactRef,
+            observedAt,
+            notification,
+          });
+          if (result.outcome === "triggered") {
+            triggeredCount += 1;
+          }
+        }
+      }
+    }
+
+    if (batches === 0) {
       return Object.freeze({
         kind: "idle",
         evaluatedCount: 0,
@@ -154,108 +268,6 @@ export function createAlertEvaluatorWorker(
         skippedReasonCodes: Object.freeze([]),
       });
     }
-    const byAsset = new Map<string, PriceAlertV2Record[]>();
-    for (const alert of alerts) {
-      const list = byAsset.get(alert.assetId) ?? [];
-      list.push(alert);
-      byAsset.set(alert.assetId, list);
-    }
-
-    let evaluatedCount = 0;
-    let triggeredCount = 0;
-    let skippedCount = 0;
-    const skippedReasonCodes: string[] = [];
-    const evaluatedIds: string[] = [];
-
-    for (const [assetId, group] of byAsset) {
-      if (signal?.aborted === true) {
-        return Object.freeze({
-          kind: "aborted",
-          evaluatedCount,
-          triggeredCount,
-          skippedCount,
-          skippedReasonCodes: Object.freeze(skippedReasonCodes),
-        });
-      }
-      const asset = await options.registry.getAsset(assetId);
-      if (
-        asset === null ||
-        asset.address === null ||
-        asset.status === "blocked"
-      ) {
-        skippedCount += group.length;
-        skippedReasonCodes.push("ASSET_NOT_READABLE");
-        continue;
-      }
-      const fact = await options.facts.readTokenPairs(asset.address, {
-        requireFresh: true,
-      });
-      if (
-        fact.quality !== "fresh" ||
-        fact.value === null ||
-        fact.fetchedAt === null
-      ) {
-        skippedCount += group.length;
-        skippedReasonCodes.push(fact.reasonCode ?? "MARKET_FACT_NOT_FRESH");
-        continue;
-      }
-      const pair = selectPrimaryPair(fact.value);
-      if (pair === null || pair.priceUsd === null) {
-        skippedCount += group.length;
-        skippedReasonCodes.push("MARKET_PAIR_NOT_FOUND");
-        continue;
-      }
-      const observed = pair.priceUsd;
-      const observedAt = fact.fetchedAt;
-      const sourceFactRef = `dexscreener:${pair.pairAddress}`;
-
-      for (const alert of group) {
-        evaluatedCount += 1;
-        if (!conditionSatisfied(alert.condition, observed, alert.threshold)) {
-          evaluatedIds.push(alert.alertId);
-          continue;
-        }
-        const enabled = await options.notifications.isCategoryEnabled(
-          alert.ownerUserId,
-          "trade.priceAlert",
-        );
-        const notification: TriggerNotificationInput | null = enabled
-          ? Object.freeze({
-              type: "trade.priceAlert" as const,
-              entityRef: `priceAlert:${alert.alertId}`,
-              contextRoute: priceAlertContextRoute,
-              contextParams: Object.freeze({ assetId: alert.assetId }),
-              payload: Object.freeze({
-                assetId: alert.assetId,
-                symbol: asset.symbol,
-                condition: alert.condition,
-                threshold: alert.threshold,
-                observedValue: observed,
-                source: fact.source,
-                observedAt,
-              }),
-              dedupeKey: priceAlertDedupeKey(
-                alert.alertId,
-                observedAt,
-                options.notificationDedupeSeconds,
-              ),
-            })
-          : null;
-        const result = await options.alerts.recordTrigger({
-          alertId: alert.alertId,
-          ownerUserId: alert.ownerUserId,
-          valueDecimal: observed,
-          source: fact.source,
-          sourceFactRef,
-          observedAt,
-          notification,
-        });
-        if (result.outcome === "triggered") {
-          triggeredCount += 1;
-        }
-      }
-    }
-
     await options.alerts.markEvaluated(evaluatedIds, now().toISOString());
     return Object.freeze({
       kind: "evaluated",

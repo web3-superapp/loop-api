@@ -31,6 +31,7 @@ import {
   InvalidMarketDecimalError,
 } from "../market/market-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import type { MarketFactService } from "../market/market-fact-service.js";
 import {
   notificationReasonCodes,
   priceAlertListLimits,
@@ -118,6 +119,8 @@ export interface AlertV2Service {
 export interface CreateAlertV2ServiceInput {
   readonly repository: AlertV2Repository;
   readonly registry: ChainRegistryRepository;
+  /** Market facts used to refuse an alert the evaluator could never price. */
+  readonly facts: MarketFactService | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly chainId: string;
   readonly now?: () => Date;
@@ -278,6 +281,19 @@ export function createAlertV2Service(
     }
     const asset = await input.registry.getAsset(assetId);
     if (asset === null || asset.status === "blocked") {
+      throw V2ApiError.fromCode("VALIDATION_FAILED");
+    }
+    // An alert must be priceable: the asset needs a DexScreener base pair
+    // (the native asset through its proxy). A Provider outage at write time
+    // is a retryable unavailability, not a validation verdict.
+    if (input.facts === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    const price = await input.facts.readAssetPrice(asset);
+    if (price.fact.value === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    if (price.pair === null || price.pair.priceUsd === null) {
       throw V2ApiError.fromCode("VALIDATION_FAILED");
     }
     return asset;

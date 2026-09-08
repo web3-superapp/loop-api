@@ -109,16 +109,29 @@ function harness(options: {
   readonly alerts: readonly PriceAlertV2Record[];
   readonly fact: CachedFact<TokenPairsSnapshot>;
   readonly preferenceEnabled?: boolean;
+  readonly nativeAsset?: boolean;
+  readonly batchSize?: number;
 }) {
   const triggers: RecordPriceAlertTriggerInput[] = [];
   const evaluated: string[][] = [];
+  const listEvaluable = vi.fn(
+    (input: {
+      readonly limit: number;
+      readonly excludeIds: readonly string[];
+    }) =>
+      Promise.resolve(
+        options.alerts
+          .filter((alert) => !input.excludeIds.includes(alert.alertId))
+          .slice(0, options.batchSize ?? input.limit),
+      ),
+  );
   const alerts: AlertV2Repository = {
     create: vi.fn(() => Promise.reject(new Error("not used"))),
     listOwned: vi.fn(() => Promise.reject(new Error("not used"))),
     findOwned: vi.fn(() => Promise.reject(new Error("not used"))),
     replaceOwned: vi.fn(() => Promise.reject(new Error("not used"))),
     softDeleteOwned: vi.fn(() => Promise.reject(new Error("not used"))),
-    listEvaluable: vi.fn(() => Promise.resolve(options.alerts)),
+    listEvaluable,
     markEvaluated: vi.fn((ids: readonly string[]) => {
       evaluated.push([...ids]);
       return Promise.resolve();
@@ -146,7 +159,18 @@ function harness(options: {
   };
   const registry: ChainRegistryRepository = {
     getChain: vi.fn(() => Promise.resolve(null)),
-    getAsset: vi.fn(() => Promise.resolve(asset)),
+    getAsset: vi.fn(() =>
+      Promise.resolve(
+        options.nativeAsset === true
+          ? {
+              ...asset,
+              assetId: "eip155:56:native",
+              address: null,
+              symbol: "BNB",
+            }
+          : asset,
+      ),
+    ),
     listAssets: vi.fn(() => Promise.resolve([asset])),
     listReadableAssets: vi.fn(() => Promise.resolve([asset])),
     upsertAsset: vi.fn(() => Promise.reject(new Error("not used"))),
@@ -154,8 +178,20 @@ function harness(options: {
     upsertPool: vi.fn(() => Promise.reject(new Error("not used"))),
   };
   const readTokenPairs = vi.fn(() => Promise.resolve(options.fact));
+  const readAssetPrice = vi.fn((target: { readonly address: string | null }) =>
+    Promise.resolve({
+      fact: options.fact,
+      pair:
+        options.fact.value === null
+          ? null
+          : (options.fact.value.pairs[0] ?? null),
+      proxyAsset: target.address === null ? wbnbAssetId : null,
+    }),
+  );
   const facts: MarketFactService = {
     readTokenPairs,
+    readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+    readAssetPrice,
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
     readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
@@ -169,7 +205,14 @@ function harness(options: {
     notificationDedupeSeconds: 3_600,
     now: () => new Date("2026-09-08T00:00:05.000Z"),
   });
-  return { worker, triggers, evaluated, readTokenPairs };
+  return {
+    worker,
+    triggers,
+    evaluated,
+    readTokenPairs,
+    readAssetPrice,
+    listEvaluable,
+  };
 }
 
 describe("alert evaluator lane", () => {
@@ -205,7 +248,7 @@ describe("alert evaluator lane", () => {
       triggeredCount: 1,
       skippedCount: 0,
     });
-    expect(readTokenPairs).toHaveBeenCalledWith(wbnb, { requireFresh: true });
+    expect(readTokenPairs).not.toHaveBeenCalled();
     expect(triggers[0]).toMatchObject({
       alertId,
       ownerUserId: owner,
@@ -226,6 +269,7 @@ describe("alert evaluator lane", () => {
           observedValue: "747.39",
           source: "dexscreener",
           observedAt,
+          proxyAsset: null,
         },
         dedupeKey: priceAlertDedupeKey(alertId, observedAt, 3_600),
       },
@@ -265,6 +309,41 @@ describe("alert evaluator lane", () => {
     });
     expect(triggers).toEqual([]);
     expect(evaluated).toEqual([[alertId]]);
+  });
+
+  it("evaluates a native-asset alert through the WBNB proxy and records it", async () => {
+    const nativeId = "eip155:56:native";
+    const { worker, triggers } = harness({
+      alerts: [alert({ assetId: nativeId })],
+      fact: pairsFact("747.39", "fresh"),
+      nativeAsset: true,
+    });
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      triggeredCount: 1,
+    });
+    expect(triggers[0]).toMatchObject({
+      sourceFactRef: `dexscreener:0x172fcd41e0913e95784454622d1c3724f546f849:proxy:${wbnb}`,
+      notification: { payload: { proxyAsset: wbnbAssetId } },
+    });
+  });
+
+  it("pages through every active alert in one tick", async () => {
+    const many = Array.from({ length: 3 }, (_, index) =>
+      alert({
+        alertId: `0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4${String(index)}`,
+        threshold: "800",
+      }),
+    );
+    const { worker, evaluated, listEvaluable } = harness({
+      alerts: many,
+      fact: pairsFact("747.39", "fresh"),
+      batchSize: 1,
+    });
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      evaluatedCount: 3,
+    });
+    expect(evaluated[0]).toHaveLength(3);
+    expect(listEvaluable).toHaveBeenCalledTimes(4);
   });
 
   it("records the trigger but no notification when the owner disabled the category", async () => {

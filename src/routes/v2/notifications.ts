@@ -7,6 +7,7 @@ import {
   priceAlertListLimits,
 } from "../../features/alerts/notification-contract.js";
 import {
+  assertDecimalStringFields,
   assertNoBody,
   assertNoBodyOrQuery,
   assertNoQuery,
@@ -31,6 +32,7 @@ import {
   replacePriceAlertRequestSchema,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
+  validateCasWriteHeaders,
   validateCommandHeaders,
   validateNoIdempotencyHeaders,
 } from "./notifications-schemas.js";
@@ -114,7 +116,7 @@ export function registerV2NotificationRoutes(
         },
       },
       onRequest: validateCommandHeaders,
-      preValidation: assertNoQuery,
+      preValidation: [assertNoQuery, assertDecimalStringFields(["threshold"])],
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
@@ -172,8 +174,8 @@ export function registerV2NotificationRoutes(
         body: replacePriceAlertRequestSchema,
         response: { 200: priceAlertEnvelopeSchema, ...notificationCasErrors },
       },
-      onRequest: validateNoIdempotencyHeaders,
-      preValidation: assertNoQuery,
+      onRequest: validateCasWriteHeaders,
+      preValidation: [assertNoQuery, assertDecimalStringFields(["threshold"])],
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
@@ -206,7 +208,7 @@ export function registerV2NotificationRoutes(
           ...notificationCasErrors,
         },
       },
-      onRequest: validateNoIdempotencyHeaders,
+      onRequest: validateCasWriteHeaders,
       preValidation: assertNoBody,
       preHandler: authenticateLoopBearer,
     },
@@ -340,7 +342,7 @@ export function registerV2NotificationRoutes(
           ...notificationCasErrors,
         },
       },
-      onRequest: validateNoIdempotencyHeaders,
+      onRequest: validateCasWriteHeaders,
       preValidation: assertNoQuery,
       preHandler: authenticateLoopBearer,
     },

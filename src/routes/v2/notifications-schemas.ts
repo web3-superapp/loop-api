@@ -21,7 +21,10 @@ import {
   priceAlertListLimits,
 } from "../../features/alerts/notification-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
-import { parseV2CommonRequestMetadata } from "../../features/session/session-contract.js";
+import {
+  parseV2CommonRequestMetadata,
+  parseV2WriteRequestMetadata,
+} from "../../features/session/session-contract.js";
 import { unavailableSchema, v2CommonHeadersSchema } from "./chain-schemas.js";
 
 /**
@@ -394,6 +397,23 @@ export const validateNoIdempotencyHeaders: onRequestHookHandler = (
 ): void => {
   try {
     parseV2CommonRequestMetadata(request.raw.rawHeaders);
+    if (hasIdempotencyKeyHeader(request.raw.rawHeaders)) {
+      throw V2ApiError.invalidRequest();
+    }
+    done();
+  } catch (error) {
+    done(error instanceof Error ? error : V2ApiError.invalidRequest());
+  }
+};
+
+/** CAS writes: no Idempotency-Key; platform/device headers validated if present. */
+export const validateCasWriteHeaders: onRequestHookHandler = (
+  request,
+  _reply,
+  done,
+): void => {
+  try {
+    parseV2WriteRequestMetadata(request.raw.rawHeaders);
     if (hasIdempotencyKeyHeader(request.raw.rawHeaders)) {
       throw V2ApiError.invalidRequest();
     }
