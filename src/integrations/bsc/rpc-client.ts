@@ -346,30 +346,55 @@ function isRevertError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) {
     return false;
   }
+  const revertNames = new Set([
+    "ExecutionRevertedError",
+    "CallExecutionError",
+    "EstimateGasExecutionError",
+  ]);
   const name = "name" in error ? String(error.name) : "";
-  if (
-    name === "CallExecutionError" ||
-    name === "EstimateGasExecutionError" ||
-    name === "ContractFunctionExecutionError" ||
-    name === "ExecutionRevertedError"
-  ) {
+  if (!revertNames.has(name)) {
+    return false;
+  }
+  // viem wraps the RPC failure: only an execution revert underneath counts as
+  // a chain fact. A transport, rate-limit, or endpoint error inside the same
+  // wrapper is "unavailable", never "reverted".
+  const walk = "walk" in error ? error.walk : undefined;
+  if (typeof walk !== "function") {
+    return name === "ExecutionRevertedError";
+  }
+  const inner = (walk as (fn: (e: unknown) => boolean) => unknown).call(
+    error,
+    (candidate) =>
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "name" in candidate &&
+      candidate.name === "ExecutionRevertedError",
+  );
+  return inner !== null && inner !== undefined;
+}
+
+/** HTTP 403 from the endpoint: the method is refused, not the transaction. */
+export function isRpcForbiddenError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const status = "status" in error ? error.status : undefined;
+  if (status === 403) {
     return true;
   }
   const walk = "walk" in error ? error.walk : undefined;
-  if (typeof walk === "function") {
-    const inner = (walk as (fn: (e: unknown) => boolean) => unknown).call(
-      error,
-      (candidate) =>
-        typeof candidate === "object" &&
-        candidate !== null &&
-        "name" in candidate &&
-        (candidate.name === "ExecutionRevertedError" ||
-          candidate.name === "InternalRpcError" ||
-          candidate.name === "InvalidInputRpcError"),
-    );
-    return inner !== null && inner !== undefined;
+  if (typeof walk !== "function") {
+    return false;
   }
-  return false;
+  const inner = (walk as (fn: (e: unknown) => boolean) => unknown).call(
+    error,
+    (candidate) =>
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "status" in candidate &&
+      candidate.status === 403,
+  );
+  return inner !== null && inner !== undefined;
 }
 
 function isNotFoundError(error: unknown): boolean {

@@ -11,6 +11,7 @@ import type { BscTransactionObservation } from "../../integrations/bsc/rpc-clien
 import { bscChainReference } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
+  openWalletIntentStates,
   walletIntentListLimits,
   walletIntentReasonCodes,
   type UnsignedTransaction,
@@ -286,7 +287,6 @@ export function createWalletIntentService(
       if (!transactionHashPattern.test(txHash)) {
         throw V2ApiError.invalidRequest();
       }
-      const writes = await requireWriteAdmission(runtime);
       const record = await requireIntent(principal, intentId);
       if (
         record.kind === "swap" ||
@@ -308,15 +308,40 @@ export function createWalletIntentService(
           runtime.readClient.confirmations,
         );
       }
-      if (isElapsed(record, runtime.now())) {
-        await persistExpiry(principal, record, requestId);
-        throw V2ApiError.fromCode("DATA_STALE");
-      }
       if (record.state === "prepared") {
         throw V2ApiError.fromCode("SIMULATION_FAILED");
       }
-      if (record.state !== "awaiting_signature") {
+      const elapsed = isElapsed(record, runtime.now());
+      // A device may broadcast right before the intent expires, is superseded
+      // by a newer prepare, or is cancelled from another screen. The chain is
+      // the authority: a hash that is already observed and matches the
+      // reviewed payload is accepted late; an unobserved one is DATA_STALE.
+      const lateReport =
+        elapsed ||
+        (record.state === "expired" &&
+          (record.reasonCode === walletIntentReasonCodes.expired ||
+            record.reasonCode === walletIntentReasonCodes.superseded)) ||
+        (record.state === "cancelled" &&
+          record.reasonCode === walletIntentReasonCodes.cancelled);
+      if (!lateReport && record.state !== "awaiting_signature") {
         throw V2ApiError.fromCode("DATA_STALE");
+      }
+      // Write admission is re-checked before any Provider/RPC call; when it
+      // fails the refusal is recorded and nothing else is read.
+      let writes;
+      try {
+        writes = await requireWriteAdmission(runtime);
+      } catch (error) {
+        await runtime.repository.recordEvent({
+          ownerUserId: principal.userId,
+          intentId,
+          eventType: "broadcast_report_refused",
+          actorType: "api",
+          requestId,
+          reasonCode: "BSC_WRITES_DISABLED",
+          details: { reportedHash: txHash },
+        });
+        throw error;
       }
       if (record.policyConfigVersion !== writes.configVersion) {
         throw V2ApiError.fromCode("DATA_STALE");
@@ -349,6 +374,14 @@ export function createWalletIntentService(
           details: { reportedHash: txHash },
         });
         throw V2ApiError.fromCode("VALIDATION_FAILED");
+      }
+      if (lateReport) {
+        if (observed === null) {
+          if (elapsed && openWalletIntentStates.has(record.state)) {
+            await persistExpiry(principal, record, requestId);
+          }
+          throw V2ApiError.fromCode("DATA_STALE");
+        }
       }
 
       // Journal the device broadcast as the single attempt of this intent's
@@ -387,12 +420,17 @@ export function createWalletIntentService(
           ownerUserId: principal.userId,
           intentId,
           expectedVersion: record.recordVersion,
-          fromStates: ["awaiting_signature"],
+          fromStates: lateReport
+            ? ["prepared", "awaiting_signature", "expired", "cancelled"]
+            : ["awaiting_signature"],
           toState: "submitted",
-          eventType: "broadcast_reported",
+          eventType: lateReport
+            ? "late_broadcast_report"
+            : "broadcast_reported",
           actorType: "api",
           requestId,
           transactionHash: txHash,
+          payloadVerified: observed !== null,
           reasonCode:
             observed === null
               ? walletIntentReasonCodes.txPendingVerification

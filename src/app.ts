@@ -44,9 +44,7 @@ import {
   type SendService,
 } from "./features/wallet-intents/send-service.js";
 import {
-  createInMemorySwapQuoteStore,
   createSwapService,
-  type SwapQuoteStore,
   type SwapService,
 } from "./features/wallet-intents/swap-service.js";
 import {
@@ -376,7 +374,6 @@ export interface BuildAppOptions {
   readonly notificationService?: NotificationService;
   /** Test seams for the wallet-intent runtime (Decision 0035). */
   readonly privySwapAdapter?: PrivySwapAdapter;
-  readonly swapQuoteStore?: SwapQuoteStore;
   readonly walletIntentService?: WalletIntentService;
   readonly sendService?: SendService;
   readonly approvalService?: ApprovalService;
@@ -1237,13 +1234,7 @@ export async function buildApp(
   const approvalService =
     options.approvalService ?? createApprovalService(walletIntentRuntime);
   const swapService =
-    options.swapService ??
-    createSwapService({
-      runtime: walletIntentRuntime,
-      quoteStore:
-        options.swapQuoteStore ??
-        createInMemorySwapQuoteStore(walletIntentRuntime.now),
-    });
+    options.swapService ?? createSwapService({ runtime: walletIntentRuntime });
 
   // Chain-ID verification is probed once at startup and refreshed lazily by
   // the read client, which owns the state. The capability projection reads it

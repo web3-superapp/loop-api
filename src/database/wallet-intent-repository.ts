@@ -62,6 +62,7 @@ const intentRowSchema = z
     receipt: z.record(z.string(), z.unknown()).nullable(),
     reconcile_after: validDateSchema.nullable(),
     reconcile_attempt_count: z.number().int().min(0),
+    payload_verified: z.boolean(),
     record_version: bigintStringSchema,
     created_at: validDateSchema,
     updated_at: validDateSchema,
@@ -89,6 +90,7 @@ const intentColumns = `
   receipt,
   reconcile_after,
   reconcile_attempt_count,
+  payload_verified,
   record_version::text as record_version,
   created_at,
   updated_at
@@ -124,6 +126,8 @@ export interface WalletIntentRecord {
   readonly receipt: IntentReceipt | null;
   readonly reconcileAfter: string | null;
   readonly reconcileAttemptCount: number;
+  /** True once the broadcast transaction was compared with the payload and matched. */
+  readonly payloadVerified: boolean;
   readonly recordVersion: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -161,7 +165,17 @@ export interface TransitionWalletIntentInput {
   readonly providerActionId?: string | null;
   readonly receipt?: IntentReceipt | null;
   readonly reconcileAfter?: string | null;
+  readonly payloadVerified?: boolean;
   readonly details?: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+export interface StoredSwapQuote {
+  readonly quoteId: string;
+  readonly ownerUserId: string;
+  readonly walletId: string;
+  readonly snapshot: Readonly<Record<string, unknown>>;
+  readonly expiresAt: string;
+  readonly consumedByIntentId: string | null;
 }
 
 export interface RecordWalletIntentEventInput {
@@ -231,6 +245,27 @@ export interface WalletIntentRepository {
     readonly leaseMs: number;
   }): Promise<readonly WalletIntentRecord[]>;
   recordApprovalObservation(input: ApprovalObservationInput): Promise<void>;
+  storeSwapQuote(input: {
+    readonly quoteId: string;
+    readonly ownerUserId: string;
+    readonly walletId: string;
+    readonly snapshot: Readonly<Record<string, unknown>>;
+    readonly expiresAt: string;
+  }): Promise<void>;
+  /** Reads an owner's quote without consuming it. */
+  getSwapQuote(
+    ownerUserId: string,
+    quoteId: string,
+  ): Promise<StoredSwapQuote | null>;
+  /**
+   * Binds the quote to one intent. Returns null when the quote is unknown,
+   * belongs to another owner, or was already consumed: a quote is spent once.
+   */
+  consumeSwapQuote(input: {
+    readonly ownerUserId: string;
+    readonly quoteId: string;
+    readonly intentId: string;
+  }): Promise<StoredSwapQuote | null>;
 }
 
 export class WalletIntentUnavailableError extends Error {
@@ -286,6 +321,7 @@ function mapIntent(row: unknown): WalletIntentRecord {
       parsed.receipt === null ? null : receiptSchema.parse(parsed.receipt),
     reconcileAfter: parsed.reconcile_after?.toISOString() ?? null,
     reconcileAttemptCount: parsed.reconcile_attempt_count,
+    payloadVerified: parsed.payload_verified,
     recordVersion: parsed.record_version,
     createdAt: parsed.created_at.toISOString(),
     updatedAt: parsed.updated_at.toISOString(),
@@ -357,6 +393,33 @@ async function withTransaction<T>(
   }
 }
 
+const swapQuoteRowSchema = z
+  .object({
+    quote_id: uuidSchema,
+    owner_user_id: uuidSchema,
+    wallet_id: uuidSchema,
+    snapshot: z.record(z.string(), z.unknown()),
+    expires_at: validDateSchema,
+    consumed_by_intent_id: uuidSchema.nullable(),
+  })
+  .strict();
+
+const swapQuoteColumns = `
+  quote_id, owner_user_id, wallet_id, snapshot, expires_at, consumed_by_intent_id
+`;
+
+function mapSwapQuote(row: unknown): StoredSwapQuote {
+  const parsed = swapQuoteRowSchema.parse(row);
+  return Object.freeze({
+    quoteId: parsed.quote_id,
+    ownerUserId: parsed.owner_user_id,
+    walletId: parsed.wallet_id,
+    snapshot: Object.freeze({ ...parsed.snapshot }),
+    expiresAt: parsed.expires_at.toISOString(),
+    consumedByIntentId: parsed.consumed_by_intent_id,
+  });
+}
+
 function unavailable(): Promise<never> {
   return Promise.reject(new WalletIntentUnavailableError());
 }
@@ -372,6 +435,9 @@ export function createUnavailableWalletIntentRepository(): WalletIntentRepositor
     expireElapsed: unavailable,
     leaseReconcilable: unavailable,
     recordApprovalObservation: unavailable,
+    storeSwapQuote: unavailable,
+    getSwapQuote: unavailable,
+    consumeSwapQuote: unavailable,
   });
 }
 
@@ -559,6 +625,8 @@ export function createPostgresWalletIntentRepository(
               receipt = case when $11::boolean then $12::jsonb else receipt end,
               reconcile_after =
                 case when $13::boolean then $14::timestamptz else reconcile_after end,
+              payload_verified =
+                case when $16::boolean then $17::boolean else payload_verified end,
               record_version = record_version + 1,
               updated_at = clock_timestamp()
             where owner_user_id = $1
@@ -585,6 +653,8 @@ export function createPostgresWalletIntentRepository(
             input.reconcileAfter !== undefined,
             input.reconcileAfter ?? null,
             [...input.fromStates],
+            input.payloadVerified !== undefined,
+            input.payloadVerified ?? false,
           ],
         });
         const row = result.rows[0];
@@ -740,6 +810,68 @@ export function createPostgresWalletIntentRepository(
           input.blockHash,
         ],
       });
+    },
+
+    async storeSwapQuote(input: {
+      readonly quoteId: string;
+      readonly ownerUserId: string;
+      readonly walletId: string;
+      readonly snapshot: Readonly<Record<string, unknown>>;
+      readonly expiresAt: string;
+    }): Promise<void> {
+      await pool.query({
+        text: `
+          insert into public.swap_quotes (
+            quote_id, owner_user_id, wallet_id, snapshot, expires_at
+          )
+          values ($1, $2, $3, $4::jsonb, $5::timestamptz)
+        `,
+        values: [
+          input.quoteId,
+          input.ownerUserId,
+          input.walletId,
+          JSON.stringify(input.snapshot),
+          input.expiresAt,
+        ],
+      });
+    },
+
+    async getSwapQuote(
+      ownerUserId: string,
+      quoteId: string,
+    ): Promise<StoredSwapQuote | null> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select ${swapQuoteColumns}
+          from public.swap_quotes
+          where owner_user_id = $1 and quote_id = $2
+          limit 1
+        `,
+        values: [ownerUserId, quoteId],
+      });
+      const row = result.rows[0];
+      return row === undefined ? null : mapSwapQuote(row);
+    },
+
+    async consumeSwapQuote(input: {
+      readonly ownerUserId: string;
+      readonly quoteId: string;
+      readonly intentId: string;
+    }): Promise<StoredSwapQuote | null> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          update public.swap_quotes
+          set consumed_by_intent_id = $3
+          where owner_user_id = $1
+            and quote_id = $2
+            and consumed_by_intent_id is null
+            and expires_at > clock_timestamp()
+          returning ${swapQuoteColumns}
+        `,
+        values: [input.ownerUserId, input.quoteId, input.intentId],
+      });
+      const row = result.rows[0];
+      return row === undefined ? null : mapSwapQuote(row);
     },
   });
 }

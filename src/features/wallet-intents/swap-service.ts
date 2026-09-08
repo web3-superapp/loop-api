@@ -95,58 +95,18 @@ export interface SwapService {
   }): Promise<WalletIntentResource>;
 }
 
-/** A quote the client may turn into an intent; single-process, bounded by TTL. */
-export interface StoredSwapQuote {
-  readonly quoteId: string;
-  readonly ownerUserId: string;
+/**
+ * Durable quote body stored in `swap_quotes.snapshot`. Asset identity is kept
+ * as IDs and re-admitted at prepare time; the valuation and the Provider quote
+ * are frozen as observed.
+ */
+export interface SwapQuoteBody {
   readonly walletId: string;
   readonly providerWalletId: string;
-  readonly sourceAsset: AssetRecord;
-  readonly destinationAsset: AssetRecord;
+  readonly sourceAssetId: string;
+  readonly destinationAssetId: string;
   readonly inputValuation: UsdValuation;
   readonly snapshot: SwapQuoteSnapshot;
-}
-
-export interface SwapQuoteStore {
-  put(quote: StoredSwapQuote): void;
-  take(ownerUserId: string, quoteId: string): StoredSwapQuote | null;
-}
-
-const maximumStoredQuotes = 1_000;
-
-/**
- * In-process quote store. A quote is only ever valid for 30 s, so an
- * evicted or restarted process simply makes the client re-quote
- * (`QUOTE_EXPIRED`); nothing is inferred from a quote the process cannot see.
- */
-export function createInMemorySwapQuoteStore(
-  now: () => Date = (): Date => new Date(),
-): SwapQuoteStore {
-  const quotes = new Map<string, StoredSwapQuote>();
-  return Object.freeze({
-    put(quote: StoredSwapQuote): void {
-      const cutoff = now().getTime();
-      for (const [key, stored] of quotes) {
-        if (Date.parse(stored.snapshot.expiresAt) <= cutoff) {
-          quotes.delete(key);
-        }
-      }
-      if (quotes.size >= maximumStoredQuotes) {
-        const oldest = quotes.keys().next().value;
-        if (oldest !== undefined) {
-          quotes.delete(oldest);
-        }
-      }
-      quotes.set(quote.quoteId, quote);
-    },
-    take(ownerUserId: string, quoteId: string): StoredSwapQuote | null {
-      const stored = quotes.get(quoteId);
-      if (stored === undefined || stored.ownerUserId !== ownerUserId) {
-        return null;
-      }
-      return stored;
-    },
-  });
 }
 
 function parseSlippage(value: unknown): number {
@@ -229,7 +189,6 @@ export function assessPriceImpact(input: {
 
 export interface CreateSwapServiceInput {
   readonly runtime: WalletIntentRuntime;
-  readonly quoteStore: SwapQuoteStore;
   readonly privyApiBaseUrl?: string;
 }
 
@@ -238,7 +197,7 @@ const executeAttemptMs = 10_000;
 const postExecuteReconcileDelayMs = 5_000;
 
 export function createSwapService(input: CreateSwapServiceInput): SwapService {
-  const { runtime, quoteStore } = input;
+  const { runtime } = input;
   const privyApiBaseUrl = (
     input.privyApiBaseUrl ?? defaultPrivyApiBaseUrl
   ).replace(/\/$/, "");
@@ -475,15 +434,20 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         }),
         platformFeeBps: writes.swapFeeBps,
       });
-      quoteStore.put({
+      const quoteBody: SwapQuoteBody = {
+        walletId: wallet.walletId,
+        providerWalletId: wallet.providerWalletId,
+        sourceAssetId: sourceAsset.assetId,
+        destinationAssetId: destinationAsset.assetId,
+        inputValuation,
+        snapshot,
+      };
+      await runtime.repository.storeSwapQuote({
         quoteId: snapshot.quoteId,
         ownerUserId: principal.userId,
         walletId: wallet.walletId,
-        providerWalletId: wallet.providerWalletId,
-        sourceAsset,
-        destinationAsset,
-        inputValuation,
-        snapshot,
+        snapshot: quoteBody as unknown as Record<string, unknown>,
+        expiresAt: snapshot.expiresAt,
       });
       return Object.freeze({
         walletId: wallet.walletId,
@@ -525,16 +489,31 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         principal,
         request.walletId,
       );
-      const quote = quoteStore.take(principal.userId, request.quoteId);
-      if (quote === null || quote.walletId !== wallet.walletId) {
+      const stored = await runtime.repository.getSwapQuote(
+        principal.userId,
+        request.quoteId,
+      );
+      if (stored === null || stored.walletId !== wallet.walletId) {
         throw V2ApiError.fromCode("QUOTE_EXPIRED");
       }
+      const quote = stored.snapshot as unknown as SwapQuoteBody;
       if (Date.parse(quote.snapshot.expiresAt) <= runtime.now().getTime()) {
         throw V2ApiError.fromCode("QUOTE_EXPIRED");
       }
+      if (quote.providerWalletId !== wallet.providerWalletId) {
+        throw V2ApiError.fromCode("DATA_STALE");
+      }
       // Re-admit the assets: the allowlist may have changed since the quote.
-      await requireCanaryAsset(runtime, writes, quote.sourceAsset.assetId);
-      await requireCanaryAsset(runtime, writes, quote.destinationAsset.assetId);
+      const sourceAsset = await requireCanaryAsset(
+        runtime,
+        writes,
+        quote.sourceAssetId,
+      );
+      const destinationAsset = await requireCanaryAsset(
+        runtime,
+        writes,
+        quote.destinationAssetId,
+      );
       enforceCanaryCeiling(writes, quote.inputValuation.valueUsd);
       if (quote.snapshot.priceImpact.decision === "blocked") {
         throw V2ApiError.fromCode("POLICY_BLOCKED");
@@ -554,7 +533,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
           idempotencyKey,
           requestSha256: intentRequestDigest("swap", [
             wallet.walletId,
-            quote.quoteId,
+            quote.snapshot.quoteId,
           ]),
           requestId,
         },
@@ -562,7 +541,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
           const balance = await readBalanceSnapshot(
             runtime,
             wallet,
-            quote.sourceAsset,
+            sourceAsset,
           );
           const amountRaw = BigInt(quote.snapshot.inputAmount.raw);
           if (amountRaw > balance.rawBalance) {
@@ -570,6 +549,16 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
           }
           const now = runtime.now();
           const intentId = runtime.createUuid();
+          // A quote is spent exactly once, before the intent row exists, so a
+          // concurrent prepare on the same quote loses here rather than later.
+          const consumed = await runtime.repository.consumeSwapQuote({
+            ownerUserId: principal.userId,
+            quoteId: quote.snapshot.quoteId,
+            intentId,
+          });
+          if (consumed === null) {
+            throw V2ApiError.fromCode("QUOTE_EXPIRED");
+          }
           const expiresAtMs = Math.min(
             Date.parse(quote.snapshot.expiresAt),
             now.getTime() + swapIntentTtlSeconds * 1000,
@@ -581,11 +570,11 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             body: Object.freeze({
               base_amount: quote.snapshot.inputAmount.raw,
               source: Object.freeze({
-                asset_address: privyAssetAddress(quote.sourceAsset),
+                asset_address: privyAssetAddress(sourceAsset),
                 caip2: bscChainId,
               }),
               destination: Object.freeze({
-                asset_address: privyAssetAddress(quote.destinationAsset),
+                asset_address: privyAssetAddress(destinationAsset),
                 caip2: bscChainId,
               }),
               amount_type: "exact_input" as const,
@@ -612,7 +601,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             chainId: bscChainId,
             walletId: wallet.walletId,
             from: wallet.address,
-            asset: assetSnapshot(quote.sourceAsset),
+            asset: assetSnapshot(sourceAsset),
             amount: quote.snapshot.inputAmount,
             recipient: null,
             spender: null,
@@ -621,17 +610,22 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             fee: null,
             balance: balance.fact,
             // Privy builds and routes the transaction at execute time, so
-            // there is no exact payload for eth_call; the Provider quote is
-            // the pre-execution evidence and is labelled as such.
+            // there is no exact payload for eth_call. Until a Provider-side
+            // simulation exists the intent is not signable (main-agent
+            // ruling): it stays `prepared` and execute is SIMULATION_FAILED.
             simulation: Object.freeze({
-              status: "passed" as const,
+              status: "unavailable" as const,
               source: "provider_quote" as const,
               observedAt: quote.snapshot.quotedAt,
-              reasonCode: null,
+              reasonCode: walletIntentReasonCodes.swapSimulationPending,
             }),
-            policy: canaryPolicyFact(writes, quote.inputValuation),
+            policy: canaryPolicyFact(writes, quote.inputValuation, {
+              basis: "amount",
+              raw: amountRaw,
+              blockNumber: balance.fact.blockNumber,
+            }),
             swap: Object.freeze({
-              destinationAsset: assetSnapshot(quote.destinationAsset),
+              destinationAsset: assetSnapshot(destinationAsset),
               quote: quote.snapshot,
               policy: swapPolicy,
               authorizationPayload,
@@ -648,7 +642,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             walletId: wallet.walletId,
             providerOperationId: operationId,
             kind: "swap",
-            state: "awaiting_signature",
+            state: "prepared",
             chainId: bscChainId,
             canonicalPayload: sealed.canonicalPayload,
             publicReview: sealed.publicReview,
@@ -656,7 +650,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             policyConfigVersion: writes.configVersion,
             factsObservedAt: source.factsObservedAt,
             expiresAt: source.expiresAt,
-            simulationStatus: "passed",
+            simulationStatus: "unavailable",
             requestId,
           });
         },
@@ -689,12 +683,16 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         throw V2ApiError.invalidRequest();
       }
       const writes = await requireWriteAdmission(runtime);
+      requirePrivyAppId();
       const record = await runtime.repository.get(principal.userId, intentId);
       if (record === null) {
         throw V2ApiError.notFound();
       }
       if (record.kind !== "swap") {
         throw V2ApiError.fromCode("VALIDATION_FAILED");
+      }
+      if (record.state === "prepared") {
+        throw V2ApiError.fromCode("SIMULATION_FAILED");
       }
       const requestId = runtime.createUuid();
       if (isElapsed(record, runtime.now())) {
@@ -807,10 +805,17 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
                   kind: "rejected",
                   reasonCode: walletIntentReasonCodes.privyRejected,
                 }
-              : {
-                  kind: "ambiguous",
-                  reasonCode: walletIntentReasonCodes.providerAmbiguous,
-                },
+              : error.kind === "unavailable"
+                ? {
+                    // Nothing was sent (no client, expired before send):
+                    // a failed intent the user may prepare again.
+                    kind: "rejected",
+                    reasonCode: walletIntentReasonCodes.privyNotSent,
+                  }
+                : {
+                    kind: "ambiguous",
+                    reasonCode: walletIntentReasonCodes.providerAmbiguous,
+                  },
           );
         } else {
           resolved = await resolveExecuteOutcome(

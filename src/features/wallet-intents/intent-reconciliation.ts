@@ -5,7 +5,10 @@ import {
   type WalletIntentRecord,
   type WalletIntentRepository,
 } from "../../database/wallet-intent-repository.js";
-import type { BscChainCallClient } from "../../integrations/bsc/rpc-client.js";
+import {
+  isRpcForbiddenError,
+  type BscChainCallClient,
+} from "../../integrations/bsc/rpc-client.js";
 import {
   PrivySwapProviderError,
   type PrivySwapAdapter,
@@ -67,6 +70,7 @@ export function createWalletIntentReconciler(
       readonly transactionHash?: string | null;
       readonly receipt?: IntentReceipt | null;
       readonly reconcileAfter?: string | null;
+      readonly payloadVerified?: boolean;
     },
   ): Promise<WalletIntentRecord | null> {
     try {
@@ -87,6 +91,9 @@ export function createWalletIntentReconciler(
         ...(input.reconcileAfter === undefined
           ? {}
           : { reconcileAfter: input.reconcileAfter }),
+        ...(input.payloadVerified === undefined
+          ? {}
+          : { payloadVerified: input.payloadVerified }),
       });
     } catch (error) {
       if (error instanceof WalletIntentStateConflictError) {
@@ -133,7 +140,10 @@ export function createWalletIntentReconciler(
     return transition(record, {
       toState: "unknown",
       eventType: "reconciliation_budget_exhausted",
-      reasonCode: walletIntentReasonCodes.txNotObserved,
+      reasonCode:
+        record.kind === "swap"
+          ? walletIntentReasonCodes.providerAmbiguous
+          : walletIntentReasonCodes.txNotObserved,
       reconcileAfter: holdUntil,
     });
   }
@@ -151,7 +161,11 @@ export function createWalletIntentReconciler(
         reconcileAfter: null,
       });
     }
-    if (record.reasonCode === walletIntentReasonCodes.txPendingVerification) {
+    // The payload is verified unconditionally before a receipt can finalise
+    // the intent, even when the report already compared it: the flag is the
+    // only evidence the lane trusts.
+    let payloadVerified = record.payloadVerified;
+    if (!payloadVerified) {
       const observed = await options.readClient.getTransaction(hash);
       if (observed === null) {
         return budgetExhausted(record);
@@ -164,20 +178,54 @@ export function createWalletIntentReconciler(
           reconcileAfter: null,
         });
       }
+      payloadVerified = true;
     }
-    const receipt = await options.readClient.getTransactionReceipt(hash);
+    let receipt;
+    try {
+      receipt = await options.readClient.getTransactionReceipt(hash);
+    } catch (error) {
+      if (isRpcForbiddenError(error)) {
+        // The endpoint refuses eth_getTransactionReceipt (publicnode 403);
+        // that is an operator problem, not an intent outcome.
+        await options.repository.recordEvent({
+          ownerUserId: record.ownerUserId,
+          intentId: record.intentId,
+          eventType: "reconciliation_read_failed",
+          actorType: "worker",
+          requestId: options.createUuid(),
+          reasonCode: walletIntentReasonCodes.rpcReceiptUnavailable,
+        });
+        return null;
+      }
+      throw error;
+    }
     if (receipt === null) {
+      if (record.receipt !== null) {
+        // A receipt that was stored and is now gone means the block was
+        // reorged out; the intent is back to waiting for inclusion.
+        return transition(record, {
+          toState: "submitted",
+          eventType: "receipt_lost",
+          reasonCode: null,
+          receipt: null,
+          payloadVerified,
+        });
+      }
       if (
         record.reconcileAttemptCount >= WALLET_INTENT_RECONCILE_MAX_ATTEMPTS
       ) {
         return budgetExhausted(record);
       }
-      if (record.reasonCode === walletIntentReasonCodes.txPendingVerification) {
+      if (
+        !record.payloadVerified ||
+        record.reasonCode === walletIntentReasonCodes.txPendingVerification
+      ) {
         // Verified now; clear the pending marker while still waiting for a receipt.
         return transition(record, {
           toState: "submitted",
           eventType: "broadcast_payload_verified",
           reasonCode: null,
+          payloadVerified,
         });
       }
       return null;
@@ -198,6 +246,7 @@ export function createWalletIntentReconciler(
         eventType: "receipt_observed",
         reasonCode: null,
         receipt: receiptFact,
+        payloadVerified,
       });
     }
     return transition(record, {
@@ -209,6 +258,7 @@ export function createWalletIntentReconciler(
           : walletIntentReasonCodes.txReverted,
       receipt: receiptFact,
       reconcileAfter: null,
+      payloadVerified,
     });
   }
 
@@ -251,7 +301,15 @@ export function createWalletIntentReconciler(
       });
     } catch (error) {
       if (error instanceof PrivySwapProviderError) {
-        return null;
+        await options.repository.recordEvent({
+          ownerUserId: record.ownerUserId,
+          intentId: record.intentId,
+          eventType: "reconciliation_read_failed",
+          actorType: "worker",
+          requestId: options.createUuid(),
+          reasonCode: error.reasonCode,
+        });
+        return budgetExhausted(record);
       }
       throw error;
     }
@@ -301,7 +359,7 @@ export function createWalletIntentReconciler(
             transactionHash: hash,
           });
         }
-        return null;
+        return budgetExhausted(record);
       }
     }
   }
@@ -327,10 +385,27 @@ export function createWalletIntentReconciler(
         if (signal.aborted) {
           break;
         }
-        const changed =
-          record.kind === "swap"
-            ? await reconcileSwap(record, signal)
-            : await reconcileDeviceBroadcast(record);
+        let changed: WalletIntentRecord | null;
+        try {
+          changed =
+            record.kind === "swap"
+              ? await reconcileSwap(record, signal)
+              : await reconcileDeviceBroadcast(record);
+        } catch (error) {
+          // One unreadable intent never stops the batch. The lease already
+          // moved reconcile_after forward, so it is retried on a later tick.
+          await options.repository.recordEvent({
+            ownerUserId: record.ownerUserId,
+            intentId: record.intentId,
+            eventType: "reconciliation_read_failed",
+            actorType: "worker",
+            requestId: options.createUuid(),
+            reasonCode: isRpcForbiddenError(error)
+              ? walletIntentReasonCodes.rpcReceiptUnavailable
+              : walletIntentReasonCodes.reconciliationReadFailed,
+          });
+          continue;
+        }
         if (changed !== null) {
           transitions.push({
             intentId: changed.intentId,
