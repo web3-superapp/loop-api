@@ -1,4 +1,4 @@
-export const latestMigrationName = "000022_v2_swap_quotes";
+export const latestMigrationName = "000023_v2_launch_mining";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -79,4 +79,23 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.indexed_approvals",
   "public.approval_observations",
   "public.swap_quotes",
+  "public.launch_projects",
+  "public.launch_review_events",
+  "public.launches",
+  "public.launch_configs",
+  "public.launch_rounds",
+  "public.launch_intents",
+  "public.purchase_records",
+  "public.entitlements",
+  "public.refund_liabilities",
+  "public.refund_claims",
+  "public.venue_milestones",
+  "public.mining_formula_versions",
+  "public.community_mining_weights",
+  "public.mining_snapshots",
+  "public.mining_snapshot_powers",
+  "public.mining_reward_ledger",
+  "public.invite_codes",
+  "public.referral_edges",
+  "public.referral_events",
 ] as const);
