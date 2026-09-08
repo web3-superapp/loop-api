@@ -91,13 +91,15 @@ export const communicationUnavailableReasonCodes = Object.freeze({
 } as const);
 
 /**
- * The 0005 pre-condition: Stream Dashboard evidence that the `listener` role
- * of the `audio_room` call type does not carry `create-call`. Until it is
- * exported the mobile locator stays unavailable even though this contract and
- * backend exist.
+ * The 0005 pre-condition: Stream Dashboard evidence that the `user` role of
+ * the `audio_room` call type does not carry `create-call`. A LOOP listener is
+ * given the `user` call role (S4 integration, BUG-03: the application defines
+ * no `listener` role), so that is the role the evidence must cover. Until it
+ * is exported the mobile locator stays unavailable even though this contract
+ * and backend exist.
  */
 export const voiceRoomEvidenceReasonCode =
-  "AUDIO_ROOM_ROLE_EVIDENCE_PENDING" as const;
+  "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
 
 export const communityChatCapabilityId = "communityChat" as const;
 export const voiceRoomsCapabilityId = "voiceRooms" as const;

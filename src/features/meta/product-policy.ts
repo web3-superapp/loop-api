@@ -161,11 +161,14 @@ export const v2CommunicationRuntimeUnavailableReasonCode =
   "COMMUNICATION_RUNTIME_UNAVAILABLE" as const;
 /**
  * Decision 0005 pre-condition: Stream Dashboard evidence that the `audio_room`
- * `listener` role does not carry `create-call`. Until it is exported the
- * capability stays evidence-pending even when the backend is available.
+ * `user` role does not carry `create-call`. `user` is the role a LOOP listener
+ * is given (S4 integration, BUG-03: the application defines no `listener`
+ * role), so it is that role's permission set the evidence must cover. Until it
+ * is exported the capability stays evidence-pending even when the backend is
+ * available.
  */
 export const v2VoiceRoomEvidencePendingReasonCode =
-  "AUDIO_ROOM_ROLE_EVIDENCE_PENDING" as const;
+  "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
 
 /**
  * Capability projected by each V2 module gate. A module without a capability

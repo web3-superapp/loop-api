@@ -21,7 +21,60 @@ const maximumQueriedMemberPages = 10;
 /** Stream permission that lets a call member publish audio. */
 export const streamSendAudioPermission = "send-audio" as const;
 
+/**
+ * Permissions a host needs when it has to be carried by the plain `user` call
+ * role: publish audio, mute the room, and end the call. Every value is a
+ * member of the SDK's `OwnCapability` union (`send-audio`, `mute-users`,
+ * `end-call`).
+ */
+export const streamHostFallbackPermissions: readonly string[] = Object.freeze([
+  streamSendAudioPermission,
+  "mute-users",
+  "end-call",
+]);
+
 export type StreamCallMemberRole = "host" | "speaker" | "listener";
+
+/**
+ * LOOP call roles are not Stream call roles (S4 integration, BUG-03). The
+ * Stream application has no `listener` role — `UpdateCallMembers` answers
+ * `role "listener" is invalid` — so a LOOP listener is carried by the built-in
+ * `user` role, which is also the role whose permission set the Decision 0005
+ * evidence must show does not contain `create-call`. A speaker keeps the
+ * `speaker` role the application does define, and a host prefers `admin`.
+ */
+const streamRoleByLoopRole: Readonly<Record<StreamCallMemberRole, string>> =
+  Object.freeze({
+    host: "admin",
+    speaker: "speaker",
+    listener: "user",
+  });
+
+/** The role a host falls back to when the application defines no `admin`. */
+const streamHostFallbackRole = "user";
+
+/**
+ * Status codes that mean "this exact request will keep being rejected": every
+ * 4xx except the quota window, the request timeout, and the replay hint. The
+ * host role fallback is attempted only for those, so a provider fault or a
+ * quota answer is never mistaken for a missing role.
+ */
+const retryableClientStatusCodes: readonly number[] = Object.freeze([
+  408, 425, 429,
+]);
+
+function isDeterministicProviderRejection(error: unknown): boolean {
+  if (!isRecord(error) || !isRecord(error["metadata"])) {
+    return false;
+  }
+  const responseCode = error["metadata"]["responseCode"];
+  return (
+    typeof responseCode === "number" &&
+    responseCode >= 400 &&
+    responseCode < 500 &&
+    !retryableClientStatusCodes.includes(responseCode)
+  );
+}
 
 export interface StreamCallProjection {
   readonly callId: string;
@@ -261,23 +314,43 @@ export function createStreamCallGateway(
       const callId = rawInput["callId"];
       const createdByStreamUserId = rawInput["createdByStreamUserId"];
       const signal = parseSignal(rawInput["signal"]);
+      const create = async (streamRole: string): Promise<unknown> =>
+        client.video.call(streamCallType, callId).create({
+          data: {
+            created_by_id: createdByStreamUserId,
+            members: [{ user_id: createdByStreamUserId, role: streamRole }],
+            custom: {
+              loop_call_kind: "communityVoiceRoom",
+              loop_call_schema_version: streamCallSchemaVersion,
+            },
+            settings_override: { backstage: { enabled: true } },
+          },
+        });
       try {
         signal.throwIfAborted();
         await client.upsertUsers([{ id: createdByStreamUserId }]);
         signal.throwIfAborted();
-        const response = await client.video
-          .call(streamCallType, callId)
-          .create({
-            data: {
-              created_by_id: createdByStreamUserId,
-              members: [{ user_id: createdByStreamUserId, role: "host" }],
-              custom: {
-                loop_call_kind: "communityVoiceRoom",
-                loop_call_schema_version: streamCallSchemaVersion,
-              },
-              settings_override: { backstage: { enabled: true } },
-            },
-          });
+        let response: unknown;
+        try {
+          response = await create(streamRoleByLoopRole.host);
+        } catch (error) {
+          if (!isDeterministicProviderRejection(error)) {
+            throw error;
+          }
+          // The same host fallback as `updateCallMembers`: an application
+          // without an `admin` call role gets a `user` host with the explicit
+          // permissions its controls need.
+          signal.throwIfAborted();
+          response = await create(streamHostFallbackRole);
+          signal.throwIfAborted();
+          await client.video
+            .call(streamCallType, callId)
+            .updateUserPermissions({
+              user_id: createdByStreamUserId,
+              grant_permissions: [...streamHostFallbackPermissions],
+              revoke_permissions: [],
+            });
+        }
         signal.throwIfAborted();
         return validateCallResponse(response, callId);
       } catch (error) {
@@ -318,18 +391,45 @@ export function createStreamCallGateway(
       const addStreamUserIds = [...rawInput["addStreamUserIds"]];
       const removeStreamUserIds = [...rawInput["removeStreamUserIds"]];
       const signal = parseSignal(rawInput["signal"]);
-      try {
-        signal.throwIfAborted();
+      const submit = async (streamRole: string): Promise<void> => {
         await client.video.call(streamCallType, callId).updateCallMembers({
           update_members: addStreamUserIds.map((userId) => ({
             user_id: userId,
-            role,
+            role: streamRole,
           })),
           remove_members: removeStreamUserIds,
         });
+      };
+      try {
+        signal.throwIfAborted();
+        await submit(streamRoleByLoopRole[role]);
         signal.throwIfAborted();
       } catch (error) {
-        return sanitizeProviderFailure(error, signal);
+        signal.throwIfAborted();
+        // A host is preferably an `admin`. An application that defines no
+        // `admin` call role rejects that deterministically, and the host is
+        // then carried by the plain `user` role plus the explicit permissions
+        // its controls need. No other role has a fallback: a rejection there
+        // stays a failure.
+        if (role !== "host" || !isDeterministicProviderRejection(error)) {
+          return sanitizeProviderFailure(error, signal);
+        }
+        try {
+          await submit(streamHostFallbackRole);
+          signal.throwIfAborted();
+          for (const userId of addStreamUserIds) {
+            await client.video
+              .call(streamCallType, callId)
+              .updateUserPermissions({
+                user_id: userId,
+                grant_permissions: [...streamHostFallbackPermissions],
+                revoke_permissions: [],
+              });
+            signal.throwIfAborted();
+          }
+        } catch (fallbackError) {
+          return sanitizeProviderFailure(fallbackError, signal);
+        }
       }
     },
 

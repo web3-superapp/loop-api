@@ -453,7 +453,7 @@ describe("LOOP API V2 communication module", () => {
       reasonCode: null,
       evidence: {
         status: "pending",
-        reasonCode: "AUDIO_ROOM_ROLE_EVIDENCE_PENDING",
+        reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING",
       },
     });
   });
@@ -480,7 +480,7 @@ describe("LOOP API V2 communication module", () => {
       reasonCode: "V2_COMMUNICATION_RUNTIME_DEFERRED",
       evidence: {
         status: "pending",
-        reasonCode: "AUDIO_ROOM_ROLE_EVIDENCE_PENDING",
+        reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING",
       },
     });
   });

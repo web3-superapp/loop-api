@@ -19,20 +19,28 @@ Stream SDK，本模块不提供接口；`community-ai` 全部 unavailable。
   Bearer。
 - 前端必须先读 `GET /v2/meta/capabilities`（现共 23 项）：
 
-| capabilityId    | 期望                                                      | UI 含义                                                                                          |
-| --------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `communityChat` | `available`（模块启用 + 仓储 + 社区运行时 + Stream 凭据） | 社区官方群、DM、小群可用                                                                         |
-| `voiceRooms`    | `available`，但 `evidence.status` 恒为 `pending`          | **只要 `evidence.reasonCode` 是 `AUDIO_ROOM_ROLE_EVIDENCE_PENDING`，语音房入口整页 unavailable** |
+| capabilityId    | 期望                                                      | UI 含义                                                                                               |
+| --------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `communityChat` | `available`（模块启用 + 仓储 + 社区运行时 + Stream 凭据） | 社区官方群、DM、小群可用                                                                              |
+| `voiceRooms`    | `available`，但 `evidence.status` 恒为 `pending`          | **只要 `evidence.reasonCode` 是 `AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING`，语音房入口整页 unavailable** |
 
 `availability: unavailable` + `COMMUNICATION_RUNTIME_UNAVAILABLE` 表示模块已
 启用但依赖未配齐；`deferred` + `V2_COMMUNICATION_RUNTIME_DEFERRED` 表示模块未
 启用。两种情况都不要调用本模块接口，也不要回退 fixture。
 
 `voiceRooms.evidence` 是决策 0005 的前置证据位：后端契约与实现已就绪，但
-Stream Dashboard 尚未导出「`audio_room` 的 `listener` 角色不含 `create-call`」
+Stream Dashboard 尚未导出「`audio_room` 的 `user` 角色不含 `create-call`」
 的证据。在证据到位（后端把 `evidence.status` 改为 `notApplicable`）之前，
 `voiceroom` / `voiceroom-full` 必须整页 unavailable 并解释原因，即使
 `availability` 已是 `available`。
+
+**角色映射（2026-09-08 修订，S4 BUG-03）**：LOOP 的 `role` 字段
+（`host | speaker | listener`）是 LOOP 语义，**不等于 Stream call role**。
+后端映射为：`listener → user`、`speaker → speaker`、`host → admin`
+（Stream 应用没有 `admin` 角色时回退 `user` 并授予 `send-audio` / `mute-users`
+/ `end-call`）。实测该 Dev 应用**没有** `listener` 这个 call role，所以 0005
+的证据对象改成 `user` 角色。前端仍然只读 LOOP 的 `role`，不要自己推断 Stream
+角色。
 
 - 读接口 header：
 
@@ -156,8 +164,9 @@ DELETE /v2/chat/groups/{groupId}/membership
 
 - `memberState` 取值 `synced | pending | removed | capacityPending | null`，
   仅用于文案区分，不要据此推断 Stream 事实。
-- 加入社区 → 后端入队 `add`；退出/被封禁 → 入队 `remove`；解封**不会**自动
-  加回聊天权限（用户需重新加入社区）。同步由独立 worker lane 在事务提交后执行。
+- 加入社区 → 后端入队 `add`；退出/被封禁 → 入队 `remove`；**解封 → 入队
+  `add`**（2026-09-08 修订：解封恢复成员资格，聊天权限随之恢复，用户不需要
+  重新加入社区）。同步由独立 worker lane 在事务提交后执行。
 - 拿到 `channelCid` 后用官方 `StreamChannel` 连接；LOOP 不提供消息、历史、
   已读、在线数接口。置顶公告、在线数在本步一律 unavailable。
 
