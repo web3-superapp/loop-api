@@ -121,6 +121,8 @@ X-Loop-Client-Version: 1.0.0
 - `status`：`healthy` / `degraded`（延迟 > 1500ms、落后 > 3 块，或 chainId 不符）
   / `unreachable`。`degraded` 与 `unreachable` 对应原型的 `异常` badge。
 - 只列 BSC 一条网络。自定义 RPC 与测试网**不显示**（不是 unavailable 占位）。
+- `indexer[]` 自 S5b 起有两条 lane：`erc20_transfer`（钱包活动）与 `pool_event`
+  （行情成交/派生 K 线）；`lane` 字段是枚举，不要写死为常量。
 
 ## 4. `GET /v2/assets/{assetId}` → `asset` 页头部
 

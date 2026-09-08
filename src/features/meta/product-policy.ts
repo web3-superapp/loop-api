@@ -143,6 +143,16 @@ export interface V2ProductPolicyRuntime {
   /** `watchlist` module enabled with the V2 watchlist repository composed. */
   readonly watchlistRuntimeAvailable: boolean;
   /**
+   * `market` module enabled with the registry, fact cache, indexer
+   * repository, and cursor codec composed (Decision 0034). Provider
+   * availability is reported per fact, not here.
+   */
+  readonly marketRuntimeAvailable: boolean;
+  /** `notifications` module enabled with the V2 alert repository and cursor codec. */
+  readonly priceAlertsRuntimeAvailable: boolean;
+  /** `notifications` module enabled with the notification repository and cursor codec. */
+  readonly notificationsFeedRuntimeAvailable: boolean;
+  /**
    * `communication` module enabled with the PostgreSQL communication
    * repository, the delivered community runtime, and the complete Stream
    * credential pair (Decision 0032). Without Stream credentials the module
@@ -189,6 +199,19 @@ export const v2WatchlistModuleDeferredReasonCode =
   "V2_WATCHLIST_RUNTIME_DEFERRED" as const;
 export const v2WatchlistRuntimeUnavailableReasonCode =
   "WATCHLIST_RUNTIME_UNAVAILABLE" as const;
+export const v2MarketModuleDeferredReasonCode =
+  "V2_MARKET_RUNTIME_DEFERRED" as const;
+export const v2MarketRuntimeUnavailableReasonCode =
+  "MARKET_RUNTIME_UNAVAILABLE" as const;
+export const v2NotificationsModuleDeferredReasonCode =
+  "V2_NOTIFICATIONS_RUNTIME_DEFERRED" as const;
+export const v2PriceAlertsRuntimeUnavailableReasonCode =
+  "PRICE_ALERTS_RUNTIME_UNAVAILABLE" as const;
+export const v2NotificationsFeedRuntimeUnavailableReasonCode =
+  "NOTIFICATIONS_RUNTIME_UNAVAILABLE" as const;
+/** Push delivery has no FCM/APNs runtime; the capability never opens here. */
+export const v2PushNotificationsUnavailableReasonCode =
+  "PUSH_RUNTIME_DEFERRED" as const;
 export const v2CommunicationModuleDeferredReasonCode =
   "V2_COMMUNICATION_RUNTIME_DEFERRED" as const;
 export const v2CommunicationRuntimeUnavailableReasonCode =
@@ -205,16 +228,16 @@ export const v2VoiceRoomEvidencePendingReasonCode =
   "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
 
 /**
- * Capability projected by each V2 module gate. A module without a capability
- * entry (market) is still gated for route registration; its capability is
- * introduced with consumer review when the module is delivered. `profile` was
- * delivered by Decision 0030, `community` and `search` by Decision 0031.
+ * Capability projected by each V2 module gate. `profile` was delivered by
+ * Decision 0030, `community` and `search` by Decision 0031, `market` and
+ * `notifications` by Decision 0034 (`notifications` additionally projects
+ * `priceAlerts` and `notificationsFeed`; `pushNotifications` stays closed).
  */
 export const v2ModuleCapabilityIds = Object.freeze({
   community: "community",
   communication: "communityChat",
   search: "search",
-  market: null,
+  market: "marketRead",
   chain: "bscRead",
   wallet: "walletRead",
   swap: "privySwap",
@@ -240,10 +263,13 @@ export const v2CapabilityIds = Object.freeze([
   "bscRead",
   "walletRead",
   "watchlist",
+  "marketRead",
   "privySwap",
   "sendApprovals",
   "launch",
   "mining",
+  "priceAlerts",
+  "notificationsFeed",
   "pushNotifications",
   "profile",
   "avatarUpload",
@@ -656,6 +682,14 @@ export function createV2CapabilitiesProjection(
       v2WalletModuleDeferredReasonCode,
       v2WalletRuntimeUnavailableReasonCode,
     ),
+    deliveredModuleCapability(
+      config,
+      "market",
+      v2ModuleCapabilityIds.market,
+      runtime.marketRuntimeAvailable,
+      v2MarketModuleDeferredReasonCode,
+      v2MarketRuntimeUnavailableReasonCode,
+    ),
     moduleGatedCapability(
       config,
       "swap",
@@ -680,11 +714,27 @@ export function createV2CapabilitiesProjection(
       v2ModuleCapabilityIds.mining,
       "MINING_FORMULA_BASELINE_PENDING",
     ),
-    moduleGatedCapability(
+    deliveredModuleCapability(
       config,
       "notifications",
+      "priceAlerts",
+      runtime.priceAlertsRuntimeAvailable,
+      v2NotificationsModuleDeferredReasonCode,
+      v2PriceAlertsRuntimeUnavailableReasonCode,
+    ),
+    deliveredModuleCapability(
+      config,
+      "notifications",
+      "notificationsFeed",
+      runtime.notificationsFeedRuntimeAvailable,
+      v2NotificationsModuleDeferredReasonCode,
+      v2NotificationsFeedRuntimeUnavailableReasonCode,
+    ),
+    // Push delivery is never available in this step regardless of the module
+    // gate: there is no FCM/APNs runtime and no device-token lifecycle.
+    unavailableCapability(
       v2ModuleCapabilityIds.notifications,
-      "PUSH_RUNTIME_DEFERRED",
+      v2PushNotificationsUnavailableReasonCode,
     ),
     profileCapability(config, runtime),
     deliveredModuleCapability(

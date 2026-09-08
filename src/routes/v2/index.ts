@@ -12,10 +12,15 @@ import type { ProfileV2Service } from "../../features/profile/profile-v2-service
 import type { V2SessionService } from "../../features/session/session-service.js";
 import type { WalletReadService } from "../../features/wallet/wallet-read-service.js";
 import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-service.js";
+import type { MarketReadService } from "../../features/market/market-read-service.js";
+import type { AlertV2Service } from "../../features/alerts/alert-v2-service.js";
+import type { NotificationService } from "../../features/alerts/notification-service.js";
 import { registerV2ChainRoutes } from "./chain.js";
 import { registerV2CommunicationRoutes } from "./communication.js";
 import { registerV2CommunityRoutes } from "./community.js";
+import { registerV2MarketRoutes } from "./market.js";
 import { registerV2MetaRoutes } from "./meta.js";
+import { registerV2NotificationRoutes } from "./notifications.js";
 import { registerV2ProfileRoutes } from "./profile.js";
 import { registerV2SearchRoutes } from "./search.js";
 import { registerV2SessionRoutes } from "./session.js";
@@ -39,6 +44,9 @@ export interface V2RouteDependencies {
   readonly assetRegistryService: AssetRegistryService;
   readonly walletReadService: WalletReadService;
   readonly watchlistV2Service: WatchlistV2Service;
+  readonly marketReadService: MarketReadService;
+  readonly alertV2Service: AlertV2Service;
+  readonly notificationService: NotificationService;
   readonly chatService: V2ChatService;
   readonly voiceRoomService: VoiceRoomService;
   readonly cursorCodec: V2CursorCodec | null;
@@ -54,8 +62,8 @@ export type V2ModuleRegistrar = (
  * delivered runtime yet: enabling it in V2_MODULES_ENABLED registers no route
  * and its capability reports MODULE_RUNTIME_NOT_REGISTERED. Each delivered
  * module replaces its entry in its own numbered decision (`profile`: 0030;
- * `community` and `search`: 0031; `chain`, `wallet`, and `watchlist`: 0033).
- * `community` and `search`: 0031; `communication`: 0032).
+ * `community` and `search`: 0031; `communication`: 0032; `chain`, `wallet`,
+ * and `watchlist`: 0033; `market` and `notifications`: 0034).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
@@ -63,14 +71,14 @@ export const v2ModuleRegistrars: Readonly<
   community: registerV2CommunityRoutes,
   communication: registerV2CommunicationRoutes,
   search: registerV2SearchRoutes,
-  market: null,
+  market: registerV2MarketRoutes,
   chain: registerV2ChainRoutes,
   wallet: registerV2WalletRoutes,
   swap: null,
   sendApprovals: null,
   launch: null,
   mining: null,
-  notifications: null,
+  notifications: registerV2NotificationRoutes,
   profile: registerV2ProfileRoutes,
   watchlist: registerV2WatchlistRoutes,
 });

@@ -313,7 +313,10 @@ describe("LOOP API V2 account sessions", () => {
       mining: "deferred",
       pay: "deferred",
       privySwap: "deferred",
-      pushNotifications: "deferred",
+      priceAlerts: "deferred",
+      notificationsFeed: "deferred",
+      marketRead: "deferred",
+      pushNotifications: "unavailable",
       sendApprovals: "deferred",
       walletRead: "deferred",
     });
@@ -322,7 +325,7 @@ describe("LOOP API V2 account sessions", () => {
         (capability) => capability.capabilityId === "pushNotifications",
       ),
     ).toMatchObject({
-      availability: "deferred",
+      availability: "unavailable",
       reasonCode: "PUSH_RUNTIME_DEFERRED",
       evidence: { status: "notApplicable", reasonCode: null },
     });

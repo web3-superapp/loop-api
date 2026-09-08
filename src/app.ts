@@ -30,6 +30,31 @@ import { createUnavailableAccountWalletRepository } from "./database/account-wal
 import { createUnavailableBscIndexerRepository } from "./database/bsc-indexer-repository.js";
 import { createUnavailableChainRegistryRepository } from "./database/chain-registry-repository.js";
 import { createUnavailableWatchlistV2Repository } from "./database/watchlist-v2-repository.js";
+import { createUnavailableMarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
+import { createUnavailableAlertV2Repository } from "./database/alert-v2-repository.js";
+import { createUnavailableNotificationRepository } from "./database/notification-repository.js";
+import {
+  createMarketFactService,
+  type MarketFactService,
+} from "./features/market/market-fact-service.js";
+import {
+  createMarketReadService,
+  type MarketReadService,
+} from "./features/market/market-read-service.js";
+import {
+  createAlertV2Service,
+  type AlertV2Service,
+} from "./features/alerts/alert-v2-service.js";
+import {
+  createNotificationService,
+  type NotificationService,
+} from "./features/alerts/notification-service.js";
+import { createMarketProviders } from "./integrations/market/provider-factory.js";
+import type {
+  CandlesProvider,
+  MarketPairsProvider,
+  SecurityFactsProvider,
+} from "./integrations/market/market-data-provider.js";
 import {
   createAssetRegistryService,
   type AssetRegistryService,
@@ -315,6 +340,13 @@ export interface BuildAppOptions {
   readonly assetRegistryService?: AssetRegistryService;
   readonly walletReadService?: WalletReadService;
   readonly watchlistV2Service?: WatchlistV2Service;
+  readonly marketPairsProvider?: MarketPairsProvider | null;
+  readonly securityFactsProvider?: SecurityFactsProvider | null;
+  readonly candlesProvider?: CandlesProvider | null;
+  readonly marketFactService?: MarketFactService;
+  readonly marketReadService?: MarketReadService;
+  readonly alertV2Service?: AlertV2Service;
+  readonly notificationService?: NotificationService;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -593,6 +625,16 @@ export async function buildApp(
       name: "watchlist",
       description:
         "Owner-bound grouped V2 Watchlist keyed by canonical asset IDs",
+    },
+    {
+      name: "market",
+      description:
+        "Provider and indexer market facts with source, fetch time, TTL, and quality on every value",
+    },
+    {
+      name: "notifications",
+      description:
+        "V2 price alerts, the context notification feed, and ten-category preferences; push delivery stays unavailable",
     },
   ] as const;
   const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
@@ -1008,6 +1050,77 @@ export async function buildApp(
       (database.watchlistsV2 !== undefined &&
         database.chainRegistry !== undefined));
 
+  // Market Providers (Decision 0034). Each is `null` when disabled or
+  // uncredentialed; the fact service then publishes its facts as unavailable.
+  const providers = createMarketProviders(config.market);
+  const marketPairsProvider =
+    options.marketPairsProvider === undefined
+      ? providers.pairs
+      : options.marketPairsProvider;
+  const securityFactsProvider =
+    options.securityFactsProvider === undefined
+      ? providers.security
+      : options.securityFactsProvider;
+  const candlesProvider =
+    options.candlesProvider === undefined
+      ? providers.candles
+      : options.candlesProvider;
+  const marketFactCacheRepository =
+    database.marketFacts ?? createUnavailableMarketFactCacheRepository();
+  const marketFactService =
+    options.marketFactService ??
+    createMarketFactService({
+      config: config.market,
+      cache: marketFactCacheRepository,
+      pairsProvider: marketPairsProvider,
+      securityProvider: securityFactsProvider,
+      candlesProvider,
+    });
+  const marketReadService =
+    options.marketReadService ??
+    createMarketReadService({
+      registry: chainRegistryRepository,
+      facts: marketFactService,
+      cache: marketFactCacheRepository,
+      indexerRepository: bscIndexerRepository,
+      watchlist: database.watchlistsV2 ?? null,
+      readClient: bscReadClient,
+      cursorCodec: v2CursorCodec,
+      chainId: bscChainId,
+    });
+  const marketRuntimeAvailable =
+    registeredModuleIds.includes("market") &&
+    (options.marketReadService !== undefined ||
+      (database.chainRegistry !== undefined &&
+        database.marketFacts !== undefined &&
+        database.bscIndexer !== undefined &&
+        v2CursorCodec !== null));
+  const alertV2Service =
+    options.alertV2Service ??
+    createAlertV2Service({
+      repository: database.alertsV2 ?? createUnavailableAlertV2Repository(),
+      registry: chainRegistryRepository,
+      cursorCodec: v2CursorCodec,
+      chainId: bscChainId,
+    });
+  const notificationService =
+    options.notificationService ??
+    createNotificationService({
+      repository:
+        database.notifications ?? createUnavailableNotificationRepository(),
+      cursorCodec: v2CursorCodec,
+    });
+  const priceAlertsRuntimeAvailable =
+    registeredModuleIds.includes("notifications") &&
+    (options.alertV2Service !== undefined ||
+      (database.alertsV2 !== undefined &&
+        database.chainRegistry !== undefined &&
+        v2CursorCodec !== null));
+  const notificationsFeedRuntimeAvailable =
+    registeredModuleIds.includes("notifications") &&
+    (options.notificationService !== undefined ||
+      (database.notifications !== undefined && v2CursorCodec !== null));
+
   // Chain-ID verification is probed once at startup and refreshed lazily by
   // the read client, which owns the state. The capability projection reads it
   // synchronously per request, so a recovery is reflected without a restart.
@@ -1144,6 +1257,9 @@ export async function buildApp(
         bscChainVerification: () => bscReadClient.currentVerification(),
         walletRuntimeAvailable,
         watchlistRuntimeAvailable,
+        marketRuntimeAvailable,
+        priceAlertsRuntimeAvailable,
+        notificationsFeedRuntimeAvailable,
         communicationRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
@@ -1155,6 +1271,9 @@ export async function buildApp(
       assetRegistryService,
       walletReadService,
       watchlistV2Service,
+      marketReadService,
+      alertV2Service,
+      notificationService,
       chatService,
       voiceRoomService,
       cursorCodec: v2CursorCodec,

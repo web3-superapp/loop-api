@@ -3,6 +3,21 @@ import {
   type BscIndexerWorker,
   type CreateBscIndexerWorkerOptions,
 } from "./bsc-indexer-worker.js";
+import {
+  createBscPoolIndexerWorker,
+  type BscPoolIndexerWorker,
+  type CreateBscPoolIndexerWorkerOptions,
+} from "./bsc-pool-indexer-worker.js";
+import {
+  createAlertEvaluatorWorker,
+  type AlertEvaluatorWorker,
+  type CreateAlertEvaluatorWorkerOptions,
+} from "./alert-evaluator-worker.js";
+import type { AlertV2Repository } from "./database/alert-v2-repository.js";
+import type { MarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
+import type { NotificationRepository } from "./database/notification-repository.js";
+import { createMarketFactService } from "./features/market/market-fact-service.js";
+import { createMarketProviders } from "./integrations/market/provider-factory.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 import type { BscIndexerRepository } from "./database/bsc-indexer-repository.js";
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
@@ -70,6 +85,9 @@ export interface ReconciliationWorkerDatabase {
   >;
   readonly chainRegistry?: ChainRegistryRepository;
   readonly bscIndexer?: BscIndexerRepository;
+  readonly marketFacts?: MarketFactCacheRepository;
+  readonly alertsV2?: AlertV2Repository;
+  readonly notifications?: NotificationRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
@@ -96,6 +114,14 @@ export type BscIndexerWorkerFactory = (
   options: CreateBscIndexerWorkerOptions,
 ) => BscIndexerWorker;
 
+export type BscPoolIndexerWorkerFactory = (
+  options: CreateBscPoolIndexerWorkerOptions,
+) => BscPoolIndexerWorker;
+
+export type AlertEvaluatorWorkerFactory = (
+  options: CreateAlertEvaluatorWorkerOptions,
+) => AlertEvaluatorWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -112,6 +138,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createLifecycleWorker?: SpotAgentLifecycleWorkerFactory;
   readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
   readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
+  readonly createBscPoolIndexerWorker?: BscPoolIndexerWorkerFactory;
+  readonly createAlertEvaluatorWorker?: AlertEvaluatorWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
@@ -145,6 +173,10 @@ export async function runReconciliationWorker(
     options.createQuotaRetentionWorker ?? createIssuanceQuotaRetentionWorker;
   const indexerWorkerFactory =
     options.createBscIndexerWorker ?? createBscIndexerWorker;
+  const poolIndexerWorkerFactory =
+    options.createBscPoolIndexerWorker ?? createBscPoolIndexerWorker;
+  const alertEvaluatorWorkerFactory =
+    options.createAlertEvaluatorWorker ?? createAlertEvaluatorWorker;
   const readClientFactory =
     options.createBscReadClient ??
     ((config): BscReadClient => createBscReadClient({ config }));
@@ -244,18 +276,74 @@ export async function runReconciliationWorker(
     const indexerChainConfig = options.config.bscChain;
     const indexerRepository = database.bscIndexer;
     const indexerRegistry = database.chainRegistry;
+    const indexerReadClient =
+      indexerChainConfig === null
+        ? null
+        : readClientFactory(indexerChainConfig);
     const indexerWorker =
       indexerConfig === null ||
-      indexerChainConfig === null ||
+      indexerReadClient === null ||
       indexerRepository === undefined ||
       indexerRegistry === undefined
         ? null
         : indexerWorkerFactory({
             repository: indexerRepository,
             registry: indexerRegistry,
-            readClient: readClientFactory(indexerChainConfig),
+            readClient: indexerReadClient,
             chainId: bscChainId,
             startBlockNumber: indexerConfig.startBlockNumber,
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
+    // The `pool_event` lane shares the BSC_INDEXER_ENABLED switch and the read
+    // client but owns its own checkpoint and rewind (Decision 0034).
+    const poolIndexerWorker =
+      indexerConfig === null ||
+      indexerReadClient === null ||
+      indexerRepository === undefined ||
+      indexerRegistry === undefined
+        ? null
+        : poolIndexerWorkerFactory({
+            repository: indexerRepository,
+            registry: indexerRegistry,
+            readClient: indexerReadClient,
+            chainId: bscChainId,
+            startBlockNumber: indexerConfig.startBlockNumber,
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
+    // The `alert_evaluator` lane (Decision 0034) is default-off and needs the
+    // DexScreener Provider, the V2 alert and notification repositories, and
+    // the registry. It only ever triggers on a fresh Provider price.
+    const evaluatorConfig = options.config.alertEvaluator;
+    const alertEvaluatorWorker =
+      evaluatorConfig === null ||
+      database.alertsV2 === undefined ||
+      database.notifications === undefined ||
+      database.marketFacts === undefined ||
+      database.chainRegistry === undefined
+        ? null
+        : alertEvaluatorWorkerFactory({
+            alerts: database.alertsV2,
+            notifications: database.notifications,
+            registry: database.chainRegistry,
+            facts: createMarketFactService({
+              config: options.config.market,
+              cache: database.marketFacts,
+              pairsProvider: createMarketProviders(options.config.market).pairs,
+              securityProvider: null,
+              candlesProvider: null,
+            }),
+            notificationDedupeSeconds:
+              evaluatorConfig.notificationDedupeSeconds,
             onInfrastructureBackoff: (event) => {
               options.logger.warn(
                 { ...logFields(), ...event },
@@ -307,6 +395,20 @@ export async function runReconciliationWorker(
       ...(indexerWorker === null
         ? []
         : [Promise.resolve().then(() => indexerWorker.run(controller.signal))]),
+      ...(poolIndexerWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              poolIndexerWorker.run(controller.signal),
+            ),
+          ]),
+      ...(alertEvaluatorWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              alertEvaluatorWorker.run(controller.signal),
+            ),
+          ]),
       ...(communityChannelSyncWorker === null
         ? []
         : [

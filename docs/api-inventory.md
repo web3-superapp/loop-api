@@ -181,9 +181,55 @@ reserve subtracted from `spendableBalance` is configured by
 multicall is the authoritative balance
 source: Privy's own balance view is a cross-check whose `disputed` or
 `unavailable` result never changes the published value. Valuation and net worth
-stay `unavailable` (`MARKET_PRICE_PROVIDER_NOT_CONFIGURED`) until D11; native
+stay `unavailable` (`MARKET_PRICE_PROVIDER_NOT_CONFIGURED`) until the wallet
+projection is wired to the D11 market facts (pending main-agent ruling); native
 transfers and cross-chain activity stay `unavailable` in this step. Nothing is
 served from a stored balance snapshot when the chain is unreadable.
+
+### V2 market module (Decision 0034, `V2_MODULES_ENABLED=market`)
+
+| Method and path                           | Request                                       | Success projection                                                                                          | Interface     | Capability                                                                 |
+| ----------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
+| `GET /v2/market/overview`                 | Bearer + contract/client headers; no input    | Watchlist rows with price facts; trending registry assets by DexScreener 24h volume with `recommendationId` | `implemented` | `blocked-provider`; each fact carries its own source/quality               |
+| `GET /v2/market/assets/{assetId}`         | Canonical `assetId`                           | Registry identity, DexScreener facts from the deepest base pair, bound verified community, GoPlus fact list | `implemented` | `blocked-provider`; GoPlus needs credentials                               |
+| `GET /v2/market/assets/{assetId}/candles` | `interval=15m\|1h\|4h\|1d\|1w`, `limit` 1–300 | GeckoTerminal OHLCV, else candles derived from indexed V3 swaps (`quality: derived`, labelled)              | `implemented` | `blocked-provider`; derived path needs a registered pool and the pool lane |
+| `GET /v2/market/assets/{assetId}/trades`  | `cursor` or `limit` (1–50)                    | Indexed swaps with tx/log/block/timestamp/confirmations and direction relative to the asset                 | `implemented` | `blocked-provider`; unregistered pool or idle lane is `unavailable`        |
+| `GET /v2/market/assets/{assetId}/holders` | Canonical `assetId`                           | GoPlus holder count; distribution `unavailable`                                                             | `implemented` | `blocked-provider`                                                         |
+| `GET /v2/market/new-pairs`                | no input                                      | GeckoTerminal new pools when enabled; risk screening `unavailable`                                          | `implemented` | `explicitly-disabled` until GeckoTerminal terms are verified               |
+| `GET /v2/market/smart-money`              | no input                                      | Always `unavailable` (`SMART_MONEY_RUNTIME_DEFERRED`)                                                       | `implemented` | `explicitly-disabled` (D21)                                                |
+
+Every market number is a canonical decimal string inside a fact object
+`{value, source, fetchedAt, ttlSeconds, quality, reasonCode}`. Provider
+responses are parsed losslessly (no JSON number becomes a JavaScript number),
+throttled to the Provider's documented limit, cached in `market_fact_cache`
+with the SHA-256 digest of the raw body, and served as `stale` only inside the
+grace window when the Provider cannot be reached. A disabled Provider closes
+its own facts and never borrows another source. Derived candles are aggregated
+by the `pool_event` indexer lane (`pnpm indexer:backfill --lane pool_event`)
+and priced in the pool's other token, never in USD.
+
+### V2 notifications module (Decision 0034, `V2_MODULES_ENABLED=notifications`)
+
+| Method and path                                | Request                                                         | Success projection                                                                       | Interface     | Capability                                                              |
+| ---------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------- |
+| `GET /v2/alerts`                               | `cursor` or `limit` (1–50)                                      | V2 alerts keyed by `assetId` with `state` active/triggered/expired                       | `implemented` | `implemented`                                                           |
+| `POST /v2/alerts`                              | `Idempotency-Key`; `{assetId, condition, threshold, expiresAt}` | `201` new / `200` replay; same key with another body is `IDEMPOTENCY_CONFLICT`           | `implemented` | `implemented`; unregistered asset is `VALIDATION_FAILED`                |
+| `GET /v2/alerts/{alertId}`                     | —                                                               | One owned alert                                                                          | `implemented` | `implemented`                                                           |
+| `PUT /v2/alerts/{alertId}`                     | No `Idempotency-Key`; `{expectedVersion, …definition}`          | Re-armed alert; stale version is `VERSION_CONFLICT`                                      | `implemented` | `implemented`                                                           |
+| `DELETE /v2/alerts/{alertId}?expectedVersion=` | —                                                               | `204` without enumeration                                                                | `implemented` | `implemented`                                                           |
+| `GET /v2/notifications/feed`                   | `cursor` or `limit` (1–50)                                      | Context notifications (`type`, `entityRef`, `contextRoute`, `payload`) plus unread count | `implemented` | `implemented`; `push` is always `unavailable` (`PUSH_RUNTIME_DEFERRED`) |
+| `POST /v2/notifications/{notificationId}/read` | `Idempotency-Key`; no body                                      | The notification with its first `readAt`                                                 | `implemented` | `implemented`                                                           |
+| `GET /v2/notification-preferences`             | —                                                               | Ten categories; `security.event` locked on                                               | `implemented` | `implemented`                                                           |
+| `PUT /v2/notification-preferences`             | No `Idempotency-Key`; `{expectedVersion, categories}` (all ten) | Committed preferences; `security.event: false` is `INVALID_REQUEST`                      | `implemented` | `implemented`; delivery remains `explicitly-disabled`                   |
+
+V2 alerts share `price_alert_definitions` with the frozen V1 rows but never
+the namespace: V1 rows keep `asset_key` and stay `inactive`; V2 rows carry the
+canonical `asset_id` and move `active → triggered` when the default-off
+`alert_evaluator` worker lane (`ALERT_EVALUATOR_ENABLED`) observes a `fresh`
+DexScreener price that satisfies the condition. A trigger records the
+append-only event and one context notification per dedupe window
+(`ALERT_NOTIFICATION_DEDUPE_SECONDS`) in a single transaction. No push Provider
+exists; the feed is the only delivery surface.
 
 ### V2 watchlist module (Decision 0033, `V2_MODULES_ENABLED=watchlist`)
 
@@ -252,25 +298,26 @@ LOOP endpoint: the first two are client-side Stream SDK calls and the last is
 `registerV2Routes` in `src/routes/v2/index.ts` is the single V2 registration
 point. `V2_MODULES_ENABLED` selects which module routes may register.
 `profile` (Decision 0030), `community` and `search` (0031), `communication`
-(0032), and `chain`, `wallet`, and `watchlist` (0033) ship their registrars;
+(0032), `chain`, `wallet`, and `watchlist` (0033), and `market` and
+`notifications` (0034) ship their registrars;
 every other module below has none yet, so enabling it registers no route and
 only changes its capability projection.
 
-| Module ID       | Capability projected | Registrar   | Status                                                     |
-| --------------- | -------------------- | ----------- | ---------------------------------------------------------- |
-| `community`     | `community`          | shipped     | routes and capability `implemented` (Decision 0031)        |
-| `communication` | `communityChat`      | shipped     | routes and capability `implemented` (Decision 0032)        |
-| `search`        | `search`             | shipped     | routes and capability `implemented` (Decision 0031)        |
-| `market`        | none yet             | not shipped | gate `implemented`; capability and routes pending D11      |
-| `chain`         | `bscRead`            | shipped     | routes and capability `implemented` (Decision 0033)        |
-| `wallet`        | `walletRead`         | shipped     | routes and capability `implemented` (Decision 0033)        |
-| `swap`          | `privySwap`          | not shipped | gate `implemented`; routes pending D13 Go/No-Go            |
-| `sendApprovals` | `sendApprovals`      | not shipped | gate `implemented`; routes pending D14                     |
-| `launch`        | `launch`             | not shipped | gate `implemented`; routes pending D17/D18 and 02 document |
-| `mining`        | `mining`             | not shipped | gate `implemented`; routes pending D19 formula freeze      |
-| `notifications` | `pushNotifications`  | not shipped | gate `implemented`; routes pending D16                     |
-| `profile`       | `profile`            | shipped     | routes and capability `implemented` (Decision 0030)        |
-| `watchlist`     | `watchlist`          | shipped     | routes and capability `implemented` (Decision 0033)        |
+| Module ID       | Capability projected                                                        | Registrar   | Status                                                                                  |
+| --------------- | --------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `community`     | `community`                                                                 | shipped     | routes and capability `implemented` (Decision 0031)                                     |
+| `communication` | `communityChat`                                                             | shipped     | routes and capability `implemented` (Decision 0032)                                     |
+| `search`        | `search`                                                                    | shipped     | routes and capability `implemented` (Decision 0031)                                     |
+| `market`        | `marketRead`                                                                | shipped     | routes and capability `implemented` (Decision 0034)                                     |
+| `chain`         | `bscRead`                                                                   | shipped     | routes and capability `implemented` (Decision 0033)                                     |
+| `wallet`        | `walletRead`                                                                | shipped     | routes and capability `implemented` (Decision 0033)                                     |
+| `swap`          | `privySwap`                                                                 | not shipped | gate `implemented`; routes pending D13 Go/No-Go                                         |
+| `sendApprovals` | `sendApprovals`                                                             | not shipped | gate `implemented`; routes pending D14                                                  |
+| `launch`        | `launch`                                                                    | not shipped | gate `implemented`; routes pending D17/D18 and 02 document                              |
+| `mining`        | `mining`                                                                    | not shipped | gate `implemented`; routes pending D19 formula freeze                                   |
+| `notifications` | `priceAlerts`, `notificationsFeed`; `pushNotifications` stays `unavailable` | shipped     | alerts, feed, and preferences `implemented` (Decision 0034); push `explicitly-disabled` |
+| `profile`       | `profile`                                                                   | shipped     | routes and capability `implemented` (Decision 0030)                                     |
+| `watchlist`     | `watchlist`                                                                 | shipped     | routes and capability `implemented` (Decision 0033)                                     |
 
 An enabled module without a registrar reports
 `availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The

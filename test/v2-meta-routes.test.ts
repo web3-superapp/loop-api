@@ -315,13 +315,23 @@ describe("LOOP API V2 meta policy gates", () => {
     });
     const capabilities = await readCapabilities(app);
 
-    for (const capabilityId of ["mining", "pushNotifications"]) {
+    for (const capabilityId of ["mining"]) {
       expect(capabilities[capabilityId]).toEqual({
         capabilityId,
         availability: "unavailable",
         reasonCode: "MODULE_RUNTIME_NOT_REGISTERED",
         evidence: { status: "notApplicable", reasonCode: null },
       });
+    }
+    // Push delivery never opens with the module gate: no FCM/APNs runtime.
+    expect(capabilities["pushNotifications"]).toEqual({
+      capabilityId: "pushNotifications",
+      availability: "unavailable",
+      reasonCode: "PUSH_RUNTIME_DEFERRED",
+      evidence: { status: "notApplicable", reasonCode: null },
+    });
+    for (const capabilityId of ["priceAlerts", "notificationsFeed"]) {
+      expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     for (const capabilityId of [
       "community",
@@ -332,6 +342,7 @@ describe("LOOP API V2 meta policy gates", () => {
       "bscRead",
       "walletRead",
       "watchlist",
+      "marketRead",
       "pay",
       "bridge",
       "dappExecution",
@@ -353,7 +364,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(24);
+    expect(Object.keys(capabilities)).toHaveLength(27);
   });
 
   it("reports the delivered profile module as available only with a composed repository", async () => {
@@ -390,6 +401,9 @@ describe("LOOP API V2 meta policy gates", () => {
       bscChainVerification: () => "unknown" as const,
       walletRuntimeAvailable: false,
       watchlistRuntimeAvailable: false,
+      marketRuntimeAvailable: false,
+      priceAlertsRuntimeAvailable: false,
+      notificationsFeedRuntimeAvailable: false,
       communicationRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
@@ -403,7 +417,7 @@ describe("LOOP API V2 meta policy gates", () => {
           capability.reasonCode === "MODULE_RUNTIME_NOT_REGISTERED",
       );
 
-      if (capabilityId === null || v2ModuleRegistrars[moduleId] !== null) {
+      if (v2ModuleRegistrars[moduleId] !== null) {
         expect(gated).toEqual([]);
       } else {
         expect(gated.map((capability) => capability.capabilityId)).toEqual([
@@ -420,8 +434,10 @@ describe("LOOP API V2 meta policy gates", () => {
       "community",
       "communication",
       "search",
+      "market",
       "chain",
       "wallet",
+      "notifications",
       "profile",
       "watchlist",
     ]);
@@ -430,8 +446,10 @@ describe("LOOP API V2 meta policy gates", () => {
       "community",
       "communication",
       "search",
+      "market",
       "chain",
       "wallet",
+      "notifications",
       "profile",
       "watchlist",
     ]);
@@ -448,6 +466,9 @@ describe("LOOP API V2 meta policy gates", () => {
       "/v2/wallets",
       "/v2/chain/status",
       "/v2/watchlist",
+      "/v2/market/overview",
+      "/v2/alerts",
+      "/v2/notifications/feed",
       "/v2/community/home",
       "/v2/profile",
       "/v2/profile/avatars",
