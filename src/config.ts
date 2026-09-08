@@ -161,6 +161,10 @@ const environmentSchema = z
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
+    BSC_WRITES_ENABLED: booleanString,
+    BSC_WRITE_CANARY_ASSETS: optionalCredential(4_096),
+    BSC_WRITE_CANARY_MAX_USD: z.string().trim().min(1).max(32),
+    LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
@@ -170,6 +174,23 @@ const environmentSchema = z
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
+    if (value.BSC_WRITES_ENABLED) {
+      if (value.BSC_RPC_URLS === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "BSC_WRITES_ENABLED requires BSC_RPC_URLS",
+          path: ["BSC_WRITES_ENABLED"],
+        });
+      }
+      if (value.BSC_WRITE_CANARY_ASSETS === undefined) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "BSC_WRITES_ENABLED requires a BSC_WRITE_CANARY_ASSETS allowlist",
+          path: ["BSC_WRITE_CANARY_ASSETS"],
+        });
+      }
+    }
     const hasAppId = value.PRIVY_APP_ID !== undefined;
     const hasAppSecret = value.PRIVY_APP_SECRET !== undefined;
 
@@ -357,6 +378,9 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
     ALERT_EVALUATOR_ENABLED: booleanString,
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
+    WALLET_INTENT_RECONCILE_ENABLED: booleanString,
+    PRIVY_APP_ID: optionalCredential(255),
+    PRIVY_APP_SECRET: optionalCredential(4_096),
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
@@ -365,6 +389,30 @@ const reconciliationWorkerEnvironmentSchema = z
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
+    // Privy credentials only matter to this process when the wallet-intent
+    // lane is on; a partial pair is then an error, otherwise it is ignored.
+    if (
+      value.WALLET_INTENT_RECONCILE_ENABLED &&
+      (value.PRIVY_APP_ID !== undefined) !==
+        (value.PRIVY_APP_SECRET !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "PRIVY_APP_ID and PRIVY_APP_SECRET must be configured together",
+        path: ["PRIVY_APP_ID"],
+      });
+    }
+    if (
+      value.WALLET_INTENT_RECONCILE_ENABLED &&
+      value.BSC_RPC_URLS === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The wallet-intent reconciliation lane requires BSC_RPC_URLS",
+        path: ["WALLET_INTENT_RECONCILE_ENABLED"],
+      });
+    }
     if (
       value.ALERT_EVALUATOR_ENABLED &&
       !value.MARKET_PROVIDER_DEXSCREENER_ENABLED
@@ -512,6 +560,22 @@ export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
 }
 
+/**
+ * BSC write admission (Decision 0035). Present only when
+ * `BSC_WRITES_ENABLED=true`; absent means every prepare, broadcast report, and
+ * Provider execute fails closed with CAPABILITY_UNAVAILABLE. Enabling writes
+ * additionally requires an explicit canary asset allowlist and a per-intent USD
+ * ceiling; an intent whose value cannot be priced is never admitted.
+ */
+export interface BscWriteConfig {
+  readonly configVersion: "bscWriteCanaryV1";
+  readonly canaryAssetIds: readonly string[];
+  /** Canonical decimal USD ceiling per intent (default 20). */
+  readonly canaryMaxUsd: string;
+  /** Platform fee slot for Privy Swap; `null` sends no fee_configuration. */
+  readonly swapFeeBps: number | null;
+}
+
 export interface GoplusConfig {
   readonly appKey: string;
   readonly appSecret: string;
@@ -590,6 +654,8 @@ export interface AppConfig {
   readonly bscConfirmations: number;
   readonly bscReorgDepthBlocks: number;
   readonly walletGasReserve: WalletGasReserveConfig;
+  /** `null` keeps every funds-moving path closed. */
+  readonly bscWrites: BscWriteConfig | null;
   readonly market: MarketConfig;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
@@ -618,6 +684,14 @@ export interface ReconciliationWorkerConfig {
   readonly market: MarketConfig;
   /** `alert_evaluator` lane (Decision 0034); default off. */
   readonly alertEvaluator: AlertEvaluatorConfig | null;
+  /**
+   * `wallet-intent-reconcile` lane (Decision 0035); default off. It reads
+   * receipts over RPC and, when Privy credentials are present, Privy wallet
+   * action status. It never signs, broadcasts, or replays a write.
+   */
+  readonly walletIntentReconcile: {
+    readonly privy: PrivyConfig | null;
+  } | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -916,6 +990,56 @@ function parseWalletGasReserve(value: string): WalletGasReserveConfig {
   });
 }
 
+const canaryAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$/;
+const canaryMaxUsdPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/;
+
+/**
+ * Write admission is off unless explicitly enabled, and enabling it requires
+ * both an asset allowlist of canonical asset IDs and a positive USD ceiling.
+ */
+function parseBscWriteConfig(data: {
+  readonly BSC_WRITES_ENABLED: boolean;
+  readonly BSC_WRITE_CANARY_ASSETS?: string | undefined;
+  readonly BSC_WRITE_CANARY_MAX_USD: string;
+  readonly LOOP_SWAP_FEE_BPS: number;
+}): BscWriteConfig | null {
+  if (!data.BSC_WRITES_ENABLED) {
+    return null;
+  }
+  const assetIds: string[] = [];
+  for (const rawEntry of (data.BSC_WRITE_CANARY_ASSETS ?? "").split(",")) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!canaryAssetIdPattern.test(entry)) {
+      throw new ConfigurationError([
+        "BSC_WRITE_CANARY_ASSETS: every entry must be a canonical eip155 asset ID",
+      ]);
+    }
+    if (!assetIds.includes(entry)) {
+      assetIds.push(entry);
+    }
+  }
+  if (assetIds.length === 0) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_ASSETS: at least one canary asset is required when writes are enabled",
+    ]);
+  }
+  const maxUsd = data.BSC_WRITE_CANARY_MAX_USD;
+  if (!canaryMaxUsdPattern.test(maxUsd) || /^0(\.0+)?$/.test(maxUsd)) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_MAX_USD: must be a positive decimal with at most 6 fraction digits",
+    ]);
+  }
+  return Object.freeze({
+    configVersion: "bscWriteCanaryV1" as const,
+    canaryAssetIds: Object.freeze(assetIds),
+    canaryMaxUsd: maxUsd,
+    swapFeeBps: data.LOOP_SWAP_FEE_BPS === 0 ? null : data.LOOP_SWAP_FEE_BPS,
+  });
+}
+
 function marketEnvironmentDefaults(
   environment: NodeJS.ProcessEnv,
 ): Record<keyof typeof marketEnvironmentShape, string | undefined> {
@@ -1057,6 +1181,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
     BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
     BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
+    BSC_WRITES_ENABLED: environment["BSC_WRITES_ENABLED"] ?? "false",
+    BSC_WRITE_CANARY_ASSETS: environment["BSC_WRITE_CANARY_ASSETS"],
+    BSC_WRITE_CANARY_MAX_USD: environment["BSC_WRITE_CANARY_MAX_USD"] ?? "20",
+    LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
@@ -1181,6 +1309,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     bscConfirmations: parsed.data.BSC_CONFIRMATIONS,
     bscReorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
+    bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
@@ -1222,6 +1351,10 @@ export function loadReconciliationWorkerConfig(
     ALERT_EVALUATOR_ENABLED: environment["ALERT_EVALUATOR_ENABLED"] ?? "false",
     ALERT_NOTIFICATION_DEDUPE_SECONDS:
       environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
+    WALLET_INTENT_RECONCILE_ENABLED:
+      environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
+    PRIVY_APP_ID: environment["PRIVY_APP_ID"],
+    PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
@@ -1301,6 +1434,18 @@ export function loadReconciliationWorkerConfig(
       ? Object.freeze({
           notificationDedupeSeconds:
             parsed.data.ALERT_NOTIFICATION_DEDUPE_SECONDS,
+        })
+      : null,
+    walletIntentReconcile: parsed.data.WALLET_INTENT_RECONCILE_ENABLED
+      ? Object.freeze({
+          privy:
+            parsed.data.PRIVY_APP_ID !== undefined &&
+            parsed.data.PRIVY_APP_SECRET !== undefined
+              ? Object.freeze({
+                  appId: parsed.data.PRIVY_APP_ID,
+                  appSecret: parsed.data.PRIVY_APP_SECRET,
+                })
+              : null,
         })
       : null,
     serviceName: "loop-reconciliation-worker",

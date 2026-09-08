@@ -159,6 +159,16 @@ export interface V2ProductPolicyRuntime {
    * fails closed rather than publishing a channel or call it cannot reach.
    */
   readonly communicationRuntimeAvailable: boolean;
+  /**
+   * `sendApprovals` / `swap` module enabled with the wallet-intent repository,
+   * the control plane, the wallet inventory, an RPC endpoint, and
+   * `BSC_WRITES_ENABLED` (Decision 0035). Evaluated per request together with
+   * the live chain verification.
+   */
+  readonly walletIntentRuntimeAvailable: boolean;
+  readonly bscWritesEnabled: boolean;
+  /** Privy credentials composed; the Swap Provider boundary needs them. */
+  readonly privySwapRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -226,6 +236,20 @@ export const v2CommunicationRuntimeUnavailableReasonCode =
  */
 export const v2VoiceRoomEvidencePendingReasonCode =
   "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
+export const v2SendApprovalsModuleDeferredReasonCode =
+  "SEND_APPROVALS_RUNTIME_DEFERRED" as const;
+export const v2PrivySwapModuleDeferredReasonCode =
+  "PRIVY_SWAP_GO_NO_GO_PENDING" as const;
+export const v2WalletIntentRuntimeUnavailableReasonCode =
+  "WALLET_INTENT_RUNTIME_UNAVAILABLE" as const;
+export const v2BscWritesDisabledReasonCode = "BSC_WRITES_DISABLED" as const;
+/**
+ * Privy BSC Swap has no physical-device evidence yet: quote availability,
+ * execute with a user authorization signature, and the Flutter
+ * `generateAuthorizationSignature` handoff are all unverified.
+ */
+export const v2PrivySwapEvidencePendingReasonCode =
+  "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING" as const;
 
 /**
  * Capability projected by each V2 module gate. `profile` was delivered by
@@ -583,6 +607,53 @@ function voiceRoomsCapability(
   });
 }
 
+/**
+ * Funds-moving capabilities (Decision 0035): the module must be enabled, the
+ * intent runtime composed, `BSC_WRITES_ENABLED` on, and the chain verified
+ * live. `privySwap` additionally needs Privy credentials and always carries
+ * the pending device evidence.
+ */
+function walletIntentCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+  moduleId: "sendApprovals" | "swap",
+): V2CapabilityProjection {
+  const capabilityId = v2ModuleCapabilityIds[moduleId];
+  const evidence =
+    moduleId === "swap"
+      ? Object.freeze({
+          status: "pending" as const,
+          reasonCode: v2PrivySwapEvidencePendingReasonCode,
+        })
+      : Object.freeze({ status: "notApplicable" as const, reasonCode: null });
+  if (!config.v2ModulesEnabled.has(moduleId)) {
+    return Object.freeze({
+      capabilityId,
+      availability: "deferred",
+      reasonCode:
+        moduleId === "swap"
+          ? v2PrivySwapModuleDeferredReasonCode
+          : v2SendApprovalsModuleDeferredReasonCode,
+      evidence,
+    });
+  }
+  const reasonCode = !runtime.walletIntentRuntimeAvailable
+    ? v2WalletIntentRuntimeUnavailableReasonCode
+    : !runtime.bscRpcConfigured
+      ? v2ChainRpcNotConfiguredReasonCode
+      : !runtime.bscWritesEnabled
+        ? v2BscWritesDisabledReasonCode
+        : moduleId === "swap" && !runtime.privySwapRuntimeAvailable
+          ? "PRIVY_NOT_CONFIGURED"
+          : chainVerificationReasonCode(runtime.bscChainVerification());
+  return Object.freeze({
+    capabilityId,
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence,
+  });
+}
+
 function unavailableCapability(
   capabilityId: string,
   reasonCode: string,
@@ -690,18 +761,8 @@ export function createV2CapabilitiesProjection(
       v2MarketModuleDeferredReasonCode,
       v2MarketRuntimeUnavailableReasonCode,
     ),
-    moduleGatedCapability(
-      config,
-      "swap",
-      v2ModuleCapabilityIds.swap,
-      "PRIVY_SWAP_GO_NO_GO_PENDING",
-    ),
-    moduleGatedCapability(
-      config,
-      "sendApprovals",
-      v2ModuleCapabilityIds.sendApprovals,
-      "SEND_APPROVALS_RUNTIME_DEFERRED",
-    ),
+    walletIntentCapability(config, runtime, "swap"),
+    walletIntentCapability(config, runtime, "sendApprovals"),
     moduleGatedCapability(
       config,
       "launch",

@@ -38,6 +38,10 @@ import {
   createPostgresNotificationRepository,
   type NotificationRepository,
 } from "./notification-repository.js";
+import {
+  createPostgresWalletIntentRepository,
+  type WalletIntentRepository,
+} from "./wallet-intent-repository.js";
 import type {
   CommunicationRepository,
   CommunityChannelSyncRepository,
@@ -137,6 +141,8 @@ export interface Database {
   readonly alertsV2?: AlertV2Repository;
   /** Context notification feed and V2 preferences (Decision 0034). */
   readonly notifications?: NotificationRepository;
+  /** Unified send/approve/revoke/swap intents (Decision 0035). */
+  readonly walletIntents?: WalletIntentRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -262,6 +268,7 @@ export function createPostgresDatabase(
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
   const alertsV2 = createPostgresAlertV2Repository(pool);
   const notifications = createPostgresNotificationRepository(pool);
+  const walletIntents = createPostgresWalletIntentRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
@@ -303,6 +310,7 @@ export function createPostgresDatabase(
     marketFacts,
     alertsV2,
     notifications,
+    walletIntents,
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

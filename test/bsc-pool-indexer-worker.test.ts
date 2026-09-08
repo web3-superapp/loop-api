@@ -73,6 +73,8 @@ function repositoryFake() {
     },
     listWalletTransfers: () => Promise.resolve({ items: [], hasMore: false }),
     sumPendingIncoming: () => Promise.resolve([]),
+    listLatestApprovals: () => Promise.resolve([]),
+    hasOutgoingTransferTo: () => Promise.resolve(false),
     commitPoolEventSegment: (input) => {
       commits.push(input);
       const rewind = input.rewindFromBlockNumber;
@@ -175,6 +177,8 @@ function readClientFake(options: {
       Promise.reject(new Error("the pool lane must not read transfers")),
     readPoolEventLogs: (query) =>
       Promise.resolve(options.logsFor?.(query) ?? []),
+    readApprovalLogs: () =>
+      Promise.reject(new Error("the pool lane must not read approvals")),
     probeEndpoints: () => Promise.resolve([]),
   };
 }

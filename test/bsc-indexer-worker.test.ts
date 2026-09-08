@@ -97,6 +97,8 @@ function repositoryFake() {
     listWalletTransfers: () =>
       Promise.resolve({ items: [...rows.values()], hasMore: false }),
     sumPendingIncoming: () => Promise.resolve([]),
+    listLatestApprovals: () => Promise.resolve([]),
+    hasOutgoingTransferTo: () => Promise.resolve(false),
     commitPoolEventSegment: () => Promise.reject(new Error("not used")),
     listPoolSwaps: () => Promise.resolve({ items: [], hasMore: false }),
     aggregateSwapCandles: () => Promise.resolve([]),
@@ -140,6 +142,7 @@ function readClientFake(options: ReadClientOptions): BscReadClient {
     readTransferLogs: (query) =>
       Promise.resolve(options.logsFor?.(query) ?? []),
     readPoolEventLogs: () => Promise.resolve([]),
+    readApprovalLogs: () => Promise.resolve([]),
     probeEndpoints: () => Promise.resolve([]),
   };
 }

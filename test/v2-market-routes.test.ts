@@ -271,6 +271,8 @@ function indexerFake(
       Promise.resolve({ items: [], hasMore: false }),
     ),
     sumPendingIncoming: vi.fn(() => Promise.resolve([])),
+    listLatestApprovals: vi.fn(() => Promise.resolve([])),
+    hasOutgoingTransferTo: vi.fn(() => Promise.resolve(false)),
     commitPoolEventSegment: vi.fn(() => Promise.reject(new Error("not used"))),
     listPoolSwaps: vi.fn(() =>
       Promise.resolve({
@@ -337,6 +339,7 @@ function readClientFake(): BscReadClient {
     readBalances: () => Promise.reject(new Error("not used")),
     readTransferLogs: () => Promise.resolve([]),
     readPoolEventLogs: () => Promise.resolve([]),
+    readApprovalLogs: () => Promise.resolve([]),
     probeEndpoints: () => Promise.resolve([]),
   };
 }

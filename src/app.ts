@@ -33,6 +33,31 @@ import { createUnavailableWatchlistV2Repository } from "./database/watchlist-v2-
 import { createUnavailableMarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
 import { createUnavailableAlertV2Repository } from "./database/alert-v2-repository.js";
 import { createUnavailableNotificationRepository } from "./database/notification-repository.js";
+import { createUnavailableWalletIntentRepository } from "./database/wallet-intent-repository.js";
+import {
+  createApprovalService,
+  type ApprovalService,
+} from "./features/wallet-intents/approval-service.js";
+import type { WalletIntentRuntime } from "./features/wallet-intents/intent-preparation.js";
+import {
+  createSendService,
+  type SendService,
+} from "./features/wallet-intents/send-service.js";
+import {
+  createInMemorySwapQuoteStore,
+  createSwapService,
+  type SwapQuoteStore,
+  type SwapService,
+} from "./features/wallet-intents/swap-service.js";
+import {
+  createWalletIntentService,
+  type WalletIntentService,
+} from "./features/wallet-intents/wallet-intent-service.js";
+import {
+  createPrivySwapAdapter,
+  createUnavailablePrivySwapAdapter,
+  type PrivySwapAdapter,
+} from "./integrations/privy/swap-adapter.js";
 import {
   createMarketFactService,
   type MarketFactService,
@@ -77,8 +102,10 @@ import {
   type WatchlistV2Service,
 } from "./features/watchlist/watchlist-v2-service.js";
 import {
+  asChainCallClient,
   createBscReadClient,
   createUnavailableBscReadClient,
+  type BscChainCallClient,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 import {
@@ -333,7 +360,7 @@ export interface BuildAppOptions {
   readonly spotWalletBindingService?: SpotWalletBindingService;
   readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
   readonly v2SessionService?: V2SessionService;
-  readonly bscReadClient?: BscReadClient;
+  readonly bscReadClient?: BscReadClient | BscChainCallClient;
   readonly privyWalletReader?: PrivyWalletReader;
   readonly privyBalanceReader?: PrivyBalanceReader;
   readonly chainStatusService?: ChainStatusService;
@@ -347,6 +374,14 @@ export interface BuildAppOptions {
   readonly marketReadService?: MarketReadService;
   readonly alertV2Service?: AlertV2Service;
   readonly notificationService?: NotificationService;
+  /** Test seams for the wallet-intent runtime (Decision 0035). */
+  readonly privySwapAdapter?: PrivySwapAdapter;
+  readonly swapQuoteStore?: SwapQuoteStore;
+  readonly walletIntentService?: WalletIntentService;
+  readonly sendService?: SendService;
+  readonly approvalService?: ApprovalService;
+  readonly swapService?: SwapService;
+  readonly walletIntentNow?: () => Date;
   readonly logger?: FastifyServerOptions["logger"];
 }
 
@@ -420,6 +455,7 @@ function loggerOptions(
         "config.hyperliquidPrivateReads.quotaHmacSecret",
         "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
         "req.body.signature",
+        "req.body.authorizationSignature",
         "req.body.authorization_signature",
         "req.body.typed_data_json",
         "req.body.typedDataJson",
@@ -635,6 +671,21 @@ export async function buildApp(
       name: "notifications",
       description:
         "V2 price alerts, the context notification feed, and ten-category preferences; push delivery stays unavailable",
+    },
+    {
+      name: "wallet-intents",
+      description:
+        "Immutable send/approve/revoke intents with server-built unsigned transactions, device broadcast reports, and one status surface for every funds action",
+    },
+    {
+      name: "swap",
+      description:
+        "Privy Swap quote, immutable swap intent, and single-attempt execute with the device authorization signature; evidence pending",
+    },
+    {
+      name: "approvals",
+      description:
+        "ERC-20 allowance inventory from indexed Approval events with live allowance() reads",
     },
   ] as const;
   const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
@@ -1132,6 +1183,68 @@ export async function buildApp(
     (options.notificationService !== undefined ||
       (database.notifications !== undefined && v2CursorCodec !== null));
 
+  // Wallet intents (Decision 0035). The runtime is composed whenever its
+  // repositories exist; whether a write is admitted is decided per request
+  // by BSC_WRITES_ENABLED, the canary allowlist, and live chain verification.
+  const walletIntentRepositoryComposed =
+    options.walletIntentService !== undefined ||
+    options.sendService !== undefined ||
+    options.approvalService !== undefined ||
+    options.swapService !== undefined ||
+    (database.walletIntents !== undefined &&
+      database.accountWallets !== undefined &&
+      database.chainRegistry !== undefined &&
+      database.bscIndexer !== undefined);
+  const walletIntentModuleEnabled =
+    registeredModuleIds.includes("sendApprovals") ||
+    registeredModuleIds.includes("swap");
+  const walletIntentRuntimeAvailable =
+    walletIntentModuleEnabled && walletIntentRepositoryComposed;
+  const privySwapAdapter =
+    options.privySwapAdapter ??
+    (privyServerClient === null
+      ? createUnavailablePrivySwapAdapter()
+      : createPrivySwapAdapter(privyServerClient.wallets()));
+  const privySwapRuntimeAvailable =
+    options.privySwapAdapter !== undefined || config.privy !== null;
+  const walletIntentRuntime: WalletIntentRuntime = Object.freeze({
+    config: Object.freeze({
+      bscWrites: config.bscWrites,
+      privyAppId: config.privy?.appId ?? null,
+      gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
+    }),
+    repository:
+      database.walletIntents ?? createUnavailableWalletIntentRepository(),
+    wallets: accountWalletRepository,
+    registry: chainRegistryRepository,
+    indexer: bscIndexerRepository,
+    readClient: asChainCallClient(bscReadClient),
+    controlPlane: database.controlPlane,
+    marketFacts:
+      options.marketFactService !== undefined || marketRuntimeAvailable
+        ? marketFactService
+        : null,
+    swapAdapter: privySwapAdapter,
+    cursorCodec: v2CursorCodec,
+    now: options.walletIntentNow ?? ((): Date => new Date()),
+    createUuid: randomUUID,
+  });
+  const walletIntentService =
+    options.walletIntentService ??
+    createWalletIntentService(walletIntentRuntime);
+  const sendService =
+    options.sendService ?? createSendService(walletIntentRuntime);
+  const approvalService =
+    options.approvalService ?? createApprovalService(walletIntentRuntime);
+  const swapService =
+    options.swapService ??
+    createSwapService({
+      runtime: walletIntentRuntime,
+      quoteStore:
+        options.swapQuoteStore ??
+        createInMemorySwapQuoteStore(walletIntentRuntime.now),
+    });
+
   // Chain-ID verification is probed once at startup and refreshed lazily by
   // the read client, which owns the state. The capability projection reads it
   // synchronously per request, so a recovery is reflected without a restart.
@@ -1272,6 +1385,9 @@ export async function buildApp(
         priceAlertsRuntimeAvailable,
         notificationsFeedRuntimeAvailable,
         communicationRuntimeAvailable,
+        walletIntentRuntimeAvailable,
+        bscWritesEnabled: config.bscWrites !== null,
+        privySwapRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
@@ -1287,6 +1403,10 @@ export async function buildApp(
       notificationService,
       chatService,
       voiceRoomService,
+      walletIntentService,
+      sendService,
+      approvalService,
+      swapService,
       cursorCodec: v2CursorCodec,
     });
   }

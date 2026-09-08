@@ -15,6 +15,8 @@ import { bsc } from "viem/chains";
 
 import type { BscChainConfig } from "../../config.js";
 import {
+  erc20AllowanceAbi,
+  erc20ApprovalEvent,
   erc20BalanceAbi,
   erc20IdentityAbi,
   erc20TransferEvent,
@@ -133,6 +135,82 @@ export interface BscPoolEventLog {
   readonly removed: boolean;
 }
 
+/** One decoded ERC-20 `Approval` log (Decision 0035). */
+export interface BscApprovalLog {
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly address: string;
+  readonly owner: string;
+  readonly spender: string;
+  readonly value: bigint;
+  readonly removed: boolean;
+}
+
+export interface BscAllowanceRequestItem {
+  readonly assetId: string;
+  readonly token: string;
+  readonly spender: string;
+}
+
+export interface BscAllowanceResult {
+  readonly assetId: string;
+  readonly spender: string;
+  readonly rawValue: bigint | null;
+  readonly reasonCode: string | null;
+}
+
+export interface BscAllowanceReadResult {
+  readonly head: BscChainHead;
+  readonly allowances: readonly BscAllowanceResult[];
+}
+
+/** Exact call shape LOOP pre-executes and estimates: from is always the wallet. */
+export interface BscCallRequest {
+  readonly from: string;
+  readonly to: string;
+  readonly data: Hex;
+  readonly value: bigint;
+}
+
+export type BscCallOutcome =
+  | { readonly status: "passed"; readonly returnData: Hex }
+  | { readonly status: "reverted"; readonly reasonCode: string };
+
+/**
+ * Fee facts from the endpoint. BSC serves both `eth_maxPriorityFeePerGas` and
+ * a legacy gas price; when the endpoint reports EIP-1559 fields the intent is
+ * built as a type-2 transaction, otherwise as legacy.
+ */
+export type BscFeeData =
+  | {
+      readonly type: "eip1559";
+      readonly maxFeePerGas: bigint;
+      readonly maxPriorityFeePerGas: bigint;
+    }
+  | { readonly type: "legacy"; readonly gasPrice: bigint };
+
+export interface BscTransactionObservation {
+  readonly hash: string;
+  readonly from: string;
+  readonly to: string | null;
+  readonly input: Hex;
+  readonly value: bigint;
+  readonly nonce: number;
+  readonly chainId: number | null;
+  readonly blockNumber: bigint | null;
+}
+
+export interface BscTransactionReceiptObservation {
+  readonly hash: string;
+  readonly status: "success" | "reverted";
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly gasUsed: bigint;
+  readonly effectiveGasPrice: bigint;
+}
+
 export interface BscReadClient {
   readonly chainId: BscChainConfig["chainId"];
   readonly chainReference: BscChainConfig["chainReference"];
@@ -161,7 +239,34 @@ export interface BscReadClient {
   readPoolEventLogs(
     query: BscTransferLogQuery,
   ): Promise<readonly BscPoolEventLog[]>;
+  /** ERC-20 `Approval` logs for the same addresses and range as the transfer lane. */
+  readApprovalLogs(
+    query: BscTransferLogQuery,
+  ): Promise<readonly BscApprovalLog[]>;
   probeEndpoints(): Promise<readonly BscEndpointHealth[]>;
+}
+
+/**
+ * Read-only RPC methods that the wallet-intent flows need on top of the S5a
+ * read surface (Decision 0035). None of them broadcasts: `call` and
+ * `estimateGas` pre-execute a reviewed payload, the rest observe chain state.
+ */
+export interface BscChainCallClient extends BscReadClient {
+  call(request: BscCallRequest): Promise<BscCallOutcome>;
+  /** `null` when the endpoint refuses to estimate (the call would revert). */
+  estimateGas(request: BscCallRequest): Promise<bigint | null>;
+  getFeeData(): Promise<BscFeeData>;
+  /** `pending` nonce so a second intent after an unmined one does not collide. */
+  getTransactionCount(address: string): Promise<number>;
+  getCode(address: string): Promise<Hex>;
+  getTransaction(hash: string): Promise<BscTransactionObservation | null>;
+  getTransactionReceipt(
+    hash: string,
+  ): Promise<BscTransactionReceiptObservation | null>;
+  readAllowances(
+    owner: string,
+    items: readonly BscAllowanceRequestItem[],
+  ): Promise<BscAllowanceReadResult>;
 }
 
 export class BscReadUnavailableError extends Error {
@@ -231,9 +336,55 @@ function normalizeHex(value: string): string {
   return value.toLowerCase();
 }
 
+/**
+ * A revert is a chain fact about the payload, not an endpoint failure. viem
+ * wraps `eth_call` and `eth_estimateGas` execution errors in typed classes;
+ * anything else (transport, rate limit, chain mismatch) propagates so the
+ * caller reports the simulation as unavailable rather than reverted.
+ */
+function isRevertError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const name = "name" in error ? String(error.name) : "";
+  if (
+    name === "CallExecutionError" ||
+    name === "EstimateGasExecutionError" ||
+    name === "ContractFunctionExecutionError" ||
+    name === "ExecutionRevertedError"
+  ) {
+    return true;
+  }
+  const walk = "walk" in error ? error.walk : undefined;
+  if (typeof walk === "function") {
+    const inner = (walk as (fn: (e: unknown) => boolean) => unknown).call(
+      error,
+      (candidate) =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        "name" in candidate &&
+        (candidate.name === "ExecutionRevertedError" ||
+          candidate.name === "InternalRpcError" ||
+          candidate.name === "InvalidInputRpcError"),
+    );
+    return inner !== null && inner !== undefined;
+  }
+  return false;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error.name === "TransactionNotFoundError" ||
+      error.name === "TransactionReceiptNotFoundError")
+  );
+}
+
 export function createBscReadClient(
   options: CreateBscReadClientOptions,
-): BscReadClient {
+): BscChainCallClient {
   const { config } = options;
   const transportFactory = options.transportFactory ?? defaultTransport;
   const now = options.now ?? ((): Date => new Date());
@@ -638,6 +789,231 @@ export function createBscReadClient(
       return Object.freeze(decoded);
     },
 
+    async readApprovalLogs(
+      query: BscTransferLogQuery,
+    ): Promise<readonly BscApprovalLog[]> {
+      await requireVerifiedChain();
+      if (query.toBlock < query.fromBlock) {
+        throw new BscReadUnavailableError("BSC_LOG_RANGE_INVALID");
+      }
+      if (query.toBlock - query.fromBlock + 1n > bscMaximumLogRange) {
+        throw new BscReadUnavailableError("BSC_LOG_RANGE_TOO_WIDE");
+      }
+      if (query.addresses.length === 0) {
+        return Object.freeze([]);
+      }
+      const addresses = [...query.addresses].map(asAddress);
+      const logs = await readLogRangeWith(
+        (range) =>
+          aggregate.getLogs({
+            address: addresses,
+            event: erc20ApprovalEvent,
+            fromBlock: range.from,
+            toBlock: range.to,
+          }),
+        query.fromBlock,
+        query.toBlock,
+      );
+      return Object.freeze(
+        logs.flatMap((log): BscApprovalLog[] => {
+          const owner = log.args.owner;
+          const spender = log.args.spender;
+          const value = log.args.value;
+          if (
+            owner === undefined ||
+            spender === undefined ||
+            value === undefined
+          ) {
+            return [];
+          }
+          return [
+            Object.freeze({
+              transactionHash: normalizeHex(log.transactionHash),
+              logIndex: log.logIndex,
+              blockNumber: log.blockNumber,
+              blockHash: normalizeHex(log.blockHash),
+              address: normalizeHex(log.address),
+              owner: normalizeHex(owner),
+              spender: normalizeHex(spender),
+              value,
+              removed: log.removed,
+            }),
+          ];
+        }),
+      );
+    },
+
+    async call(request: BscCallRequest): Promise<BscCallOutcome> {
+      await requireVerifiedChain();
+      try {
+        const result = await aggregate.call({
+          account: asAddress(request.from),
+          to: asAddress(request.to),
+          data: request.data,
+          value: request.value,
+        });
+        return Object.freeze({
+          status: "passed" as const,
+          returnData: result.data ?? "0x",
+        });
+      } catch (error) {
+        if (isRevertError(error)) {
+          return Object.freeze({
+            status: "reverted" as const,
+            reasonCode: "BSC_CALL_REVERTED",
+          });
+        }
+        throw error;
+      }
+    },
+
+    async estimateGas(request: BscCallRequest): Promise<bigint | null> {
+      await requireVerifiedChain();
+      try {
+        return await aggregate.estimateGas({
+          account: asAddress(request.from),
+          to: asAddress(request.to),
+          data: request.data,
+          value: request.value,
+        });
+      } catch (error) {
+        if (isRevertError(error)) {
+          return null;
+        }
+        throw error;
+      }
+    },
+
+    async getFeeData(): Promise<BscFeeData> {
+      await requireVerifiedChain();
+      const block = await aggregate.getBlock({ blockTag: "latest" });
+      if (block.baseFeePerGas !== null) {
+        let priority: bigint;
+        try {
+          priority = await aggregate.estimateMaxPriorityFeePerGas();
+        } catch {
+          priority = await aggregate.getGasPrice();
+        }
+        // Base fee headroom of 2x plus the tip, so a short base-fee rise while
+        // the user reviews does not strand the transaction.
+        return Object.freeze({
+          type: "eip1559" as const,
+          maxFeePerGas: block.baseFeePerGas * 2n + priority,
+          maxPriorityFeePerGas: priority,
+        });
+      }
+      return Object.freeze({
+        type: "legacy" as const,
+        gasPrice: await aggregate.getGasPrice(),
+      });
+    },
+
+    async getTransactionCount(address: string): Promise<number> {
+      await requireVerifiedChain();
+      return aggregate.getTransactionCount({
+        address: asAddress(address),
+        blockTag: "pending",
+      });
+    },
+
+    async getCode(address: string): Promise<Hex> {
+      await requireVerifiedChain();
+      const code = await aggregate.getCode({ address: asAddress(address) });
+      return code ?? "0x";
+    },
+
+    async getTransaction(
+      hash: string,
+    ): Promise<BscTransactionObservation | null> {
+      await requireVerifiedChain();
+      let transaction;
+      try {
+        transaction = await aggregate.getTransaction({ hash: hash as Hex });
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
+      }
+      return Object.freeze({
+        hash: normalizeHex(transaction.hash),
+        from: normalizeHex(transaction.from),
+        to: transaction.to === null ? null : normalizeHex(transaction.to),
+        input: normalizeHex(transaction.input) as Hex,
+        value: transaction.value,
+        nonce: transaction.nonce,
+        chainId: transaction.chainId ?? null,
+        blockNumber: transaction.blockNumber,
+      });
+    },
+
+    async getTransactionReceipt(
+      hash: string,
+    ): Promise<BscTransactionReceiptObservation | null> {
+      await requireVerifiedChain();
+      let receipt;
+      try {
+        receipt = await aggregate.getTransactionReceipt({ hash: hash as Hex });
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
+      }
+      return Object.freeze({
+        hash: normalizeHex(receipt.transactionHash),
+        status: receipt.status,
+        blockNumber: receipt.blockNumber,
+        blockHash: normalizeHex(receipt.blockHash),
+        gasUsed: receipt.gasUsed,
+        effectiveGasPrice: receipt.effectiveGasPrice,
+      });
+    },
+
+    async readAllowances(
+      owner: string,
+      items: readonly BscAllowanceRequestItem[],
+    ): Promise<BscAllowanceReadResult> {
+      await requireVerifiedChain();
+      const head = await readHead(aggregate);
+      if (items.length === 0) {
+        return Object.freeze({ head, allowances: Object.freeze([]) });
+      }
+      const ownerAddress = asAddress(owner);
+      const results = await aggregate.multicall({
+        allowFailure: true,
+        blockNumber: head.blockNumber,
+        contracts: items.map((item) => ({
+          address: asAddress(item.token),
+          abi: erc20AllowanceAbi,
+          functionName: "allowance" as const,
+          args: [ownerAddress, asAddress(item.spender)] as const,
+        })),
+      });
+      return Object.freeze({
+        head,
+        allowances: Object.freeze(
+          items.map((item, index) => {
+            const result = results[index];
+            if (result === undefined || result.status === "failure") {
+              return Object.freeze({
+                assetId: item.assetId,
+                spender: item.spender,
+                rawValue: null,
+                reasonCode: "BSC_ALLOWANCE_CALL_FAILED",
+              });
+            }
+            return Object.freeze({
+              assetId: item.assetId,
+              spender: item.spender,
+              rawValue: result.result,
+              reasonCode: null,
+            });
+          }),
+        ),
+      });
+    },
+
     async probeEndpoints(): Promise<readonly BscEndpointHealth[]> {
       const observedAt = now().toISOString();
       const probes = await Promise.all(
@@ -718,6 +1094,33 @@ export function createBscReadClient(
 }
 
 /**
+ * Widens a read-only client to the call surface. A composed client already
+ * has the methods; a narrow test double gets rejecting stubs so a
+ * funds-moving path can never silently succeed against a fake that does not
+ * pre-execute.
+ */
+export function asChainCallClient(
+  client: BscReadClient | BscChainCallClient,
+): BscChainCallClient {
+  if ("call" in client && typeof client.call === "function") {
+    return client;
+  }
+  const reject = (): Promise<never> =>
+    Promise.reject(new BscReadUnavailableError("BSC_CALL_CLIENT_NOT_COMPOSED"));
+  return Object.freeze({
+    ...client,
+    call: reject,
+    estimateGas: reject,
+    getFeeData: reject,
+    getTransactionCount: reject,
+    getCode: reject,
+    getTransaction: reject,
+    getTransactionReceipt: reject,
+    readAllowances: reject,
+  });
+}
+
+/**
  * The client used when no RPC endpoint is configured. Every read rejects with
  * a stable reason code; nothing is inferred, cached, or replaced by a fixture.
  */
@@ -726,7 +1129,7 @@ export function createUnavailableBscReadClient(
     readonly confirmations?: number;
     readonly reorgDepthBlocks?: number;
   } = {},
-): BscReadClient {
+): BscChainCallClient {
   const reject = (): Promise<never> =>
     Promise.reject(new BscReadUnavailableError("BSC_RPC_NOT_CONFIGURED"));
   return Object.freeze({
@@ -745,6 +1148,15 @@ export function createUnavailableBscReadClient(
     readBalances: reject,
     readTransferLogs: reject,
     readPoolEventLogs: reject,
+    readApprovalLogs: reject,
+    call: reject,
+    estimateGas: reject,
+    getFeeData: reject,
+    getTransactionCount: reject,
+    getCode: reject,
+    getTransaction: reject,
+    getTransactionReceipt: reject,
+    readAllowances: reject,
     probeEndpoints: (): Promise<readonly BscEndpointHealth[]> =>
       Promise.resolve(Object.freeze([])),
   });

@@ -14,6 +14,18 @@ import {
   type CreateAlertEvaluatorWorkerOptions,
 } from "./alert-evaluator-worker.js";
 import type { AlertV2Repository } from "./database/alert-v2-repository.js";
+import type { AccountWalletRepository } from "./database/account-wallet-repository.js";
+import type { WalletIntentRepository } from "./database/wallet-intent-repository.js";
+import {
+  createWalletIntentReconcileWorker,
+  type CreateWalletIntentReconcileWorkerOptions,
+  type WalletIntentReconcileWorker,
+} from "./wallet-intent-reconcile-worker.js";
+import { createPrivyServerClient } from "./integrations/privy/client.js";
+import {
+  createPrivySwapAdapter,
+  createUnavailablePrivySwapAdapter,
+} from "./integrations/privy/swap-adapter.js";
 import type { MarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
 import type { NotificationRepository } from "./database/notification-repository.js";
 import { createMarketFactService } from "./features/market/market-fact-service.js";
@@ -23,6 +35,7 @@ import type { BscIndexerRepository } from "./database/bsc-indexer-repository.js"
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
 import { bscChainId } from "./features/chain/chain-contract.js";
 import {
+  asChainCallClient,
   createBscReadClient,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
@@ -88,6 +101,8 @@ export interface ReconciliationWorkerDatabase {
   readonly marketFacts?: MarketFactCacheRepository;
   readonly alertsV2?: AlertV2Repository;
   readonly notifications?: NotificationRepository;
+  readonly accountWallets?: AccountWalletRepository;
+  readonly walletIntents?: WalletIntentRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
@@ -122,6 +137,10 @@ export type AlertEvaluatorWorkerFactory = (
   options: CreateAlertEvaluatorWorkerOptions,
 ) => AlertEvaluatorWorker;
 
+export type WalletIntentReconcileWorkerFactory = (
+  options: CreateWalletIntentReconcileWorkerOptions,
+) => WalletIntentReconcileWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -140,6 +159,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
   readonly createBscPoolIndexerWorker?: BscPoolIndexerWorkerFactory;
   readonly createAlertEvaluatorWorker?: AlertEvaluatorWorkerFactory;
+  readonly createWalletIntentReconcileWorker?: WalletIntentReconcileWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
@@ -177,6 +197,9 @@ export async function runReconciliationWorker(
     options.createBscPoolIndexerWorker ?? createBscPoolIndexerWorker;
   const alertEvaluatorWorkerFactory =
     options.createAlertEvaluatorWorker ?? createAlertEvaluatorWorker;
+  const walletIntentReconcileWorkerFactory =
+    options.createWalletIntentReconcileWorker ??
+    createWalletIntentReconcileWorker;
   const readClientFactory =
     options.createBscReadClient ??
     ((config): BscReadClient => createBscReadClient({ config }));
@@ -354,6 +377,33 @@ export async function runReconciliationWorker(
               );
             },
           });
+    // The `wallet-intent-reconcile` lane (Decision 0035) is default-off. It
+    // reads receipts over RPC and Privy action status when credentials exist;
+    // it never signs, broadcasts, or replays.
+    const walletIntentConfig = options.config.walletIntentReconcile;
+    const walletIntentReconcileWorker =
+      walletIntentConfig === null ||
+      indexerReadClient === null ||
+      database.walletIntents === undefined ||
+      database.accountWallets === undefined
+        ? null
+        : walletIntentReconcileWorkerFactory({
+            repository: database.walletIntents,
+            wallets: database.accountWallets,
+            readClient: asChainCallClient(indexerReadClient),
+            swapAdapter:
+              walletIntentConfig.privy === null
+                ? createUnavailablePrivySwapAdapter()
+                : createPrivySwapAdapter(
+                    createPrivyServerClient(walletIntentConfig.privy).wallets(),
+                  ),
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          });
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).
     const communityChannelSyncWorker =
@@ -417,6 +467,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               communityChannelSyncWorker.run(controller.signal),
+            ),
+          ]),
+      ...(walletIntentReconcileWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              walletIntentReconcileWorker.run(controller.signal),
             ),
           ]),
     ];

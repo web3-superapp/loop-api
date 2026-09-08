@@ -20,6 +20,29 @@ export const erc20TransferEvent = parseAbiItem(
 );
 
 /**
+ * Allowance surface for the approvals inventory (Decision 0035). `allowance`
+ * is read through Multicall3; `Approval` logs are indexed by the transfer lane
+ * in the same segment as `Transfer` logs.
+ */
+export const erc20AllowanceAbi = parseAbi([
+  "function allowance(address owner, address spender) view returns (uint256)",
+]);
+
+export const erc20ApprovalEvent = parseAbiItem(
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+);
+
+/**
+ * The only two ERC-20 write selectors LOOP ever encodes. Arbitrary calldata
+ * is never accepted from a client; every intent's `data` is produced here from
+ * reviewed arguments (Decision 0035).
+ */
+export const erc20WriteAbi = parseAbi([
+  "function transfer(address to, uint256 value) returns (bool)",
+  "function approve(address spender, uint256 value) returns (bool)",
+]);
+
+/**
  * PancakeSwap V3 pool identity. A pool row is only created after these reads
  * succeed and both tokens are already in the Asset Registry.
  */

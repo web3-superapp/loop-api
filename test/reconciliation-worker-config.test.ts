@@ -53,6 +53,7 @@ describe("loadReconciliationWorkerConfig", () => {
         staleGraceSeconds: 900,
       },
       alertEvaluator: null,
+      walletIntentReconcile: null,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });

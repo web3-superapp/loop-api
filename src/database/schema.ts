@@ -1,4 +1,4 @@
-export const latestMigrationName = "000020_v2_market_alerts";
+export const latestMigrationName = "000021_v2_wallet_intents";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -74,4 +74,8 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.notifications",
   "public.notification_preference_v2_versions",
   "public.notification_preferences_v2",
+  "public.wallet_intents",
+  "public.wallet_intent_events",
+  "public.indexed_approvals",
+  "public.approval_observations",
 ] as const);

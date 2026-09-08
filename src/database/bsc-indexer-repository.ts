@@ -76,9 +76,31 @@ export interface IndexedTransferRecord extends IndexedTransferInput {
   readonly observedAt: string;
 }
 
+export interface IndexedApprovalInput {
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly assetId: string;
+  readonly ownerAddress: string;
+  readonly spenderAddress: string;
+  readonly rawValue: string;
+}
+
+export interface IndexedApprovalRecord extends IndexedApprovalInput {
+  readonly removed: boolean;
+  readonly observedAt: string;
+}
+
 export interface CommitTransferSegmentInput {
   readonly chainId: string;
   readonly transfers: readonly IndexedTransferInput[];
+  /**
+   * `Approval` logs from the same block range (Decision 0035). They share the
+   * transfer lane's checkpoint and rewind so an approval can never be claimed
+   * for a block whose transfers were not stored, and vice versa.
+   */
+  readonly approvals?: readonly IndexedApprovalInput[];
   readonly checkpoint: {
     readonly lastBlockNumber: string;
     readonly lastBlockHash: string;
@@ -189,6 +211,12 @@ export interface PendingTransferTotal {
   readonly rawValue: string;
 }
 
+export interface ListWalletApprovalsInput {
+  readonly chainId: string;
+  readonly ownerAddress: string;
+  readonly assetIds: readonly string[];
+}
+
 export interface BscIndexerRepository {
   getCheckpoint(
     lane: IndexerLane,
@@ -197,6 +225,20 @@ export interface BscIndexerRepository {
   commitTransferSegment(
     input: CommitTransferSegmentInput,
   ): Promise<IndexerCheckpointRecord>;
+  /**
+   * The latest non-removed `Approval` log per (asset, spender) for one owner,
+   * newest first. It is the inventory candidate list; the current allowance is
+   * always re-read over RPC before it is published.
+   */
+  listLatestApprovals(
+    input: ListWalletApprovalsInput,
+  ): Promise<readonly IndexedApprovalRecord[]>;
+  /** Whether the owner has an indexed outgoing transfer to the address. */
+  hasOutgoingTransferTo(input: {
+    readonly chainId: string;
+    readonly fromAddress: string;
+    readonly toAddress: string;
+  }): Promise<boolean>;
   listWalletTransfers(
     input: ListWalletTransfersInput,
   ): Promise<WalletTransferPage>;
@@ -275,6 +317,114 @@ const transferColumns = `
   removed,
   observed_at
 `;
+
+const approvalRowSchema = z
+  .object({
+    transaction_hash: z
+      .string()
+      .regex(new RegExp(transactionHashPatternSource)),
+    log_index: z.number().int().min(0),
+    block_number: bigintStringSchema,
+    block_hash: z.string().regex(new RegExp(blockHashPatternSource)),
+    asset_id: z.string().regex(new RegExp(assetIdPatternSource)),
+    owner_address: z.string().regex(new RegExp(evmAddressPatternSource)),
+    spender_address: z.string().regex(new RegExp(evmAddressPatternSource)),
+    raw_value: bigintStringSchema,
+    removed: z.boolean(),
+    observed_at: z.date(),
+  })
+  .strict();
+
+const approvalColumns = `
+  transaction_hash,
+  log_index,
+  block_number::text as block_number,
+  block_hash,
+  asset_id,
+  owner_address,
+  spender_address,
+  raw_value::text as raw_value,
+  removed,
+  observed_at
+`;
+
+function mapApproval(row: unknown): IndexedApprovalRecord {
+  const parsed = approvalRowSchema.parse(row);
+  return Object.freeze({
+    transactionHash: parsed.transaction_hash,
+    logIndex: parsed.log_index,
+    blockNumber: parsed.block_number,
+    blockHash: parsed.block_hash,
+    assetId: parsed.asset_id,
+    ownerAddress: parsed.owner_address,
+    spenderAddress: parsed.spender_address,
+    rawValue: parsed.raw_value,
+    removed: parsed.removed,
+    observedAt: parsed.observed_at.toISOString(),
+  });
+}
+
+const indexedApprovalColumnCount = 9;
+
+async function insertApprovals(
+  client: PoolClient,
+  chainId: string,
+  approvals: readonly IndexedApprovalInput[],
+): Promise<void> {
+  const unique = new Map<string, IndexedApprovalInput>();
+  for (const approval of approvals) {
+    unique.set(
+      `${approval.transactionHash}:${String(approval.logIndex)}`,
+      approval,
+    );
+  }
+  const deduplicated = [...unique.values()];
+  for (
+    let offset = 0;
+    offset < deduplicated.length;
+    offset += indexedTransferInsertBatchSize
+  ) {
+    const batch = deduplicated.slice(
+      offset,
+      offset + indexedTransferInsertBatchSize,
+    );
+    const values: unknown[] = [chainId];
+    const tuples = batch.map((approval, index) => {
+      const base = index * indexedApprovalColumnCount + 1;
+      values.push(
+        approval.transactionHash,
+        approval.logIndex,
+        approval.blockNumber,
+        approval.blockHash,
+        approval.assetId,
+        approval.ownerAddress,
+        approval.spenderAddress,
+        approval.rawValue,
+        false,
+      );
+      return `($1, $${String(base + 1)}, $${String(base + 2)}, $${String(base + 3)}::numeric, $${String(base + 4)}, $${String(base + 5)}, $${String(base + 6)}, $${String(base + 7)}, $${String(base + 8)}::numeric, $${String(base + 9)})`;
+    });
+    await client.query<Record<string, unknown>>({
+      text: `
+        insert into public.indexed_approvals (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          asset_id, owner_address, spender_address, raw_value, removed
+        )
+        values ${tuples.join(", ")}
+        on conflict (chain_id, transaction_hash, log_index) do update set
+          block_number = excluded.block_number,
+          block_hash = excluded.block_hash,
+          asset_id = excluded.asset_id,
+          owner_address = excluded.owner_address,
+          spender_address = excluded.spender_address,
+          raw_value = excluded.raw_value,
+          removed = false,
+          observed_at = clock_timestamp()
+      `,
+      values,
+    });
+  }
+}
 
 const poolEventRowSchema = z
   .object({
@@ -555,9 +705,19 @@ export function createPostgresBscIndexerRepository(
             `,
             values: [input.chainId, rewindFrom],
           });
+          // Approvals ride the same lane and rewind with it.
+          await client.query<Record<string, unknown>>({
+            text: `
+              update public.indexed_approvals
+              set removed = true, observed_at = clock_timestamp()
+              where chain_id = $1 and block_number >= $2::numeric
+            `,
+            values: [input.chainId, rewindFrom],
+          });
         }
 
         await insertTransfers(client, input.chainId, input.transfers);
+        await insertApprovals(client, input.chainId, input.approvals ?? []);
 
         const committed = await upsertCheckpoint(
           client,
@@ -581,6 +741,55 @@ export function createPostgresBscIndexerRepository(
       } finally {
         client.release();
       }
+    },
+
+    async listLatestApprovals(
+      input: ListWalletApprovalsInput,
+    ): Promise<readonly IndexedApprovalRecord[]> {
+      if (input.assetIds.length === 0) {
+        return Object.freeze([]);
+      }
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select distinct on (asset_id, spender_address) ${approvalColumns}
+          from public.indexed_approvals
+          where chain_id = $1
+            and owner_address = $2
+            and asset_id = any($3::text[])
+            and not removed
+          order by asset_id, spender_address, block_number desc, log_index desc
+        `,
+        values: [input.chainId, input.ownerAddress, [...input.assetIds]],
+      });
+      const rows = result.rows.map(mapApproval);
+      rows.sort((left, right) => {
+        const byBlock = BigInt(right.blockNumber) - BigInt(left.blockNumber);
+        if (byBlock !== 0n) {
+          return byBlock > 0n ? 1 : -1;
+        }
+        return right.logIndex - left.logIndex;
+      });
+      return Object.freeze(rows);
+    },
+
+    async hasOutgoingTransferTo(input: {
+      readonly chainId: string;
+      readonly fromAddress: string;
+      readonly toAddress: string;
+    }): Promise<boolean> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select 1
+          from public.indexed_transfers
+          where chain_id = $1
+            and from_address = $2
+            and to_address = $3
+            and not removed
+          limit 1
+        `,
+        values: [input.chainId, input.fromAddress, input.toAddress],
+      });
+      return result.rows.length > 0;
     },
 
     async listWalletTransfers(
@@ -820,6 +1029,8 @@ export function createUnavailableBscIndexerRepository(): BscIndexerRepository {
   return Object.freeze({
     getCheckpoint: unavailable,
     commitTransferSegment: unavailable,
+    listLatestApprovals: unavailable,
+    hasOutgoingTransferTo: unavailable,
     listWalletTransfers: unavailable,
     sumPendingIncoming: unavailable,
     commitPoolEventSegment: unavailable,

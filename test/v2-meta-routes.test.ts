@@ -405,6 +405,9 @@ describe("LOOP API V2 meta policy gates", () => {
       priceAlertsRuntimeAvailable: false,
       notificationsFeedRuntimeAvailable: false,
       communicationRuntimeAvailable: false,
+      walletIntentRuntimeAvailable: false,
+      bscWritesEnabled: false,
+      privySwapRuntimeAvailable: false,
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
@@ -437,6 +440,8 @@ describe("LOOP API V2 meta policy gates", () => {
       "market",
       "chain",
       "wallet",
+      "swap",
+      "sendApprovals",
       "notifications",
       "profile",
       "watchlist",
@@ -449,6 +454,8 @@ describe("LOOP API V2 meta policy gates", () => {
       "market",
       "chain",
       "wallet",
+      "swap",
+      "sendApprovals",
       "notifications",
       "profile",
       "watchlist",

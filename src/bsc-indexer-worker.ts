@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   BscIndexerRepository,
+  IndexedApprovalInput,
   IndexedTransferInput,
 } from "./database/bsc-indexer-repository.js";
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
@@ -207,6 +208,14 @@ export function createBscIndexerWorker(
       fromBlock,
       toBlock,
     });
+    // Approval logs are read for the same addresses and range and committed
+    // under the same checkpoint (Decision 0035), so the approvals inventory
+    // can never be ahead of or behind the transfer history.
+    const approvalLogs = await options.readClient.readApprovalLogs({
+      addresses: tokens.map((token) => token.address),
+      fromBlock,
+      toBlock,
+    });
     if (isAborted(signal)) {
       return idleResult("aborted", null);
     }
@@ -222,6 +231,17 @@ export function createBscIndexerWorker(
       rawValue: log.value.toString(10),
     }));
 
+    const approvals: IndexedApprovalInput[] = approvalLogs.map((log) => ({
+      transactionHash: log.transactionHash,
+      logIndex: log.logIndex,
+      blockNumber: log.blockNumber.toString(10),
+      blockHash: log.blockHash,
+      assetId: assetIdForAddress(options.chainId, log.address),
+      ownerAddress: log.owner,
+      spenderAddress: log.spender,
+      rawValue: log.value.toString(10),
+    }));
+
     const toBlockHash =
       toBlock === head.blockNumber
         ? head.blockHash
@@ -233,6 +253,7 @@ export function createBscIndexerWorker(
     await options.repository.commitTransferSegment({
       chainId: options.chainId,
       transfers,
+      approvals,
       checkpoint: {
         lastBlockNumber: toBlock.toString(10),
         lastBlockHash: toBlockHash,

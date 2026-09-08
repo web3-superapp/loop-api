@@ -15,6 +15,11 @@ import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-s
 import type { MarketReadService } from "../../features/market/market-read-service.js";
 import type { AlertV2Service } from "../../features/alerts/alert-v2-service.js";
 import type { NotificationService } from "../../features/alerts/notification-service.js";
+import type { ApprovalService } from "../../features/wallet-intents/approval-service.js";
+import type { SendService } from "../../features/wallet-intents/send-service.js";
+import type { SwapService } from "../../features/wallet-intents/swap-service.js";
+import type { WalletIntentService } from "../../features/wallet-intents/wallet-intent-service.js";
+import { registerV2ApprovalRoutes } from "./approvals.js";
 import { registerV2ChainRoutes } from "./chain.js";
 import { registerV2CommunicationRoutes } from "./communication.js";
 import { registerV2CommunityRoutes } from "./community.js";
@@ -24,7 +29,9 @@ import { registerV2NotificationRoutes } from "./notifications.js";
 import { registerV2ProfileRoutes } from "./profile.js";
 import { registerV2SearchRoutes } from "./search.js";
 import { registerV2SessionRoutes } from "./session.js";
+import { registerV2SwapRoutes } from "./swap.js";
 import { registerV2WalletRoutes } from "./wallet.js";
+import { registerV2WalletIntentRoutes } from "./wallet-intents.js";
 import { registerV2WatchlistRoutes } from "./watchlist.js";
 
 /**
@@ -49,6 +56,10 @@ export interface V2RouteDependencies {
   readonly notificationService: NotificationService;
   readonly chatService: V2ChatService;
   readonly voiceRoomService: VoiceRoomService;
+  readonly walletIntentService: WalletIntentService;
+  readonly sendService: SendService;
+  readonly approvalService: ApprovalService;
+  readonly swapService: SwapService;
   readonly cursorCodec: V2CursorCodec | null;
 }
 
@@ -63,7 +74,8 @@ export type V2ModuleRegistrar = (
  * and its capability reports MODULE_RUNTIME_NOT_REGISTERED. Each delivered
  * module replaces its entry in its own numbered decision (`profile`: 0030;
  * `community` and `search`: 0031; `communication`: 0032; `chain`, `wallet`,
- * and `watchlist`: 0033; `market` and `notifications`: 0034).
+ * and `watchlist`: 0033; `market` and `notifications`: 0034; `swap` and
+ * `sendApprovals`: 0035).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
@@ -74,8 +86,11 @@ export const v2ModuleRegistrars: Readonly<
   market: registerV2MarketRoutes,
   chain: registerV2ChainRoutes,
   wallet: registerV2WalletRoutes,
-  swap: null,
-  sendApprovals: null,
+  swap: registerV2SwapRoutes,
+  sendApprovals: (app, dependencies): void => {
+    registerV2WalletIntentRoutes(app, dependencies);
+    registerV2ApprovalRoutes(app, dependencies);
+  },
   launch: null,
   mining: null,
   notifications: registerV2NotificationRoutes,

@@ -75,6 +75,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/account/me",
       "/v2/alerts",
       "/v2/alerts/{alertId}",
+      "/v2/approvals",
+      "/v2/approvals/{assetId}/{spender}",
       "/v2/assets/{assetId}",
       "/v2/blocks",
       "/v2/chain/status",
@@ -118,6 +120,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/search",
       "/v2/session/bootstrap",
       "/v2/session/logout",
+      "/v2/swap/quote",
       "/v2/video/token",
       "/v2/voice-rooms/{voiceRoomId}",
       "/v2/voice-rooms/{voiceRoomId}/end",
@@ -127,6 +130,16 @@ describe("committed OpenAPI artifact", () => {
       "/v2/voice-rooms/{voiceRoomId}/leave",
       "/v2/voice-rooms/{voiceRoomId}/mute-all",
       "/v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}",
+      "/v2/wallet-intents",
+      "/v2/wallet-intents/approve",
+      "/v2/wallet-intents/revoke",
+      "/v2/wallet-intents/send",
+      "/v2/wallet-intents/send/preflight",
+      "/v2/wallet-intents/swap",
+      "/v2/wallet-intents/{intentId}",
+      "/v2/wallet-intents/{intentId}/broadcast-report",
+      "/v2/wallet-intents/{intentId}/cancel",
+      "/v2/wallet-intents/{intentId}/execute",
       "/v2/wallets",
       "/v2/wallets/active",
       "/v2/wallets/{walletId}/activity",
@@ -135,7 +148,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(80);
+    expect(operationIds).toHaveLength(93);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
