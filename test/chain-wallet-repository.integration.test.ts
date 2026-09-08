@@ -58,6 +58,9 @@ async function cleanFixtures(): Promise<void> {
     `delete from public.indexer_checkpoints where chain_id = 'eip155:56'`,
   );
   await pool.query(
+    `delete from public.indexed_approvals where chain_id = 'eip155:56'`,
+  );
+  await pool.query(
     `delete from public.indexed_transfers where chain_id = 'eip155:56'`,
   );
   await pool.query({

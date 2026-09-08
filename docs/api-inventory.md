@@ -236,6 +236,37 @@ append-only event and one context notification per dedupe window
 (`ALERT_NOTIFICATION_DEDUPE_SECONDS`) in a single transaction. No push Provider
 exists; the feed is the only delivery surface.
 
+### V2 wallet-intent, swap, and approvals modules (Decision 0035, `V2_MODULES_ENABLED=sendApprovals,swap`)
+
+| Method and path                                       | Request                                                                                                    | Success projection                                                                                            | Interface     | Capability                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------- |
+| `POST /v2/wallet-intents/send/preflight`              | Write headers, no `Idempotency-Key`; `{walletId, address, chainId?}`                                       | Checksummed recipient, `isContract`, `isFirstRecipient`, screening `unavailable`, warning keys                | `implemented` | `implemented`; GoPlus address screening `blocked-provider`                      |
+| `POST /v2/wallet-intents/send`                        | `Idempotency-Key`; `{walletId, assetId, amount, recipientAddress}`                                         | Immutable send intent: review, `unsignedTransaction`, `reviewSha256`, `simulation`, `policy`, `expiresAt`     | `implemented` | `blocked-product-legal`; needs `BSC_WRITES_ENABLED` + canary allowlist/ceiling  |
+| `POST /v2/wallet-intents/approve`                     | `Idempotency-Key`; `{walletId, assetId, spenderAddress, allowance}`                                        | Approve intent with decoded `approve(spender, value)`; unlimited is `POLICY_BLOCKED` under canary             | `implemented` | `blocked-product-legal`; same switch                                            |
+| `POST /v2/wallet-intents/revoke`                      | `Idempotency-Key`; `{walletId, assetId, spenderAddress}`                                                   | `approve(spender, 0)` intent                                                                                  | `implemented` | `blocked-product-legal`; same switch                                            |
+| `POST /v2/wallet-intents/{intentId}/broadcast-report` | `Idempotency-Key`; `{txHash}`                                                                              | `submitted` after `eth_getTransactionByHash` matches the payload; mismatch is `VALIDATION_FAILED` and audited | `implemented` | `blocked-product-legal`; device broadcast unverified                            |
+| `GET /v2/wallet-intents/{intentId}`                   | —                                                                                                          | State machine, hash, Provider action ID, reason code, receipt with confirmations                              | `implemented` | `implemented`                                                                   |
+| `GET /v2/wallet-intents`                              | `cursor` or `limit` (1–50)                                                                                 | Newest-first intents                                                                                          | `implemented` | `implemented`                                                                   |
+| `POST /v2/wallet-intents/{intentId}/cancel`           | `Idempotency-Key`; no body                                                                                 | `cancelled` for open intents; later states are `DATA_STALE`                                                   | `implemented` | `implemented`                                                                   |
+| `POST /v2/swap/quote`                                 | Write headers, no `Idempotency-Key`; `{walletId, sourceAssetId, destinationAssetId, amount, slippageBps?}` | Privy quote snapshot with 30 s expiry, price impact decision, `swapPolicyV1`, canary value                    | `implemented` | `blocked-provider`; Privy BSC Swap evidence pending                             |
+| `POST /v2/wallet-intents/swap`                        | `Idempotency-Key`; `{walletId, quoteId, confirmPriceImpact?}`                                              | Swap intent with `authorizationPayload` the device signs                                                      | `implemented` | `blocked-provider`; evidence pending                                            |
+| `POST /v2/wallet-intents/{intentId}/execute`          | `Idempotency-Key`; `{authorizationSignature}`                                                              | One `wallets.swap.execute`; `submitted` / `failed` / `unknown`; a second call is `SUBMISSION_UNKNOWN`         | `implemented` | `blocked-provider`; never run locally                                           |
+| `GET /v2/approvals?walletId=`                         | —                                                                                                          | Spenders from indexed `Approval` events with live `allowance()` reads at one block                            | `implemented` | `blocked-provider`; `INDEXING_DELAYED` until the transfer lane has a checkpoint |
+| `GET /v2/approvals/{assetId}/{spender}?walletId=`     | —                                                                                                          | One live allowance                                                                                            | `implemented` | `implemented`; GoPlus approval facts `unavailable`                              |
+
+Every funds action is one immutable intent (`wallet_intents`): the canonical
+payload and the public review are generated from one source and
+`reviewSha256` is the digest the client re-checks before invoking the signer.
+Two signing modes exist: send/approve/revoke are broadcast by the device
+through Privy `eth_sendTransaction` on the server-built `unsignedTransaction`,
+and swap is one server-side `wallets.swap.execute` authorized by the device's
+signature over `authorizationPayload`. `BSC_WRITES_ENABLED` (default false)
+keeps every prepare, report, quote, and execute at `CAPABILITY_UNAVAILABLE`;
+enabling it is a canary bounded by `BSC_WRITE_CANARY_ASSETS` and
+`BSC_WRITE_CANARY_MAX_USD`. Ambiguous Provider results become `unknown` and
+are reconciled by the default-off `wallet-intent-reconcile` worker lane, never
+replayed. No transaction was broadcast or executed locally.
+
 ### V2 watchlist module (Decision 0033, `V2_MODULES_ENABLED=watchlist`)
 
 | Method and path     | Request                                           | Success projection                                           | Interface     | Capability                                              |
@@ -304,25 +335,26 @@ LOOP endpoint: the first two are client-side Stream SDK calls and the last is
 point. `V2_MODULES_ENABLED` selects which module routes may register.
 `profile` (Decision 0030), `community` and `search` (0031), `communication`
 (0032), `chain`, `wallet`, and `watchlist` (0033), and `market` and
-`notifications` (0034) ship their registrars;
+`notifications` (0034), and `swap` and `sendApprovals` (0035) ship their
+registrars;
 every other module below has none yet, so enabling it registers no route and
 only changes its capability projection.
 
-| Module ID       | Capability projected                                                        | Registrar   | Status                                                                                  |
-| --------------- | --------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
-| `community`     | `community`                                                                 | shipped     | routes and capability `implemented` (Decision 0031)                                     |
-| `communication` | `communityChat`                                                             | shipped     | routes and capability `implemented` (Decision 0032)                                     |
-| `search`        | `search`                                                                    | shipped     | routes and capability `implemented` (Decision 0031)                                     |
-| `market`        | `marketRead`                                                                | shipped     | routes and capability `implemented` (Decision 0034)                                     |
-| `chain`         | `bscRead`                                                                   | shipped     | routes and capability `implemented` (Decision 0033)                                     |
-| `wallet`        | `walletRead`                                                                | shipped     | routes and capability `implemented` (Decision 0033)                                     |
-| `swap`          | `privySwap`                                                                 | not shipped | gate `implemented`; routes pending D13 Go/No-Go                                         |
-| `sendApprovals` | `sendApprovals`                                                             | not shipped | gate `implemented`; routes pending D14                                                  |
-| `launch`        | `launch`                                                                    | not shipped | gate `implemented`; routes pending D17/D18 and 02 document                              |
-| `mining`        | `mining`                                                                    | not shipped | gate `implemented`; routes pending D19 formula freeze                                   |
-| `notifications` | `priceAlerts`, `notificationsFeed`; `pushNotifications` stays `unavailable` | shipped     | alerts, feed, and preferences `implemented` (Decision 0034); push `explicitly-disabled` |
-| `profile`       | `profile`                                                                   | shipped     | routes and capability `implemented` (Decision 0030)                                     |
-| `watchlist`     | `watchlist`                                                                 | shipped     | routes and capability `implemented` (Decision 0033)                                     |
+| Module ID       | Capability projected                                                        | Registrar   | Status                                                                                                                                      |
+| --------------- | --------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `community`     | `community`                                                                 | shipped     | routes and capability `implemented` (Decision 0031)                                                                                         |
+| `communication` | `communityChat`                                                             | shipped     | routes and capability `implemented` (Decision 0032)                                                                                         |
+| `search`        | `search`                                                                    | shipped     | routes and capability `implemented` (Decision 0031)                                                                                         |
+| `market`        | `marketRead`                                                                | shipped     | routes and capability `implemented` (Decision 0034)                                                                                         |
+| `chain`         | `bscRead`                                                                   | shipped     | routes and capability `implemented` (Decision 0033)                                                                                         |
+| `wallet`        | `walletRead`                                                                | shipped     | routes and capability `implemented` (Decision 0033)                                                                                         |
+| `swap`          | `privySwap`                                                                 | shipped     | routes `implemented` (Decision 0035); `available` only with `BSC_WRITES_ENABLED`, Privy credentials, and a verified chain; evidence pending |
+| `sendApprovals` | `sendApprovals`                                                             | shipped     | routes `implemented` (Decision 0035); `available` only with `BSC_WRITES_ENABLED` and a verified chain                                       |
+| `launch`        | `launch`                                                                    | not shipped | gate `implemented`; routes pending D17/D18 and 02 document                                                                                  |
+| `mining`        | `mining`                                                                    | not shipped | gate `implemented`; routes pending D19 formula freeze                                                                                       |
+| `notifications` | `priceAlerts`, `notificationsFeed`; `pushNotifications` stays `unavailable` | shipped     | alerts, feed, and preferences `implemented` (Decision 0034); push `explicitly-disabled`                                                     |
+| `profile`       | `profile`                                                                   | shipped     | routes and capability `implemented` (Decision 0030)                                                                                         |
+| `watchlist`     | `watchlist`                                                                 | shipped     | routes and capability `implemented` (Decision 0033)                                                                                         |
 
 An enabled module without a registrar reports
 `availability: unavailable, reasonCode: MODULE_RUNTIME_NOT_REGISTERED`. The

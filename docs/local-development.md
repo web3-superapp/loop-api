@@ -188,6 +188,30 @@ regardless (`ALIAS_RESERVED`). Avatar upload stays unavailable
 agent keys, APNs private keys, Firebase service accounts, and Stream server
 secrets must never be placed in tracked files or command examples.
 
+## V2 wallet intents: Send, approvals, Swap (Decision 0035)
+
+The `sendApprovals` and `swap` modules register their routes with the module
+gate, but every funds-moving call stays `CAPABILITY_UNAVAILABLE` until the
+write switch is on:
+
+```sh
+V2_MODULES_ENABLED=chain,wallet,market,swap,sendApprovals
+BSC_RPC_URLS=https://…            # a verified chain-56 endpoint
+BSC_WRITES_ENABLED=true
+BSC_WRITE_CANARY_ASSETS=eip155:56:native,eip155:56:0x…   # allowlist
+BSC_WRITE_CANARY_MAX_USD=20
+```
+
+`market` is needed because the canary ceiling is enforced on the USD value of
+every intent; an amount that cannot be priced is refused. Prepare builds the
+exact unsigned transaction and pre-executes it over RPC; nothing here signs or
+broadcasts. The approvals inventory needs the `erc20_transfer` lane to have a
+checkpoint (`pnpm indexer:backfill --from <block>` also indexes `Approval`
+logs). The `wallet-intent-reconcile` worker lane
+(`WALLET_INTENT_RECONCILE_ENABLED=true`) reads receipts and Privy action
+status; it needs `BSC_RPC_URLS` and, for Swap status, the Privy credential
+pair. See `docs/frontend-v2-wallet-intents-api.md` for the client contract.
+
 ## Standalone reconciliation worker
 
 Run the worker in a second terminal after PostgreSQL migrations are current:

@@ -40,6 +40,9 @@ async function cleanFixtures(): Promise<void> {
     values: [`${testPrivyPrefix}%`],
   });
   await pool.query(
+    `delete from public.indexed_approvals where chain_id = 'eip155:56'`,
+  );
+  await pool.query(
     `delete from public.indexed_transfers where chain_id = 'eip155:56'`,
   );
   // Pools (S5b) reference registry assets; drop any pool on the fixture
