@@ -189,7 +189,11 @@ const projectProjectionSchema = {
         { type: "null" },
       ],
     },
-    version: { type: "integer", minimum: 1 },
+    version: {
+      anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+      description:
+        "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project.",
+    },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
     configVersion: { type: "string", const: launchConfigVersion },
@@ -332,10 +336,22 @@ export const overviewResourceSchema = {
     segments: {
       type: "object",
       additionalProperties: false,
-      required: ["live", "upcoming", "ended"],
+      required: ["live", "upcoming", "awaitingSchedule", "ended"],
       properties: {
         live: { type: "array", maxItems: 200, items: launchSummarySchema },
-        upcoming: { type: "array", maxItems: 200, items: launchSummarySchema },
+        upcoming: {
+          type: "array",
+          maxItems: 200,
+          items: launchSummarySchema,
+          description: "scheduleStatus = scheduled only.",
+        },
+        awaitingSchedule: {
+          type: "array",
+          maxItems: 200,
+          items: launchSummarySchema,
+          description:
+            "scheduleStatus = unscheduled: approved catalog entries with no schedule yet; never merged into upcoming.",
+        },
         ended: { type: "array", maxItems: 200, items: launchSummarySchema },
       },
     },
@@ -652,7 +668,7 @@ export const milestonesResourceSchema = {
           evidence: {
             type: "object",
             additionalProperties: false,
-            required: ["digest", "recordedAt", "reviewer"],
+            required: ["digest", "recordedAt", "observedAt", "reviewer"],
             properties: {
               digest: {
                 anyOf: [
@@ -660,7 +676,16 @@ export const milestonesResourceSchema = {
                   { type: "null" },
                 ],
               },
-              recordedAt: nullableDateTimeSchema,
+              recordedAt: {
+                ...nullableDateTimeSchema,
+                description:
+                  "Server clock when the reviewer recorded the evidence.",
+              },
+              observedAt: {
+                ...nullableDateTimeSchema,
+                description:
+                  "Operator-supplied platform time the evidence became verifiable; null when not supplied. Never derived from recordedAt.",
+              },
               reviewer: {
                 anyOf: [
                   { type: "string", pattern: "^[a-z][a-z0-9_.-]{0,63}$" },

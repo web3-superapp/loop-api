@@ -91,7 +91,10 @@ export interface VenueMilestoneRecord {
   readonly marketType: VenueMilestoneMarketType;
   readonly state: VenueMilestoneState;
   readonly evidenceDigest: string | null;
+  /** Server clock when the reviewer recorded the evidence. */
   readonly evidenceRecordedAt: string | null;
+  /** Operator-supplied platform time the evidence became verifiable, or null. */
+  readonly evidenceObservedAt: string | null;
   readonly reviewer: string | null;
   readonly version: number;
   readonly updatedAt: string;
@@ -129,6 +132,7 @@ export interface ReplaceLaunchProjectInput {
   readonly projectId: string;
   readonly expectedVersion: number;
   readonly values: LaunchProjectValues;
+  readonly requestId: string;
 }
 
 export interface SubmitLaunchProjectInput {
@@ -152,6 +156,7 @@ export interface RecordVenueMilestoneInput {
   readonly marketType: VenueMilestoneMarketType;
   readonly state: VenueMilestoneState;
   readonly evidenceDigest: string | null;
+  readonly evidenceObservedAt: string | null;
   readonly reviewer: string | null;
   readonly requestId: string;
 }

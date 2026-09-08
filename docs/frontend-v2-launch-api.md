@@ -141,7 +141,8 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 
 ### 3.5 `GET /v2/launch/projects/{projectId}`
 
-本人可见任何状态；他人只可见 `approved`；否则 `404`。
+本人可见任何状态；他人只可见 `approved`，且非本人投影中 `reviewReasonCode`、`submittedAt`、
+`reviewedAt`、`version` 一律为 `null`（审核轨迹与 CAS 版本只属于申请人）；否则 `404`。
 
 ## 4. 目录与详情
 
@@ -149,7 +150,7 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 
 ```json
 {
-  "segments": { "live": [], "upcoming": [ { …LaunchSummary } ], "ended": [] },
+  "segments": { "live": [], "upcoming": [], "awaitingSchedule": [ { …LaunchSummary } ], "ended": [] },
   "graduated": { "status": "unavailable", "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING" },
   "myEligibility": { "status": "unavailable", "reasonCode": "TIER_MODE_PENDING" },
   "staking": { "status": "unavailable", "reasonCode": "STAKING_CONTRACT_PENDING" },
@@ -186,7 +187,8 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 }
 ```
 
-- 分段只按 `scheduleStatus`：`live` = `live`；`upcoming` = `scheduled|unscheduled`；
+- 分段只按 `scheduleStatus`：`live` = `live`；`upcoming` = `scheduled`；
+  `awaitingSchedule` = `unscheduled`（已批准、未排期，独立分段，**不得**并入"即将开始"）；
   `ended` = `ended`。"已毕业"是流动性轴的投影，本步恒 unavailable，**不要**用
   `scheduleStatus` 推断。
 - `contractAddress` 恒 `null`，`configVersion` 为已确认配置版本或 `null`（显示"待确认"）。
@@ -298,7 +300,12 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
       "venue": "lbank",
       "marketType": "spot",
       "state": "APPLIED",
-      "evidence": { "digest": null, "recordedAt": null, "reviewer": null },
+      "evidence": {
+        "digest": null,
+        "recordedAt": null,
+        "observedAt": null,
+        "reviewer": null
+      },
       "version": 2,
       "updatedAt": "…"
     }
@@ -310,6 +317,8 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
 `venue ∈ lbank|binance|bithumb`，`marketType ∈ spot|alpha|perpetual`，
 `state ∈ PREPARING|APPLIED|EVIDENCE_PENDING|LISTED|FEATURED|REJECTED|DEFERRED|EVIDENCE_INVALID|DELISTED`。
 只有 `LISTED/FEATURED` 带证据 digest/时间/复核人；Alpha 不等于现货，不可互推。
+`evidence.recordedAt` = 复核人记录证据时的服务端时钟；`evidence.observedAt` = 操作员提供的
+"证据在平台上可核验的时间"（可空，不从 `recordedAt` 推导）；页面把两者分开显示。
 
 ### 4.9 `GET /v2/launch/economy`（loop-economy）
 
@@ -339,5 +348,5 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
 ## 6. 联调脚本（Dev）
 
 - `pnpm launch:review <projectId> approve` → 目录出现该 launch（`unscheduled`）。
-- `pnpm launch:milestone <projectId> lbank spot APPLIED`；`… LISTED --evidence <url> --reviewer ops.alice`。
+- `pnpm launch:milestone <projectId> lbank spot APPLIED`；`… LISTED --evidence <url> --reviewer ops.alice [--observed-at 2026-09-01T08:00:00+08:00]`。
 - 两者在 `NODE_ENV=production` 下拒绝执行。

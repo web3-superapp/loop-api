@@ -106,7 +106,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchOverview",
         summary: "Get the Launch landing catalog",
         description:
-          "Approved launches grouped by scheduleStatus (live / upcoming / ended) from PostgreSQL. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
+          "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -245,6 +245,7 @@ export function registerV2LaunchRoutes(
         principal: requireAuthenticatedLoopPrincipal(request),
         projectId: params.projectId,
         body: request.body,
+        requestId: request.id,
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
@@ -289,7 +290,7 @@ export function registerV2LaunchRoutes(
         operationId: "listV2LaunchProjectMilestones",
         summary: "List external venue milestones for a project",
         description:
-          "One independent state machine per venue + market type (03 §8.4). LISTED and FEATURED carry an evidence digest, time, and reviewer; Alpha never implies spot or perpetual. Recorded only by the Dev-only script `pnpm launch:milestone`.",
+          "One independent state machine per venue + market type (03 §8.4). LISTED and FEATURED carry an evidence digest, the server time it was recorded, the operator-supplied platform time it became verifiable (observedAt, nullable), and the reviewer; Alpha never implies spot or perpetual. Recorded only by the Dev-only script `pnpm launch:milestone`.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

@@ -274,6 +274,10 @@ export function up(pgm: MigrationBuilder): void {
       created_at timestamptz not null default clock_timestamp(),
       updated_at timestamptz not null default clock_timestamp(),
       constraint launch_rounds_index_unique unique (launch_id, round_index),
+      constraint launch_rounds_config_fk
+        foreign key (launch_id, config_version)
+        references public.launch_configs (launch_id, config_version)
+        on delete restrict,
       constraint launch_rounds_index_check check (round_index >= 1),
       constraint launch_rounds_version_check
         check (config_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'),
@@ -493,6 +497,7 @@ export function up(pgm: MigrationBuilder): void {
       state text not null default 'PREPARING',
       evidence_digest text,
       evidence_recorded_at timestamptz,
+      evidence_observed_at timestamptz,
       reviewer text,
       record_version bigint not null default 1,
       created_at timestamptz not null default clock_timestamp(),
@@ -514,6 +519,8 @@ export function up(pgm: MigrationBuilder): void {
           (evidence_digest is null) = (evidence_recorded_at is null)
           and (evidence_digest is null) = (reviewer is null)
         ),
+      constraint venue_milestones_observed_check
+        check (evidence_observed_at is null or evidence_digest is not null),
       constraint venue_milestones_listed_evidence_check
         check (state not in ('LISTED', 'FEATURED') or evidence_digest is not null),
       constraint venue_milestones_reviewer_check
@@ -523,7 +530,7 @@ export function up(pgm: MigrationBuilder): void {
     );
 
     comment on table public.venue_milestones is
-      'Independent listing milestone per project + venue + market type (03 §8.4). LISTED and FEATURED require a verifiable evidence digest, time, and reviewer; Alpha never implies spot or perpetual.';
+      'Independent listing milestone per project + venue + market type (03 §8.4). LISTED and FEATURED require a verifiable evidence digest, time, and reviewer; Alpha never implies spot or perpetual. evidence_recorded_at is the server clock when the reviewer recorded it; evidence_observed_at is the operator-supplied platform time the evidence became verifiable (nullable).';
 
     -- ------------------------------------------------------------------
     -- Mining skeleton

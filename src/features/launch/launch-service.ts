@@ -86,6 +86,8 @@ export interface LaunchOverviewResource {
   readonly segments: {
     readonly live: readonly LaunchSummaryProjection[];
     readonly upcoming: readonly LaunchSummaryProjection[];
+    /** Approved but not yet scheduled: its own segment, never "upcoming". */
+    readonly awaitingSchedule: readonly LaunchSummaryProjection[];
     readonly ended: readonly LaunchSummaryProjection[];
   };
   readonly graduated: UnavailableProjection;
@@ -207,6 +209,7 @@ export interface VenueMilestoneProjection {
   readonly evidence: {
     readonly digest: string | null;
     readonly recordedAt: string | null;
+    readonly observedAt: string | null;
     readonly reviewer: string | null;
   };
   readonly version: number;
@@ -256,6 +259,7 @@ export interface LaunchService {
     input: PrincipalInput & {
       readonly projectId: string;
       readonly body: unknown;
+      readonly requestId: string;
     },
   ): Promise<LaunchProjectResource>;
   submitProject(
@@ -311,9 +315,15 @@ function translate(error: unknown): never {
   throw error;
 }
 
+/**
+ * Public projection. A non-owner only sees an approved project and never its
+ * review trail or compare-and-swap version (those are the applicant's).
+ */
 function projectProjection(
   record: LaunchProjectRecord,
+  viewer: "owner" | "public" = "owner",
 ): LaunchProjectProjection {
+  const owner = viewer === "owner";
   return Object.freeze({
     projectId: record.projectId,
     name: record.name,
@@ -322,17 +332,17 @@ function projectProjection(
     officialLinks: record.officialLinks,
     materialVersion: record.materialVersion,
     reviewStatus: record.reviewStatus,
-    reviewReasonCode: record.reviewReasonCode,
+    reviewReasonCode: owner ? record.reviewReasonCode : null,
     kyb: Object.freeze({
       status: "unavailable" as const,
       state: record.kybStatus,
       reasonCode: launchReasonCodes.kybProviderNotSelected,
     }),
     attachments: unavailable(launchReasonCodes.attachmentStorageNotSelected),
-    submittedAt: record.submittedAt,
-    reviewedAt: record.reviewedAt,
+    submittedAt: owner ? record.submittedAt : null,
+    reviewedAt: owner ? record.reviewedAt : null,
     launchId: record.launchId,
-    version: record.version,
+    version: owner ? record.version : null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     configVersion: launchConfigVersion,
@@ -423,6 +433,7 @@ function milestoneProjection(
     evidence: Object.freeze({
       digest: record.evidenceDigest,
       recordedAt: record.evidenceRecordedAt,
+      observedAt: record.evidenceObservedAt,
       reviewer: record.reviewer,
     }),
     version: record.version,
@@ -508,9 +519,12 @@ export function createLaunchService(
             ),
             upcoming: Object.freeze(
               summaries.filter(
-                (launch) =>
-                  launch.scheduleStatus === "scheduled" ||
-                  launch.scheduleStatus === "unscheduled",
+                (launch) => launch.scheduleStatus === "scheduled",
+              ),
+            ),
+            awaitingSchedule: Object.freeze(
+              summaries.filter(
+                (launch) => launch.scheduleStatus === "unscheduled",
               ),
             ),
             ended: Object.freeze(
@@ -595,7 +609,7 @@ export function createLaunchService(
               })
             : null;
         return Object.freeze({
-          items: Object.freeze(page.map(projectProjection)),
+          items: Object.freeze(page.map((record) => projectProjection(record))),
           nextCursor,
           contractVersion: v2ContractVersion,
         });
@@ -633,7 +647,10 @@ export function createLaunchService(
           input.projectId,
         );
         return Object.freeze({
-          project: projectProjection(record),
+          project: projectProjection(
+            record,
+            record.ownerUserId === input.principal.userId ? "owner" : "public",
+          ),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -651,6 +668,7 @@ export function createLaunchService(
           projectId: parseLaunchOpaqueId(input.projectId),
           expectedVersion: request.expectedVersion,
           values: request.project,
+          requestId: input.requestId,
         });
         return Object.freeze({
           project: projectProjection(record),

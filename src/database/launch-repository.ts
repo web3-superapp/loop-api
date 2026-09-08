@@ -166,6 +166,7 @@ const milestoneRowSchema = z
     state: z.enum(venueMilestoneStates),
     evidence_digest: sha256Schema.nullable(),
     evidence_recorded_at: dateSchema.nullable(),
+    evidence_observed_at: dateSchema.nullable(),
     reviewer: z.string().nullable(),
     record_version: z.coerce.number().int().min(1),
     updated_at: dateSchema,
@@ -282,6 +283,7 @@ function mapMilestone(raw: unknown): VenueMilestoneRecord {
     state: row.state,
     evidenceDigest: row.evidence_digest,
     evidenceRecordedAt: toNullableIsoString(row.evidence_recorded_at),
+    evidenceObservedAt: toNullableIsoString(row.evidence_observed_at),
     reviewer: row.reviewer,
     version: row.record_version,
     updatedAt: toIsoString(row.updated_at),
@@ -520,6 +522,7 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
           .int()
           .min(1)
           .parse(rawInput.expectedVersion);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
         return await withV2Transaction(pool, unavailable, async (client) => {
           const current = await readProject(client, projectId, true);
           if (current === null || current.ownerUserId !== ownerUserId) {
@@ -565,7 +568,7 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
             toStatus: current.reviewStatus,
             reasonCode: null,
             idempotencyRecordId: null,
-            requestId: randomUUID(),
+            requestId,
           });
           const next = await readProject(client, projectId);
           if (next === null) {
@@ -816,7 +819,7 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
           text: `
             select
               venue_milestone_id, project_id, venue, market_type, state,
-              evidence_digest, evidence_recorded_at, reviewer, record_version, updated_at
+              evidence_digest, evidence_recorded_at, evidence_observed_at, reviewer, record_version, updated_at
             from public.venue_milestones
             where project_id = $1
             order by venue asc, market_type asc
@@ -843,9 +846,17 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
                 .string()
                 .regex(/^[a-z][a-z0-9_.-]{0,63}$/)
                 .parse(rawInput.reviewer);
+        const evidenceObservedAt =
+          rawInput.evidenceObservedAt === null
+            ? null
+            : z
+                .string()
+                .datetime({ offset: true })
+                .parse(rawInput.evidenceObservedAt);
         if (
-          venueMilestoneRequiresEvidence(rawInput.state) &&
-          (evidenceDigest === null || reviewer === null)
+          (venueMilestoneRequiresEvidence(rawInput.state) &&
+            (evidenceDigest === null || reviewer === null)) ||
+          (evidenceObservedAt !== null && evidenceDigest === null)
         ) {
           throw new LaunchMilestoneTransitionError();
         }
@@ -858,7 +869,7 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
             text: `
               select
                 venue_milestone_id, project_id, venue, market_type, state,
-                evidence_digest, evidence_recorded_at, reviewer, record_version, updated_at
+                evidence_digest, evidence_recorded_at, evidence_observed_at, reviewer, record_version, updated_at
               from public.venue_milestones
               where project_id = $1 and venue = $2 and market_type = $3
               for update
@@ -877,16 +888,17 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
               text: `
                 insert into public.venue_milestones (
                   project_id, venue, market_type, state,
-                  evidence_digest, evidence_recorded_at, reviewer
+                  evidence_digest, evidence_recorded_at, evidence_observed_at, reviewer
                 )
                 values (
                   $1, $2, $3, $4, $5,
                   case when $5::text is null then null else clock_timestamp() end,
+                  $7::timestamptz,
                   $6
                 )
                 returning
                   venue_milestone_id, project_id, venue, market_type, state,
-                  evidence_digest, evidence_recorded_at, reviewer, record_version, updated_at
+                  evidence_digest, evidence_recorded_at, evidence_observed_at, reviewer, record_version, updated_at
               `,
               values: [
                 projectId,
@@ -895,6 +907,7 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
                 rawInput.state,
                 evidenceDigest,
                 reviewer,
+                evidenceObservedAt,
               ],
             });
             return mapMilestone(inserted.rows[0]);
@@ -915,19 +928,24 @@ export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
                   when $3::text is null then evidence_recorded_at
                   else clock_timestamp()
                 end,
+                evidence_observed_at = case
+                  when $3::text is null then evidence_observed_at
+                  else $5::timestamptz
+                end,
                 reviewer = coalesce($4, reviewer),
                 record_version = record_version + 1,
                 updated_at = clock_timestamp()
               where venue_milestone_id = $1
               returning
                 venue_milestone_id, project_id, venue, market_type, state,
-                evidence_digest, evidence_recorded_at, reviewer, record_version, updated_at
+                evidence_digest, evidence_recorded_at, evidence_observed_at, reviewer, record_version, updated_at
             `,
             values: [
               current.venueMilestoneId,
               rawInput.state,
               evidenceDigest,
               reviewer,
+              evidenceObservedAt,
             ],
           });
           return mapMilestone(updated.rows[0]);

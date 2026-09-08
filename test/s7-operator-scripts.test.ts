@@ -135,8 +135,58 @@ describe("pnpm launch:milestone", () => {
       marketType: "spot",
       state: "LISTED",
       evidenceDigest: venueEvidenceDigest("https://lbank.example/a"),
+      evidenceObservedAt: null,
       reviewer: "ops.alice",
     });
+    expect(
+      parseLaunchMilestoneRequest(
+        [
+          "node",
+          "s",
+          projectId,
+          "lbank",
+          "spot",
+          "LISTED",
+          "--evidence",
+          "https://lbank.example/a",
+          "--reviewer",
+          "ops.alice",
+          "--observed-at",
+          "2026-09-01T08:00:00+08:00",
+        ],
+        development,
+      ).evidenceObservedAt,
+    ).toBe("2026-09-01T00:00:00.000Z");
+    for (const argv of [
+      [
+        "node",
+        "s",
+        projectId,
+        "lbank",
+        "spot",
+        "APPLIED",
+        "--observed-at",
+        "2026-09-01T08:00:00Z",
+      ],
+      [
+        "node",
+        "s",
+        projectId,
+        "lbank",
+        "spot",
+        "LISTED",
+        "--evidence",
+        "x",
+        "--reviewer",
+        "ops",
+        "--observed-at",
+        "yesterday",
+      ],
+    ]) {
+      expect(() => parseLaunchMilestoneRequest(argv, development)).toThrow(
+        LaunchMilestoneError,
+      );
+    }
     expect(() =>
       parseLaunchMilestoneRequest(
         [
@@ -174,6 +224,7 @@ describe("pnpm launch:milestone", () => {
         marketType: "alpha" as const,
         state: "APPLIED" as const,
         evidenceDigest: null,
+        evidenceObservedAt: null,
       }),
     );
     const close = vi.fn(() => Promise.resolve());

@@ -525,7 +525,8 @@ export interface LaunchProjectProjection {
   readonly submittedAt: string | null;
   readonly reviewedAt: string | null;
   readonly launchId: string | null;
-  readonly version: number;
+  /** Compare-and-swap version; null in the non-owner projection. */
+  readonly version: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly configVersion: typeof launchConfigVersion;

@@ -199,13 +199,16 @@ describe("LOOP API V2 launch module", () => {
     const body = response.json<{
       readonly segments: {
         readonly upcoming: readonly Record<string, unknown>[];
+        readonly awaitingSchedule: readonly Record<string, unknown>[];
       };
       readonly graduated: unknown;
       readonly staking: unknown;
       readonly myEligibility: unknown;
     }>();
-    expect(body.segments.upcoming).toHaveLength(1);
-    expect(body.segments.upcoming[0]).toMatchObject({
+    // unscheduled is its own segment and is never presented as upcoming.
+    expect(body.segments.upcoming).toHaveLength(0);
+    expect(body.segments.awaitingSchedule).toHaveLength(1);
+    expect(body.segments.awaitingSchedule[0]).toMatchObject({
       launchId,
       contractAddress: null,
       scheduleStatus: "unscheduled",
@@ -402,6 +405,22 @@ describe("LOOP API V2 launch module", () => {
       headers: s7CommonHeaders(),
     });
     expect(visible.statusCode).toBe(200);
+    // The public projection carries no review trail or CAS version.
+    expect(visible.json()).toMatchObject({
+      project: {
+        reviewStatus: "approved",
+        reviewReasonCode: null,
+        submittedAt: null,
+        reviewedAt: null,
+        version: null,
+      },
+    });
+    const own = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(own.statusCode).toBe(404);
   });
 
   it("lists the caller's projects with an owner-bound cursor and rejects limit with cursor", async () => {
@@ -632,6 +651,7 @@ describe("LOOP API V2 launch module", () => {
               state: "APPLIED" as const,
               evidenceDigest: null,
               evidenceRecordedAt: null,
+              evidenceObservedAt: null,
               reviewer: null,
               version: 2,
               updatedAt: createdAt,
@@ -653,7 +673,7 @@ describe("LOOP API V2 launch module", () => {
           venue: "lbank",
           marketType: "spot",
           state: "APPLIED",
-          evidence: { digest: null },
+          evidence: { digest: null, recordedAt: null, observedAt: null },
         },
       ],
     });

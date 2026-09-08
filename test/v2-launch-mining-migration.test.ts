@@ -81,6 +81,10 @@ describe("000023 V2 launch, mining, and referral migration contract", () => {
       "constraint launch_rounds_index_unique unique (launch_id, round_index)",
     );
     expect(statement).toContain("price_usd1 text,");
+    expect(statement).toContain("constraint launch_rounds_config_fk");
+    expect(statement).toContain(
+      "references public.launch_configs (launch_id, config_version)",
+    );
     expect(statement).toContain("wallet_round_cap_raw numeric(78, 0),");
     expect(statement).toContain(
       "eligibility_tier in ('priority', 'community', 'public')",
@@ -130,6 +134,10 @@ describe("000023 V2 launch, mining, and referral migration contract", () => {
     );
     expect(statement).toContain(
       "check (state not in ('LISTED', 'FEATURED') or evidence_digest is not null)",
+    );
+    expect(statement).toContain("evidence_observed_at timestamptz,");
+    expect(statement).toContain(
+      "check (evidence_observed_at is null or evidence_digest is not null)",
     );
   });
 

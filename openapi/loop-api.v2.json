@@ -71118,7 +71118,7 @@
         "operationId": "getV2LaunchOverview",
         "summary": "Get the Launch landing catalog",
         "tags": ["launch"],
-        "description": "Approved launches grouped by scheduleStatus (live / upcoming / ended) from PostgreSQL. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
+        "description": "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
         "parameters": [
           {
             "schema": {
@@ -71169,7 +71169,12 @@
                     "segments": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["live", "upcoming", "ended"],
+                      "required": [
+                        "live",
+                        "upcoming",
+                        "awaitingSchedule",
+                        "ended"
+                      ],
                       "properties": {
                         "live": {
                           "type": "array",
@@ -71417,7 +71422,133 @@
                                 "format": "date-time"
                               }
                             }
-                          }
+                          },
+                          "description": "scheduleStatus = scheduled only."
+                        },
+                        "awaitingSchedule": {
+                          "type": "array",
+                          "maxItems": 200,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "launchId",
+                              "projectId",
+                              "name",
+                              "ticker",
+                              "chainId",
+                              "contractAddress",
+                              "configDigest",
+                              "scheduleStatus",
+                              "onChainState",
+                              "configVersion",
+                              "createdAt"
+                            ],
+                            "properties": {
+                              "launchId": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 4096
+                              },
+                              "ticker": {
+                                "type": "string",
+                                "pattern": "^[A-Z0-9]{2,12}$"
+                              },
+                              "chainId": {
+                                "type": "string",
+                                "enum": ["eip155:56"]
+                              },
+                              "contractAddress": {
+                                "type": "null",
+                                "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                              },
+                              "configDigest": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "scheduleStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "unscheduled",
+                                  "scheduled",
+                                  "live",
+                                  "ended"
+                                ]
+                              },
+                              "onChainState": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "saleState",
+                                  "entitlementState",
+                                  "liquidityState",
+                                  "operationalState",
+                                  "stateTupleDigest",
+                                  "snapshotBlockNumber",
+                                  "snapshotBlockHash",
+                                  "source",
+                                  "reasonCode"
+                                ],
+                                "properties": {
+                                  "saleState": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "entitlementState": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "liquidityState": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "operationalState": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "stateTupleDigest": { "type": "null" },
+                                  "snapshotBlockNumber": { "type": "null" },
+                                  "snapshotBlockHash": { "type": "null" },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                                  }
+                                }
+                              },
+                              "configVersion": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  { "type": "null" }
+                                ],
+                                "description": "The confirmed configuration version, or null while pending."
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          },
+                          "description": "scheduleStatus = unscheduled: approved catalog entries with no schedule yet; never merged into upcoming."
                         },
                         "ended": {
                           "type": "array",
@@ -72306,7 +72437,13 @@
                               { "type": "null" }
                             ]
                           },
-                          "version": { "type": "integer", "minimum": 1 },
+                          "version": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 1 },
+                              { "type": "null" }
+                            ],
+                            "description": "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project."
+                          },
                           "createdAt": {
                             "type": "string",
                             "format": "date-time"
@@ -73085,7 +73222,13 @@
                             { "type": "null" }
                           ]
                         },
-                        "version": { "type": "integer", "minimum": 1 },
+                        "version": {
+                          "anyOf": [
+                            { "type": "integer", "minimum": 1 },
+                            { "type": "null" }
+                          ],
+                          "description": "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project."
+                        },
                         "createdAt": {
                           "type": "string",
                           "format": "date-time"
@@ -73925,7 +74068,13 @@
                             { "type": "null" }
                           ]
                         },
-                        "version": { "type": "integer", "minimum": 1 },
+                        "version": {
+                          "anyOf": [
+                            { "type": "integer", "minimum": 1 },
+                            { "type": "null" }
+                          ],
+                          "description": "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project."
+                        },
                         "createdAt": {
                           "type": "string",
                           "format": "date-time"
@@ -74715,7 +74864,13 @@
                             { "type": "null" }
                           ]
                         },
-                        "version": { "type": "integer", "minimum": 1 },
+                        "version": {
+                          "anyOf": [
+                            { "type": "integer", "minimum": 1 },
+                            { "type": "null" }
+                          ],
+                          "description": "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project."
+                        },
                         "createdAt": {
                           "type": "string",
                           "format": "date-time"
@@ -75564,7 +75719,13 @@
                             { "type": "null" }
                           ]
                         },
-                        "version": { "type": "integer", "minimum": 1 },
+                        "version": {
+                          "anyOf": [
+                            { "type": "integer", "minimum": 1 },
+                            { "type": "null" }
+                          ],
+                          "description": "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project."
+                        },
                         "createdAt": {
                           "type": "string",
                           "format": "date-time"
@@ -76181,7 +76342,7 @@
         "operationId": "listV2LaunchProjectMilestones",
         "summary": "List external venue milestones for a project",
         "tags": ["launch"],
-        "description": "One independent state machine per venue + market type (03 §8.4). LISTED and FEATURED carry an evidence digest, time, and reviewer; Alpha never implies spot or perpetual. Recorded only by the Dev-only script `pnpm launch:milestone`.",
+        "description": "One independent state machine per venue + market type (03 §8.4). LISTED and FEATURED carry an evidence digest, the server time it was recorded, the operator-supplied platform time it became verifiable (observedAt, nullable), and the reviewer; Alpha never implies spot or perpetual. Recorded only by the Dev-only script `pnpm launch:milestone`.",
         "parameters": [
           {
             "schema": {
@@ -76280,7 +76441,12 @@
                           "evidence": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["digest", "recordedAt", "reviewer"],
+                            "required": [
+                              "digest",
+                              "recordedAt",
+                              "observedAt",
+                              "reviewer"
+                            ],
                             "properties": {
                               "digest": {
                                 "anyOf": [
@@ -76295,7 +76461,15 @@
                                 "anyOf": [
                                   { "type": "string", "format": "date-time" },
                                   { "type": "null" }
-                                ]
+                                ],
+                                "description": "Server clock when the reviewer recorded the evidence."
+                              },
+                              "observedAt": {
+                                "anyOf": [
+                                  { "type": "string", "format": "date-time" },
+                                  { "type": "null" }
+                                ],
+                                "description": "Operator-supplied platform time the evidence became verifiable; null when not supplied. Never derived from recordedAt."
                               },
                               "reviewer": {
                                 "anyOf": [

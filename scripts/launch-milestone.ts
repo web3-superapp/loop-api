@@ -22,7 +22,7 @@ import type {
 /**
  * Dev-only operator path that records an external venue milestone
  * (Decision 0036, 03 §8.4):
- * `pnpm launch:milestone <projectId> <venue> <marketType> <state> [--evidence <ref> --reviewer <id>]`.
+ * `pnpm launch:milestone <projectId> <venue> <marketType> <state> [--evidence <ref> --reviewer <id> [--observed-at <RFC 3339>]]`.
  *
  * LISTED and FEATURED require an evidence reference and a reviewer; only the
  * SHA-256 digest of the reference is stored. The script refuses to run with
@@ -38,6 +38,8 @@ export type LaunchMilestoneErrorCode =
 const opaqueIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const reviewerPattern = /^[a-z][a-z0-9_.-]{0,63}$/;
+const rfc3339Pattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 interface OutputWriter {
   readonly write: (contents: string) => unknown;
@@ -84,6 +86,7 @@ export interface LaunchMilestoneRequest {
   readonly marketType: VenueMilestoneMarketType;
   readonly state: VenueMilestoneState;
   readonly evidenceDigest: string | null;
+  readonly evidenceObservedAt: string | null;
   readonly reviewer: string | null;
   readonly databaseUrl: string;
 }
@@ -99,17 +102,24 @@ export function parseLaunchMilestoneRequest(
   const positional: string[] = [];
   let evidence: string | null = null;
   let reviewer: string | null = null;
+  let observedAt: string | null = null;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--evidence" || arg === "--reviewer") {
+    if (
+      arg === "--evidence" ||
+      arg === "--reviewer" ||
+      arg === "--observed-at"
+    ) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("--")) {
         throw new LaunchMilestoneError("launch_milestone_arguments_invalid");
       }
       if (arg === "--evidence") {
         evidence = value;
-      } else {
+      } else if (arg === "--reviewer") {
         reviewer = value;
+      } else {
+        observedAt = value;
       }
       index += 1;
     } else if (arg !== undefined) {
@@ -129,7 +139,9 @@ export function parseLaunchMilestoneRequest(
     (reviewer !== null && !reviewerPattern.test(reviewer)) ||
     (evidence !== null &&
       (evidence.trim() === "" || evidence.length > 4_096)) ||
-    (evidence === null) !== (reviewer === null)
+    (evidence === null) !== (reviewer === null) ||
+    (observedAt !== null &&
+      (evidence === null || !rfc3339Pattern.test(observedAt)))
   ) {
     throw new LaunchMilestoneError("launch_milestone_arguments_invalid");
   }
@@ -143,6 +155,8 @@ export function parseLaunchMilestoneRequest(
     marketType: marketType as VenueMilestoneMarketType,
     state: state as VenueMilestoneState,
     evidenceDigest: evidence === null ? null : venueEvidenceDigest(evidence),
+    evidenceObservedAt:
+      observedAt === null ? null : new Date(observedAt).toISOString(),
     reviewer,
     databaseUrl,
   });
@@ -160,6 +174,7 @@ export async function recordLaunchMilestone(
       marketType: request.marketType,
       state: request.state,
       evidenceDigest: request.evidenceDigest,
+      evidenceObservedAt: request.evidenceObservedAt,
       reviewer: request.reviewer,
       requestId: randomUUID(),
     });

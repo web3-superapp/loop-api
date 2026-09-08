@@ -225,6 +225,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         projectId: created.projectId,
         expectedVersion: 1,
         values: { ...projectValues, narrative: null },
+        requestId: randomUUID(),
       });
       expect(replaced).toMatchObject({
         version: 2,
@@ -237,6 +238,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           projectId: created.projectId,
           expectedVersion: 1,
           values: projectValues,
+          requestId: randomUUID(),
         }),
       ).rejects.toBeInstanceOf(LaunchVersionConflictError);
       await expect(
@@ -245,6 +247,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           projectId: created.projectId,
           expectedVersion: 2,
           values: projectValues,
+          requestId: randomUUID(),
         }),
       ).rejects.toBeInstanceOf(LaunchNotFoundError);
 
@@ -266,6 +269,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           projectId: created.projectId,
           expectedVersion: submitted.version,
           values: projectValues,
+          requestId: randomUUID(),
         }),
       ).rejects.toBeInstanceOf(LaunchDataStaleError);
       await expect(
@@ -376,6 +380,52 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       expect(listed.map((row) => row.projectId)).toEqual([created.projectId]);
     });
 
+    it("refuses a round whose config version has no launch_configs row", async () => {
+      const owner = await createUser(true);
+      const project = await launch.createProject({
+        ownerUserId: owner,
+        idempotencyKey: randomUUID(),
+        requestSha256: launchCommandDigest("createProject", ["roundfk"]),
+        requestId: randomUUID(),
+        values: { ...projectValues, ticker: "RNDF" },
+      });
+      await launch.submitProject({
+        ownerUserId: owner,
+        projectId: project.projectId,
+        idempotencyKey: randomUUID(),
+        requestSha256: launchCommandDigest("submitProject", [
+          project.projectId,
+        ]),
+        requestId: randomUUID(),
+      });
+      const approved = await launch.reviewProject({
+        projectId: project.projectId,
+        decision: "approve",
+        reasonCode: "operator_manual_review",
+        requestId: randomUUID(),
+      });
+      const launchId = approved.launch?.launchId ?? "";
+      await expect(
+        pool.query({
+          text: `insert into public.launch_rounds (launch_id, round_index, config_version) values ($1, 1, 'launchRndfV1')`,
+          values: [launchId],
+        }),
+      ).rejects.toThrow(/launch_rounds_config_fk/);
+      await pool.query({
+        text: `insert into public.launch_configs (launch_id, config_version) values ($1, 'launchRndfV1')`,
+        values: [launchId],
+      });
+      await pool.query({
+        text: `insert into public.launch_rounds (launch_id, round_index, config_version) values ($1, 1, 'launchRndfV1')`,
+        values: [launchId],
+      });
+      const detail = await launch.getLaunch(launchId);
+      expect(detail?.rounds.map((round) => round.configVersion)).toEqual([
+        "launchRndfV1",
+      ]);
+      expect(detail?.configs[0]?.status).toBe("pending_confirmation");
+    });
+
     it("refuses a non-null on-chain axis at the schema", async () => {
       const owner = await createUser(true);
       const project = await launch.createProject({
@@ -411,6 +461,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         marketType: "spot",
         state: "APPLIED",
         evidenceDigest: null,
+        evidenceObservedAt: null,
         reviewer: null,
         requestId: randomUUID(),
       });
@@ -426,6 +477,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           marketType: "spot",
           state: "LISTED",
           evidenceDigest: null,
+          evidenceObservedAt: null,
           reviewer: null,
           requestId: randomUUID(),
         }),
@@ -436,6 +488,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         marketType: "spot",
         state: "EVIDENCE_PENDING",
         evidenceDigest: null,
+        evidenceObservedAt: null,
         reviewer: null,
         requestId: randomUUID(),
       });
@@ -449,15 +502,27 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         marketType: "spot",
         state: "LISTED",
         evidenceDigest: digest,
+        evidenceObservedAt: "2026-09-01T08:00:00.000Z",
         reviewer: "ops.alice",
         requestId: randomUUID(),
       });
       expect(listed).toMatchObject({
         state: "LISTED",
         evidenceDigest: digest,
+        evidenceObservedAt: "2026-09-01T08:00:00.000Z",
         reviewer: "ops.alice",
       });
       expect(listed.evidenceRecordedAt).not.toBeNull();
+      // observedAt without evidence is refused at the schema.
+      await expect(
+        pool.query({
+          text: `
+            insert into public.venue_milestones (project_id, venue, market_type, state, evidence_observed_at)
+            values ($1, 'bithumb', 'spot', 'APPLIED', now())
+          `,
+          values: [project.projectId],
+        }),
+      ).rejects.toThrow(/venue_milestones_observed_check/);
       // Binance Alpha is its own machine; it never moves the spot row.
       const alpha = await launch.recordMilestone({
         projectId: project.projectId,
@@ -465,6 +530,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         marketType: "alpha",
         state: "APPLIED",
         evidenceDigest: null,
+        evidenceObservedAt: null,
         reviewer: null,
         requestId: randomUUID(),
       });
@@ -607,6 +673,60 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         totalPower: "2.5",
       });
       expect((await mining.getLatestSnapshot())?.snapshotId).toBe(snapshotId);
+      // Community weights are read per formula version: a weight reviewed
+      // under a retired version never enters a snapshot of the current one.
+      await pool.query({
+        text: `
+          insert into public.mining_formula_versions (config_version, formula, weight_range, price_guard_rules, status)
+          values ('miningFormulaRetiredTestOnly', $1::jsonb, $2::jsonb, '[]'::jsonb, 'retired')
+        `,
+        values: [
+          JSON.stringify({
+            kind: "holding_times_reference_price_times_weight",
+            expressionKey: "k",
+            dailyOutputKey: "k",
+            assetWeights: {},
+            referralBoost: { status: "pending_approval" },
+          }),
+          JSON.stringify({
+            loop: { status: "approved", descriptionKey: "k" },
+            community: { status: "pending_approval", descriptionKey: "k" },
+            reviewFactorKeys: [],
+          }),
+        ],
+      });
+      const communities = await pool.query<{ community_id: string }>({
+        text: `
+          insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
+          values ('Weight Current', 'weight-current', 'eip155:56:0x00000000000000000000000000000000000000aa', $1),
+                 ('Weight Retired', 'weight-retired', 'eip155:56:0x00000000000000000000000000000000000000bb', $1)
+          returning community_id
+        `,
+        values: [owner],
+      });
+      const [current, retired] = communities.rows.map(
+        (row) => row.community_id,
+      );
+      await pool.query({
+        text: `
+          insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at)
+          values ($1, 'approved', '0.5', 'miningFormulaTestOnly', now()),
+                 ($2, 'approved', '0.9', 'miningFormulaRetiredTestOnly', now())
+        `,
+        values: [current, retired],
+      });
+      const currentInputs = await mining.listCommunityWeightInputs(
+        "miningFormulaTestOnly",
+      );
+      expect(currentInputs.map((row) => [row.communityId, row.weight])).toEqual(
+        [[current, "0.5"]],
+      );
+      expect(
+        await mining.listCommunityWeightInputs("miningFormulaRetiredTestOnly"),
+      ).toHaveLength(1);
+      expect(
+        await mining.listCommunityWeightInputs("miningFormulaV1-draft"),
+      ).toEqual([]);
       // Retire it again so the seeded draft remains the only visible version.
       await pool.query({
         text: `update public.mining_formula_versions set status = 'retired' where config_version = 'miningFormulaTestOnly'`,

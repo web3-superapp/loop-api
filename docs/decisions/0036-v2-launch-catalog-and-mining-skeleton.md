@@ -66,6 +66,10 @@ snapshot, approved formula, or command record exists.
   until then no code path can write a chain state by accident.
 - **One launch per approved project** (`launches_project_unique`), created by
   the operator approval inside the same transaction as the audit row.
+- **Rounds reference their configuration**: `launch_rounds (launch_id,
+config_version)` is a composite foreign key onto `launch_configs`, so a
+  round can never name a configuration version that does not exist for its
+  launch (S7 review).
 - **Configuration slots are strings inside jsonb** and are projected as
   `{status: "confirmed", value}` only when the row is `confirmed`; otherwise
   `unavailable(LAUNCH_CONFIG_PENDING_CONFIRMATION)`. At most one confirmed row
@@ -96,17 +100,17 @@ pending_approval` with description keys, seven review-factor keys, and three
 
 ### Referral relationship rules
 
-| Rule              | Behaviour                                                                                                                                                                                                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Who may claim     | An account with an activated V2 profile, inside `[activatedAt, activatedAt + 7 days)`, that has never been bound. Unactivated → `409 PROFILE_ACTIVATION_REQUIRED`; window closed → `403 POLICY_BLOCKED` (audited `claim_window_closed`).                                    |
-| Code resolution   | Unknown code → `404 NOT_FOUND` (same as any missing resource; codes are not enumerable). Malformed code → `400 INVALID_REQUEST`.                                                                                                                                            |
-| Self / cycle      | Own code → `422 VALIDATION_FAILED` (audited `self_invite`). A code whose owner's ancestor chain contains the claimant → `422 VALIDATION_FAILED` (audited `referral_cycle`).                                                                                                 |
-| Depth             | The inviter chain is walked with a recursive query over depth-1 edges; edges are materialised for the inviter (depth 1) and each ancestor at depth + 1, **capped at 5**. A sixth ancestor is simply not an edge; the claim itself is not refused because the chain is long. |
-| Already bound     | `409 DATA_STALE`; enforced under the owner lock and by `referral_edges_invitee_depth_unique`.                                                                                                                                                                               |
-| Replay            | Same `Idempotency-Key` + same code returns the original binding; same key + other code → `409 IDEMPOTENCY_CONFLICT`.                                                                                                                                                        |
-| Validation status | Activation is a precondition, so a new edge is `pending_wallet` (no active wallet) or `pending_mining` (an active wallet exists). `valid` requires an approved Mining formula (D19) and is never produced here; `invalidated` requires `effective_to`.                      |
-| Identity          | The inviter is never identified to the invitee (only the binding state, its validation status, and its lock time). Counts per level are grouped by `validationStatus`.                                                                                                      |
-| Boost             | `GET /v2/referral.boost` is `unavailable(MINING_FORMULA_BASELINE_PENDING)`; the five level percentages come from the unchanged `referralRulesV1` snapshot and are Mining Power boosts, never revenue or commission.                                                         |
+| Rule              | Behaviour                                                                                                                                                                                                                                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who may claim     | An account with an activated V2 profile, inside `[activatedAt, activatedAt + 7 days)`, that has never been bound. Unactivated → `409 PROFILE_ACTIVATION_REQUIRED`; window closed → `403 POLICY_BLOCKED` (audited `claim_window_closed`).                                                                         |
+| Code resolution   | Unknown code → `404 NOT_FOUND` (same as any missing resource; codes are not enumerable). Malformed code → `400 INVALID_REQUEST`.                                                                                                                                                                                 |
+| Self / cycle      | Own code → `422 VALIDATION_FAILED` (audited `self_invite`). A code whose owner's ancestor chain contains the claimant → `422 VALIDATION_FAILED` (audited `referral_cycle`).                                                                                                                                      |
+| Depth             | The inviter chain is walked with a recursive query over depth-1 edges up to 64 ancestors (cycle detection); edges are materialised for the inviter (depth 1) and each ancestor at depth + 1, **capped at 5**. A sixth ancestor is simply not an edge; the claim itself is not refused because the chain is long. |
+| Already bound     | `409 DATA_STALE`; enforced under the owner lock and by `referral_edges_invitee_depth_unique`.                                                                                                                                                                                                                    |
+| Replay            | Same `Idempotency-Key` + same code returns the original binding; same key + other code → `409 IDEMPOTENCY_CONFLICT`.                                                                                                                                                                                             |
+| Validation status | Activation is a precondition, so a new edge is `pending_wallet` (no active wallet) or `pending_mining` (an active wallet exists). `valid` requires an approved Mining formula (D19) and is never produced here; `invalidated` requires `effective_to`.                                                           |
+| Identity          | The inviter is never identified to the invitee (only the binding state, its validation status, and its lock time). Counts per level are grouped by `validationStatus`.                                                                                                                                           |
+| Boost             | `GET /v2/referral.boost` is `unavailable(MINING_FORMULA_BASELINE_PENDING)`; the five level percentages come from the unchanged `referralRulesV1` snapshot and are Mining Power boosts, never revenue or commission.                                                                                              |
 
 ### Routes
 
@@ -114,31 +118,31 @@ pending_approval` with description keys, seven review-factor keys, and three
 (`src/routes/v2/mining.ts`), `referral` module (`src/routes/v2/referral.ts`).
 The V2 artifact grows from 93 to 115 operations.
 
-| Method | Path                                         | Semantics                                                                                  |
-| ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `GET`  | `/v2/launch/overview`                        | Approved launches by `scheduleStatus`; `graduated`, `myEligibility`, `staking` unavailable |
-| `GET`  | `/v2/launch/projects`                        | Caller's applications, `status` filter, owner-bound cursor                                 |
-| `POST` | `/v2/launch/projects`                        | Draft; `201`; Idempotency-Key bound to the body digest                                     |
-| `GET`  | `/v2/launch/projects/{projectId}`            | Owner sees every status; others only `approved`; else `404`                                |
-| `PUT`  | `/v2/launch/projects/{projectId}`            | CAS `{expectedVersion, project}`; only `draft\|returned`; no Idempotency-Key               |
-| `POST` | `/v2/launch/projects/{projectId}/submit`     | `draft\|returned → submitted`; otherwise `DATA_STALE`                                      |
-| `GET`  | `/v2/launch/projects/{projectId}/milestones` | Venue milestones                                                                           |
-| `GET`  | `/v2/launches/{launchId}`                    | Launch + project + config slots + rounds + four axes + graduation steps + pool evidence    |
-| `GET`  | `/v2/launch/{launchId}/eligibility`          | `mode` from `tierModeV1`; `TIER_MODE_PENDING` otherwise                                    |
-| `GET`  | `/v2/launch/{launchId}/holders`              | All unavailable                                                                            |
-| `GET`  | `/v2/launch/{launchId}/history`              | Empty `purchaseRecords/entitlements/refunds` + `source: unavailable`                       |
-| `POST` | `/v2/launch/{launchId}/intents`              | Always `503 CAPABILITY_UNAVAILABLE`                                                        |
-| `GET`  | `/v2/launch/stake`                           | `STAKING_CONTRACT_PENDING`, `executable: false`                                            |
-| `GET`  | `/v2/launch/economy`                         | Provable counts only                                                                       |
-| `GET`  | `/v2/mining/summary`                         | All numbers unavailable; names the pending formula version                                 |
-| `GET`  | `/v2/mining/assets`                          | Unavailable                                                                                |
-| `GET`  | `/v2/mining/rewards`                         | `claimable` `REWARD_AUTHORITY_PENDING`, `claimExecutable: false`                           |
-| `GET`  | `/v2/mining/rank`                            | `scope=users\|communities`; unavailable; anonymity rule                                    |
-| `GET`  | `/v2/mining/communities/{communityId}`       | Weight record (`approved` value or `pending_review`)                                       |
-| `GET`  | `/v2/mining/rules`                           | Approved (null) + pending versions with rule keys; referral levels                         |
-| `GET`  | `/v2/mining/referral/rules`                  | Moved from `community`; path preserved                                                     |
-| `GET`  | `/v2/referral`                               | Invite code (issued on first read), binding, level counts, boost unavailable               |
-| `POST` | `/v2/referral/claim`                         | Bind to an inviter (rules above)                                                           |
+| Method | Path                                         | Semantics                                                                                                                                                                          |
+| ------ | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/v2/launch/overview`                        | Approved launches by `scheduleStatus`: `live`, `upcoming` (scheduled), `awaitingSchedule` (unscheduled, own segment), `ended`; `graduated`, `myEligibility`, `staking` unavailable |
+| `GET`  | `/v2/launch/projects`                        | Caller's applications, `status` filter, owner-bound cursor                                                                                                                         |
+| `POST` | `/v2/launch/projects`                        | Draft; `201`; Idempotency-Key bound to the body digest                                                                                                                             |
+| `GET`  | `/v2/launch/projects/{projectId}`            | Owner sees every status; others only `approved` with `reviewReasonCode/submittedAt/reviewedAt/version` null; else `404`                                                            |
+| `PUT`  | `/v2/launch/projects/{projectId}`            | CAS `{expectedVersion, project}`; only `draft\|returned`; no Idempotency-Key                                                                                                       |
+| `POST` | `/v2/launch/projects/{projectId}/submit`     | `draft\|returned → submitted`; otherwise `DATA_STALE`                                                                                                                              |
+| `GET`  | `/v2/launch/projects/{projectId}/milestones` | Venue milestones                                                                                                                                                                   |
+| `GET`  | `/v2/launches/{launchId}`                    | Launch + project + config slots + rounds + four axes + graduation steps + pool evidence                                                                                            |
+| `GET`  | `/v2/launch/{launchId}/eligibility`          | `mode` from `tierModeV1`; `TIER_MODE_PENDING` otherwise                                                                                                                            |
+| `GET`  | `/v2/launch/{launchId}/holders`              | All unavailable                                                                                                                                                                    |
+| `GET`  | `/v2/launch/{launchId}/history`              | Empty `purchaseRecords/entitlements/refunds` + `source: unavailable`                                                                                                               |
+| `POST` | `/v2/launch/{launchId}/intents`              | Always `503 CAPABILITY_UNAVAILABLE`                                                                                                                                                |
+| `GET`  | `/v2/launch/stake`                           | `STAKING_CONTRACT_PENDING`, `executable: false`                                                                                                                                    |
+| `GET`  | `/v2/launch/economy`                         | Provable counts only                                                                                                                                                               |
+| `GET`  | `/v2/mining/summary`                         | All numbers unavailable; names the pending formula version                                                                                                                         |
+| `GET`  | `/v2/mining/assets`                          | Unavailable                                                                                                                                                                        |
+| `GET`  | `/v2/mining/rewards`                         | `claimable` `REWARD_AUTHORITY_PENDING`, `claimExecutable: false`                                                                                                                   |
+| `GET`  | `/v2/mining/rank`                            | `scope=users\|communities`; unavailable; anonymity rule                                                                                                                            |
+| `GET`  | `/v2/mining/communities/{communityId}`       | Weight record (`approved` value or `pending_review`)                                                                                                                               |
+| `GET`  | `/v2/mining/rules`                           | Approved (null) + pending versions with rule keys; referral levels                                                                                                                 |
+| `GET`  | `/v2/mining/referral/rules`                  | Moved from `community`; path preserved                                                                                                                                             |
+| `GET`  | `/v2/referral`                               | Invite code (issued on first read), binding, level counts, boost unavailable                                                                                                       |
+| `POST` | `/v2/referral/claim`                         | Bind to an inviter (rules above)                                                                                                                                                   |
 
 ### Capabilities
 
@@ -155,9 +159,12 @@ stays `unavailable` unchanged.
 - `pnpm launch:review <projectId> <review|approve|return|reject> [reasonCode]`
   — appends an operator `launch_review_events` row; `approve` creates the
   `launches` row (`unscheduled`, `contractAddress: null`).
-- `pnpm launch:milestone <projectId> <venue> <marketType> <state> [--evidence <ref> --reviewer <id>]`
+- `pnpm launch:milestone <projectId> <venue> <marketType> <state> [--evidence <ref> --reviewer <id> [--observed-at <RFC 3339>]]`
   — enforces the 03 §8.4 state machine; `LISTED`/`FEATURED` require both
   evidence and reviewer; only `sha256(evidence)` is stored.
+  `evidence_recorded_at` is the server clock at recording;
+  `evidence_observed_at` is the operator-supplied platform time the evidence
+  became verifiable (nullable, only with a digest, never derived).
 - `pnpm mining:approve-formula <configVersion> --confirm` — approves one
   version, retires any other, sets `effectiveAt`.
 
@@ -169,7 +176,9 @@ All three refuse `NODE_ENV=production` before opening a connection.
 tick: no approved formula → `idle(MINING_FORMULA_BASELINE_PENDING)` and no
 further read. Otherwise: latest `wallet_balance_snapshots` per active wallet
 and readable asset, approved community weights joined to the community's
-bound asset, one **fresh** DexScreener price per weighted asset (`requireFresh`;
+bound asset (read for the approved formula's `configVersion` only, so a
+weight reviewed under a retired version never enters a snapshot), one
+**fresh** DexScreener price per weighted asset (`requireFresh`;
 a proxied native price is refused), then the pure
 `computeMiningSnapshot(inputs, formula)`:
 `power = holding × referencePriceUsd × weight` per account and asset with
