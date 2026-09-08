@@ -16,7 +16,10 @@ import {
   checksumAddress,
   fromHexQuantity,
 } from "../src/integrations/bsc/tx-builder.js";
-import type { BscTransactionObservation } from "../src/integrations/bsc/rpc-client.js";
+import type {
+  BscTransactionObservation,
+  BscTransactionReceiptObservation,
+} from "../src/integrations/bsc/rpc-client.js";
 import { PrivySwapProviderError } from "../src/integrations/privy/swap-adapter.js";
 import {
   externalWalletId,
@@ -1163,7 +1166,7 @@ describe("swap quote, prepare, execute", () => {
 describe("reconciliation lane", () => {
   it("verifies a pending hash, waits for confirmations, then confirms", async () => {
     const transactions = new Map<string, BscTransactionObservation | null>();
-    const receipts = new Map();
+    const receipts = new Map<string, BscTransactionReceiptObservation | null>();
     const { send, intents, runtime, repository } = build({
       readClient: { transactions, receipts },
     });
@@ -1223,7 +1226,7 @@ describe("reconciliation lane", () => {
         reconcileAfter: null,
       });
     }
-    result = await reconciler.reconcileOnce();
+    await reconciler.reconcileOnce();
     expect(repository.records.get(resource.intentId)).toMatchObject({
       state: "submitted",
       receipt: { status: "success", blockNumber: "43999996" },
@@ -1260,7 +1263,7 @@ describe("reconciliation lane", () => {
 
   it("fails an intent whose broadcast hash carries a different payload and reverts on a failed receipt", async () => {
     const transactions = new Map<string, BscTransactionObservation | null>();
-    const receipts = new Map();
+    const receipts = new Map<string, BscTransactionReceiptObservation | null>();
     const { send, intents, runtime, repository } = build({
       readClient: { transactions, receipts },
     });

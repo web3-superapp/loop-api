@@ -23,7 +23,11 @@ function clientFake(
 ) {
   const quote = vi.fn(() =>
     overrides.quoteError !== undefined
-      ? Promise.reject(overrides.quoteError)
+      ? Promise.reject(
+          overrides.quoteError instanceof Error
+            ? overrides.quoteError
+            : new Error("quote failed"),
+        )
       : Promise.resolve(
           overrides.quote ?? {
             caip2: "eip155:56",
@@ -38,7 +42,11 @@ function clientFake(
   );
   const execute = vi.fn(() =>
     overrides.executeError !== undefined
-      ? Promise.reject(overrides.executeError)
+      ? Promise.reject(
+          overrides.executeError instanceof Error
+            ? overrides.executeError
+            : new Error("execute failed"),
+        )
       : Promise.resolve(
           overrides.execute ?? {
             id: "act_123",

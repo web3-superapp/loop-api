@@ -687,7 +687,7 @@ export function createPostgresWalletIntentRepository(
       const result = await pool.query<Record<string, unknown>>({
         text: `
           with due as (
-            select intent_id
+            select intent_id as due_intent_id
             from public.wallet_intents
             where state in ('submitted', 'unknown')
               and (reconcile_after is null or reconcile_after <= clock_timestamp())
@@ -703,7 +703,7 @@ export function createPostgresWalletIntentRepository(
             record_version = intent.record_version + 1,
             updated_at = clock_timestamp()
           from due
-          where intent.intent_id = due.intent_id
+          where intent.intent_id = due.due_intent_id
           returning ${intentColumns}
         `,
         values: [input.limit, input.leaseMs],
