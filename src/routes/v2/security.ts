@@ -6,6 +6,7 @@ import {
   emptyQueryStringSchema,
   noStoreResponseHeaders,
 } from "../../core/http/schemas.js";
+import { opaqueIdPatternSource } from "../../core/ids/opaque-id.js";
 import { notificationCategories } from "../../features/alerts/notification-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
@@ -183,7 +184,10 @@ const securityEventSchema = {
     "createdAt",
   ],
   properties: {
-    notificationId: { type: "string", pattern: uuidPatternSource },
+    // Same table/column as GET /v2/notifications/feed: canonical lowercase
+    // UUIDv4 (`notifications.notification_id`), so both routes publish the
+    // identical pattern.
+    notificationId: { type: "string", pattern: opaqueIdPatternSource },
     type: { type: "string", enum: [...notificationCategories] },
     entityRef: { type: "string", minLength: 3, maxLength: 200 },
     contextRoute: { type: "string", pattern: "^[a-z][a-z0-9-]{0,63}$" },

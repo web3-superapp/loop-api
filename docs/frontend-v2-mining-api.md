@@ -23,7 +23,7 @@
 
 未启用时对应路径 `404 NOT_FOUND`。`GET /v2/mining/referral/rules` 已从 `community` 模块移入
 `mining` 模块（路径不变）：只启用 `community` 的部署不再有该路径。移动端 capability 枚举需新增
-`referral`（S8 合并后共 **31** 项；以 `GET /v2/meta/capabilities` 实际数量为准，不要写死）。
+`referral`（S8 合并后共 **31** 项；以 `openapi/loop-api.v2.json` 为唯一计数来源，不要写死）。
 
 ## 2. Headers
 
@@ -126,6 +126,11 @@
 ### 3.7 `GET /v2/mining/referral/rules`
 
 与 S3 相同的静态快照（`edges`/`inviteCode` 字段仍为 unavailable；真实数据走 `GET /v2/referral`）。
+
+**前端第 7 步（S7）起，referral 页改读 `GET /v2/referral`**：邀请码、邀请关系边、
+各层级人数与加成事实只在该接口下发。`GET /v2/mining/referral/rules` 保留为兼容接口
+（路径与响应形状不变，仍是静态规则快照），S3 已上线的客户端可继续调用，但新页面不要
+再从它读取 `edges` / `inviteCode`——那里恒为 unavailable。
 
 ## 4. 邀请关系（referral）
 

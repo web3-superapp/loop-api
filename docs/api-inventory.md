@@ -10,6 +10,12 @@ The committed implemented contracts are `openapi/loop-api.v1.json` and
 by `pnpm openapi:generate` and checked for drift by `pnpm openapi:check`. V1 is
 the frozen compatibility surface; new product modules use V2.
 
+`openapi/loop-api.v2.json` is the single source of truth for every count in this
+repository's documentation. It currently publishes **123** V2 operations across
+**102** V2 paths, and `GET /v2/meta/capabilities` currently returns **31**
+capability IDs. Recount from the committed artifact after each module lands
+rather than trusting a number quoted in prose.
+
 ## Status model
 
 | Status                  | Meaning                                                                                                                                  |

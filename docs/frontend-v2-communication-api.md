@@ -17,7 +17,7 @@ Stream SDK，本模块不提供接口；`community-ai` 全部 unavailable。
 - 后端 `V2_MODULES_ENABLED` 必须同时包含 `community` 与 `communication`。未启用
   `communication` 时本文所有路径返回 `404 NOT_FOUND`（V2 错误体），且不会校验
   Bearer。
-- 前端必须先读 `GET /v2/meta/capabilities`（现共 23 项）：
+- 前端必须先读 `GET /v2/meta/capabilities`（现共 **31** 项；以 `openapi/loop-api.v2.json` 为唯一计数来源，不要写死）：
 
 | capabilityId    | 期望                                                      | UI 含义                                                                                               |
 | --------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |

@@ -1,5 +1,8 @@
 # LOOP API V2 conventions
 
+以 `openapi/loop-api.v2.json` 为唯一计数来源（route/operation/capability 数量
+一律从该产物数出，不在文档里另行写死）。
+
 Status: accepted baseline for new product routes. Decision 0026 is authoritative
 for the V1 freeze and V2 product boundary.
 

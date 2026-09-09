@@ -551,6 +551,9 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 
 ### 4.13 `GET /v2/mining/referral/rules` — `referral` 页（只读）
 
+> 前端第 7 步（S7）起 `referral` 页改读 `GET /v2/referral`（见
+> `docs/frontend-v2-mining-api.md` §3.7 与 §4）。本接口保留兼容，形状不变。
+
 ```json
 {
   "configVersion": "referralRulesV1",

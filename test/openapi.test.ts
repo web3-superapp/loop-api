@@ -10,6 +10,9 @@ import {
   renderOpenApiV2Artifact,
 } from "../scripts/generate-openapi.js";
 
+const canonicalUuidV4Pattern =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+
 interface OpenApiDocument {
   readonly openapi: string;
   readonly servers: readonly { readonly url: string }[];
@@ -1037,6 +1040,32 @@ describe("committed OpenAPI artifact", () => {
     expect(authorizeTransfer).toHaveProperty(
       "requestBody.content.application/json.schema.oneOf.1.properties.official_formatter_envelope_sha256.pattern",
       "^[0-9a-f]{64}$",
+    );
+  });
+
+  it("publishes one notification id pattern across every V2 surface", async () => {
+    const document = JSON.parse(
+      await readFile(openApiV2ArtifactPath, "utf8"),
+    ) as OpenApiDocument;
+    const jsonSchema = (path: string, method: string): unknown => {
+      const okResponse = document.paths[path]?.[method]?.responses?.["200"] as
+        | { readonly content?: Record<string, { readonly schema?: unknown }> }
+        | undefined;
+
+      return okResponse?.content?.["application/json"]?.schema;
+    };
+    const feedItem = jsonSchema("/v2/notifications/feed", "get");
+    const summary = jsonSchema("/v2/security/summary", "get");
+
+    // Both surfaces expose `notifications.notification_id`, so the published
+    // pattern must be the canonical lowercase UUIDv4 in both places.
+    expect(feedItem).toHaveProperty(
+      "properties.items.items.properties.notificationId.pattern",
+      canonicalUuidV4Pattern,
+    );
+    expect(summary).toHaveProperty(
+      "properties.recentSecurityEvents.oneOf.0.properties.items.items.properties.notificationId.pattern",
+      canonicalUuidV4Pattern,
     );
   });
 });

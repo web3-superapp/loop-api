@@ -136,8 +136,8 @@ forceUpdateBelow/storeUrls/reasonCode`。`forceUpdateBelow` 永不为 null（未
 后端 `V2_MODULES_ENABLED` 启用了某模块但该模块尚未交付运行时时，对应
 capability 从 `deferred` 变为
 `{"availability": "unavailable", "reasonCode": "MODULE_RUNTIME_NOT_REGISTERED"}`，
-客户端应按 unavailable 展示，不得视为即将可用。capability 列表仍固定 16
-项，ID 集合不变。
+客户端应按 unavailable 展示，不得视为即将可用。capability 列表现共 **31**
+项（以 `openapi/loop-api.v2.json` 为唯一计数来源，不要写死），ID 集合稳定。
 
 ## Bootstrap / 注册
 

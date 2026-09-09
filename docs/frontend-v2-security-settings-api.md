@@ -15,7 +15,7 @@
   同名 capability 为 `deferred`；启用但运行时未组装时为 `unavailable`
   （`SECURITY_RUNTIME_UNAVAILABLE` / `SETTINGS_RUNTIME_UNAVAILABLE` /
   `SUPPORT_RUNTIME_UNAVAILABLE`）。capability 列表现在有 **31** 项（S8 合并后实测；新增
-  `security`、`settings`、`support`），移动端枚举同步——但请以 `GET /v2/meta/capabilities`
+  `security`、`settings`、`support`），移动端枚举同步——但请以 `openapi/loop-api.v2.json`
   实际下发的数量为准，不要在客户端写死或做穷举断言。
 - **MFA / Passkey / 恢复密码 / 自动恢复 / 社交恢复 / 私钥导出不是 meta
   capability**，只从 `GET /v2/security/capabilities` 读（§3.1），六项恒

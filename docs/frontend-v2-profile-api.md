@@ -269,7 +269,7 @@ body：
 
 ## capabilities 增量
 
-`GET /v2/meta/capabilities` 现为 18 项，新增：
+`GET /v2/meta/capabilities` 现为 **31** 项（以 `openapi/loop-api.v2.json` 为唯一计数来源，不要写死），本模块新增：
 
 ```json
 { "capabilityId": "profile", "availability": "available", "reasonCode": null, "evidence": { "status": "notApplicable", "reasonCode": null } }
