@@ -15,13 +15,10 @@ import {
   type SpotReconciliationRepository,
   type SpotRejectedReconciliationReasonCode,
 } from "../src/features/spot/spot-reconciliation-contract.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const requestSha256 = "a".repeat(64);
 const metadataSha256 = "b".repeat(64);

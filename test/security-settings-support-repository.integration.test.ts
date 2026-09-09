@@ -19,13 +19,10 @@ import {
   SupportTicketNotFoundError,
   SupportTicketStateError,
 } from "../src/features/support/support-ticket-repository.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const pool = new Pool({ connectionString: databaseUrl });
 const testPrivyPrefix = "security-settings-support-test:";

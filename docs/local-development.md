@@ -11,6 +11,23 @@ pnpm db:migrate
 pnpm dev
 ```
 
+Integration suites (`pnpm test:integration`, every `test/*.integration.test.ts`)
+truncate tables, so they run only against `DATABASE_URL_TEST` and never fall
+back to `DATABASE_URL`. Create a separate database whose name contains `test`,
+point `DATABASE_URL_TEST` at it in `.env.local`, and migrate it separately:
+
+```sh
+docker compose exec postgres psql -U loop_api -d loop_api_dev \
+  -c "CREATE DATABASE loop_api_test OWNER loop_api;"
+# .env.local: DATABASE_URL_TEST=postgres://loop_api:...@127.0.0.1:5432/loop_api_test
+pnpm db:migrate:test
+pnpm test:integration
+```
+
+`pnpm test:integration` refuses to start when `DATABASE_URL_TEST` is unset or
+names a database without `test` in it, and the shared helper in
+`test/helpers/integration-database.ts` applies the same guard inside each suite.
+
 Migration `000012_alias_discovery_and_group_personas` deliberately refuses to
 run if an existing Profile alias contains a Unicode control, formatting,
 surrogate, line-separator, or paragraph-separator code point. Replace or clear

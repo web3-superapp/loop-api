@@ -6,12 +6,10 @@ import { runner } from "node-pg-migrate";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 
-const { Client, Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const { Client, Pool } = pg;
+const databaseUrl = requireIntegrationDatabaseUrl();
 const requiredDatabaseUrl = databaseUrl;
 
 const migrationsDirectory = resolve(

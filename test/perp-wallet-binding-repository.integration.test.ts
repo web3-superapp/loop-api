@@ -10,13 +10,10 @@ import {
   type PerpWalletBindingRepository,
   type PutVerifiedPerpWalletBindingInput,
 } from "../src/database/perp-wallet-binding-repository.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const fixturePrivyPrefix = "did:privy:wallet-binding-test:";
 const addressA = `0x${"1".repeat(40)}`;

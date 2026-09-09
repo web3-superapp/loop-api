@@ -3,12 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import pg, { type PoolClient } from "pg";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const { Pool } = pg;
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 function digest(label: string): string {
   return createHash("sha256").update(label, "utf8").digest("hex");

@@ -8,13 +8,10 @@ import {
   ChatChannelIdempotencyConflictRepositoryError,
   type ChatChannelRepository,
 } from "../src/features/communication/chat-channel-repository.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 function digest(label: string): string {
   return createHash("sha256").update(label, "utf8").digest("hex");

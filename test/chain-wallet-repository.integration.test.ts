@@ -31,13 +31,10 @@ import {
   WatchlistVersionConflictError,
 } from "../src/features/watchlist/watchlist-contract.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const pool = new Pool({ connectionString: databaseUrl });
 const testPrivyPrefix = "chain-wallet-repository-test:";

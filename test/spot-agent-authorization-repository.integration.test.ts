@@ -27,13 +27,10 @@ import {
 import { createPerpWalletBindingResolver } from "../src/features/perp/wallet-binding-resolver.js";
 import { createSpotIntentPrepareAuthorityResolver } from "../src/features/spot/spot-intent-prepare-authority-resolver.js";
 import type { PrivyUserReader } from "../src/integrations/privy/user-reader.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const truncateAll = `
   truncate table

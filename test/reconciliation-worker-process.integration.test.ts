@@ -2,11 +2,9 @@ import { spawn } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const databaseUrl = process.env["DATABASE_URL"];
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 async function withTimeout<T>(
   promise: Promise<T>,

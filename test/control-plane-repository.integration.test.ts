@@ -17,13 +17,10 @@ import {
   type Database,
 } from "../src/database/database.js";
 import { latestMigrationName } from "../src/database/schema.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const config = loadConfig({
   NODE_ENV: "test",
@@ -38,6 +35,26 @@ const digestA = "a".repeat(64);
 const digestB = "b".repeat(64);
 const ipSubjectHmac = "c".repeat(64);
 const userSubjectHmac = "d".repeat(64);
+
+/**
+ * Polls `condition` until it reports true or `timeoutMs` elapses. Bounded by a
+ * generous deadline rather than a fixed number of attempts so lock-wait
+ * observation does not depend on machine speed.
+ */
+async function pollUntil(
+  condition: () => Promise<boolean>,
+  timeoutMs = 10_000,
+  intervalMs = 20,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return condition();
+}
 
 const truncateControlPlane = `
   truncate table
@@ -725,10 +742,13 @@ describe("PostgreSQL control-plane repository", () => {
         leaseDurationMs: 30_000,
       })
     )[0];
+    // Shorten the lease so it lapses while the completion is blocked on the
+    // row lock below. The test waits explicitly for the database clock to pass
+    // `lease_expires_at` instead of sleeping for a fixed duration.
     await inspectionPool.query({
       text: `
         update public.provider_operations
-        set lease_expires_at = clock_timestamp() + interval '1 second'
+        set lease_expires_at = clock_timestamp() + interval '250 milliseconds'
         where id = $1
       `,
       values: [prepared.operation.id],
@@ -760,9 +780,7 @@ describe("PostgreSQL control-plane repository", () => {
           requestId: randomUUID(),
           state: "succeeded",
         });
-      let waiterObserved = false;
-
-      for (let attempt = 0; attempt < 20; attempt += 1) {
+      const waiterObserved = await pollUntil(async () => {
         const waiting = await inspectionPool.query<{ waiting: boolean }>({
           text: `
             select exists (
@@ -774,15 +792,22 @@ describe("PostgreSQL control-plane repository", () => {
             ) as waiting
           `,
         });
-        waiterObserved = waiting.rows[0]?.waiting === true;
-        if (waiterObserved) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-
+        return waiting.rows[0]?.waiting === true;
+      });
       expect(waiterObserved).toBe(true);
-      await inspectionPool.query("select pg_sleep(1.1)");
+
+      const leaseExpired = await pollUntil(async () => {
+        const expiry = await inspectionPool.query<{ expired: boolean }>({
+          text: `
+            select lease_expires_at <= clock_timestamp() as expired
+            from public.provider_operations
+            where id = $1
+          `,
+          values: [prepared.operation.id],
+        });
+        return expiry.rows[0]?.expired === true;
+      });
+      expect(leaseExpired).toBe(true);
       await locker.query("commit");
       lockerOpen = false;
       await expect(completion).rejects.toBeInstanceOf(

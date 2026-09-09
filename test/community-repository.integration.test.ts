@@ -30,18 +30,11 @@ import {
 } from "../src/features/community/community-repository.js";
 import { profileActivationDigest } from "../src/features/profile/profile-v2-contract.js";
 import type { ProfileV2Repository } from "../src/features/profile/profile-v2-repository.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Client, Pool } = pg;
 
-function requireDatabaseUrl(): string {
-  const value = process.env["DATABASE_URL"];
-  if (value === undefined || value.trim() === "") {
-    throw new Error("DATABASE_URL is required for the integration test suite");
-  }
-  return value;
-}
-
-const databaseUrl = requireDatabaseUrl();
+const databaseUrl = requireIntegrationDatabaseUrl();
 const migrationsDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../migrations",

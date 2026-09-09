@@ -3,12 +3,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const { Pool } = pg;
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const pool = new Pool({ connectionString: databaseUrl });
 const testPrivyPrefix = "chain-wallet-migration-test:";

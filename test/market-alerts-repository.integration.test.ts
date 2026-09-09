@@ -32,13 +32,10 @@ import {
 } from "../src/database/notification-repository.js";
 import { defaultNotificationPreferences } from "../src/features/alerts/notification-contract.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Pool } = pg;
-const databaseUrl = process.env["DATABASE_URL"];
-
-if (databaseUrl === undefined || databaseUrl.trim() === "") {
-  throw new Error("DATABASE_URL is required for the integration test suite");
-}
+const databaseUrl = requireIntegrationDatabaseUrl();
 
 const pool = new Pool({ connectionString: databaseUrl });
 const testPrivyPrefix = "market-alerts-repository-test:";

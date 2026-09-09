@@ -66,7 +66,9 @@ docker compose config --quiet
 ```
 
 Run `pnpm db:migrate` and real readiness checks against PostgreSQL for database or
-migration changes. Provider/device tests that lack credentials or a physical
+migration changes. Integration suites run with `pnpm db:migrate:test` followed by
+`pnpm test:integration`; both read only `DATABASE_URL_TEST`, which must name a
+separate database containing `test` (never the `DATABASE_URL` dev database). Provider/device tests that lack credentials or a physical
 device are unverified, never passing.
 
 Direct dependency versions remain exact. Change Node, pnpm, Fastify, OpenAPI,
