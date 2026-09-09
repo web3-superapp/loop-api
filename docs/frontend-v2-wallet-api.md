@@ -375,6 +375,14 @@ optional 键 `launchChain`：
 | `LAUNCH_CHAIN_ID_MISMATCH`        | 端点返回的不是 chain 97——Launch 区块整块不可用 |
 | `BSC_BALANCE_CALL_FAILED`         | 链已校验但 `eth_getBalance` 本身失败           |
 
+`LAUNCH_CHAIN_VERIFICATION_PENDING` **只出现在 `GET /v2/chain/status.launchChain`**，
+不会出现在 balances：余额读取本身会触发 chainId 校验，校验结果只能是已核验、
+不符或不可达三者之一。
+
+- `nativeBalance.snapshot.confirmations` 是后端对测试网槽位配置的**策略确认数**
+  （`LAUNCH_BSC_CONFIRMATIONS`，默认 5），语义与主链 `snapshot.confirmations` 相同——
+  表示"多少个确认后视为最终"，**不是**该快照区块已经获得的确认数。
+
 - 测试网槽位失败**不会**让主链 balances 变成 503：`balances[]`、`snapshot`、
   `netWorth` 照常下发。钱包页 Launch 区块单独显示 unavailable。
 - 行情、Watchlist、Swap、Send 页面永远不显示 97 的任何数据；`walletRead` /

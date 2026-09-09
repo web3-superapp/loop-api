@@ -1068,19 +1068,23 @@ export function parseLaunchChainConfig(
 
 /**
  * The launch chain ID as an operator script reads it from the same
- * environment file the API uses (Decision 0038). Blank means the default.
+ * environment file the API uses (Decision 0038). The rule is exactly the
+ * one `loadConfig` applies through `launchChainEnvironmentShape`: an unset
+ * key is the default (56); otherwise only the exact strings "56" and "97"
+ * are accepted — a blank or padded value is refused, never defaulted, so
+ * the script and the API can never disagree about which chain a launch is
+ * stamped with.
  */
 export function parseLaunchChainIdEnvironment(
   value: string | undefined,
 ): LaunchChainId {
-  const trimmed = value?.trim() ?? "";
-  if (trimmed === "" || trimmed === "56") {
-    return bscChainId;
+  const parsed = launchChainEnvironmentShape.LAUNCH_CHAIN_ID.safeParse(
+    value ?? "56",
+  );
+  if (!parsed.success) {
+    throw new ConfigurationError(["LAUNCH_CHAIN_ID: must be 56 or 97"]);
   }
-  if (trimmed === "97") {
-    return bscTestnetChainId;
-  }
-  throw new ConfigurationError(["LAUNCH_CHAIN_ID: must be 56 or 97"]);
+  return parsed.data === "97" ? bscTestnetChainId : bscChainId;
 }
 
 const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;

@@ -57,6 +57,9 @@ instead of to a hardcoded chain.
    the slot fields.
 5. The note that `https://data-seed-prebsc-1-s1.bnbchain.org:8545` was not
    probed stays.
+6. (Review) `pnpm launch:review` parses `LAUNCH_CHAIN_ID` with the same strict
+   rule as `loadConfig` (unset → 56; only the exact strings `56`/`97`; blank
+   or padded values refused), locked by a matrix test in `test/config.test.ts`.
 
 ## Testnet facts
 
@@ -152,8 +155,14 @@ The primary slot's `bscRead` capability and `BSC_*` reason codes are untouched.
   `nativeBalance` is `{assetId: "eip155:97:native", symbol: "tBNB",
 decimals: 18, rawValue, displayBalance, availableBalance, spendableBalance,
 gasReserve, snapshot: {blockNumber, blockHash, observedAt, confirmations}}`
-  or `null`. A launch-slot failure never fails the primary balances, and no
-  `wallet_balance_snapshots` row is recorded for 97 (there is no registry
+  or `null`. `snapshot.confirmations` is the slot's configured confirmation
+  policy (`LAUNCH_BSC_CONFIRMATIONS`, default 5) with the same meaning as
+  the primary `snapshot.confirmations` — how many confirmations count as
+  final — not the number of confirmations the snapshot block has received.
+  `LAUNCH_CHAIN_VERIFICATION_PENDING` can appear only on `chain/status`: a
+  balance read forces the probe, so its outcome is verified, mismatched, or
+  unreachable. A launch-slot failure never fails the primary balances, and
+  no `wallet_balance_snapshots` row is recorded for 97 (there is no registry
   asset to reference). `pending`, `valuation`, and `crossCheck` do not exist
   for the launch slot.
 - Launch summaries publish `chainId` from the stored row

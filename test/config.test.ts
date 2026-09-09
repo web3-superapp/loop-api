@@ -645,13 +645,50 @@ describe("launch chain slot (Decision 0038)", () => {
     expect(() => loadConfig(credentialed)).not.toThrow(/pass@/);
   });
 
-  it("reads the launch chain ID for operator scripts with the same defaults", () => {
+  it("reads the launch chain ID for operator scripts with exactly the loadConfig rule", () => {
+    // Every value the script parser accepts or refuses must be accepted or
+    // refused identically by loadConfig, with the same resulting chain.
+    const matrix: readonly (string | undefined)[] = [
+      undefined,
+      "56",
+      "97",
+      "",
+      " ",
+      " 56 ",
+      "56 ",
+      "097",
+      "1",
+      "eip155:97",
+      "0x61",
+    ];
+    for (const value of matrix) {
+      const environment = validEnvironment();
+      if (value !== undefined) {
+        environment["LAUNCH_CHAIN_ID"] = value;
+      }
+      let viaConfig: string | null;
+      try {
+        viaConfig = loadConfig(environment).launchChain.chainId;
+      } catch (error) {
+        expect(error, JSON.stringify(value)).toBeInstanceOf(ConfigurationError);
+        viaConfig = null;
+      }
+      let viaScript: string | null;
+      try {
+        viaScript = parseLaunchChainIdEnvironment(value);
+      } catch (error) {
+        expect(error, JSON.stringify(value)).toBeInstanceOf(ConfigurationError);
+        viaScript = null;
+      }
+      expect(viaScript, JSON.stringify(value)).toBe(viaConfig);
+    }
     expect(parseLaunchChainIdEnvironment(undefined)).toBe("eip155:56");
-    expect(parseLaunchChainIdEnvironment("")).toBe("eip155:56");
-    expect(parseLaunchChainIdEnvironment(" 56 ")).toBe("eip155:56");
+    expect(parseLaunchChainIdEnvironment("56")).toBe("eip155:56");
     expect(parseLaunchChainIdEnvironment("97")).toBe("eip155:97");
-    expect(() => parseLaunchChainIdEnvironment("1")).toThrow(
-      ConfigurationError,
-    );
+    for (const rejected of ["", " 56 ", "56 ", "1"]) {
+      expect(() => parseLaunchChainIdEnvironment(rejected), rejected).toThrow(
+        ConfigurationError,
+      );
+    }
   });
 });
