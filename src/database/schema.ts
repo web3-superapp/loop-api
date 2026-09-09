@@ -1,4 +1,4 @@
-export const latestMigrationName = "000025_v2_approval_coverage";
+export const latestMigrationName = "000026_v2_launch_chain_bsc_testnet";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
