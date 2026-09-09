@@ -13,6 +13,7 @@ import {
 } from "../../integrations/bsc/tx-builder.js";
 import {
   bscChainId,
+  bscChainReference,
   formatDecimalAmount,
   isChainId,
 } from "../chain/chain-contract.js";
@@ -279,6 +280,8 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
             spender: null,
             decodedCall,
             transaction: buildUnsignedTransaction({
+              kind: "send",
+              chainReference: bscChainReference,
               from: wallet.address,
               to: call.to,
               data: call.data,

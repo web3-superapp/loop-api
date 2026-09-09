@@ -34,6 +34,14 @@ describe("loadReconciliationWorkerConfig", () => {
       databaseStatementTimeoutMs: 5_000,
       bscChain: null,
       bscIndexer: null,
+      launchChain: {
+        chainId: "eip155:56",
+        chainReference: 56,
+        rpcUrls: [],
+        confirmations: 15,
+        reorgDepthBlocks: 64,
+        sharedWithPrimary: true,
+      },
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
@@ -219,5 +227,31 @@ describe("loadReconciliationWorkerConfig", () => {
       expect(error).toBeInstanceOf(ConfigurationError);
       expect(String(error)).not.toContain("do-not-log-me");
     }
+  });
+
+  it("parses the launch chain slot with the API rules so one environment file behaves identically (Decision 0038)", () => {
+    const testnet = validEnvironment();
+    testnet["LAUNCH_CHAIN_ID"] = "97";
+    testnet["LAUNCH_BSC_RPC_URLS"] = "https://bsc-testnet-rpc.example/";
+    expect(loadReconciliationWorkerConfig(testnet).launchChain).toEqual({
+      chainId: "eip155:97",
+      chainReference: 97,
+      rpcUrls: ["https://bsc-testnet-rpc.example/"],
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+      sharedWithPrimary: false,
+    });
+    // The indexer lane keeps driving only the primary chain: it needs
+    // BSC_RPC_URLS regardless of the launch slot.
+    testnet["BSC_INDEXER_ENABLED"] = "true";
+    expect(() => loadReconciliationWorkerConfig(testnet)).toThrow(
+      /BSC_INDEXER_ENABLED: The BSC indexer lane requires BSC_RPC_URLS/,
+    );
+
+    const shared = validEnvironment();
+    shared["LAUNCH_BSC_RPC_URLS"] = "https://bsc-testnet-rpc.example/";
+    expect(() => loadReconciliationWorkerConfig(shared)).toThrow(
+      ConfigurationError,
+    );
   });
 });

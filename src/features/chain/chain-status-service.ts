@@ -11,6 +11,10 @@ import type {
   ChainVerificationState,
 } from "../../integrations/bsc/rpc-client.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import {
+  launchChainReasonCodes,
+  type LaunchChainId,
+} from "./chain-contract.js";
 
 /**
  * Read freshness surface for the `networks` page (Decision 0033).
@@ -46,6 +50,21 @@ export interface IndexerLaneProjection {
   readonly updatedAt: string | null;
 }
 
+/**
+ * The `launch` chain slot (Decision 0038): published only when it differs
+ * from the primary slot, and then without an endpoint list — the slot's
+ * health is one verification state, one head, and one reason code.
+ */
+export interface LaunchChainStatusProjection {
+  readonly chainId: LaunchChainId;
+  readonly chainReference: number;
+  readonly verification: ChainVerificationState;
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+  readonly head: ChainHeadProjection | null;
+  readonly reasonCode: string | null;
+}
+
 export interface ChainStatusResource {
   readonly chain: {
     readonly chainId: string;
@@ -67,6 +86,8 @@ export interface ChainStatusResource {
     readonly readableAssetCount: number;
     readonly registeredPoolCount: number;
   };
+  /** `null` when the launch slot equals the primary slot (Decision 0038). */
+  readonly launchChain: LaunchChainStatusProjection | null;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -82,6 +103,65 @@ export interface CreateChainStatusServiceInput {
   readonly chainName: string;
   readonly chainReference: number;
   readonly nativeAssetId: string;
+  /** The launch slot's own client, or `null` when it is shared with primary. */
+  readonly launchReadClient: BscReadClient | null;
+}
+
+function launchChainReasonCode(
+  verification: ChainVerificationState,
+): string | null {
+  switch (verification) {
+    case "verified": {
+      return null;
+    }
+    case "mismatched": {
+      return launchChainReasonCodes.mismatched;
+    }
+    case "unreachable": {
+      return launchChainReasonCodes.unreachable;
+    }
+    case "unknown": {
+      return launchChainReasonCodes.verificationPending;
+    }
+  }
+}
+
+async function projectLaunchChain(
+  client: BscReadClient | null,
+): Promise<LaunchChainStatusProjection | null> {
+  if (client === null) {
+    return null;
+  }
+  const identity = Object.freeze({
+    chainId: client.chainId,
+    chainReference: client.chainReference,
+    confirmations: client.confirmations,
+    reorgDepthBlocks: client.reorgDepthBlocks,
+  });
+  if (client.endpointRefs.length === 0) {
+    return Object.freeze({
+      ...identity,
+      verification: "unknown" as const,
+      head: null,
+      reasonCode: launchChainReasonCodes.notConfigured,
+    });
+  }
+  const verification = await client.verifyChain();
+  const reasonCode = launchChainReasonCode(verification);
+  let head: ChainHeadProjection | null = null;
+  if (reasonCode === null) {
+    try {
+      const observed = await client.getHead();
+      head = Object.freeze({
+        blockNumber: observed.blockNumber.toString(10),
+        blockHash: observed.blockHash,
+        observedAt: observed.observedAt,
+      });
+    } catch {
+      head = null;
+    }
+  }
+  return Object.freeze({ ...identity, verification, head, reasonCode });
 }
 
 function rpcReasonCode(verification: ChainVerificationState): string | null {
@@ -170,6 +250,7 @@ export function createChainStatusService(
         input.repository.listReadableAssets(input.chainId),
         input.repository.listPools(input.chainId),
       ]);
+      const launchChain = await projectLaunchChain(input.launchReadClient);
 
       return Object.freeze({
         chain: Object.freeze({
@@ -195,6 +276,7 @@ export function createChainStatusService(
           readableAssetCount: assets.length,
           registeredPoolCount: pools.length,
         }),
+        launchChain,
         contractVersion: v2ContractVersion,
       });
     },

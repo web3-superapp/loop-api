@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import type { LaunchChainId } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 
 /**
@@ -10,12 +11,13 @@ import { v2ContractVersion } from "../meta/product-policy.js";
  * `LAUNCH_CONTRACT_BASELINE_PENDING`; the only writable surface is the
  * off-chain project application. Public fields are camelCase; every amount
  * is a string; every mutable rule carries `configVersion` + `effectiveAt`.
+ * The chain a launch belongs to is the `launch` slot configured at creation
+ * time (Decision 0038), never a constant of this module.
  */
 
 export const launchConfigVersion = "launchCatalogV1" as const;
 export const launchCommandDigestVersion = "launch_command_v1" as const;
 export const launchCommandIdempotencyScope = "v2_launch_command" as const;
-export const launchChainId = "eip155:56" as const;
 export const launchListLimits = Object.freeze({ default: 20, maximum: 50 });
 export const launchCursorRoutes = Object.freeze({
   projects: "v2LaunchProjects",
@@ -554,7 +556,7 @@ export interface LaunchSummaryProjection {
   readonly projectId: string;
   readonly name: string;
   readonly ticker: string;
-  readonly chainId: typeof launchChainId;
+  readonly chainId: LaunchChainId;
   readonly contractAddress: null;
   readonly configDigest: string | null;
   readonly scheduleStatus: LaunchScheduleStatus;

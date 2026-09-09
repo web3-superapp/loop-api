@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import type { AppConfig } from "../../config.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
+import { launchChainIds } from "../../features/chain/chain-contract.js";
 import {
   emptyQueryStringSchema,
   noStoreResponseHeaders,
@@ -249,6 +250,12 @@ const capabilitiesResponseSchema = {
                 enum: ["notApplicable", "pending"],
               },
               reasonCode: nullableReasonCodeSchema,
+              launchChainId: {
+                type: "string",
+                enum: [...launchChainIds],
+                description:
+                  "Present on the launch capability only (Decision 0038): the chain slot the Launch module points at.",
+              },
             },
           },
         },

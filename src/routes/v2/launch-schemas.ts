@@ -1,7 +1,7 @@
 import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
+import { launchChainIds } from "../../features/chain/chain-contract.js";
 import {
-  launchChainId,
   launchConfigVersion,
   launchConfigVersionPatternSource,
   launchEligibilityModes,
@@ -294,7 +294,12 @@ const launchSummarySchema = {
       maxLength: maximumLaunchRawTextLength,
     },
     ticker: { type: "string", pattern: launchTickerPatternSource },
-    chainId: { type: "string", const: launchChainId },
+    chainId: {
+      type: "string",
+      enum: [...launchChainIds],
+      description:
+        "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56.",
+    },
     contractAddress: {
       type: "null",
       description:

@@ -53,7 +53,7 @@ let watchlistV2: WatchlistV2Repository;
 
 async function cleanFixtures(): Promise<void> {
   await pool.query(
-    `delete from public.indexer_checkpoints where chain_id = 'eip155:56'`,
+    `delete from public.indexer_checkpoints where chain_id in ('eip155:56', 'eip155:97')`,
   );
   await pool.query(
     `delete from public.indexed_approvals where chain_id = 'eip155:56'`,
@@ -323,6 +323,39 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       limit: 10,
     });
     expect(afterReorg.items[0]?.removed).toBe(true);
+  });
+
+  it("keys a checkpoint by (lane, chain) so the launch slot's testnet can hold its own lane state (Decision 0038)", async () => {
+    // Migration 000026 seeded the chain row every chain-keyed table needs.
+    const chain = await registry.getChain("eip155:97");
+    expect(chain).toMatchObject({
+      chainId: "eip155:97",
+      reference: 97,
+      nativeAssetId: "eip155:97:native",
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+    });
+
+    const testnet = await indexer.commitTransferSegment({
+      chainId: "eip155:97",
+      transfers: [],
+      checkpoint: {
+        lastBlockNumber: "50000000",
+        lastBlockHash: `0x${"c".repeat(64)}`,
+        startedFromBlockNumber: "49999000",
+      },
+    });
+    expect(testnet).toMatchObject({
+      lastBlockNumber: "50000000",
+      reorgCount: 0,
+    });
+    await expect(
+      indexer.getCheckpoint("erc20_transfer", "eip155:97"),
+    ).resolves.toMatchObject({ lastBlockNumber: "50000000" });
+    // The primary chain's lane is untouched by the testnet checkpoint.
+    await expect(
+      indexer.getCheckpoint("erc20_transfer", bscChainId),
+    ).resolves.toBeNull();
   });
 
   it("tracks Approval coverage on the transfer lane: null until declared, min of every segment, lowered by a coverage backfill", async () => {

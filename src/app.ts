@@ -90,6 +90,7 @@ import {
   bscChainId,
   bscChainReference,
   bscNativeAssetId,
+  launchChainReasonCodes,
 } from "./features/chain/chain-contract.js";
 import {
   createWalletReadService,
@@ -395,6 +396,12 @@ export interface BuildAppOptions {
   readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
   readonly v2SessionService?: V2SessionService;
   readonly bscReadClient?: BscReadClient | BscChainCallClient;
+  /**
+   * Test seam for the launch chain slot's client (Decision 0038). Ignored
+   * while `LAUNCH_CHAIN_ID=56`, because the slot then shares the primary
+   * client and publishes nothing of its own.
+   */
+  readonly launchChainReadClient?: BscReadClient;
   readonly privyWalletReader?: PrivyWalletReader;
   readonly privyBalanceReader?: PrivyBalanceReader;
   readonly chainStatusService?: ChainStatusService;
@@ -1069,6 +1076,22 @@ export async function buildApp(
           reorgDepthBlocks: config.bscReorgDepthBlocks,
         })
       : createBscReadClient({ config: config.bscChain }));
+  // The launch chain slot (Decision 0038): a second read client only when
+  // the slot names a different chain than primary. Without endpoints it is
+  // the unavailable client with the slot's own reason code, never a crash.
+  const launchChainReadClient: BscReadClient | null = config.launchChain
+    .sharedWithPrimary
+    ? null
+    : (options.launchChainReadClient ??
+      (config.launchChain.rpcUrls.length === 0
+        ? createUnavailableBscReadClient({
+            chainId: config.launchChain.chainId,
+            chainReference: config.launchChain.chainReference,
+            confirmations: config.launchChain.confirmations,
+            reorgDepthBlocks: config.launchChain.reorgDepthBlocks,
+            reasonCode: launchChainReasonCodes.notConfigured,
+          })
+        : createBscReadClient({ config: config.launchChain })));
   const chainRegistryRepository =
     database.chainRegistry ?? createUnavailableChainRegistryRepository();
   const bscIndexerRepository =
@@ -1103,6 +1126,7 @@ export async function buildApp(
       chainName: "BNB Smart Chain",
       chainReference: bscChainReference,
       nativeAssetId: bscNativeAssetId,
+      launchReadClient: launchChainReadClient,
     });
   const watchlistV2Service =
     options.watchlistV2Service ??
@@ -1183,6 +1207,7 @@ export async function buildApp(
       chainId: bscChainId,
       chainName: "BNB Smart Chain",
       chainReference: bscChainReference,
+      launchChainReadClient,
     });
   const marketReadService =
     options.marketReadService ??
@@ -1392,6 +1417,31 @@ export async function buildApp(
         // The client records the failure; nothing else to do here.
       });
   }
+  // Same pattern for the launch chain slot (Decision 0038): probe once,
+  // warn on anything but `verified`, and let the projections read the live
+  // state per request.
+  if (
+    launchChainReadClient !== null &&
+    launchChainReadClient.endpointRefs.length > 0
+  ) {
+    void launchChainReadClient
+      .verifyChain()
+      .then((state) => {
+        if (state !== "verified") {
+          app.log.warn(
+            {
+              chainId: launchChainReadClient.chainId,
+              chainSlot: "launch",
+              chainVerification: state,
+            },
+            "Launch chain verification did not confirm the configured chain",
+          );
+        }
+      })
+      .catch(() => {
+        // The client records the failure; nothing else to do here.
+      });
+  }
 
   app.addHook("onClose", async () => {
     await database.close();
@@ -1516,6 +1566,7 @@ export async function buildApp(
         bscWritesEnabled: config.bscWrites !== null,
         privySwapRuntimeAvailable,
         launchRuntimeAvailable,
+        launchChainId: config.launchChain.chainId,
         miningRuntimeAvailable,
         referralRuntimeAvailable,
         securityRuntimeAvailable,

@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import pg from "pg";
 
+import {
+  ConfigurationError,
+  parseLaunchChainIdEnvironment,
+} from "../src/config.js";
 import { createPostgresLaunchRepository } from "../src/database/launch-repository.js";
+import type { LaunchChainId } from "../src/features/chain/chain-contract.js";
 import {
   launchReviewDecisions,
   type LaunchReviewDecision,
@@ -30,6 +35,7 @@ import type {
 export type LaunchReviewErrorCode =
   | "launch_review_arguments_invalid"
   | "launch_review_database_unconfigured"
+  | "launch_review_launch_chain_invalid"
   | "launch_review_forbidden_in_production"
   | "launch_review_failed";
 
@@ -42,7 +48,10 @@ interface OutputWriter {
   readonly write: (contents: string) => unknown;
 }
 
-export type CreateLaunchReviewRepository = (databaseUrl: string) => {
+export type CreateLaunchReviewRepository = (
+  databaseUrl: string,
+  launchChainId: LaunchChainId,
+) => {
   readonly repository: Pick<LaunchRepository, "reviewProject">;
   readonly close: () => Promise<void>;
 };
@@ -62,7 +71,10 @@ export class LaunchReviewError extends Error {
   }
 }
 
-function defaultCreateRepository(databaseUrl: string): {
+function defaultCreateRepository(
+  databaseUrl: string,
+  launchChainId: LaunchChainId,
+): {
   readonly repository: LaunchRepository;
   readonly close: () => Promise<void>;
 } {
@@ -72,7 +84,7 @@ function defaultCreateRepository(databaseUrl: string): {
     max: 1,
   });
   return {
-    repository: createPostgresLaunchRepository(pool),
+    repository: createPostgresLaunchRepository(pool, { launchChainId }),
     close: () => pool.end(),
   };
 }
@@ -82,6 +94,8 @@ export interface LaunchReviewRequest {
   readonly decision: LaunchReviewDecision;
   readonly reasonCode: string;
   readonly databaseUrl: string;
+  /** The `launch` chain slot from LAUNCH_CHAIN_ID (Decision 0038). */
+  readonly launchChainId: LaunchChainId;
 }
 
 export function parseLaunchReviewRequest(
@@ -109,11 +123,23 @@ export function parseLaunchReviewRequest(
   if (databaseUrl === undefined || databaseUrl === "") {
     throw new LaunchReviewError("launch_review_database_unconfigured");
   }
+  let launchChainId: LaunchChainId;
+  try {
+    launchChainId = parseLaunchChainIdEnvironment(
+      environment["LAUNCH_CHAIN_ID"],
+    );
+  } catch (error) {
+    if (error instanceof ConfigurationError) {
+      throw new LaunchReviewError("launch_review_launch_chain_invalid");
+    }
+    throw error;
+  }
   return Object.freeze({
     projectId,
     decision: decision as LaunchReviewDecision,
     reasonCode,
     databaseUrl,
+    launchChainId,
   });
 }
 
@@ -124,7 +150,10 @@ export async function reviewLaunchProject(
   readonly project: LaunchProjectRecord;
   readonly launch: LaunchRecord | null;
 }> {
-  const { repository, close } = createRepository(request.databaseUrl);
+  const { repository, close } = createRepository(
+    request.databaseUrl,
+    request.launchChainId,
+  );
   try {
     return await repository.reviewProject({
       projectId: request.projectId,
@@ -155,7 +184,7 @@ export async function runLaunchReview(
       `Project ${result.project.projectId} is ${result.project.reviewStatus}` +
         (result.launch === null
           ? "\n"
-          : ` (launch ${result.launch.launchId}, ${result.launch.scheduleStatus})\n`),
+          : ` (launch ${result.launch.launchId}, ${result.launch.scheduleStatus}, ${result.launch.chainId})\n`),
     );
     return 0;
   } catch {

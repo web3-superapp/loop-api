@@ -1223,6 +1223,11 @@
                                   },
                                   { "type": "null" }
                                 ]
+                              },
+                              "launchChainId": {
+                                "type": "string",
+                                "enum": ["eip155:56", "eip155:97"],
+                                "description": "Present on the launch capability only (Decision 0038): the chain slot the Launch module points at."
                               }
                             }
                           }
@@ -42598,6 +42603,7 @@
                     "rpc",
                     "indexer",
                     "registry",
+                    "launchChain",
                     "contractVersion"
                   ],
                   "properties": {
@@ -42844,6 +42850,90 @@
                           "minimum": 0
                         }
                       }
+                    },
+                    "launchChain": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "chainId",
+                            "chainReference",
+                            "verification",
+                            "confirmations",
+                            "reorgDepthBlocks",
+                            "head",
+                            "reasonCode"
+                          ],
+                          "properties": {
+                            "chainId": {
+                              "type": "string",
+                              "enum": ["eip155:56", "eip155:97"]
+                            },
+                            "chainReference": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "verification": {
+                              "type": "string",
+                              "enum": [
+                                "verified",
+                                "mismatched",
+                                "unreachable",
+                                "unknown"
+                              ]
+                            },
+                            "confirmations": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "reorgDepthBlocks": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "head": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "blockNumber",
+                                    "blockHash",
+                                    "observedAt"
+                                  ],
+                                  "properties": {
+                                    "blockNumber": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                      "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                    },
+                                    "blockHash": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{64}$"
+                                    },
+                                    "observedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "The launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain; otherwise its own verification, head, and reason code, without endpoint details."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -45517,6 +45607,7 @@
                     "gasReservePolicy",
                     "balances",
                     "netWorth",
+                    "launchChain",
                     "contractVersion"
                   ],
                   "properties": {
@@ -45930,6 +46021,132 @@
                           }
                         }
                       ]
+                    },
+                    "launchChain": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "chainId",
+                            "availability",
+                            "reasonCode",
+                            "nativeBalance"
+                          ],
+                          "properties": {
+                            "chainId": {
+                              "type": "string",
+                              "enum": ["eip155:56", "eip155:97"]
+                            },
+                            "availability": {
+                              "type": "string",
+                              "enum": ["available", "unavailable"]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "nativeBalance": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "assetId",
+                                    "symbol",
+                                    "decimals",
+                                    "rawValue",
+                                    "displayBalance",
+                                    "availableBalance",
+                                    "spendableBalance",
+                                    "gasReserve",
+                                    "snapshot"
+                                  ],
+                                  "properties": {
+                                    "assetId": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                                      "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                                    },
+                                    "symbol": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 32
+                                    },
+                                    "decimals": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 36
+                                    },
+                                    "rawValue": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                      "description": "Integer amount in the asset's smallest unit, as a string."
+                                    },
+                                    "displayBalance": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                      "description": "Exact decimal string; never a JavaScript floating-point value."
+                                    },
+                                    "availableBalance": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                      "description": "Exact decimal string; never a JavaScript floating-point value."
+                                    },
+                                    "spendableBalance": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                      "description": "Exact decimal string; never a JavaScript floating-point value."
+                                    },
+                                    "gasReserve": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                      "description": "Exact decimal string; never a JavaScript floating-point value."
+                                    },
+                                    "snapshot": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "blockNumber",
+                                        "blockHash",
+                                        "observedAt",
+                                        "confirmations"
+                                      ],
+                                      "properties": {
+                                        "blockNumber": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                          "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                        },
+                                        "blockHash": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "observedAt": {
+                                          "type": "string",
+                                          "format": "date-time"
+                                        },
+                                        "confirmations": {
+                                          "type": "integer",
+                                          "minimum": 1
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -71608,7 +71825,8 @@
                               },
                               "chainId": {
                                 "type": "string",
-                                "enum": ["eip155:56"]
+                                "enum": ["eip155:56", "eip155:97"],
+                                "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
                                 "type": "null",
@@ -71732,7 +71950,8 @@
                               },
                               "chainId": {
                                 "type": "string",
-                                "enum": ["eip155:56"]
+                                "enum": ["eip155:56", "eip155:97"],
+                                "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
                                 "type": "null",
@@ -71857,7 +72076,8 @@
                               },
                               "chainId": {
                                 "type": "string",
-                                "enum": ["eip155:56"]
+                                "enum": ["eip155:56", "eip155:97"],
+                                "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
                                 "type": "null",
@@ -71982,7 +72202,8 @@
                               },
                               "chainId": {
                                 "type": "string",
-                                "enum": ["eip155:56"]
+                                "enum": ["eip155:56", "eip155:97"],
+                                "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
                                 "type": "null",
@@ -77439,7 +77660,11 @@
                           "type": "string",
                           "pattern": "^[A-Z0-9]{2,12}$"
                         },
-                        "chainId": { "type": "string", "enum": ["eip155:56"] },
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"],
+                          "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
+                        },
                         "contractAddress": {
                           "type": "null",
                           "description": "Always null: no Launch contract has been deployed, audited, or verified."

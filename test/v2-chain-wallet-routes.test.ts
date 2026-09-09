@@ -36,8 +36,10 @@ import { bscChainId } from "../src/features/chain/chain-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import {
+  BscChainMismatchError,
   BscReadUnavailableError,
   type BscReadClient,
+  type ChainVerificationState,
 } from "../src/integrations/bsc/rpc-client.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 import type {
@@ -61,6 +63,8 @@ const walletAddress = "0x00000000000000000000000000000000000000a1";
 const counterparty = "0x00000000000000000000000000000000000000b2";
 const headNumber = 44_000_000n;
 const headHash = `0x${"1".repeat(64)}`;
+const launchHeadNumber = 52_000_000n;
+const launchHeadHash = `0x${"9".repeat(64)}`;
 const observedAt = "2026-09-08T00:00:00.000Z";
 
 const nativeAsset: AssetRecord = Object.freeze({
@@ -364,6 +368,70 @@ function readClientFake(
   return client;
 }
 
+/**
+ * The launch slot's own client (Decision 0038): chain 97, native balance
+ * only. `verification` drives what the slot reports; `configured: false`
+ * is the unavailable client with the slot's reason code.
+ */
+function launchClientFake(
+  options: {
+    readonly configured?: boolean;
+    readonly verification?: ChainVerificationState;
+    readonly failBalance?: boolean;
+  } = {},
+): BscReadClient {
+  const configured = options.configured !== false;
+  const verification = options.verification ?? "verified";
+  const rejectRead = (): Promise<never> =>
+    Promise.reject(
+      !configured
+        ? new BscReadUnavailableError("LAUNCH_CHAIN_RPC_NOT_CONFIGURED")
+        : verification === "mismatched"
+          ? new BscChainMismatchError()
+          : new BscReadUnavailableError("BSC_RPC_UNREACHABLE"),
+    );
+  const head = {
+    blockNumber: launchHeadNumber,
+    blockHash: launchHeadHash,
+    observedAt,
+  };
+  return {
+    chainId: "eip155:97",
+    chainReference: 97,
+    confirmations: 5,
+    reorgDepthBlocks: 15,
+    endpointRefs: configured ? ["rpc-fedcbafedcba"] : [],
+    verifyChain: () => Promise.resolve(configured ? verification : "unknown"),
+    currentVerification: () => (configured ? verification : "unknown"),
+    getHead: () =>
+      configured && verification === "verified"
+        ? Promise.resolve(head)
+        : rejectRead(),
+    getBlockHash: () => Promise.resolve(launchHeadHash),
+    readTokenIdentity: () => Promise.reject(new Error("not used")),
+    readPoolIdentity: () => Promise.reject(new Error("not used")),
+    readBalances: (_owner, items) =>
+      configured && verification === "verified"
+        ? Promise.resolve({
+            head,
+            balances: items.map((item) => ({
+              assetId: item.assetId,
+              rawValue:
+                options.failBalance === true
+                  ? null
+                  : 2_500_000_000_000_000_000n,
+              reasonCode:
+                options.failBalance === true ? "BSC_BALANCE_CALL_FAILED" : null,
+            })),
+          })
+        : rejectRead(),
+    readTransferLogs: () => Promise.resolve([]),
+    readPoolEventLogs: () => Promise.resolve([]),
+    readApprovalLogs: () => Promise.resolve([]),
+    probeEndpoints: () => Promise.resolve([]),
+  };
+}
+
 function privyReadersFake(
   options: { readonly matched?: boolean; readonly empty?: boolean } = {},
 ) {
@@ -476,7 +544,9 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
   });
 
   async function createApp(
-    dependencies = fakes(),
+    dependencies: ReturnType<typeof fakes> & {
+      readonly launchChainReadClient?: BscReadClient;
+    } = fakes(),
     overrides: Readonly<Record<string, string>> = {},
     marketFactService?: MarketFactService,
   ) {
@@ -486,6 +556,9 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       database: dependencies.database,
       privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
       bscReadClient: dependencies.bscReadClient,
+      ...(dependencies.launchChainReadClient === undefined
+        ? {}
+        : { launchChainReadClient: dependencies.launchChainReadClient }),
       privyWalletReader: dependencies.walletReader,
       privyBalanceReader: dependencies.balanceReader,
       ...(marketFactService === undefined ? {} : { marketFactService }),
@@ -638,6 +711,264 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(body.indexer[0]?.reorgCount).toBe(2);
     expect(body.chain.confirmations).toBe(15);
     expect(response.body).not.toContain("example");
+  });
+
+  it("publishes launchChain as null while the launch slot is shared with primary (Decision 0038)", async () => {
+    const { app } = await createApp();
+    const status = await app.inject({
+      method: "GET",
+      url: "/v2/chain/status",
+      headers: commonHeaders(),
+    });
+    expect(status.statusCode).toBe(200);
+    const statusBody = status.json<Record<string, unknown>>();
+    expect(statusBody["launchChain"]).toBeNull();
+    expect(Object.keys(statusBody)).toEqual([
+      "chain",
+      "rpc",
+      "indexer",
+      "registry",
+      "launchChain",
+      "contractVersion",
+    ]);
+
+    const balances = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(balances.statusCode).toBe(200);
+    const balancesBody = balances.json<Record<string, unknown>>();
+    expect(balancesBody["launchChain"]).toBeNull();
+    expect(Object.keys(balancesBody)).toEqual([
+      "walletId",
+      "snapshot",
+      "gasReservePolicy",
+      "balances",
+      "netWorth",
+      "launchChain",
+      "contractVersion",
+    ]);
+
+    // An injected launch client is ignored while the slot is shared: the
+    // seam cannot make LAUNCH_CHAIN_ID=56 publish a second chain.
+    const { app: sharedWithSeam } = await createApp({
+      ...fakes(),
+      launchChainReadClient: launchClientFake(),
+    });
+    const seamStatus = await sharedWithSeam.inject({
+      method: "GET",
+      url: "/v2/chain/status",
+      headers: commonHeaders(),
+    });
+    expect(
+      seamStatus.json<Record<string, unknown>>()["launchChain"],
+    ).toBeNull();
+  });
+
+  it("publishes the launch slot's testnet status and tBNB balance beside the primary chain", async () => {
+    const { app } = await createApp(
+      { ...fakes(), launchChainReadClient: launchClientFake() },
+      { LAUNCH_CHAIN_ID: "97" },
+    );
+    const status = await app.inject({
+      method: "GET",
+      url: "/v2/chain/status",
+      headers: commonHeaders(),
+    });
+    expect(status.statusCode).toBe(200);
+    const statusBody = status.json<{
+      readonly chain: { readonly chainId: string };
+      readonly rpc: { readonly status: string };
+      readonly launchChain: Record<string, unknown>;
+    }>();
+    // The primary slot is untouched.
+    expect(statusBody.chain.chainId).toBe("eip155:56");
+    expect(statusBody.rpc.status).toBe("available");
+    expect(statusBody.launchChain).toEqual({
+      chainId: "eip155:97",
+      chainReference: 97,
+      verification: "verified",
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+      head: {
+        blockNumber: launchHeadNumber.toString(10),
+        blockHash: launchHeadHash,
+        observedAt,
+      },
+      reasonCode: null,
+    });
+    expect(status.body).not.toContain("example");
+
+    const balances = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(balances.statusCode).toBe(200);
+    const balancesBody = balances.json<
+      BalancesBody & { readonly launchChain: Record<string, unknown> }
+    >();
+    // Primary rows and snapshot are exactly the mainnet facts.
+    expect(balancesBody.snapshot.blockNumber).toBe(headNumber.toString(10));
+    expect(balancesBody.balances.map((row) => row.assetId)).toEqual([
+      "eip155:56:native",
+      wbnbAssetId,
+    ]);
+    expect(balancesBody.launchChain).toEqual({
+      chainId: "eip155:97",
+      availability: "available",
+      reasonCode: null,
+      nativeBalance: {
+        assetId: "eip155:97:native",
+        symbol: "tBNB",
+        decimals: 18,
+        rawValue: "2500000000000000000",
+        displayBalance: "2.5",
+        availableBalance: "2.5",
+        spendableBalance: "2.495",
+        gasReserve: "0.005",
+        snapshot: {
+          blockNumber: launchHeadNumber.toString(10),
+          blockHash: launchHeadHash,
+          observedAt,
+          confirmations: 5,
+        },
+      },
+    });
+
+    const capabilities = await app.inject({
+      method: "GET",
+      url: "/v2/meta/capabilities",
+    });
+    const bscRead = capabilities
+      .json<{
+        readonly capabilities: readonly {
+          readonly capabilityId: string;
+          readonly availability: string;
+        }[];
+      }>()
+      .capabilities.find((capability) => capability.capabilityId === "bscRead");
+    expect(bscRead?.availability).toBe("available");
+  });
+
+  it("reports the launch slot's failures inside launchChain without failing the primary reads", async () => {
+    const cases: readonly {
+      readonly client: BscReadClient;
+      readonly reasonCode: string;
+      readonly verification: ChainVerificationState;
+      /**
+       * A balance read forces the probe, so "verification pending" cannot
+       * survive it: the fake then answers as unreachable.
+       */
+      readonly balancesReasonCode?: string;
+    }[] = [
+      {
+        client: launchClientFake({ configured: false }),
+        reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+        verification: "unknown",
+      },
+      {
+        client: launchClientFake({ verification: "mismatched" }),
+        reasonCode: "LAUNCH_CHAIN_ID_MISMATCH",
+        verification: "mismatched",
+      },
+      {
+        client: launchClientFake({ verification: "unreachable" }),
+        reasonCode: "LAUNCH_CHAIN_RPC_UNREACHABLE",
+        verification: "unreachable",
+      },
+      {
+        client: launchClientFake({ verification: "unknown" }),
+        reasonCode: "LAUNCH_CHAIN_VERIFICATION_PENDING",
+        verification: "unknown",
+        balancesReasonCode: "LAUNCH_CHAIN_RPC_UNREACHABLE",
+      },
+    ];
+    for (const testCase of cases) {
+      const { app } = await createApp(
+        { ...fakes(), launchChainReadClient: testCase.client },
+        { LAUNCH_CHAIN_ID: "97" },
+      );
+      const status = await app.inject({
+        method: "GET",
+        url: "/v2/chain/status",
+        headers: commonHeaders(),
+      });
+      expect(status.statusCode, testCase.reasonCode).toBe(200);
+      expect(
+        status.json<{ readonly launchChain: unknown }>().launchChain,
+        testCase.reasonCode,
+      ).toEqual({
+        chainId: "eip155:97",
+        chainReference: 97,
+        verification: testCase.verification,
+        confirmations: 5,
+        reorgDepthBlocks: 15,
+        head: null,
+        reasonCode: testCase.reasonCode,
+      });
+
+      const balances = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      });
+      expect(balances.statusCode, testCase.reasonCode).toBe(200);
+      const body = balances.json<
+        BalancesBody & { readonly launchChain: unknown }
+      >();
+      expect(body.balances).toHaveLength(2);
+      expect(body.launchChain, testCase.reasonCode).toEqual({
+        chainId: "eip155:97",
+        availability: "unavailable",
+        reasonCode: testCase.balancesReasonCode ?? testCase.reasonCode,
+        nativeBalance: null,
+      });
+    }
+
+    // A failed eth_getBalance keeps the slot's identity and names the call.
+    const { app } = await createApp(
+      {
+        ...fakes(),
+        launchChainReadClient: launchClientFake({ failBalance: true }),
+      },
+      { LAUNCH_CHAIN_ID: "97" },
+    );
+    const balances = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(
+      balances.json<{ readonly launchChain: unknown }>().launchChain,
+    ).toEqual({
+      chainId: "eip155:97",
+      availability: "unavailable",
+      reasonCode: "BSC_BALANCE_CALL_FAILED",
+      nativeBalance: null,
+    });
+  });
+
+  it("composes the unavailable launch client when LAUNCH_CHAIN_ID=97 has no endpoints", async () => {
+    const { app } = await createApp(fakes(), { LAUNCH_CHAIN_ID: "97" });
+    const status = await app.inject({
+      method: "GET",
+      url: "/v2/chain/status",
+      headers: commonHeaders(),
+    });
+    expect(status.statusCode).toBe(200);
+    expect(
+      status.json<{ readonly launchChain: unknown }>().launchChain,
+    ).toEqual({
+      chainId: "eip155:97",
+      chainReference: 97,
+      verification: "unknown",
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+      head: null,
+      reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+    });
   });
 
   it("projects a registry asset with a non-swappable capability", async () => {

@@ -469,4 +469,79 @@ describe("BSC read client", () => {
     expect(configured.confirmations).toBe(21);
     expect(configured.reorgDepthBlocks).toBe(96);
   });
+
+  it("serves the launch slot's testnet with the same verification discipline (Decision 0038)", async () => {
+    const testnet = createBscReadClient({
+      config: {
+        chainId: "eip155:97",
+        chainReference: 97,
+        rpcUrls: ["https://bsc-testnet-rpc.example/"],
+        confirmations: 5,
+        reorgDepthBlocks: 15,
+      },
+      transportFactory: () => chainTransport({ chainId: "0x61" }),
+    });
+    expect(testnet.chainId).toBe("eip155:97");
+    expect(testnet.chainReference).toBe(97);
+    expect(testnet.confirmations).toBe(5);
+    expect(testnet.reorgDepthBlocks).toBe(15);
+    await expect(testnet.verifyChain()).resolves.toBe("verified");
+    const balances = await testnet.readBalances(owner, [
+      { assetId: "eip155:97:native", address: null },
+    ]);
+    expect(balances.head.blockNumber).toBe(headNumber);
+    expect(balances.balances).toEqual([
+      {
+        assetId: "eip155:97:native",
+        rawValue: 7_000_000_000_000_000_000n,
+        reasonCode: null,
+      },
+    ]);
+
+    // A mainnet endpoint behind the testnet slot is a mismatch, not a
+    // silently wrong chain.
+    const mainnetBehindTestnet = createBscReadClient({
+      config: {
+        chainId: "eip155:97",
+        chainReference: 97,
+        rpcUrls: ["https://rpc-a.example/"],
+        confirmations: 5,
+        reorgDepthBlocks: 15,
+      },
+      transportFactory: () => chainTransport({ chainId: "0x38" }),
+    });
+    await expect(mainnetBehindTestnet.verifyChain()).resolves.toBe(
+      "mismatched",
+    );
+    await expect(
+      mainnetBehindTestnet.readBalances(owner, [
+        { assetId: "eip155:97:native", address: null },
+      ]),
+    ).rejects.toBeInstanceOf(BscChainMismatchError);
+    const probes = await mainnetBehindTestnet.probeEndpoints();
+    expect(probes[0]).toMatchObject({
+      status: "degraded",
+      chainVerification: "mismatched",
+    });
+  });
+
+  it("closes the launch slot with its own identity and reason code when no endpoint is configured", async () => {
+    const client = createUnavailableBscReadClient({
+      chainId: "eip155:97",
+      chainReference: 97,
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+      reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+    });
+    expect(client.chainId).toBe("eip155:97");
+    expect(client.chainReference).toBe(97);
+    expect(client.endpointRefs).toEqual([]);
+    await expect(
+      client.readBalances(owner, [
+        { assetId: "eip155:97:native", address: null },
+      ]),
+    ).rejects.toMatchObject({ reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED" });
+    // The primary unavailable client is unchanged.
+    expect(createUnavailableBscReadClient().chainId).toBe("eip155:56");
+  });
 });

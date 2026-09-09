@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigurationError, loadConfig } from "../src/config.js";
+import {
+  ConfigurationError,
+  loadConfig,
+  parseLaunchChainIdEnvironment,
+} from "../src/config.js";
 
 function validEnvironment(): NodeJS.ProcessEnv {
   return {
@@ -511,5 +515,143 @@ describe("loadConfig", () => {
       ]);
       expect(config.v2Cursor).toEqual({ hmacSecret: secret, ttlSeconds: 600 });
     });
+  });
+});
+
+describe("launch chain slot (Decision 0038)", () => {
+  it("defaults the launch slot to the primary chain and mirrors its read policy", () => {
+    const environment = validEnvironment();
+    environment["BSC_RPC_URLS"] =
+      "https://rpc-a.example/,https://rpc-b.example/";
+    environment["BSC_CONFIRMATIONS"] = "21";
+    environment["BSC_REORG_DEPTH_BLOCKS"] = "96";
+
+    const config = loadConfig(environment);
+
+    expect(config.launchChain).toEqual({
+      chainId: "eip155:56",
+      chainReference: 56,
+      rpcUrls: ["https://rpc-a.example/", "https://rpc-b.example/"],
+      confirmations: 21,
+      reorgDepthBlocks: 96,
+      sharedWithPrimary: true,
+    });
+    expect(Object.isFrozen(config.launchChain)).toBe(true);
+  });
+
+  it("keeps the shared slot without endpoints when the primary chain has none", () => {
+    const config = loadConfig(validEnvironment());
+    expect(config.launchChain).toEqual({
+      chainId: "eip155:56",
+      chainReference: 56,
+      rpcUrls: [],
+      confirmations: 15,
+      reorgDepthBlocks: 64,
+      sharedWithPrimary: true,
+    });
+  });
+
+  it("refuses LAUNCH_BSC_* overrides while the slot is shared with the primary chain", () => {
+    for (const [key, value] of [
+      ["LAUNCH_BSC_RPC_URLS", "https://testnet.example/"],
+      ["LAUNCH_BSC_CONFIRMATIONS", "5"],
+      ["LAUNCH_BSC_REORG_DEPTH_BLOCKS", "15"],
+    ] as const) {
+      const environment = validEnvironment();
+      environment[key] = value;
+      expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+      expect(() => loadConfig(environment)).toThrow(
+        new RegExp(`${key}: must be blank while LAUNCH_CHAIN_ID=56`),
+      );
+      const explicit = validEnvironment();
+      explicit["LAUNCH_CHAIN_ID"] = "56";
+      explicit[key] = value;
+      expect(() => loadConfig(explicit)).toThrow(ConfigurationError);
+    }
+  });
+
+  it("names the BSC testnet without endpoints as an unavailable slot, never a startup failure", () => {
+    const environment = validEnvironment();
+    environment["LAUNCH_CHAIN_ID"] = "97";
+
+    const config = loadConfig(environment);
+
+    expect(config.launchChain).toEqual({
+      chainId: "eip155:97",
+      chainReference: 97,
+      rpcUrls: [],
+      confirmations: 5,
+      reorgDepthBlocks: 15,
+      sharedWithPrimary: false,
+    });
+    expect(config.bscChain).toBeNull();
+  });
+
+  it("parses the testnet endpoint list with the primary URL rules and its own defaults", () => {
+    const environment = validEnvironment();
+    environment["BSC_RPC_URLS"] = "https://rpc-a.example/";
+    environment["LAUNCH_CHAIN_ID"] = "97";
+    environment["LAUNCH_BSC_RPC_URLS"] =
+      " https://bsc-testnet-rpc.example/ , https://bsc-testnet-rpc.example/, https://data-seed.example:8545 ";
+    environment["LAUNCH_BSC_CONFIRMATIONS"] = "3";
+
+    const config = loadConfig(environment);
+
+    expect(config.launchChain).toEqual({
+      chainId: "eip155:97",
+      chainReference: 97,
+      rpcUrls: [
+        "https://bsc-testnet-rpc.example/",
+        "https://data-seed.example:8545/",
+      ],
+      confirmations: 3,
+      reorgDepthBlocks: 15,
+      sharedWithPrimary: false,
+    });
+    // The primary slot is untouched by the launch slot.
+    expect(config.bscChain).toMatchObject({
+      chainId: "eip155:56",
+      rpcUrls: ["https://rpc-a.example/"],
+      confirmations: 15,
+      reorgDepthBlocks: 64,
+    });
+  });
+
+  it("rejects an unsupported launch chain, credentialed testnet URLs, and out-of-range policy", () => {
+    for (const overrides of [
+      { LAUNCH_CHAIN_ID: "1" },
+      { LAUNCH_CHAIN_ID: "eip155:97" },
+      {
+        LAUNCH_CHAIN_ID: "97",
+        LAUNCH_BSC_RPC_URLS: "https://user:pass@bsc-testnet.example/",
+      },
+      {
+        LAUNCH_CHAIN_ID: "97",
+        LAUNCH_BSC_RPC_URLS: "ws://bsc-testnet.example/",
+      },
+      { LAUNCH_CHAIN_ID: "97", LAUNCH_BSC_CONFIRMATIONS: "0" },
+      { LAUNCH_CHAIN_ID: "97", LAUNCH_BSC_REORG_DEPTH_BLOCKS: "1001" },
+    ]) {
+      const environment = { ...validEnvironment(), ...overrides };
+      expect(() => loadConfig(environment), JSON.stringify(overrides)).toThrow(
+        ConfigurationError,
+      );
+    }
+    const credentialed = validEnvironment();
+    credentialed["LAUNCH_CHAIN_ID"] = "97";
+    credentialed["LAUNCH_BSC_RPC_URLS"] =
+      "https://user:pass@bsc-testnet.example/";
+    expect(() => loadConfig(credentialed)).toThrow(/LAUNCH_BSC_RPC_URLS/);
+    expect(() => loadConfig(credentialed)).not.toThrow(/pass@/);
+  });
+
+  it("reads the launch chain ID for operator scripts with the same defaults", () => {
+    expect(parseLaunchChainIdEnvironment(undefined)).toBe("eip155:56");
+    expect(parseLaunchChainIdEnvironment("")).toBe("eip155:56");
+    expect(parseLaunchChainIdEnvironment(" 56 ")).toBe("eip155:56");
+    expect(parseLaunchChainIdEnvironment("97")).toBe("eip155:97");
+    expect(() => parseLaunchChainIdEnvironment("1")).toThrow(
+      ConfigurationError,
+    );
   });
 });

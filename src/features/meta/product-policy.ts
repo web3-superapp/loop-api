@@ -1,5 +1,6 @@
 import type { AppConfig, V2ModuleId } from "../../config.js";
 import type { ChainVerificationState } from "../../integrations/bsc/rpc-client.js";
+import type { LaunchChainId } from "../chain/chain-contract.js";
 
 export const v2ContractVersion = "2.0" as const;
 export const v2ProductConfigVersion = "productPolicyV2.2026-09-01" as const;
@@ -95,6 +96,11 @@ export interface V2CapabilityProjection {
   readonly evidence: {
     readonly status: V2CapabilityEvidenceStatus;
     readonly reasonCode: string | null;
+    /**
+     * `launch` only (Decision 0038): the chain slot the Launch module points
+     * at, so the client can show the testnet badge before any launch exists.
+     */
+    readonly launchChainId?: LaunchChainId;
   };
 }
 
@@ -171,6 +177,8 @@ export interface V2ProductPolicyRuntime {
   readonly privySwapRuntimeAvailable: boolean;
   /** `launch` module enabled with the launch repository and cursor codec (Decision 0036). */
   readonly launchRuntimeAvailable: boolean;
+  /** The configured `launch` chain slot (Decision 0038). */
+  readonly launchChainId: LaunchChainId;
   /** `mining` module enabled with the mining repository composed (Decision 0036). */
   readonly miningRuntimeAvailable: boolean;
   /** `referral` module enabled with the referral repository composed (Decision 0036). */
@@ -537,10 +545,12 @@ function evidencePendingModuleCapability(
   deferredReasonCode: string,
   unavailableReasonCode: string,
   evidencePendingReasonCode: string,
+  launchChainId?: LaunchChainId,
 ): V2CapabilityProjection {
   const evidence = Object.freeze({
     status: "pending" as const,
     reasonCode: evidencePendingReasonCode,
+    ...(launchChainId === undefined ? {} : { launchChainId }),
   });
   if (!config.v2ModulesEnabled.has(moduleId)) {
     return Object.freeze({
@@ -836,6 +846,7 @@ export function createV2CapabilitiesProjection(
       v2LaunchModuleDeferredReasonCode,
       v2LaunchRuntimeUnavailableReasonCode,
       v2LaunchEvidencePendingReasonCode,
+      runtime.launchChainId,
     ),
     evidencePendingModuleCapability(
       config,

@@ -7,13 +7,20 @@ import {
   InvalidParamsRpcError,
   LimitExceededRpcError,
   type Address,
+  type Chain,
   type Hex,
   type PublicClient,
   type Transport,
 } from "viem";
-import { bsc } from "viem/chains";
+import { bsc, bscTestnet } from "viem/chains";
 
-import type { BscChainConfig } from "../../config.js";
+import {
+  bscChainId,
+  bscChainReference,
+  bscTestnetChainReference,
+  type LaunchChainId,
+  type LaunchChainReference,
+} from "../../features/chain/chain-contract.js";
 import {
   erc20AllowanceAbi,
   erc20ApprovalEvent,
@@ -211,9 +218,22 @@ export interface BscTransactionReceiptObservation {
   readonly effectiveGasPrice: bigint;
 }
 
+/**
+ * What a read client needs to know about its chain slot (Decision 0038). Both
+ * `BscChainConfig` (primary, always 56) and `LaunchChainConfig` (56 or 97)
+ * satisfy it; the client never learns which slot it serves.
+ */
+export interface BscRpcChainConfig {
+  readonly chainId: LaunchChainId;
+  readonly chainReference: LaunchChainReference;
+  readonly rpcUrls: readonly string[];
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+}
+
 export interface BscReadClient {
-  readonly chainId: BscChainConfig["chainId"];
-  readonly chainReference: BscChainConfig["chainReference"];
+  readonly chainId: LaunchChainId;
+  readonly chainReference: LaunchChainReference;
   readonly confirmations: number;
   readonly reorgDepthBlocks: number;
   readonly endpointRefs: readonly string[];
@@ -315,17 +335,26 @@ export interface BscTransportFactory {
 }
 
 export interface CreateBscReadClientOptions {
-  readonly config: BscChainConfig;
+  readonly config: BscRpcChainConfig;
   /** Test seam: supplies a mock transport instead of an HTTP transport. */
   readonly transportFactory?: BscTransportFactory;
   readonly now?: () => Date;
   readonly monotonicMs?: () => number;
 }
 
-type ViemClient = PublicClient<Transport, typeof bsc>;
+type ViemClient = PublicClient<Transport, Chain>;
 
 function defaultTransport(url: string): Transport {
   return http(url, { timeout: requestTimeoutMs, retryCount: 0 });
+}
+
+/**
+ * viem's built-in definition for the configured chain reference. Both carry
+ * the Multicall3 address; the testnet one is used only for native balance
+ * reads in this step (Decision 0038), never through Multicall3.
+ */
+function viemChainFor(reference: LaunchChainReference): Chain {
+  return reference === bscTestnetChainReference ? bscTestnet : bsc;
 }
 
 function asAddress(value: string): Address {
@@ -416,18 +445,19 @@ export function createBscReadClient(
   const monotonicMs =
     options.monotonicMs ??
     ((): number => Number(process.hrtime.bigint() / 1_000_000n));
+  const chain = viemChainFor(config.chainReference);
   const endpoints: readonly {
     readonly endpointRef: string;
     readonly client: ViemClient;
   }[] = config.rpcUrls.map((url) => ({
     endpointRef: endpointRefFor(url),
     client: createPublicClient({
-      chain: bsc,
+      chain,
       transport: transportFactory(url),
     }),
   }));
   const aggregate: ViemClient = createPublicClient({
-    chain: bsc,
+    chain,
     transport: fallback(config.rpcUrls.map((url) => transportFactory(url))),
   });
 
@@ -1148,18 +1178,23 @@ export function asChainCallClient(
 /**
  * The client used when no RPC endpoint is configured. Every read rejects with
  * a stable reason code; nothing is inferred, cached, or replaced by a fixture.
+ * The launch slot passes its own identity and reason code (Decision 0038).
  */
 export function createUnavailableBscReadClient(
   options: {
+    readonly chainId?: LaunchChainId;
+    readonly chainReference?: LaunchChainReference;
     readonly confirmations?: number;
     readonly reorgDepthBlocks?: number;
+    readonly reasonCode?: string;
   } = {},
 ): BscChainCallClient {
+  const reasonCode = options.reasonCode ?? "BSC_RPC_NOT_CONFIGURED";
   const reject = (): Promise<never> =>
-    Promise.reject(new BscReadUnavailableError("BSC_RPC_NOT_CONFIGURED"));
+    Promise.reject(new BscReadUnavailableError(reasonCode));
   return Object.freeze({
-    chainId: "eip155:56" as const,
-    chainReference: 56 as const,
+    chainId: options.chainId ?? bscChainId,
+    chainReference: options.chainReference ?? bscChainReference,
     confirmations: options.confirmations ?? defaultBscConfirmations,
     reorgDepthBlocks: options.reorgDepthBlocks ?? defaultBscReorgDepthBlocks,
     endpointRefs: Object.freeze([] as readonly string[]),

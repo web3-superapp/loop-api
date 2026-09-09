@@ -1,3 +1,4 @@
+import type { LaunchChainId } from "../chain/chain-contract.js";
 import type {
   LaunchEligibilityTier,
   LaunchKybStatus,
@@ -40,7 +41,8 @@ export interface LaunchProjectRecord {
 export interface LaunchRecord {
   readonly launchId: string;
   readonly projectId: string;
-  readonly chainId: string;
+  /** The launch chain slot at creation time (Decision 0038). */
+  readonly chainId: LaunchChainId;
   readonly contractAddress: string | null;
   readonly configDigest: string | null;
   readonly scheduleStatus: LaunchScheduleStatus;

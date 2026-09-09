@@ -4,8 +4,12 @@ import type { Pool } from "pg";
 import { z } from "zod";
 
 import {
+  bscChainId,
+  launchChainIds,
+  type LaunchChainId,
+} from "../features/chain/chain-contract.js";
+import {
   isVenueMilestoneTransitionAllowed,
-  launchChainId,
   launchCommandDigestVersion,
   launchCommandIdempotencyScope,
   launchEligibilityTiers,
@@ -116,7 +120,7 @@ const launchRowSchema = z
   .object({
     launch_id: opaqueIdSchema,
     project_id: opaqueIdSchema,
-    chain_id: z.literal(launchChainId),
+    chain_id: z.enum(launchChainIds),
     contract_address: z.string().nullable(),
     config_digest: z.string().nullable(),
     schedule_status: z.enum(launchScheduleStatuses),
@@ -409,7 +413,19 @@ function countsByKey<T extends string>(
   return Object.freeze(counts);
 }
 
-export function createPostgresLaunchRepository(pool: Pool): LaunchRepository {
+export interface PostgresLaunchRepositoryOptions {
+  /**
+   * The chain a newly approved launch is created on (Decision 0038). It is
+   * the configured `launch` slot; existing rows keep their stored chain.
+   */
+  readonly launchChainId?: LaunchChainId;
+}
+
+export function createPostgresLaunchRepository(
+  pool: Pool,
+  options: PostgresLaunchRepositoryOptions = {},
+): LaunchRepository {
+  const launchChainId: LaunchChainId = options.launchChainId ?? bscChainId;
   return Object.freeze({
     async createProject(rawInput: CreateLaunchProjectInput) {
       try {

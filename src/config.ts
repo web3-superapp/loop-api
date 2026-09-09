@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-import { parseDecimalAmount } from "./features/chain/chain-contract.js";
+import {
+  bscChainId,
+  bscChainReference,
+  bscTestnetChainId,
+  bscTestnetChainReference,
+  parseDecimalAmount,
+  type LaunchChainId,
+  type LaunchChainReference,
+} from "./features/chain/chain-contract.js";
 import {
   compareClientVersions,
   isValidClientVersion,
@@ -60,6 +68,63 @@ const optionalOpaqueSecret = (minimumLength: number, maximumLength: number) =>
     blankStringToUndefined,
     z.string().min(minimumLength).max(maximumLength).optional(),
   );
+
+const optionalPositiveIntegerString = (minimum: number, maximum: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    positiveIntegerString(minimum, maximum).optional(),
+  );
+
+/**
+ * Launch chain slot keys shared by the API and worker processes (Decision
+ * 0038). `LAUNCH_CHAIN_ID=56` reuses the primary chain configuration and
+ * refuses every `LAUNCH_BSC_*` override; `97` reads its own endpoint list.
+ */
+const launchChainEnvironmentShape = {
+  LAUNCH_CHAIN_ID: z.enum(["56", "97"]),
+  LAUNCH_BSC_RPC_URLS: optionalCredential(4_096),
+  LAUNCH_BSC_CONFIRMATIONS: optionalPositiveIntegerString(1, 1_000),
+  LAUNCH_BSC_REORG_DEPTH_BLOCKS: optionalPositiveIntegerString(1, 1_000),
+} as const;
+
+function launchChainEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof launchChainEnvironmentShape, string | undefined> {
+  return {
+    LAUNCH_CHAIN_ID: environment["LAUNCH_CHAIN_ID"] ?? "56",
+    LAUNCH_BSC_RPC_URLS: environment["LAUNCH_BSC_RPC_URLS"],
+    LAUNCH_BSC_CONFIRMATIONS: environment["LAUNCH_BSC_CONFIRMATIONS"],
+    LAUNCH_BSC_REORG_DEPTH_BLOCKS: environment["LAUNCH_BSC_REORG_DEPTH_BLOCKS"],
+  };
+}
+
+function refineLaunchChainEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
+    readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
+    readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.LAUNCH_CHAIN_ID !== "56") {
+    return;
+  }
+  for (const key of [
+    "LAUNCH_BSC_RPC_URLS",
+    "LAUNCH_BSC_CONFIRMATIONS",
+    "LAUNCH_BSC_REORG_DEPTH_BLOCKS",
+  ] as const) {
+    if (value[key] !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "must be blank while LAUNCH_CHAIN_ID=56: the launch slot reuses the primary BSC configuration",
+        path: [key],
+      });
+    }
+  }
+}
 
 /**
  * Market Provider keys shared by the API and worker processes (Decision 0034).
@@ -170,6 +235,7 @@ const environmentSchema = z
     BSC_WRITE_CANARY_MAX_USD: z.string().trim().min(1).max(32),
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
+    ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
@@ -178,6 +244,7 @@ const environmentSchema = z
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
+    refineLaunchChainEnvironment(value, context);
     if (value.BSC_WRITES_ENABLED) {
       if (value.BSC_RPC_URLS === undefined) {
         context.addIssue({
@@ -386,6 +453,7 @@ const reconciliationWorkerEnvironmentSchema = z
     MINING_SNAPSHOT_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
+    ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
@@ -394,6 +462,7 @@ const reconciliationWorkerEnvironmentSchema = z
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
+    refineLaunchChainEnvironment(value, context);
     // Privy credentials only matter to this process when the wallet-intent
     // lane is on; a partial pair is then an error, otherwise it is ignored.
     if (
@@ -551,6 +620,23 @@ export interface BscChainConfig {
 }
 
 /**
+ * The `launch` chain slot (Decision 0038). Always present: with
+ * `LAUNCH_CHAIN_ID=56` it mirrors the primary slot (`sharedWithPrimary`), with
+ * `97` it names the BSC testnet and carries its own endpoint list, which may
+ * be empty (the slot then fails closed with LAUNCH_CHAIN_RPC_NOT_CONFIGURED).
+ * Like `BscChainConfig`, a present endpoint is not proof of reachability or of
+ * the chain it serves; `eth_chainId` is verified at runtime.
+ */
+export interface LaunchChainConfig {
+  readonly chainId: LaunchChainId;
+  readonly chainReference: LaunchChainReference;
+  readonly rpcUrls: readonly string[];
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+  readonly sharedWithPrimary: boolean;
+}
+
+/**
  * Native amount held back from `spendableBalance` so a later transfer or Swap
  * can still pay gas. It is a display-side product policy, not a chain fact,
  * and is published with its own config version.
@@ -658,6 +744,8 @@ export interface AppConfig {
    */
   readonly bscConfirmations: number;
   readonly bscReorgDepthBlocks: number;
+  /** The `launch` chain slot (Decision 0038); never null. */
+  readonly launchChain: LaunchChainConfig;
   readonly walletGasReserve: WalletGasReserveConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
@@ -680,6 +768,13 @@ export interface ReconciliationWorkerConfig {
   readonly issuanceRateRecordCleanupEnabled: boolean;
   readonly bscChain: BscChainConfig | null;
   readonly bscIndexer: BscIndexerConfig | null;
+  /**
+   * The `launch` chain slot (Decision 0038), parsed with the same rules as
+   * the API process so one environment file is accepted or refused
+   * identically. No worker lane consumes it yet: the slot has no indexer
+   * lane until the 02 contract document lands.
+   */
+  readonly launchChain: LaunchChainConfig;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -889,7 +984,10 @@ const maximumBscRpcEndpoints = 8;
  * they are validated here and never published in an API response, a capability
  * projection, or a log field.
  */
-function parseBscRpcUrls(value: string | undefined): readonly string[] {
+function parseBscRpcUrls(
+  value: string | undefined,
+  fieldName: "BSC_RPC_URLS" | "LAUNCH_BSC_RPC_URLS" = "BSC_RPC_URLS",
+): readonly string[] {
   if (value === undefined) {
     return Object.freeze([]);
   }
@@ -899,15 +997,15 @@ function parseBscRpcUrls(value: string | undefined): readonly string[] {
     if (entry.length === 0) {
       continue;
     }
-    const url = parseUrl("BSC_RPC_URLS", entry);
+    const url = parseUrl(fieldName, entry);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new ConfigurationError([
-        "BSC_RPC_URLS: protocol must be http or https",
+        `${fieldName}: protocol must be http or https`,
       ]);
     }
     if (url.username !== "" || url.password !== "") {
       throw new ConfigurationError([
-        "BSC_RPC_URLS: credentials are not allowed in an endpoint URL",
+        `${fieldName}: credentials are not allowed in an endpoint URL`,
       ]);
     }
     const normalized = url.toString();
@@ -917,10 +1015,72 @@ function parseBscRpcUrls(value: string | undefined): readonly string[] {
   }
   if (urls.length > maximumBscRpcEndpoints) {
     throw new ConfigurationError([
-      `BSC_RPC_URLS: at most ${maximumBscRpcEndpoints} endpoints are supported`,
+      `${fieldName}: at most ${maximumBscRpcEndpoints} endpoints are supported`,
     ]);
   }
   return Object.freeze(urls);
+}
+
+/** Mirrors the LAUNCH_BSC_CONFIRMATIONS and LAUNCH_BSC_REORG_DEPTH_BLOCKS defaults. */
+export const defaultLaunchChainConfirmations = 5;
+export const defaultLaunchChainReorgDepthBlocks = 15;
+
+/**
+ * Parses the launch chain slot (Decision 0038). With `LAUNCH_CHAIN_ID=56` the
+ * primary endpoint list and read policy are copied so the slot can never
+ * describe a second, differently configured mainnet client; the schema
+ * refinement has already refused any `LAUNCH_BSC_*` override in that case.
+ */
+export function parseLaunchChainConfig(
+  data: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
+    readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
+    readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
+  },
+  primary: {
+    readonly rpcUrls: readonly string[];
+    readonly confirmations: number;
+    readonly reorgDepthBlocks: number;
+  },
+): LaunchChainConfig {
+  if (data.LAUNCH_CHAIN_ID === "56") {
+    return Object.freeze({
+      chainId: bscChainId,
+      chainReference: bscChainReference,
+      rpcUrls: primary.rpcUrls,
+      confirmations: primary.confirmations,
+      reorgDepthBlocks: primary.reorgDepthBlocks,
+      sharedWithPrimary: true,
+    });
+  }
+  return Object.freeze({
+    chainId: bscTestnetChainId,
+    chainReference: bscTestnetChainReference,
+    rpcUrls: parseBscRpcUrls(data.LAUNCH_BSC_RPC_URLS, "LAUNCH_BSC_RPC_URLS"),
+    confirmations:
+      data.LAUNCH_BSC_CONFIRMATIONS ?? defaultLaunchChainConfirmations,
+    reorgDepthBlocks:
+      data.LAUNCH_BSC_REORG_DEPTH_BLOCKS ?? defaultLaunchChainReorgDepthBlocks,
+    sharedWithPrimary: false,
+  });
+}
+
+/**
+ * The launch chain ID as an operator script reads it from the same
+ * environment file the API uses (Decision 0038). Blank means the default.
+ */
+export function parseLaunchChainIdEnvironment(
+  value: string | undefined,
+): LaunchChainId {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "" || trimmed === "56") {
+    return bscChainId;
+  }
+  if (trimmed === "97") {
+    return bscTestnetChainId;
+  }
+  throw new ConfigurationError(["LAUNCH_CHAIN_ID: must be 56 or 97"]);
 }
 
 const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
@@ -1197,6 +1357,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_WRITE_CANARY_MAX_USD: environment["BSC_WRITE_CANARY_MAX_USD"] ?? "20",
     LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
+    ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
@@ -1292,6 +1453,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     });
   }
 
+  const bscChain = parseBscChainConfig(parsed.data);
+
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
     host: parsed.data.HOST,
@@ -1316,9 +1479,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     social,
     perpReadCursor,
     hyperliquidPrivateReads,
-    bscChain: parseBscChainConfig(parsed.data),
+    bscChain,
     bscConfirmations: parsed.data.BSC_CONFIRMATIONS,
     bscReorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+    launchChain: parseLaunchChainConfig(parsed.data, {
+      rpcUrls: bscChain?.rpcUrls ?? Object.freeze([]),
+      confirmations: parsed.data.BSC_CONFIRMATIONS,
+      reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+    }),
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
@@ -1367,6 +1535,7 @@ export function loadReconciliationWorkerConfig(
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
@@ -1404,6 +1573,11 @@ export function loadReconciliationWorkerConfig(
     });
   }
 
+  const workerBscChain = parseBscChainConfig({
+    ...parsed.data,
+    BSC_USD1_VERIFIED: false,
+  });
+
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
     logLevel: parsed.data.LOG_LEVEL,
@@ -1423,10 +1597,7 @@ export function loadReconciliationWorkerConfig(
       parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
     issuanceRateRecordCleanupEnabled:
       parsed.data.ISSUANCE_RATE_RECORD_CLEANUP_ENABLED,
-    bscChain: parseBscChainConfig({
-      ...parsed.data,
-      BSC_USD1_VERIFIED: false,
-    }),
+    bscChain: workerBscChain,
     bscIndexer: parsed.data.BSC_INDEXER_ENABLED
       ? Object.freeze({
           startBlockNumber: parsed.data.BSC_INDEXER_START_BLOCK ?? null,
@@ -1441,6 +1612,11 @@ export function loadReconciliationWorkerConfig(
             apiSecret: parsed.data.STREAM_API_SECRET,
           })
         : null,
+    launchChain: parseLaunchChainConfig(parsed.data, {
+      rpcUrls: workerBscChain?.rpcUrls ?? Object.freeze([]),
+      confirmations: parsed.data.BSC_CONFIRMATIONS,
+      reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+    }),
     market: parseMarketConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
       ? Object.freeze({

@@ -238,6 +238,44 @@ describe("LOOP API V2 launch module", () => {
     expect(JSON.stringify(body)).not.toMatch(/tax|totalSupply|1%|LOOP$/);
   });
 
+  it("publishes the launch's stored chain, not a constant (Decision 0038)", async () => {
+    const testnetCatalog = {
+      ...catalog,
+      launch: { ...catalog.launch, chainId: "eip155:97" as const },
+    };
+    const repository = repositoryFake({
+      listLaunches: () => Promise.resolve([testnetCatalog]),
+      getLaunch: () =>
+        Promise.resolve({ ...detail, launch: testnetCatalog.launch }),
+    });
+    const { app } = await createApp(repository);
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/v2/launch/overview",
+      headers: s7CommonHeaders(),
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(
+      overview.json<{
+        readonly segments: {
+          readonly awaitingSchedule: readonly { readonly chainId: string }[];
+        };
+      }>().segments.awaitingSchedule[0]?.chainId,
+    ).toBe("eip155:97");
+
+    const launch = await app.inject({
+      method: "GET",
+      url: `/v2/launches/${launchId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(launch.statusCode).toBe(200);
+    expect(
+      launch.json<{ readonly launch: { readonly chainId: string } }>().launch
+        .chainId,
+    ).toBe("eip155:97");
+  });
+
   it("creates a draft with an Idempotency-Key and rejects a missing one", async () => {
     const { app, repository } = await createApp();
     const payload = {

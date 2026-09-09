@@ -5,9 +5,12 @@ import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/core/json/canonical-json.js";
 import {
   digestCanonicalPayload,
+  isIntentChainAllowed,
   sealIntent,
   type IntentSource,
 } from "../src/features/wallet-intents/intent-contract.js";
+import { buildUnsignedTransaction } from "../src/features/wallet-intents/intent-preparation.js";
+import { transactionMatchesPayload } from "../src/features/wallet-intents/wallet-intent-service.js";
 import { assessPriceImpact } from "../src/features/wallet-intents/swap-service.js";
 import {
   buildErc20Approve,
@@ -314,5 +317,91 @@ describe("swap price impact policy", () => {
       decision: "blocked",
       reasonCode: "PRICE_IMPACT_UNAVAILABLE",
     });
+  });
+});
+
+describe("intent chain policy (Decision 0038)", () => {
+  const feeData = {
+    type: "eip1559" as const,
+    maxFeePerGas: 3_000_000_000n,
+    maxPriorityFeePerGas: 1_000_000_000n,
+  };
+  const call = {
+    from: "0x00000000000000000000000000000000000000a1",
+    to: usdt,
+    data: "0xa9059cbb" as const,
+    value: 0n,
+    gasLimit: 52_000n,
+    nonce: 7,
+    feeData,
+  };
+
+  it("lets every intent bind the primary chain and only a launch intent bind the testnet", () => {
+    for (const kind of [
+      "send",
+      "approve",
+      "revoke",
+      "swap",
+      "launch",
+    ] as const) {
+      expect(isIntentChainAllowed(kind, 56), kind).toBe(true);
+      expect(isIntentChainAllowed(kind, 1), kind).toBe(false);
+      expect(isIntentChainAllowed(kind, 97), kind).toBe(kind === "launch");
+    }
+  });
+
+  it("builds the unsigned transaction with the injected chain and refuses a disallowed pair before any field exists", () => {
+    expect(
+      buildUnsignedTransaction({ ...call, kind: "send", chainReference: 56 })
+        .chainId,
+    ).toBe(56);
+    expect(
+      buildUnsignedTransaction({ ...call, kind: "launch", chainReference: 97 })
+        .chainId,
+    ).toBe(97);
+    for (const kind of ["send", "approve", "revoke", "swap"] as const) {
+      expect(() =>
+        buildUnsignedTransaction({ ...call, kind, chainReference: 97 }),
+      ).toThrow(InvalidTransactionArgumentError);
+    }
+    expect(() =>
+      buildUnsignedTransaction({ ...call, kind: "launch", chainReference: 1 }),
+    ).toThrow(InvalidTransactionArgumentError);
+  });
+
+  it("verifies a broadcast against the payload's own chain, not a constant", () => {
+    const mainnet = buildUnsignedTransaction({
+      ...call,
+      kind: "send",
+      chainReference: 56,
+    });
+    const observed = {
+      hash: `0x${"7".repeat(64)}`,
+      from: mainnet.from,
+      to: mainnet.to,
+      input: mainnet.data,
+      value: 0n,
+      nonce: 7,
+      chainId: 56,
+      blockNumber: null,
+    };
+    expect(transactionMatchesPayload(observed, mainnet)).toBe(true);
+    expect(
+      transactionMatchesPayload({ ...observed, chainId: null }, mainnet),
+    ).toBe(true);
+    expect(
+      transactionMatchesPayload({ ...observed, chainId: 97 }, mainnet),
+    ).toBe(false);
+    const testnetLaunch = buildUnsignedTransaction({
+      ...call,
+      kind: "launch",
+      chainReference: 97,
+    });
+    expect(
+      transactionMatchesPayload({ ...observed, chainId: 97 }, testnetLaunch),
+    ).toBe(true);
+    expect(
+      transactionMatchesPayload({ ...observed, chainId: 56 }, testnetLaunch),
+    ).toBe(false);
   });
 });

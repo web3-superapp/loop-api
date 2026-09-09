@@ -59,6 +59,53 @@ describe("pnpm launch:review", () => {
     ).toThrow(LaunchReviewError);
   });
 
+  it("hands the LAUNCH_CHAIN_ID slot to the repository and refuses an unsupported chain (Decision 0038)", async () => {
+    expect(
+      parseLaunchReviewRequest(["node", "s", projectId, "approve"], development)
+        .launchChainId,
+    ).toBe("eip155:56");
+    expect(
+      parseLaunchReviewRequest(["node", "s", projectId, "approve"], {
+        ...development,
+        LAUNCH_CHAIN_ID: "97",
+      }).launchChainId,
+    ).toBe("eip155:97");
+    expect(() =>
+      parseLaunchReviewRequest(["node", "s", projectId, "approve"], {
+        ...development,
+        LAUNCH_CHAIN_ID: "1",
+      }),
+    ).toThrow(
+      expect.objectContaining({ code: "launch_review_launch_chain_invalid" }),
+    );
+
+    const createRepository = vi.fn(() => ({
+      repository: {
+        reviewProject: () =>
+          Promise.resolve({
+            project: { projectId, reviewStatus: "approved" as const },
+            launch: {
+              launchId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+              scheduleStatus: "unscheduled" as const,
+              chainId: "eip155:97" as const,
+            },
+          }),
+      } as never,
+      close: () => Promise.resolve(),
+    }));
+    const stdout = outputWriter();
+    const exitCode = await runLaunchReview({
+      argv: ["node", "s", projectId, "approve"],
+      environment: { ...development, LAUNCH_CHAIN_ID: "97" },
+      stdout,
+      stderr: outputWriter(),
+      createRepository,
+    });
+    expect(exitCode).toBe(0);
+    expect(createRepository).toHaveBeenCalledWith(databaseUrl, "eip155:97");
+    expect(stdout.contents()).toContain("unscheduled, eip155:97)");
+  });
+
   it("approves through the repository, prints the launch, and closes the pool", async () => {
     const reviewProject = vi.fn(() =>
       Promise.resolve({

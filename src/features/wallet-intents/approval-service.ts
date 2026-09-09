@@ -15,6 +15,7 @@ import {
 } from "../../integrations/bsc/tx-builder.js";
 import {
   bscChainId,
+  bscChainReference,
   formatDecimalAmount,
   isAssetId,
   isNormalizedEvmAddress,
@@ -313,6 +314,8 @@ export function createApprovalService(
           spender: spenderReview,
           decodedCall: projectDecodedApprove(call.data),
           transaction: buildUnsignedTransaction({
+            kind: input.kind,
+            chainReference: bscChainReference,
             from: wallet.address,
             to: call.to,
             data: call.data,

@@ -371,6 +371,41 @@ describe("LOOP API V2 meta policy gates", () => {
     expect(Object.keys(capabilities)).toHaveLength(31);
   });
 
+  it("names the launch chain slot in the launch capability's evidence only (Decision 0038)", async () => {
+    const shared = await readCapabilities(
+      await createApp({ V2_MODULES_ENABLED: "launch" }),
+    );
+    expect(shared["launch"]).toEqual({
+      capabilityId: "launch",
+      availability: "unavailable",
+      reasonCode: "LAUNCH_RUNTIME_UNAVAILABLE",
+      evidence: {
+        status: "pending",
+        reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+        launchChainId: "eip155:56",
+      },
+    });
+    for (const [capabilityId, capability] of Object.entries(shared)) {
+      if (capabilityId !== "launch") {
+        expect(capability.evidence, capabilityId).not.toHaveProperty(
+          "launchChainId",
+        );
+      }
+    }
+    expect(Object.keys(shared)).toHaveLength(31);
+
+    const testnet = await readCapabilities(
+      await createApp({ V2_MODULES_ENABLED: "launch", LAUNCH_CHAIN_ID: "97" }),
+    );
+    expect(testnet["launch"]?.evidence).toEqual({
+      status: "pending",
+      reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+      launchChainId: "eip155:97",
+    });
+    // bscRead keeps describing only the primary chain.
+    expect(testnet["bscRead"]).toEqual(shared["bscRead"]);
+  });
+
   it("reports the delivered profile module as available only with a composed repository", async () => {
     const withoutRepository = await readCapabilities(
       await createApp({ V2_MODULES_ENABLED: "profile" }),
@@ -418,6 +453,7 @@ describe("LOOP API V2 meta policy gates", () => {
       securityRuntimeAvailable: false,
       settingsRuntimeAvailable: false,
       supportRuntimeAvailable: false,
+      launchChainId: "eip155:56",
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];

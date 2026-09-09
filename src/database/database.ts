@@ -1,6 +1,8 @@
 import pg from "pg";
 import { z } from "zod";
 
+import type { LaunchChainId } from "../features/chain/chain-contract.js";
+
 import type {
   InternalUser,
   InternalUserRepository,
@@ -183,6 +185,11 @@ export interface PostgresDatabaseConfig {
   readonly databaseStatementTimeoutMs: number;
   /** Optional; the reconciliation worker process does not configure it. */
   readonly v2CommunityChannelMemberCap?: number;
+  /**
+   * The `launch` chain slot (Decision 0038); only its `chainId` is needed
+   * here, to stamp newly approved launches. Absent means `eip155:56`.
+   */
+  readonly launchChain?: { readonly chainId: LaunchChainId };
 }
 
 export interface PostgresDatabaseLogger {
@@ -291,7 +298,12 @@ export function createPostgresDatabase(
   const walletIntents = createPostgresWalletIntentRepository(pool);
   const accountSettings = createPostgresAccountSettingsRepository(pool);
   const supportTickets = createPostgresSupportTicketRepository(pool);
-  const launch = createPostgresLaunchRepository(pool);
+  const launch = createPostgresLaunchRepository(
+    pool,
+    config.launchChain === undefined
+      ? {}
+      : { launchChainId: config.launchChain.chainId },
+  );
   const mining = createPostgresMiningRepository(pool);
   const referral = createPostgresReferralRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);

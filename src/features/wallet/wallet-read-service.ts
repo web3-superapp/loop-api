@@ -30,7 +30,11 @@ import {
   bscNativeDecimals,
   eip681Uri,
   formatDecimalAmount,
+  launchChainReasonCodes,
+  nativeAssetId,
+  nativeSymbolForLaunchChain,
   subtractFloorZero,
+  type LaunchChainId,
   type WalletKind,
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
@@ -199,7 +203,38 @@ export interface WalletBalancesResource {
   };
   readonly balances: readonly WalletBalanceProjection[];
   readonly netWorth: WalletNetWorthProjection | UnavailableProjection;
+  /** `null` when the launch slot equals the primary slot (Decision 0038). */
+  readonly launchChain: LaunchChainBalanceProjection | null;
   readonly contractVersion: typeof v2ContractVersion;
+}
+
+/**
+ * The wallet's native coin on the `launch` chain slot (Decision 0038): one
+ * `eth_getBalance` at one block, no registry, no Multicall3, no pending or
+ * valuation facts. The same gas reserve rule as the primary slot applies.
+ */
+export interface LaunchChainNativeBalance {
+  readonly assetId: string;
+  readonly symbol: string;
+  readonly decimals: number;
+  readonly rawValue: string;
+  readonly displayBalance: string;
+  readonly availableBalance: string;
+  readonly spendableBalance: string;
+  readonly gasReserve: string;
+  readonly snapshot: {
+    readonly blockNumber: string;
+    readonly blockHash: string;
+    readonly observedAt: string;
+    readonly confirmations: number;
+  };
+}
+
+export interface LaunchChainBalanceProjection {
+  readonly chainId: LaunchChainId;
+  readonly availability: "available" | "unavailable";
+  readonly reasonCode: string | null;
+  readonly nativeBalance: LaunchChainNativeBalance | null;
 }
 
 export interface WalletActivityItem {
@@ -287,6 +322,8 @@ export interface CreateWalletReadServiceInput {
   readonly chainId: string;
   readonly chainName: string;
   readonly chainReference: number;
+  /** The launch slot's own read client, or `null` when shared with primary. */
+  readonly launchChainReadClient: BscReadClient | null;
   readonly now?: () => Date;
 }
 
@@ -327,6 +364,92 @@ function chainUnavailable(error: unknown): never {
     throw V2ApiError.capabilityUnavailable();
   }
   throw error as Error;
+}
+
+function unavailableLaunchChain(
+  chainId: LaunchChainId,
+  reasonCode: string,
+): LaunchChainBalanceProjection {
+  return Object.freeze({
+    chainId,
+    availability: "unavailable" as const,
+    reasonCode,
+    nativeBalance: null,
+  });
+}
+
+/**
+ * Reads the native balance on the launch slot. A failure here is reported
+ * inside the projection and never fails the primary balances: the launch
+ * chain is a secondary fact of the wallet page, not its gate.
+ */
+async function projectLaunchChainBalance(
+  client: BscReadClient | null,
+  address: string,
+  gasReserveRawWei: bigint,
+): Promise<LaunchChainBalanceProjection | null> {
+  if (client === null) {
+    return null;
+  }
+  const chainId = client.chainId;
+  if (client.endpointRefs.length === 0) {
+    return unavailableLaunchChain(
+      chainId,
+      launchChainReasonCodes.notConfigured,
+    );
+  }
+  const assetId = nativeAssetId(chainId);
+  let read: BscBalanceReadResult;
+  try {
+    read = await client.readBalances(address, [{ assetId, address: null }]);
+  } catch (error) {
+    if (error instanceof BscChainMismatchError) {
+      return unavailableLaunchChain(chainId, launchChainReasonCodes.mismatched);
+    }
+    if (error instanceof BscReadUnavailableError) {
+      return unavailableLaunchChain(
+        chainId,
+        error.reasonCode === "BSC_RPC_UNREACHABLE"
+          ? launchChainReasonCodes.unreachable
+          : error.reasonCode === "BSC_RPC_NOT_CONFIGURED"
+            ? launchChainReasonCodes.notConfigured
+            : error.reasonCode,
+      );
+    }
+    throw error as Error;
+  }
+  const observed = read.balances.find((balance) => balance.assetId === assetId);
+  const rawValue = observed?.rawValue ?? null;
+  if (rawValue === null) {
+    return unavailableLaunchChain(
+      chainId,
+      observed?.reasonCode ?? walletReasonCodes.balanceCallFailed,
+    );
+  }
+  return Object.freeze({
+    chainId,
+    availability: "available" as const,
+    reasonCode: null,
+    nativeBalance: Object.freeze({
+      assetId,
+      symbol: nativeSymbolForLaunchChain(chainId),
+      decimals: bscNativeDecimals,
+      rawValue: rawValue.toString(10),
+      displayBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
+      availableBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
+      spendableBalance: formatDecimalAmount(
+        subtractFloorZero(rawValue, gasReserveRawWei),
+        bscNativeDecimals,
+      ),
+      gasReserve: formatDecimalAmount(gasReserveRawWei, bscNativeDecimals),
+      snapshot: Object.freeze({
+        blockNumber: read.head.blockNumber.toString(10),
+        blockHash: read.head.blockHash,
+        observedAt: read.head.observedAt,
+        confirmations: client.confirmations,
+      }),
+    }),
+  });
 }
 
 export function createWalletReadService(
@@ -662,6 +785,11 @@ export function createWalletReadService(
         }),
         balances: Object.freeze(balances),
         netWorth: projectNetWorth(),
+        launchChain: await projectLaunchChainBalance(
+          input.launchChainReadClient,
+          wallet.address,
+          input.gasReserveRawWei,
+        ),
         contractVersion: v2ContractVersion,
       });
 

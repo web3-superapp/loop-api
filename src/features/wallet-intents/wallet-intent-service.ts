@@ -8,7 +8,6 @@ import {
   type WalletIntentRecord,
 } from "../../database/wallet-intent-repository.js";
 import type { BscTransactionObservation } from "../../integrations/bsc/rpc-client.js";
-import { bscChainReference } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   openWalletIntentStates,
@@ -78,7 +77,7 @@ export function transactionMatchesPayload(
     observed.input === transaction.data &&
     observed.value === fromHexQuantity(transaction.value) &&
     BigInt(observed.nonce) === fromHexQuantity(transaction.nonce) &&
-    (observed.chainId === null || observed.chainId === bscChainReference)
+    (observed.chainId === null || observed.chainId === transaction.chainId)
   );
 }
 

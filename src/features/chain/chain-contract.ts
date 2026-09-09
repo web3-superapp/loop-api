@@ -14,6 +14,71 @@ export const bscNativeAssetId = "eip155:56:native" as const;
 export const bscNativeSymbol = "BNB" as const;
 export const bscNativeDecimals = 18 as const;
 
+/**
+ * BSC testnet identity (Decision 0038). It exists only as the possible target
+ * of the `launch` chain slot; the `primary` slot is always `eip155:56`, and no
+ * registry, market, or indexer surface describes this chain.
+ */
+export const bscTestnetChainReference = 97 as const;
+export const bscTestnetChainId = "eip155:97" as const;
+export const bscTestnetNativeAssetId = "eip155:97:native" as const;
+export const bscTestnetNativeSymbol = "tBNB" as const;
+
+/** The chains the `launch` slot may name (Decision 0038). */
+export const launchChainIds = Object.freeze([
+  bscChainId,
+  bscTestnetChainId,
+] as const);
+export type LaunchChainId = (typeof launchChainIds)[number];
+export const launchChainReferences = Object.freeze([
+  bscChainReference,
+  bscTestnetChainReference,
+] as const);
+export type LaunchChainReference = (typeof launchChainReferences)[number];
+
+export function isLaunchChainId(value: unknown): value is LaunchChainId {
+  return (
+    typeof value === "string" &&
+    (launchChainIds as readonly string[]).includes(value)
+  );
+}
+
+export function launchChainReferenceFor(
+  chainId: LaunchChainId,
+): LaunchChainReference {
+  return chainId === bscTestnetChainId
+    ? bscTestnetChainReference
+    : bscChainReference;
+}
+
+export function launchChainIdFor(
+  reference: LaunchChainReference,
+): LaunchChainId {
+  return reference === bscTestnetChainReference
+    ? bscTestnetChainId
+    : bscChainId;
+}
+
+export function nativeSymbolForLaunchChain(
+  chainId: LaunchChainId,
+): typeof bscNativeSymbol | typeof bscTestnetNativeSymbol {
+  return chainId === bscTestnetChainId
+    ? bscTestnetNativeSymbol
+    : bscNativeSymbol;
+}
+
+/**
+ * Reason codes of the `launch` chain slot (Decision 0038). They are distinct
+ * from the primary `BSC_*` codes so a client can never confuse "the Launch
+ * testnet is unreachable" with "BSC mainnet is unreachable".
+ */
+export const launchChainReasonCodes = Object.freeze({
+  notConfigured: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+  verificationPending: "LAUNCH_CHAIN_VERIFICATION_PENDING",
+  unreachable: "LAUNCH_CHAIN_RPC_UNREACHABLE",
+  mismatched: "LAUNCH_CHAIN_ID_MISMATCH",
+} as const);
+
 export const chainIdPatternSource = "^eip155:[1-9][0-9]{0,9}$";
 export const assetIdPatternSource =
   "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$";

@@ -8,7 +8,6 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   InvalidLaunchRequestError,
   canonicalLaunchFilter,
-  launchChainId,
   launchCommandDigest,
   launchConfigVersion,
   launchCursorRoutes,
@@ -367,7 +366,7 @@ function summaryProjection(
     projectId: record.launch.projectId,
     name: record.projectName,
     ticker: record.projectTicker,
-    chainId: launchChainId,
+    chainId: record.launch.chainId,
     contractAddress: null,
     configDigest: record.launch.configDigest,
     scheduleStatus: record.launch.scheduleStatus,

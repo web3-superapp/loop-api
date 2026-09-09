@@ -31,12 +31,12 @@ import {
 } from "../../integrations/bsc/rpc-client.js";
 import {
   fromHexQuantity,
+  InvalidTransactionArgumentError,
   toHexQuantity,
 } from "../../integrations/bsc/tx-builder.js";
 import type { PrivySwapAdapter } from "../../integrations/privy/swap-adapter.js";
 import {
   bscChainId,
-  bscChainReference,
   bscNativeDecimals,
   decomposeAssetId,
   formatDecimalAmount,
@@ -52,11 +52,13 @@ import type { MarketFactService } from "../market/market-fact-service.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   bscWriteCanaryPolicyVersion,
+  isIntentChainAllowed,
   openWalletIntentStates,
   walletIntentIdempotencyScope,
   walletIntentReasonCodes,
   walletIntentRefusalReasonCodes,
   type CanaryPolicyFact,
+  type ChainBoundIntentKind,
   type ExposureBasis,
   type IntentAssetSnapshot,
   type IntentBalanceFact,
@@ -525,7 +527,14 @@ export async function readNonce(
   }
 }
 
+/**
+ * The chain is injected, never a constant (Decision 0038), and the pair
+ * `(kind, chainReference)` is checked before any field is assembled so a
+ * send/approve/revoke payload can never be built for the launch testnet.
+ */
 export function buildUnsignedTransaction(input: {
+  readonly kind: ChainBoundIntentKind;
+  readonly chainReference: number;
   readonly from: string;
   readonly to: string;
   readonly data: Hex;
@@ -534,8 +543,11 @@ export function buildUnsignedTransaction(input: {
   readonly nonce: number;
   readonly feeData: BscFeeData;
 }): UnsignedTransaction {
+  if (!isIntentChainAllowed(input.kind, input.chainReference)) {
+    throw new InvalidTransactionArgumentError();
+  }
   return Object.freeze({
-    chainId: bscChainReference,
+    chainId: input.chainReference,
     from: input.from,
     to: input.to,
     data: input.data,

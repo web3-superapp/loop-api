@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import type { Hex } from "viem";
 
 import { canonicalJson } from "../../core/json/canonical-json.js";
+import {
+  bscChainReference,
+  bscTestnetChainReference,
+  type LaunchChainId,
+  type LaunchChainReference,
+} from "../chain/chain-contract.js";
 
 /**
  * Unified wallet intent contract (D15/D16, Decision 0035).
@@ -34,6 +40,29 @@ export const walletIntentStates = Object.freeze([
   "expired",
 ] as const);
 export type WalletIntentState = (typeof walletIntentStates)[number];
+
+/**
+ * Intent families that bind a chain (Decision 0038). `launch` is reserved for
+ * the Launch intent the 02 contract document will define; it is not a
+ * `WalletIntentKind` and has no prepare path in this step.
+ */
+export type ChainBoundIntentKind = WalletIntentKind | "launch";
+
+/**
+ * The single chain rule for signable payloads: every intent may bind the
+ * primary chain (56); only a Launch intent may bind the launch slot's testnet
+ * (97). Send, approve, revoke, and swap therefore never leave mainnet even
+ * when `LAUNCH_CHAIN_ID=97`.
+ */
+export function isIntentChainAllowed(
+  kind: ChainBoundIntentKind,
+  chainReference: number,
+): chainReference is LaunchChainReference {
+  if (chainReference === bscChainReference) {
+    return true;
+  }
+  return chainReference === bscTestnetChainReference && kind === "launch";
+}
 
 /** States from which nothing further can happen. */
 export const terminalWalletIntentStates: ReadonlySet<WalletIntentState> =
@@ -190,10 +219,12 @@ export interface CanaryPolicyFact {
 
 /**
  * Raw JSON-RPC transaction object the device hands to Privy
- * `eth_sendTransaction` verbatim. Every quantity is a 0x hex string.
+ * `eth_sendTransaction` verbatim. Every quantity is a 0x hex string. The
+ * chain is the slot the intent was built for (`isIntentChainAllowed`); the
+ * wallet-intent routes only ever produce 56.
  */
 export interface UnsignedTransaction {
-  readonly chainId: 56;
+  readonly chainId: LaunchChainReference;
   readonly from: string;
   readonly to: string;
   readonly data: Hex;
@@ -319,7 +350,7 @@ export interface IntentSource {
   readonly version: string;
   readonly intentId: string;
   readonly kind: WalletIntentKind;
-  readonly chainId: "eip155:56";
+  readonly chainId: LaunchChainId;
   readonly walletId: string;
   readonly from: string;
   readonly asset: IntentAssetSnapshot;

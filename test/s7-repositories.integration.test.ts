@@ -419,6 +419,67 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       expect(detail?.configs[0]?.status).toBe("pending_confirmation");
     });
 
+    it("stamps an approved launch with the configured launch chain slot (Decision 0038)", async () => {
+      const testnetRepository = createPostgresLaunchRepository(pool, {
+        launchChainId: "eip155:97",
+      });
+      const owner = await createUser(true);
+      const created = await testnetRepository.createProject({
+        ownerUserId: owner,
+        idempotencyKey: randomUUID(),
+        requestSha256: launchCommandDigest("createProject", ["testnet"]),
+        requestId: randomUUID(),
+        values: { ...projectValues, ticker: "TNET" },
+      });
+      await testnetRepository.submitProject({
+        ownerUserId: owner,
+        projectId: created.projectId,
+        idempotencyKey: randomUUID(),
+        requestSha256: launchCommandDigest("submitProject", [
+          created.projectId,
+        ]),
+        requestId: randomUUID(),
+      });
+      const approved = await testnetRepository.reviewProject({
+        projectId: created.projectId,
+        decision: "approve",
+        reasonCode: "operator_manual_review",
+        requestId: randomUUID(),
+      });
+      expect(approved.launch).toMatchObject({
+        projectId: created.projectId,
+        chainId: "eip155:97",
+        contractAddress: null,
+        scheduleStatus: "unscheduled",
+      });
+      // The stored chain, not the reading repository's slot, is what a read
+      // publishes: the default (mainnet) repository still reports 97.
+      const detail = await launch.getLaunch(approved.launch?.launchId ?? "");
+      expect(detail?.launch.chainId).toBe("eip155:97");
+      const catalog = await launch.listLaunches();
+      expect(
+        catalog.find((row) => row.launch.launchId === approved.launch?.launchId)
+          ?.launch.chainId,
+      ).toBe("eip155:97");
+      // A chain outside the seeded slots is refused by the foreign key.
+      const other = await testnetRepository.createProject({
+        ownerUserId: owner,
+        idempotencyKey: randomUUID(),
+        requestSha256: launchCommandDigest("createProject", ["other-chain"]),
+        requestId: randomUUID(),
+        values: { ...projectValues, ticker: "OTHR" },
+      });
+      await expect(
+        pool.query({
+          text: `
+            insert into public.launches (launch_id, project_id, chain_id)
+            values ($1, $2, 'eip155:1')
+          `,
+          values: [randomUUID(), other.projectId],
+        }),
+      ).rejects.toThrow(/foreign key/);
+    });
+
     it("refuses a non-null on-chain axis at the schema", async () => {
       const owner = await createUser(true);
       const project = await launch.createProject({
