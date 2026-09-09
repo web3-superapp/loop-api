@@ -1,3 +1,5 @@
+import { request as httpRequest } from "node:http";
+
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -604,6 +606,92 @@ describe("LOOP API V2 account sessions", () => {
       correlationId: response.headers["x-request-id"],
       detailsSafe: null,
       providerReferenceSafe: null,
+    });
+  });
+
+  describe("body-less commands behind an HTTP/2 proxy", () => {
+    // cloudflared and other HTTP/2-to-HTTP/1.1 proxies forward an empty POST as
+    // a chunked stream with neither Content-Type nor Content-Length.
+    async function sendChunked(
+      address: string,
+      headers: Record<string, string>,
+      chunks: readonly string[],
+    ): Promise<{ statusCode: number; body: string }> {
+      return new Promise((resolve, reject) => {
+        const url = new URL("/v2/session/bootstrap", address);
+        const req = httpRequest(
+          {
+            host: url.hostname,
+            port: url.port,
+            path: url.pathname,
+            method: "POST",
+            headers: { ...headers, "transfer-encoding": "chunked" },
+          },
+          (res) => {
+            let body = "";
+            res.setEncoding("utf8");
+            res.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            res.on("end", () => {
+              resolve({ statusCode: res.statusCode ?? 0, body });
+            });
+          },
+        );
+        req.on("error", reject);
+        for (const chunk of chunks) {
+          req.write(chunk);
+        }
+        req.end();
+      });
+    }
+
+    it("accepts an empty chunked body without a media type", async () => {
+      const dependencies = await createApp();
+      const address = await dependencies.app.listen({
+        host: "127.0.0.1",
+        port: 0,
+      });
+      const response = await sendChunked(address, requestHeaders(), []);
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({
+        account: { accountId },
+        contractVersion: "2.0",
+      });
+    });
+
+    it("still rejects a non-empty payload of an unknown media type", async () => {
+      const dependencies = await createApp();
+      const address = await dependencies.app.listen({
+        host: "127.0.0.1",
+        port: 0,
+      });
+      const response = await sendChunked(
+        address,
+        {
+          ...requestHeaders(),
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        ["a=1"],
+      );
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body)).toMatchObject({
+        code: "INVALID_REQUEST",
+        category: "validation",
+      });
+    });
+
+    it("still rejects a non-empty chunked payload without a media type", async () => {
+      const dependencies = await createApp();
+      const address = await dependencies.app.listen({
+        host: "127.0.0.1",
+        port: 0,
+      });
+      const response = await sendChunked(address, requestHeaders(), ["{}"]);
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body)).toMatchObject({
+        code: "INVALID_REQUEST",
+      });
     });
   });
 });

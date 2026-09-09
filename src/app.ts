@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import helmet from "@fastify/helmet";
 import swagger from "@fastify/swagger";
 import Fastify, {
+  errorCodes as fastifyErrorCodes,
   LogController,
   type FastifyInstance,
   type FastifyReply,
@@ -602,6 +603,31 @@ export async function buildApp(
     trustProxy: config.trustProxy ? localCloudflaredProxyCidrs : false,
   };
   const app = Fastify(fastifyOptions);
+
+  // A body-less POST/PUT/DELETE that crosses an HTTP/2 proxy (Cloudflare
+  // Tunnel, an ALB) reaches the origin as a chunked stream with neither
+  // Content-Type nor Content-Length. Fastify would reject it as an unsupported
+  // media type before any route hook runs, which broke every V2 command that
+  // deliberately carries no body (session bootstrap, logout, ...). Accept only
+  // an EMPTY payload for unknown or missing media types and leave
+  // `request.body` undefined so the existing "no body" route checks still
+  // apply; a non-empty payload keeps failing exactly as before.
+  app.addContentTypeParser(
+    "*",
+    { parseAs: "buffer" },
+    (request, payload: Buffer, done) => {
+      if (payload.length === 0) {
+        done(null, undefined);
+        return;
+      }
+      done(
+        new fastifyErrorCodes.FST_ERR_CTP_INVALID_MEDIA_TYPE(
+          request.headers["content-type"] ?? "undefined",
+        ),
+        undefined,
+      );
+    },
+  );
 
   // Must be the first onRequest hook: every later hook, handler, and gateway
   // reads the replacement `request.signal` it installs.
@@ -1634,11 +1660,49 @@ export async function buildApp(
   app.setErrorHandler(async (error, request, reply) => {
     if (isV2RequestPath(request.raw.url)) {
       const projection = projectV2Error(error, request.id);
+      const failure = classifyRequestError(error);
+      const validationIssues = (error as { validation?: unknown }).validation;
+      const validationPaths = Array.isArray(validationIssues)
+        ? validationIssues.map((issue: unknown) => {
+            if (typeof issue !== "object" || issue === null) {
+              return "unknown";
+            }
+            const record = issue as {
+              instancePath?: unknown;
+              keyword?: unknown;
+            };
+            const instancePath =
+              typeof record.instancePath === "string"
+                ? record.instancePath
+                : "";
+            const keyword =
+              typeof record.keyword === "string" ? record.keyword : "";
+            return `${instancePath} ${keyword}`.trim();
+          })
+        : undefined;
       request.log.warn(
         {
           requestId: request.id,
           responseCode: projection.response.code,
           statusCode: projection.statusCode,
+          // Operator diagnostics only: the Fastify/ApiError code plus the
+          // schema paths of a validation failure. Neither carries header or
+          // body values, and nothing here reaches the response envelope.
+          ...(failure.code === undefined ? {} : { errorCode: failure.code }),
+          ...(typeof failure.code === "string" &&
+          failure.code.startsWith("FST_ERR_CTP_")
+            ? {
+                requestContentType: request.headers["content-type"] ?? null,
+                requestContentLength: request.headers["content-length"] ?? null,
+              }
+            : {}),
+          ...(validationPaths === undefined
+            ? {}
+            : {
+                validationContext: (error as { validationContext?: unknown })
+                  .validationContext,
+                validationPaths,
+              }),
         },
         "Request failed",
       );
