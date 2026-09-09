@@ -42603,7 +42603,6 @@
                     "rpc",
                     "indexer",
                     "registry",
-                    "launchChain",
                     "contractVersion"
                   ],
                   "properties": {
@@ -42852,88 +42851,74 @@
                       }
                     },
                     "launchChain": {
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": [
-                            "chainId",
-                            "chainReference",
-                            "verification",
-                            "confirmations",
-                            "reorgDepthBlocks",
-                            "head",
-                            "reasonCode"
-                          ],
-                          "properties": {
-                            "chainId": {
-                              "type": "string",
-                              "enum": ["eip155:56", "eip155:97"]
-                            },
-                            "chainReference": {
-                              "type": "integer",
-                              "minimum": 1
-                            },
-                            "verification": {
-                              "type": "string",
-                              "enum": [
-                                "verified",
-                                "mismatched",
-                                "unreachable",
-                                "unknown"
-                              ]
-                            },
-                            "confirmations": {
-                              "type": "integer",
-                              "minimum": 1
-                            },
-                            "reorgDepthBlocks": {
-                              "type": "integer",
-                              "minimum": 1
-                            },
-                            "head": {
-                              "anyOf": [
-                                {
-                                  "type": "object",
-                                  "additionalProperties": false,
-                                  "required": [
-                                    "blockNumber",
-                                    "blockHash",
-                                    "observedAt"
-                                  ],
-                                  "properties": {
-                                    "blockNumber": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,19})$",
-                                      "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
-                                    },
-                                    "blockHash": {
-                                      "type": "string",
-                                      "pattern": "^0x[0-9a-f]{64}$"
-                                    },
-                                    "observedAt": {
-                                      "type": "string",
-                                      "format": "date-time"
-                                    }
-                                  }
-                                },
-                                { "type": "null" }
-                              ]
-                            },
-                            "reasonCode": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
-                                },
-                                { "type": "null" }
-                              ]
-                            }
-                          }
-                        },
-                        { "type": "null" }
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "chainId",
+                        "chainReference",
+                        "verification",
+                        "confirmations",
+                        "reorgDepthBlocks",
+                        "head",
+                        "reasonCode"
                       ],
-                      "description": "The launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain; otherwise its own verification, head, and reason code, without endpoint details."
+                      "properties": {
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "chainReference": { "type": "integer", "minimum": 1 },
+                        "verification": {
+                          "type": "string",
+                          "enum": [
+                            "verified",
+                            "mismatched",
+                            "unreachable",
+                            "unknown"
+                          ]
+                        },
+                        "confirmations": { "type": "integer", "minimum": 1 },
+                        "reorgDepthBlocks": { "type": "integer", "minimum": 1 },
+                        "head": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "blockNumber",
+                                "blockHash",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "blockNumber": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                  "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                },
+                                "blockHash": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      },
+                      "description": "The launch chain slot (LAUNCH_CHAIN_ID). Absent while the slot equals the primary chain; otherwise its own verification, head, and reason code, without endpoint details."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -45607,7 +45592,6 @@
                     "gasReservePolicy",
                     "balances",
                     "netWorth",
-                    "launchChain",
                     "contractVersion"
                   ],
                   "properties": {
@@ -46023,130 +46007,125 @@
                       ]
                     },
                     "launchChain": {
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": [
-                            "chainId",
-                            "availability",
-                            "reasonCode",
-                            "nativeBalance"
-                          ],
-                          "properties": {
-                            "chainId": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "chainId",
+                        "availability",
+                        "reasonCode",
+                        "nativeBalance"
+                      ],
+                      "properties": {
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "availability": {
+                          "type": "string",
+                          "enum": ["available", "unavailable"]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
                               "type": "string",
-                              "enum": ["eip155:56", "eip155:97"]
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                             },
-                            "availability": {
-                              "type": "string",
-                              "enum": ["available", "unavailable"]
-                            },
-                            "reasonCode": {
-                              "anyOf": [
-                                {
+                            { "type": "null" }
+                          ]
+                        },
+                        "nativeBalance": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "assetId",
+                                "symbol",
+                                "decimals",
+                                "rawValue",
+                                "displayBalance",
+                                "availableBalance",
+                                "spendableBalance",
+                                "gasReserve",
+                                "snapshot"
+                              ],
+                              "properties": {
+                                "assetId": {
                                   "type": "string",
-                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                                  "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
                                 },
-                                { "type": "null" }
-                              ]
-                            },
-                            "nativeBalance": {
-                              "anyOf": [
-                                {
+                                "symbol": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 32
+                                },
+                                "decimals": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 36
+                                },
+                                "rawValue": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                  "description": "Integer amount in the asset's smallest unit, as a string."
+                                },
+                                "displayBalance": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                  "description": "Exact decimal string; never a JavaScript floating-point value."
+                                },
+                                "availableBalance": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                  "description": "Exact decimal string; never a JavaScript floating-point value."
+                                },
+                                "spendableBalance": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                  "description": "Exact decimal string; never a JavaScript floating-point value."
+                                },
+                                "gasReserve": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                  "description": "Exact decimal string; never a JavaScript floating-point value."
+                                },
+                                "snapshot": {
                                   "type": "object",
                                   "additionalProperties": false,
                                   "required": [
-                                    "assetId",
-                                    "symbol",
-                                    "decimals",
-                                    "rawValue",
-                                    "displayBalance",
-                                    "availableBalance",
-                                    "spendableBalance",
-                                    "gasReserve",
-                                    "snapshot"
+                                    "blockNumber",
+                                    "blockHash",
+                                    "observedAt",
+                                    "confirmations"
                                   ],
                                   "properties": {
-                                    "assetId": {
+                                    "blockNumber": {
                                       "type": "string",
-                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
-                                      "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                                      "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                      "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
                                     },
-                                    "symbol": {
+                                    "blockHash": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 32
+                                      "pattern": "^0x[0-9a-f]{64}$"
                                     },
-                                    "decimals": {
+                                    "observedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "confirmations": {
                                       "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 36
-                                    },
-                                    "rawValue": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,77})$",
-                                      "description": "Integer amount in the asset's smallest unit, as a string."
-                                    },
-                                    "displayBalance": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                                      "description": "Exact decimal string; never a JavaScript floating-point value."
-                                    },
-                                    "availableBalance": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                                      "description": "Exact decimal string; never a JavaScript floating-point value."
-                                    },
-                                    "spendableBalance": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                                      "description": "Exact decimal string; never a JavaScript floating-point value."
-                                    },
-                                    "gasReserve": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                                      "description": "Exact decimal string; never a JavaScript floating-point value."
-                                    },
-                                    "snapshot": {
-                                      "type": "object",
-                                      "additionalProperties": false,
-                                      "required": [
-                                        "blockNumber",
-                                        "blockHash",
-                                        "observedAt",
-                                        "confirmations"
-                                      ],
-                                      "properties": {
-                                        "blockNumber": {
-                                          "type": "string",
-                                          "pattern": "^(0|[1-9][0-9]{0,19})$",
-                                          "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
-                                        },
-                                        "blockHash": {
-                                          "type": "string",
-                                          "pattern": "^0x[0-9a-f]{64}$"
-                                        },
-                                        "observedAt": {
-                                          "type": "string",
-                                          "format": "date-time"
-                                        },
-                                        "confirmations": {
-                                          "type": "integer",
-                                          "minimum": 1
-                                        }
-                                      }
+                                      "minimum": 1
                                     }
                                   }
-                                },
-                                { "type": "null" }
-                              ]
-                            }
-                          }
-                        },
-                        { "type": "null" }
-                      ],
-                      "description": "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances."
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      },
+                      "description": "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). Absent while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }

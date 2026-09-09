@@ -1,6 +1,6 @@
 import type { AppConfig, V2ModuleId } from "../../config.js";
 import type { ChainVerificationState } from "../../integrations/bsc/rpc-client.js";
-import type { LaunchChainId } from "../chain/chain-contract.js";
+import { bscChainId, type LaunchChainId } from "../chain/chain-contract.js";
 
 export const v2ContractVersion = "2.0" as const;
 export const v2ProductConfigVersion = "productPolicyV2.2026-09-01" as const;
@@ -97,8 +97,10 @@ export interface V2CapabilityProjection {
     readonly status: V2CapabilityEvidenceStatus;
     readonly reasonCode: string | null;
     /**
-     * `launch` only (Decision 0038): the chain slot the Launch module points
-     * at, so the client can show the testnet badge before any launch exists.
+     * `launch` only, and only while the launch slot differs from the primary
+     * chain (Decision 0038): the chain the Launch module points at, so the
+     * client can show the testnet badge before any launch exists. Absent on
+     * a mainnet-only deployment, keeping that document byte-identical.
      */
     readonly launchChainId?: LaunchChainId;
   };
@@ -846,7 +848,7 @@ export function createV2CapabilitiesProjection(
       v2LaunchModuleDeferredReasonCode,
       v2LaunchRuntimeUnavailableReasonCode,
       v2LaunchEvidencePendingReasonCode,
-      runtime.launchChainId,
+      runtime.launchChainId === bscChainId ? undefined : runtime.launchChainId,
     ),
     evidencePendingModuleCapability(
       config,

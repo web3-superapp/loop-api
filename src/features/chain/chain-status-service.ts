@@ -86,8 +86,11 @@ export interface ChainStatusResource {
     readonly readableAssetCount: number;
     readonly registeredPoolCount: number;
   };
-  /** `null` when the launch slot equals the primary slot (Decision 0038). */
-  readonly launchChain: LaunchChainStatusProjection | null;
+  /**
+   * Absent while the launch slot equals the primary slot (Decision 0038):
+   * a client that predates the slot must see a byte-identical document.
+   */
+  readonly launchChain?: LaunchChainStatusProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -276,7 +279,7 @@ export function createChainStatusService(
           readableAssetCount: assets.length,
           registeredPoolCount: pools.length,
         }),
-        launchChain,
+        ...(launchChain === null ? {} : { launchChain }),
         contractVersion: v2ContractVersion,
       });
     },

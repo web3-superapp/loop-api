@@ -38,7 +38,8 @@ Launch 合约先在 **BSC 测试网（`eip155:97`）** 停留一段时间。后�
 `primary` 恒为 `eip155:56`（钱包、行情、Swap、授权、indexer 全部在此，一字不改）；
 `launch` 由后端配置 `LAUNCH_CHAIN_ID` 决定，为 `eip155:56`（默认）或 `eip155:97`。
 
-- `launch` capability 的 `evidence` 多一个字段 `launchChainId`（仅 `launch` 有）：
+- **只有** `LAUNCH_CHAIN_ID=97` 时 `launch` capability 的 `evidence` 多一个 optional
+  字段 `launchChainId`（仅 `launch` 有；槽位共享时缺席，`evidence` 与 S7 完全相同）：
 
 ```json
 {

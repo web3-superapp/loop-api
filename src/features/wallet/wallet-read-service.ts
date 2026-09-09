@@ -203,8 +203,11 @@ export interface WalletBalancesResource {
   };
   readonly balances: readonly WalletBalanceProjection[];
   readonly netWorth: WalletNetWorthProjection | UnavailableProjection;
-  /** `null` when the launch slot equals the primary slot (Decision 0038). */
-  readonly launchChain: LaunchChainBalanceProjection | null;
+  /**
+   * Absent while the launch slot equals the primary slot (Decision 0038):
+   * a client that predates the slot must see a byte-identical document.
+   */
+  readonly launchChain?: LaunchChainBalanceProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -767,6 +770,11 @@ export function createWalletReadService(
         );
       }
 
+      const launchChain = await projectLaunchChainBalance(
+        input.launchChainReadClient,
+        wallet.address,
+        input.gasReserveRawWei,
+      );
       return Object.freeze({
         walletId: wallet.walletId,
         snapshot: Object.freeze({
@@ -785,11 +793,7 @@ export function createWalletReadService(
         }),
         balances: Object.freeze(balances),
         netWorth: projectNetWorth(),
-        launchChain: await projectLaunchChainBalance(
-          input.launchChainReadClient,
-          wallet.address,
-          input.gasReserveRawWei,
-        ),
+        ...(launchChain === null ? {} : { launchChain }),
         contractVersion: v2ContractVersion,
       });
 

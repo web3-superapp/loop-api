@@ -158,8 +158,8 @@ is built, and no prototype supply/tax/suffix number is published. Frontend
 contract: `docs/frontend-v2-launch-api.md`. Since Decision 0038 every launch
 summary publishes the `chainId` stored at approval time — `eip155:56` or,
 while the Launch contract lives on the BSC testnet, `eip155:97` from the
-`LAUNCH_CHAIN_ID` slot — and the `launch` capability's `evidence` carries
-`launchChainId`. `POST /v2/launch/{launchId}/intents` is unchanged (always
+`LAUNCH_CHAIN_ID` slot — and, only with `LAUNCH_CHAIN_ID=97`, the `launch`
+capability's `evidence` carries `launchChainId`. `POST /v2/launch/{launchId}/intents` is unchanged (always
 `503`); no Launch transaction exists for either chain.
 
 | Method and path                                  | Request                                                                   | Success projection                                                                       | Interface     | Capability                                                               |
@@ -218,9 +218,9 @@ of its tokens are already readable registry rows. RPC endpoint URLs are never
 published: `GET /v2/chain/status` identifies each endpoint by an opaque,
 non-reversible `endpointRef`. With no configured endpoint the route is
 `503 CAPABILITY_UNAVAILABLE`, never an all-null healthy document. Since
-Decision 0038 the response also carries `launchChain`: `null` while the
-`launch` chain slot (`LAUNCH_CHAIN_ID`) equals the primary chain, otherwise the
-BSC testnet's own verification, head, confirmation policy, and reason code
+Decision 0038 the response carries an optional `launchChain`: absent while the
+`launch` chain slot (`LAUNCH_CHAIN_ID`) equals the primary chain (the document
+is then byte-identical to S5), otherwise the BSC testnet's own verification, head, confirmation policy, and reason code
 (`LAUNCH_CHAIN_RPC_NOT_CONFIGURED` / `LAUNCH_CHAIN_VERIFICATION_PENDING` /
 `LAUNCH_CHAIN_RPC_UNREACHABLE` / `LAUNCH_CHAIN_ID_MISMATCH`), still without any
 endpoint URL. The primary slot alone gates the route; `bscRead` describes only

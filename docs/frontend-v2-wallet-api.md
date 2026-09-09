@@ -112,15 +112,14 @@ X-Loop-Client-Version: 1.0.0
     }
   ],
   "registry": { "readableAssetCount": 1, "registeredPoolCount": 0 },
-  "launchChain": null,
   "contractVersion": "2.0"
 }
 ```
 
-- `launchChain`（S9 / 决策 0038）：`launch` 链槽位与 `primary` 相同时为 `null`；后端
-  `LAUNCH_CHAIN_ID=97` 时为测试网自己的健康投影，字段与语义见
-  `docs/frontend-v2-chain-api.md`。`chain`/`rpc`/`indexer`/`registry` 永远只描述
-  `eip155:56`。
+- `launchChain`（S9 / 决策 0038，optional）：`launch` 链槽位与 `primary` 相同时**该键
+  缺席**（上面的文档即完整响应）；后端 `LAUNCH_CHAIN_ID=97` 时在 `registry` 之后多出
+  测试网自己的健康投影，字段与语义见 `docs/frontend-v2-chain-api.md`。
+  `chain`/`rpc`/`indexer`/`registry` 永远只描述 `eip155:56`。
 - `endpointRef` 是不可逆的稳定引用（`rpc-<12 位十六进制>`）。**后端永远不下发
   RPC URL**，前端不要显示或猜测端点地址。
 - `status`：`healthy` / `degraded`（延迟 > 1500ms、落后 > 3 块，或 chainId 不符）
@@ -333,8 +332,9 @@ CAPABILITY_UNAVAILABLE`。后端**不会**回放历史快照当成当前余额�
 
 ### 6.1 `launchChain`：Launch 链槽位上的 tBNB 余额（S9 / 决策 0038）
 
-响应在 `netWorth` 之后多一个键 `launchChain`（`contractVersion` 之前）。后端
-`LAUNCH_CHAIN_ID` 未设置或为 `56` 时恒为 `null`，钱包页不显示 Launch 区块；为 `97` 时：
+后端 `LAUNCH_CHAIN_ID` 未设置或为 `56` 时**没有这个键**（响应与 S5/S5b 逐字节相同），
+钱包页不显示 Launch 区块；为 `97` 时响应在 `netWorth` 之后、`contractVersion` 之前多一个
+optional 键 `launchChain`：
 
 ```json
 {

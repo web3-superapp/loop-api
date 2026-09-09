@@ -15,8 +15,11 @@
 | `launch`  | `eip155:56`（默认）或 `eip155:97` | Launch 目录、Launch 相关页面、将来的 Launch 意图           |
 
 `launch` 槽位由后端 `LAUNCH_CHAIN_ID` 决定，客户端**只信后端发布的值**：
-`GET /v2/meta/capabilities` 里 `launch.evidence.launchChainId`（每个部署都有）、
+`GET /v2/meta/capabilities` 里 `launch.evidence.launchChainId`、
 `GET /v2/chain/status.launchChain`、每个 `LaunchSummary.chainId`。
+**槽位与 primary 相同（后端未设置或 `LAUNCH_CHAIN_ID=56`）时，前两个字段整个缺席
+（不是 `null`）**，响应与 S5/S7 逐字节相同；只有 `LAUNCH_CHAIN_ID=97` 时才出现。
+strict 解析把这两个键当 optional。
 `chain_contract.dart` 里"本步只支持 eip155:56"的校验改为"primary 链 56 **或**
 launch 链（后端发布）"；出现其它值按 strict 解析拒绝。
 
@@ -26,8 +29,8 @@ RPC URL 永远不会出现在任何响应里。
 
 ## 1. `GET /v2/chain/status.launchChain`
 
-`launch` 槽位与 `primary` 相同（`LAUNCH_CHAIN_ID` 未设置或 `56`）时恒为 `null`——
-不重复发布主链。`LAUNCH_CHAIN_ID=97` 时：
+`launch` 槽位与 `primary` 相同（`LAUNCH_CHAIN_ID` 未设置或 `56`）时**该键缺席**——
+不重复发布主链，响应与 S5 逐字节相同。`LAUNCH_CHAIN_ID=97` 时：
 
 ```json
 {
@@ -47,8 +50,8 @@ RPC URL 永远不会出现在任何响应里。
 }
 ```
 
-- 键顺序：`chain`、`rpc`、`indexer`、`registry`、`launchChain`、`contractVersion`；
-  前五个中前四个只描述 `eip155:56`，与 S5 完全一致。
+- 键顺序（97 时）：`chain`、`rpc`、`indexer`、`registry`、`launchChain`、
+  `contractVersion`；前四个只描述 `eip155:56`，与 S5 完全一致。
 - `verification` 与主链同枚举：`verified | mismatched | unreachable | unknown`。
   `head` 只在 `verified` 时非空。
 - **没有** `endpoints[]`：测试网端点健康不单列，也不下发 `endpointRef`。
@@ -64,8 +67,8 @@ RPC URL 永远不会出现在任何响应里。
 | `LAUNCH_CHAIN_RPC_UNREACHABLE`      | `unreachable`  | 端点不可达                                     | `异常` badge            |
 | `LAUNCH_CHAIN_ID_MISMATCH`          | `mismatched`   | 端点返回的不是 chain 97——Launch 相关整块不可用 | `异常` badge            |
 
-`networks` 页只有在 `launchChain !== null` 时才增加一行"BSC 测试网（Launch）"；
-`launchChain === null` 时**不显示**任何测试网行（不是 unavailable 占位）。
+`networks` 页只有在响应含 `launchChain` 时才增加一行"BSC 测试网（Launch）"；
+键缺席时**不显示**任何测试网行（不是 unavailable 占位）。
 
 ## 2. `GET /v2/meta/capabilities` → `launch.evidence.launchChainId`
 
@@ -77,14 +80,14 @@ RPC URL 永远不会出现在任何响应里。
   "evidence": {
     "status": "pending",
     "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING",
-    "launchChainId": "eip155:56"
+    "launchChainId": "eip155:97"
   }
 }
 ```
 
-- 31 个 capability id 不变；只有 `launch` 的 `evidence` 多 `launchChainId`
-  （`eip155:56 | eip155:97`），其它 capability 的 `evidence` 仍只有
-  `status` + `reasonCode`。
+- 31 个 capability id 不变；**只有** `LAUNCH_CHAIN_ID=97` 时 `launch` 的 `evidence`
+  多 `launchChainId`（值恒 `eip155:97`）；槽位共享时该键缺席，`evidence` 与 S7 一样只有
+  `status` + `reasonCode`。其它 capability 永远没有这个键。
 - `bscRead` 语义不变：只描述 `primary`。测试网可用与否**不影响** `bscRead`。
 - 客户端用它决定：Launch 列表/详情/轮次/交易/质押页与签名单是否显示"BSC 测试网"
   徽标与一次性说明（不阻断）。
@@ -93,7 +96,7 @@ RPC URL 永远不会出现在任何响应里。
 
 | 接口                                               | 变化                                                                                | 文档                                     |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------- |
-| `GET /v2/wallets/{walletId}/balances`              | 新增 `launchChain`（tBNB 余额；槽位相同时 `null`）                                  | `docs/frontend-v2-wallet-api.md` §6.1    |
+| `GET /v2/wallets/{walletId}/balances`              | 97 时新增 `launchChain`（tBNB 余额；槽位相同时缺席）                                | `docs/frontend-v2-wallet-api.md` §6.1    |
 | `GET /v2/launch/overview`、`GET /v2/launches/{id}` | `LaunchSummary.chainId` 变为枚举 `eip155:56 \| eip155:97`（来自存储行，不再是常量） | `docs/frontend-v2-launch-api.md` §1.1    |
 | `POST /v2/launch/{launchId}/intents`               | 不变，恒 `503`                                                                      | 同上 §4.5                                |
 | 钱包意图（send/approve/revoke/swap）               | 不变：`unsignedTransaction.chainId` 恒 `56`，任何 97 都必须拒绝                     | `docs/frontend-v2-wallet-intents-api.md` |

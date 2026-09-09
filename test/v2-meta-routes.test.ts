@@ -371,28 +371,29 @@ describe("LOOP API V2 meta policy gates", () => {
     expect(Object.keys(capabilities)).toHaveLength(31);
   });
 
-  it("names the launch chain slot in the launch capability's evidence only (Decision 0038)", async () => {
-    const shared = await readCapabilities(
-      await createApp({ V2_MODULES_ENABLED: "launch" }),
-    );
-    expect(shared["launch"]).toEqual({
-      capabilityId: "launch",
-      availability: "unavailable",
-      reasonCode: "LAUNCH_RUNTIME_UNAVAILABLE",
-      evidence: {
-        status: "pending",
-        reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
-        launchChainId: "eip155:56",
-      },
-    });
-    for (const [capabilityId, capability] of Object.entries(shared)) {
-      if (capabilityId !== "launch") {
-        expect(capability.evidence, capabilityId).not.toHaveProperty(
-          "launchChainId",
-        );
+  it("names the launch chain slot in the launch capability's evidence only while it is the testnet (Decision 0038)", async () => {
+    for (const overrides of [{}, { LAUNCH_CHAIN_ID: "56" }]) {
+      const shared = await readCapabilities(
+        await createApp({ V2_MODULES_ENABLED: "launch", ...overrides }),
+      );
+      // Shared slot: the pre-S9 document, key for key.
+      expect(shared["launch"]).toEqual({
+        capabilityId: "launch",
+        availability: "unavailable",
+        reasonCode: "LAUNCH_RUNTIME_UNAVAILABLE",
+        evidence: {
+          status: "pending",
+          reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+        },
+      });
+      for (const [capabilityId, capability] of Object.entries(shared)) {
+        expect(Object.keys(capability.evidence), capabilityId).toEqual([
+          "status",
+          "reasonCode",
+        ]);
       }
+      expect(Object.keys(shared)).toHaveLength(31);
     }
-    expect(Object.keys(shared)).toHaveLength(31);
 
     const testnet = await readCapabilities(
       await createApp({ V2_MODULES_ENABLED: "launch", LAUNCH_CHAIN_ID: "97" }),
@@ -402,7 +403,19 @@ describe("LOOP API V2 meta policy gates", () => {
       reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
       launchChainId: "eip155:97",
     });
-    // bscRead keeps describing only the primary chain.
+    for (const [capabilityId, capability] of Object.entries(testnet)) {
+      if (capabilityId !== "launch") {
+        expect(Object.keys(capability.evidence), capabilityId).toEqual([
+          "status",
+          "reasonCode",
+        ]);
+      }
+    }
+    // bscRead keeps describing only the primary chain: identical with or
+    // without the testnet slot.
+    const shared = await readCapabilities(
+      await createApp({ V2_MODULES_ENABLED: "launch" }),
+    );
     expect(testnet["bscRead"]).toEqual(shared["bscRead"]);
   });
 

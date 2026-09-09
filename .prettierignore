@@ -6,3 +6,5 @@ dist/**
 node_modules/**
 pnpm-lock.yaml
 server/app-integrations-p0/adapter.mjs
+# Byte-exact response baselines (Decision 0038); never reformat.
+test/fixtures/s9-baseline/

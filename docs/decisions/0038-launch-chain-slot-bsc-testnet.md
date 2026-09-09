@@ -29,13 +29,34 @@ instead of to a hardcoded chain.
 | Chain model       | Exactly two named slots: `primary = eip155:56` (unchanged) and `launch = LAUNCH_CHAIN_ID ∈ {56, 97}`, default `56`. No generic multi-chain support, no chain list.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Configuration     | `LAUNCH_CHAIN_ID`, `LAUNCH_BSC_RPC_URLS` (comma list), `LAUNCH_BSC_CONFIRMATIONS` (default 5), `LAUNCH_BSC_REORG_DEPTH_BLOCKS` (default 15). With `LAUNCH_CHAIN_ID=56` the primary RPC and parameters are reused and every `LAUNCH_BSC_*` key must be blank (otherwise startup fails). `LAUNCH_CHAIN_ID=97` without `LAUNCH_BSC_RPC_URLS` is `unavailable(LAUNCH_CHAIN_RPC_NOT_CONFIGURED)`, never a crash. The runtime `eth_chainId` must equal the configured value, otherwise `unavailable(LAUNCH_CHAIN_ID_MISMATCH)` plus a startup warning, in the same pattern as the Decision 0033 primary verification. |
 | RPC client        | `integrations/bsc/rpc-client.ts` is reused and instantiated once per slot. Endpoint URLs never enter a response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Chain status      | `GET /v2/chain/status` gains `launchChain: {chainId, chainReference, verification, confirmations, reorgDepthBlocks, head, reasonCode} \| null`; `null` when the `launch` slot equals `primary` (nothing is published twice).                                                                                                                                                                                                                                                                                                                                                                                    |
+| Chain status      | `GET /v2/chain/status` gains `launchChain: {chainId, chainReference, verification, confirmations, reorgDepthBlocks, head, reasonCode}`; the field is **absent** when the `launch` slot equals `primary` (nothing is published twice; see the 2026-09-09 follow-up ruling below).                                                                                                                                                                                                                                                                                                                                |
 | Launch catalog    | `launches.chain_id` is decided by the `launch` slot at creation time (existing rows stay `eip155:56`); `GET /v2/launch/overview`, `GET /v2/launches/{id}` and the list items publish `chainId`; the `launchChainId` constant becomes configuration. The contract-address slot stays `null`.                                                                                                                                                                                                                                                                                                                     |
-| Wallet read       | `GET /v2/wallets/{walletId}/balances` gains `launchChain: {chainId, nativeBalance, availability, reasonCode} \| null`: only the native coin (tBNB) via `eth_getBalance`, no asset registry for 97, no Multicall3; `null` when the slots are equal. `spendableBalance` / gas reserve follow the primary rules (`WALLET_GAS_RESERVE_BNB` is reused).                                                                                                                                                                                                                                                              |
+| Wallet read       | `GET /v2/wallets/{walletId}/balances` gains `launchChain: {chainId, nativeBalance, availability, reasonCode}`: only the native coin (tBNB) via `eth_getBalance`, no asset registry for 97, no Multicall3; the field is **absent** when the slots are equal. `spendableBalance` / gas reserve follow the primary rules (`WALLET_GAS_RESERVE_BNB` is reused).                                                                                                                                                                                                                                                     |
 | Transaction shape | The unsigned-transaction `chainId` is injected from a parameter (no `56` constant); the `intent-contract.ts` literal widens to `56 \| 97`, but **only a Launch intent may bind 97** — send/swap/approval keep 56 (locked by tests). No executable Launch intent is added; `POST /v2/launch/{launchId}/intents` stays `503 LAUNCH_CONTRACT_BASELINE_PENDING`.                                                                                                                                                                                                                                                    |
 | Indexer           | No new lane (no contract). `indexer_checkpoints` and `indexed_*` are already keyed by `(lane, chain_id)`; this step only proves that `eip155:97` can be written (integration test). `BSC_INDEXER_ENABLED` keeps driving only the primary chain.                                                                                                                                                                                                                                                                                                                                                                 |
-| Capabilities      | No new capability ID. The `launch` capability's `evidence` gains `launchChainId`; `bscRead` keeps describing only the primary chain.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Capabilities      | No new capability ID. The `launch` capability's `evidence` gains `launchChainId` (absent while the slot is shared); `bscRead` keeps describing only the primary chain.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Not in scope      | Market / GoPlus / DexScreener data for 97; an asset registry or ERC-20 balances for 97; PancakeSwap testnet pools; a Launch event lane; any Launch transaction; any change to `BSC_WRITES_ENABLED` semantics.                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+## Follow-up rulings (main agent, 2026-09-09, on the backend report)
+
+1. **Field presence.** While the `launch` slot equals `primary`
+   (`LAUNCH_CHAIN_ID` unset or `56`), `chain/status.launchChain`,
+   `balances.launchChain`, and `launch.evidence.launchChainId` are **absent**
+   (optional, never `null`); they appear only with `LAUNCH_CHAIN_ID=97`. The
+   mobile client parses strictly and rejects unknown keys, so an older client
+   must receive byte-identical documents. The OpenAPI schemas mark the three
+   fields optional under the existing `additionalProperties: false` objects.
+2. **`buildUnsignedTransaction` stays in
+   `src/features/wallet-intents/intent-preparation.ts`.** `tx-builder.ts`
+   never held a chain constant (it encodes calldata only); the `56` literal
+   lived in `buildUnsignedTransaction`, which is where the injected chain and
+   the `isIntentChainAllowed` gate now live. No move to `tx-builder.ts`.
+3. The reconciliation worker keeps parsing the `LAUNCH_*` keys (parity), and
+   still instantiates no launch-chain client.
+4. `docs/frontend-v2-chain-api.md` is kept as the chain-module handover for
+   the slot fields.
+5. The note that `https://data-seed-prebsc-1-s1.bnbchain.org:8545` was not
+   probed stays.
 
 ## Testnet facts
 
@@ -121,12 +142,12 @@ The primary slot's `bscRead` capability and `BSC_*` reason codes are untouched.
 
 ### Projections
 
-- `GET /v2/chain/status.launchChain` is `null` when shared. Otherwise it carries
+- `GET /v2/chain/status.launchChain` is absent when shared. Otherwise it carries
   the slot's chain identity, live verification, confirmation policy, the head
   (only when verified), and one reason code. It publishes no endpoint list
   and no URL. The route still fails closed on the **primary** slot: a launch
   slot alone never turns the networks page on.
-- `GET /v2/wallets/{walletId}/balances.launchChain` is `null` when shared.
+- `GET /v2/wallets/{walletId}/balances.launchChain` is absent when shared.
   Otherwise `{chainId, availability, reasonCode, nativeBalance}` where
   `nativeBalance` is `{assetId: "eip155:97:native", symbol: "tBNB",
 decimals: 18, rawValue, displayBalance, availableBalance, spendableBalance,
@@ -138,7 +159,8 @@ gasReserve, snapshot: {blockNumber, blockHash, observedAt, confirmations}}`
 - Launch summaries publish `chainId` from the stored row
   (`"eip155:56" | "eip155:97"`), never from a constant.
 - `GET /v2/meta/capabilities`: the `launch` entry's `evidence` gains
-  `launchChainId`; every other entry is byte-identical.
+  `launchChainId` only with `LAUNCH_CHAIN_ID=97`; every other entry, and the
+  whole document on a shared slot, is byte-identical.
 
 ### Intent chain policy (`src/features/wallet-intents`)
 
@@ -170,10 +192,12 @@ API reads); an invalid value is `launch_review_launch_chain_invalid`.
 
 ## Regression guarantee
 
-With `LAUNCH_CHAIN_ID` unset every existing field keeps its value and
-position. The additive fields are exactly the three the rulings name:
-`chain/status.launchChain: null`, `balances.launchChain: null`, and
-`capabilities[launch].evidence.launchChainId: "eip155:56"`. Launch
+With `LAUNCH_CHAIN_ID` unset (or `56`) `GET /v2/chain/status`,
+`GET /v2/wallets/{walletId}/balances`, and `GET /v2/meta/capabilities` are
+byte-identical to the pre-S9 documents: `test/fixtures/s9-baseline/*.json`
+were generated from the `integration/v2` sources at `25ca0c3` with the
+route-test fakes, and `test/v2-chain-wallet-routes.test.ts` compares the
+serialised responses of the S9 code against them with `toBe`. Launch
 `chainId` already existed and keeps the value `"eip155:56"`. The existing
 route, contract, and OpenAPI tests were not relaxed.
 
@@ -181,7 +205,7 @@ route, contract, and OpenAPI tests were not relaxed.
 
 Unset `LAUNCH_CHAIN_ID` (or set it to `56`) and clear `LAUNCH_BSC_*`; the
 launch slot collapses onto the primary slot and the three additive fields
-report `null` / `"eip155:56"`. Migration `000026`'s `down` removes the
+disappear. Migration `000026`'s `down` removes the
 `chains` row once no launch or checkpoint references it.
 
 ## Integration checklist once 02 arrives

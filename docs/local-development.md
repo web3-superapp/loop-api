@@ -281,11 +281,13 @@ LAUNCH_BSC_RPC_URLS=https://bsc-testnet-rpc.publicnode.com
 What changes with the slot set to 97 (and nothing else):
 
 - `GET /v2/chain/status.launchChain` publishes the testnet's verification,
-  head, confirmation policy, and reason code (`null` while the slot is 56).
+  head, confirmation policy, and reason code (absent while the slot is 56).
 - `GET /v2/wallets/{walletId}/balances.launchChain` publishes the wallet's
-  tBNB balance from one `eth_getBalance` (`null` while the slot is 56).
-- `GET /v2/meta/capabilities` → `launch.evidence.launchChainId` names the
-  slot on every deployment (`eip155:56` by default).
+  tBNB balance from one `eth_getBalance` (absent while the slot is 56).
+- `GET /v2/meta/capabilities` → `launch.evidence.launchChainId: "eip155:97"`
+  (absent while the slot is 56).
+- With the slot at 56 all three documents are byte-identical to S5/S7
+  (`test/fixtures/s9-baseline/*.json`).
 - `pnpm launch:review <projectId> approve` stamps the new `launches` row
   with the slot read from the same `.env.local`; existing rows keep
   `eip155:56`, and every Launch read publishes the stored `chainId`.

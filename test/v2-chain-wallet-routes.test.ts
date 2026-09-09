@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -713,57 +715,48 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(response.body).not.toContain("example");
   });
 
-  it("publishes launchChain as null while the launch slot is shared with primary (Decision 0038)", async () => {
-    const { app } = await createApp();
-    const status = await app.inject({
-      method: "GET",
-      url: "/v2/chain/status",
-      headers: commonHeaders(),
-    });
-    expect(status.statusCode).toBe(200);
-    const statusBody = status.json<Record<string, unknown>>();
-    expect(statusBody["launchChain"]).toBeNull();
-    expect(Object.keys(statusBody)).toEqual([
-      "chain",
-      "rpc",
-      "indexer",
-      "registry",
-      "launchChain",
-      "contractVersion",
-    ]);
+  it("keeps chain status, balances, and capabilities byte-identical to the S5 baseline while the launch slot is shared (Decision 0038)", async () => {
+    // The fixtures were generated from the integration/v2 sources at
+    // 25ca0c3 (before this decision) with these same fakes.
+    const baseline = (name: string): string =>
+      readFileSync(
+        new URL(`./fixtures/s9-baseline/${name}.json`, import.meta.url),
+        "utf8",
+      ).trimEnd();
+    const apps = [
+      await createApp(),
+      await createApp(fakes(), { LAUNCH_CHAIN_ID: "56" }),
+      // An injected launch client is ignored while the slot is shared: the
+      // seam cannot make LAUNCH_CHAIN_ID=56 publish a second chain.
+      await createApp({
+        ...fakes(),
+        launchChainReadClient: launchClientFake(),
+      }),
+    ];
+    for (const { app } of apps) {
+      const status = await app.inject({
+        method: "GET",
+        url: "/v2/chain/status",
+        headers: commonHeaders(),
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.body).toBe(baseline("chain-status"));
 
-    const balances = await app.inject({
-      method: "GET",
-      url: `/v2/wallets/${walletId}/balances`,
-      headers: commonHeaders(),
-    });
-    expect(balances.statusCode).toBe(200);
-    const balancesBody = balances.json<Record<string, unknown>>();
-    expect(balancesBody["launchChain"]).toBeNull();
-    expect(Object.keys(balancesBody)).toEqual([
-      "walletId",
-      "snapshot",
-      "gasReservePolicy",
-      "balances",
-      "netWorth",
-      "launchChain",
-      "contractVersion",
-    ]);
+      const balances = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      });
+      expect(balances.statusCode).toBe(200);
+      expect(balances.body).toBe(baseline("wallet-balances"));
 
-    // An injected launch client is ignored while the slot is shared: the
-    // seam cannot make LAUNCH_CHAIN_ID=56 publish a second chain.
-    const { app: sharedWithSeam } = await createApp({
-      ...fakes(),
-      launchChainReadClient: launchClientFake(),
-    });
-    const seamStatus = await sharedWithSeam.inject({
-      method: "GET",
-      url: "/v2/chain/status",
-      headers: commonHeaders(),
-    });
-    expect(
-      seamStatus.json<Record<string, unknown>>()["launchChain"],
-    ).toBeNull();
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      expect(capabilities.statusCode).toBe(200);
+      expect(capabilities.body).toBe(baseline("capabilities"));
+    }
   });
 
   it("publishes the launch slot's testnet status and tBNB balance beside the primary chain", async () => {

@@ -206,47 +206,35 @@ const chainHeadSchema = {
  * from the primary slot; no endpoint list, no URL.
  */
 const launchChainStatusSchema = {
-  anyOf: [
-    {
-      type: "object",
-      additionalProperties: false,
-      required: [
-        "chainId",
-        "chainReference",
-        "verification",
-        "confirmations",
-        "reorgDepthBlocks",
-        "head",
-        "reasonCode",
-      ],
-      properties: {
-        chainId: { type: "string", enum: [...launchChainIds] },
-        chainReference: { type: "integer", minimum: 1 },
-        verification: { type: "string", enum: [...chainVerificationStates] },
-        confirmations: { type: "integer", minimum: 1 },
-        reorgDepthBlocks: { type: "integer", minimum: 1 },
-        head: { anyOf: [chainHeadSchema, { type: "null" }] },
-        reasonCode: nullableReasonCodeSchema,
-      },
-    },
-    { type: "null" },
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "chainId",
+    "chainReference",
+    "verification",
+    "confirmations",
+    "reorgDepthBlocks",
+    "head",
+    "reasonCode",
   ],
+  properties: {
+    chainId: { type: "string", enum: [...launchChainIds] },
+    chainReference: { type: "integer", minimum: 1 },
+    verification: { type: "string", enum: [...chainVerificationStates] },
+    confirmations: { type: "integer", minimum: 1 },
+    reorgDepthBlocks: { type: "integer", minimum: 1 },
+    head: { anyOf: [chainHeadSchema, { type: "null" }] },
+    reasonCode: nullableReasonCodeSchema,
+  },
   description:
-    "The launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain; otherwise its own verification, head, and reason code, without endpoint details.",
+    "The launch chain slot (LAUNCH_CHAIN_ID). Absent while the slot equals the primary chain; otherwise its own verification, head, and reason code, without endpoint details.",
 } as const;
 
 export const chainStatusResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: [
-    "chain",
-    "rpc",
-    "indexer",
-    "registry",
-    "launchChain",
-    "contractVersion",
-  ],
+  required: ["chain", "rpc", "indexer", "registry", "contractVersion"],
   properties: {
     chain: {
       type: "object",
@@ -422,70 +410,65 @@ const decimalAmountSchema = {
  * pending, valuation, or cross-check facts exist for this slot.
  */
 const launchChainBalanceSchema = {
-  anyOf: [
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["chainId", "availability", "reasonCode", "nativeBalance"],
-      properties: {
-        chainId: { type: "string", enum: [...launchChainIds] },
-        availability: { type: "string", enum: ["available", "unavailable"] },
-        reasonCode: nullableReasonCodeSchema,
-        nativeBalance: {
-          anyOf: [
-            {
+  type: "object",
+  additionalProperties: false,
+  required: ["chainId", "availability", "reasonCode", "nativeBalance"],
+  properties: {
+    chainId: { type: "string", enum: [...launchChainIds] },
+    availability: { type: "string", enum: ["available", "unavailable"] },
+    reasonCode: nullableReasonCodeSchema,
+    nativeBalance: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "assetId",
+            "symbol",
+            "decimals",
+            "rawValue",
+            "displayBalance",
+            "availableBalance",
+            "spendableBalance",
+            "gasReserve",
+            "snapshot",
+          ],
+          properties: {
+            assetId: assetIdSchema,
+            symbol: { type: "string", minLength: 1, maxLength: 32 },
+            decimals: { type: "integer", minimum: 0, maximum: 36 },
+            rawValue: rawAmountSchema,
+            displayBalance: decimalAmountSchema,
+            availableBalance: decimalAmountSchema,
+            spendableBalance: decimalAmountSchema,
+            gasReserve: decimalAmountSchema,
+            snapshot: {
               type: "object",
               additionalProperties: false,
               required: [
-                "assetId",
-                "symbol",
-                "decimals",
-                "rawValue",
-                "displayBalance",
-                "availableBalance",
-                "spendableBalance",
-                "gasReserve",
-                "snapshot",
+                "blockNumber",
+                "blockHash",
+                "observedAt",
+                "confirmations",
               ],
               properties: {
-                assetId: assetIdSchema,
-                symbol: { type: "string", minLength: 1, maxLength: 32 },
-                decimals: { type: "integer", minimum: 0, maximum: 36 },
-                rawValue: rawAmountSchema,
-                displayBalance: decimalAmountSchema,
-                availableBalance: decimalAmountSchema,
-                spendableBalance: decimalAmountSchema,
-                gasReserve: decimalAmountSchema,
-                snapshot: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: [
-                    "blockNumber",
-                    "blockHash",
-                    "observedAt",
-                    "confirmations",
-                  ],
-                  properties: {
-                    blockNumber: blockNumberSchema,
-                    blockHash: {
-                      type: "string",
-                      pattern: blockHashPatternSource,
-                    },
-                    observedAt: { type: "string", format: "date-time" },
-                    confirmations: { type: "integer", minimum: 1 },
-                  },
+                blockNumber: blockNumberSchema,
+                blockHash: {
+                  type: "string",
+                  pattern: blockHashPatternSource,
                 },
+                observedAt: { type: "string", format: "date-time" },
+                confirmations: { type: "integer", minimum: 1 },
               },
             },
-            { type: "null" },
-          ],
+          },
         },
-      },
+        { type: "null" },
+      ],
     },
-    { type: "null" },
-  ],
+  },
   description:
-    "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). null while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances.",
+    "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). Absent while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances.",
 } as const;
 
 export const walletBalancesResourceSchema = {
@@ -498,7 +481,6 @@ export const walletBalancesResourceSchema = {
     "gasReservePolicy",
     "balances",
     "netWorth",
-    "launchChain",
     "contractVersion",
   ],
   properties: {
