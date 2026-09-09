@@ -264,6 +264,43 @@ market fact cache and registry; it stays idle until a formula version is
 approved. See `docs/frontend-v2-launch-api.md` and
 `docs/frontend-v2-mining-api.md`.
 
+## Launch chain slot on the BSC testnet (Decision 0038)
+
+The Launch contract lives on the BSC testnet (`eip155:97`) first. Only the
+`launch` chain slot can point there; wallet balances, market, Swap, approvals,
+and the indexer keep reading the primary chain (`eip155:56`).
+
+```sh
+V2_MODULES_ENABLED=chain,wallet,launch
+BSC_RPC_URLS=https://…                                   # primary, chain 56
+LAUNCH_CHAIN_ID=97
+LAUNCH_BSC_RPC_URLS=https://bsc-testnet-rpc.publicnode.com
+# LAUNCH_BSC_CONFIRMATIONS=5 and LAUNCH_BSC_REORG_DEPTH_BLOCKS=15 are the defaults
+```
+
+What changes with the slot set to 97 (and nothing else):
+
+- `GET /v2/chain/status.launchChain` publishes the testnet's verification,
+  head, confirmation policy, and reason code (`null` while the slot is 56).
+- `GET /v2/wallets/{walletId}/balances.launchChain` publishes the wallet's
+  tBNB balance from one `eth_getBalance` (`null` while the slot is 56).
+- `GET /v2/meta/capabilities` → `launch.evidence.launchChainId` names the
+  slot on every deployment (`eip155:56` by default).
+- `pnpm launch:review <projectId> approve` stamps the new `launches` row
+  with the slot read from the same `.env.local`; existing rows keep
+  `eip155:56`, and every Launch read publishes the stored `chainId`.
+
+Migration `000026_v2_launch_chain_bsc_testnet` seeds the `eip155:97` row of
+`public.chains` that these foreign keys need; run `pnpm db:migrate` (and
+`pnpm db:migrate:test`) after pulling. With `LAUNCH_CHAIN_ID=56` every
+`LAUNCH_BSC_*` key must be blank, and the launch slot simply mirrors the
+primary configuration. `LAUNCH_CHAIN_ID=97` without `LAUNCH_BSC_RPC_URLS`
+starts fine and reports `LAUNCH_CHAIN_RPC_NOT_CONFIGURED`; a mainnet endpoint
+behind the testnet slot reports `LAUNCH_CHAIN_ID_MISMATCH` plus a startup
+warning. Testnet funds come from `https://www.bnbchain.org/en/testnet-faucet`.
+No Launch transaction, event lane, asset registry, or market data exists for
+97 yet (see `docs/decisions/0038-launch-chain-slot-bsc-testnet.md`).
+
 ## V2 support tickets: operator answer (Decision 0037)
 
 The API only creates and lists tickets. Status advances through the Dev

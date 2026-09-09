@@ -32,6 +32,33 @@ LOOP"、"0.5% 单地址上限"、"三轮 10%/5%" 等口径；所有合约/公式
 `launch-trade` 主动作、`loop-stake` 整页、`launch-holders`/`graduation`/`history` 数据块
 渲染为不可执行/unavailable。
 
+### 1.1 Launch 链槽位（S9 / 决策 0038）
+
+Launch 合约先在 **BSC 测试网（`eip155:97`）** 停留一段时间。后端有且只有两个链槽位：
+`primary` 恒为 `eip155:56`（钱包、行情、Swap、授权、indexer 全部在此，一字不改）；
+`launch` 由后端配置 `LAUNCH_CHAIN_ID` 决定，为 `eip155:56`（默认）或 `eip155:97`。
+
+- `launch` capability 的 `evidence` 多一个字段 `launchChainId`（仅 `launch` 有）：
+
+```json
+{
+  "status": "pending",
+  "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING",
+  "launchChainId": "eip155:97"
+}
+```
+
+- 每个 `LaunchSummary`（overview 分段、`GET /v2/launches/{id}.launch`）的 `chainId` 是该
+  launch **创建时**写入的链（枚举 `eip155:56 | eip155:97`），不再是常量；未知值按
+  strict 解析拒绝。同一目录里可以同时存在两种链的 launch（旧行保持 56）。
+- `chainId === "eip155:97"` 时 Launch 相关页面与签名单显示"BSC 测试网"徽标与一次性说明，
+  **不阻断**。行情 / Watchlist / Swap 页面永远不会出现 97。
+- 测试网 tBNB 余额见 `docs/frontend-v2-wallet-api.md` §6 的 `launchChain`；链健康见
+  `docs/frontend-v2-chain-api.md`。
+- 本步**没有**任何可执行的 Launch 意图：`POST /v2/launch/{launchId}/intents` 仍恒
+  `503 CAPABILITY_UNAVAILABLE`。将来的 Launch 签名意图的 `chainId` 只信后端 canonical
+  值，Privy 签名前按意图切链；send/approve/revoke/swap 意图永远是 56。
+
 ## 2. Headers
 
 | 接口                                                                                          | 必须                        | `Idempotency-Key`                                                                     |
@@ -196,6 +223,8 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
   `ended` = `ended`。"已毕业"是流动性轴的投影，本步恒 unavailable，**不要**用
   `scheduleStatus` 推断。
 - `contractAddress` 恒 `null`，`configVersion` 为已确认配置版本或 `null`（显示"待确认"）。
+- `chainId` 是该 launch 创建时的链槽位（`eip155:56 | eip155:97`，§1.1）；`eip155:97`
+  时显示"BSC 测试网"徽标。
 
 ### 4.2 `GET /v2/launches/{launchId}`（launch-detail / launch-rounds / launch-graduation）
 

@@ -112,10 +112,15 @@ X-Loop-Client-Version: 1.0.0
     }
   ],
   "registry": { "readableAssetCount": 1, "registeredPoolCount": 0 },
+  "launchChain": null,
   "contractVersion": "2.0"
 }
 ```
 
+- `launchChain`（S9 / 决策 0038）：`launch` 链槽位与 `primary` 相同时为 `null`；后端
+  `LAUNCH_CHAIN_ID=97` 时为测试网自己的健康投影，字段与语义见
+  `docs/frontend-v2-chain-api.md`。`chain`/`rpc`/`indexer`/`registry` 永远只描述
+  `eip155:56`。
 - `endpointRef` 是不可逆的稳定引用（`rpc-<12 位十六进制>`）。**后端永远不下发
   RPC URL**，前端不要显示或猜测端点地址。
 - `status`：`healthy` / `degraded`（延迟 > 1500ms、落后 > 3 块，或 chainId 不符）
@@ -325,6 +330,55 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   图表仍无后端，显示 unavailable。
 - 链读不可用（未配置 RPC、端点不可达、chainId 不符）→ `503
 CAPABILITY_UNAVAILABLE`。后端**不会**回放历史快照当成当前余额。
+
+### 6.1 `launchChain`：Launch 链槽位上的 tBNB 余额（S9 / 决策 0038）
+
+响应在 `netWorth` 之后多一个键 `launchChain`（`contractVersion` 之前）。后端
+`LAUNCH_CHAIN_ID` 未设置或为 `56` 时恒为 `null`，钱包页不显示 Launch 区块；为 `97` 时：
+
+```json
+{
+  "launchChain": {
+    "chainId": "eip155:97",
+    "availability": "available",
+    "reasonCode": null,
+    "nativeBalance": {
+      "assetId": "eip155:97:native",
+      "symbol": "tBNB",
+      "decimals": 18,
+      "rawValue": "2500000000000000000",
+      "displayBalance": "2.5",
+      "availableBalance": "2.5",
+      "spendableBalance": "2.495",
+      "gasReserve": "0.005",
+      "snapshot": {
+        "blockNumber": "52000000",
+        "blockHash": "0x9999…",
+        "observedAt": "2026-09-09T10:45:05.000Z",
+        "confirmations": 5
+      }
+    }
+  }
+}
+```
+
+- 只有原生币（tBNB）一条，来自一次 `eth_getBalance`；**没有** 97 的资产 registry、
+  ERC-20 余额、`pending`、`valuation`、`crossCheck`。`spendableBalance` /
+  `gasReserve` 规则与主链一致（复用 `WALLET_GAS_RESERVE_BNB`，随 `gasReservePolicy`
+  下发，不要写死）。
+- `availability: "unavailable"` 时 `nativeBalance` 为 `null`，`reasonCode` 为：
+
+| reasonCode                        | 含义                                           |
+| --------------------------------- | ---------------------------------------------- |
+| `LAUNCH_CHAIN_RPC_NOT_CONFIGURED` | 后端配置了 97 但没有测试网 RPC                 |
+| `LAUNCH_CHAIN_RPC_UNREACHABLE`    | 测试网端点全部不可达                           |
+| `LAUNCH_CHAIN_ID_MISMATCH`        | 端点返回的不是 chain 97——Launch 区块整块不可用 |
+| `BSC_BALANCE_CALL_FAILED`         | 链已校验但 `eth_getBalance` 本身失败           |
+
+- 测试网槽位失败**不会**让主链 balances 变成 503：`balances[]`、`snapshot`、
+  `netWorth` 照常下发。钱包页 Launch 区块单独显示 unavailable。
+- 行情、Watchlist、Swap、Send 页面永远不显示 97 的任何数据；`walletRead` /
+  `bscRead` capability 只描述主链。
 
 ## 7. `GET /v2/wallets/{walletId}/activity` → `tx-history` 页
 

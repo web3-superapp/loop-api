@@ -155,7 +155,12 @@ and writes an operator audit row.
 The 02 contract document has not been provided: every on-chain Launch fact is
 `unavailable` with `LAUNCH_CONTRACT_BASELINE_PENDING`, no Launch transaction
 is built, and no prototype supply/tax/suffix number is published. Frontend
-contract: `docs/frontend-v2-launch-api.md`.
+contract: `docs/frontend-v2-launch-api.md`. Since Decision 0038 every launch
+summary publishes the `chainId` stored at approval time — `eip155:56` or,
+while the Launch contract lives on the BSC testnet, `eip155:97` from the
+`LAUNCH_CHAIN_ID` slot — and the `launch` capability's `evidence` carries
+`launchChainId`. `POST /v2/launch/{launchId}/intents` is unchanged (always
+`503`); no Launch transaction exists for either chain.
 
 | Method and path                                  | Request                                                                   | Success projection                                                                       | Interface     | Capability                                                               |
 | ------------------------------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------ |
@@ -199,10 +204,10 @@ contract: `docs/frontend-v2-mining-api.md`.
 
 ### V2 chain module (Decision 0033, `V2_MODULES_ENABLED=chain`)
 
-| Method and path            | Request                                    | Success projection                                                                               | Interface     | Capability                                                             |
-| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
-| `GET /v2/chain/status`     | Bearer + contract/client headers; no input | Chain constants, RPC verification and head, per-endpoint health behind opaque refs, indexer lane | `implemented` | `blocked-provider`; needs a configured, chain-56-verified RPC endpoint |
-| `GET /v2/assets/{assetId}` | Canonical CAIP `assetId` in the path       | Registry identity read from on-chain calls plus a non-swappable capability                       | `implemented` | `implemented`; `swappable` stays false until D15                       |
+| Method and path            | Request                                    | Success projection                                                                                                                   | Interface     | Capability                                                             |
+| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
+| `GET /v2/chain/status`     | Bearer + contract/client headers; no input | Chain constants, RPC verification and head, per-endpoint health behind opaque refs, indexer lane, `launchChain` slot (Decision 0038) | `implemented` | `blocked-provider`; needs a configured, chain-56-verified RPC endpoint |
+| `GET /v2/assets/{assetId}` | Canonical CAIP `assetId` in the path       | Registry identity read from on-chain calls plus a non-swappable capability                                                           | `implemented` | `implemented`; `swappable` stays false until D15                       |
 
 `symbol`, `name`, and `decimals` are only ever the values an on-chain
 `symbol()`/`name()`/`decimals()` call returned, recorded with the observing
@@ -212,17 +217,24 @@ row additionally requires `BSC_USD1_TOKEN_ADDRESS` and `BSC_USD1_VERIFIED`.
 of its tokens are already readable registry rows. RPC endpoint URLs are never
 published: `GET /v2/chain/status` identifies each endpoint by an opaque,
 non-reversible `endpointRef`. With no configured endpoint the route is
-`503 CAPABILITY_UNAVAILABLE`, never an all-null healthy document.
+`503 CAPABILITY_UNAVAILABLE`, never an all-null healthy document. Since
+Decision 0038 the response also carries `launchChain`: `null` while the
+`launch` chain slot (`LAUNCH_CHAIN_ID`) equals the primary chain, otherwise the
+BSC testnet's own verification, head, confirmation policy, and reason code
+(`LAUNCH_CHAIN_RPC_NOT_CONFIGURED` / `LAUNCH_CHAIN_VERIFICATION_PENDING` /
+`LAUNCH_CHAIN_RPC_UNREACHABLE` / `LAUNCH_CHAIN_ID_MISMATCH`), still without any
+endpoint URL. The primary slot alone gates the route; `bscRead` describes only
+the primary chain.
 
 ### V2 wallet module (Decision 0033, `V2_MODULES_ENABLED=wallet`)
 
-| Method and path                       | Request                                                    | Success projection                                                                              | Interface     | Capability                                                             |
-| ------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
-| `GET /v2/wallets`                     | Bearer + contract/client headers; no input                 | Opaque `walletId`, public `address`, `kind`, `status`, `isActive`                               | `implemented` | `blocked-provider`; needs Privy credentials                            |
-| `PUT /v2/wallets/active`              | No `Idempotency-Key`; `{walletId, expectedActiveWalletId}` | Committed wallet list; concurrent switch is `VERSION_CONFLICT`                                  | `implemented` | `implemented`; moves no funds and grants no signing authority          |
-| `GET /v2/wallets/{walletId}/balances` | Bearer + contract/client headers; no input                 | One snapshot block; display/available/spendable/gasReserve/pending, valuation, Privy crossCheck | `implemented` | `blocked-provider`; needs a verified RPC endpoint                      |
-| `GET /v2/wallets/{walletId}/activity` | `cursor` or `limit` (1–50), mutually exclusive             | Indexed ERC-20 transfers with tx/log/block/confirmations plus indexer freshness                 | `implemented` | `blocked-provider`; `INDEXING_DELAYED` until the lane has a checkpoint |
-| `GET /v2/wallets/{walletId}/receive`  | Bearer + contract/client headers; no input                 | Address and EIP-681 request for BSC only                                                        | `implemented` | `implemented`                                                          |
+| Method and path                       | Request                                                    | Success projection                                                                                                                          | Interface     | Capability                                                             |
+| ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
+| `GET /v2/wallets`                     | Bearer + contract/client headers; no input                 | Opaque `walletId`, public `address`, `kind`, `status`, `isActive`                                                                           | `implemented` | `blocked-provider`; needs Privy credentials                            |
+| `PUT /v2/wallets/active`              | No `Idempotency-Key`; `{walletId, expectedActiveWalletId}` | Committed wallet list; concurrent switch is `VERSION_CONFLICT`                                                                              | `implemented` | `implemented`; moves no funds and grants no signing authority          |
+| `GET /v2/wallets/{walletId}/balances` | Bearer + contract/client headers; no input                 | One snapshot block; display/available/spendable/gasReserve/pending, valuation, Privy crossCheck; `launchChain` tBNB balance (Decision 0038) | `implemented` | `blocked-provider`; needs a verified RPC endpoint                      |
+| `GET /v2/wallets/{walletId}/activity` | `cursor` or `limit` (1–50), mutually exclusive             | Indexed ERC-20 transfers with tx/log/block/confirmations plus indexer freshness                                                             | `implemented` | `blocked-provider`; `INDEXING_DELAYED` until the lane has a checkpoint |
+| `GET /v2/wallets/{walletId}/receive`  | Bearer + contract/client headers; no input                 | Address and EIP-681 request for BSC only                                                                                                    | `implemented` | `implemented`                                                          |
 
 Privy stays authoritative for which wallets exist; LOOP only issues the opaque
 `walletId` and remembers the active selection. A wallet Privy stops reporting
