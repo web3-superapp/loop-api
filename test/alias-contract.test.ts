@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aliasSearchPrefixKey,
   parseAliasSearchLimit,
   parseAliasSearchPrefix,
   parseCommunicationGroupId,
   parseGroupAlias,
+  parseMemberSearchPrefix,
   parseStreamChannelId,
 } from "../src/features/identity/alias-contract.js";
 
@@ -33,6 +35,32 @@ describe("alias discovery contract", () => {
     ["too long", "😀".repeat(41)],
   ])("rejects unsafe search prefix: %s", (_label, value) => {
     expect(() => parseAliasSearchPrefix(value)).toThrow();
+  });
+
+  it("accepts a one code point community member prefix", () => {
+    expect(parseMemberSearchPrefix("f")).toBe("f");
+    expect(parseMemberSearchPrefix("  张  ")).toBe("张");
+    expect(parseMemberSearchPrefix("e\u0301")).toBe("e\u0301");
+    expect(parseMemberSearchPrefix("%_")).toBe("%_");
+    expect(parseMemberSearchPrefix("  frog  maxi  ")).toBe("frog  maxi");
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace only", "   "],
+    ["control", "fr\u0000og"],
+    ["zero width", "fr\u200bog"],
+    ["line separator", "fr\u2028og"],
+    ["surrogate half", "fr\ud800og"],
+    ["too long", "a".repeat(41)],
+  ])("rejects an unsafe member prefix: %s", (_label, value) => {
+    expect(() => parseMemberSearchPrefix(value)).toThrow();
+  });
+
+  it("folds case and outer whitespace into one member search key", () => {
+    expect(aliasSearchPrefixKey("  FR  ")).toBe("fr");
+    expect(aliasSearchPrefixKey("\uFF26\uFF32")).toBe("fr");
+    expect(aliasSearchPrefixKey("fr")).toBe(aliasSearchPrefixKey("Fr"));
   });
 
   it("strictly validates opaque group IDs and existing Stream channel IDs", () => {

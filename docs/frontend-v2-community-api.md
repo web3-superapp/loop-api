@@ -278,6 +278,7 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 | query    | 取值                                    | 默认  |
 | -------- | --------------------------------------- | ----- |
 | `role`   | `all` \| `owner` \| `admin` \| `banned` | `all` |
+| `q`      | 成员别名前缀，1–40 码点                 | —     |
 | `limit`  | 1–50                                    | 20    |
 | `cursor` | 上一页 `nextCursor`                     | —     |
 
@@ -316,6 +317,31 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 `403 PERMISSION_DENIED`。`counts.all/owner/admin` 始终是**非封禁**目录的计数，
 不随 `role=banned` 改变（被封禁者不计入），所以"已封禁"seg 不要显示计数徽标，
 用翻页结果本身呈现。cursor 与 `role` 绑定，切换 seg 必须丢弃旧 cursor。
+
+**`q` 成员搜索（2026-09-10 新增，决策 0040）**：可选参数，只按**成员别名前缀**
+匹配，永远不是子串匹配，也不搜聊天内容、`loopId` 或钱包地址。原始文本先去首尾
+空白，再按 NFKC 归一化、转小写、把连续 ASCII 空格折成一个，归一化后必须是
+**1–40 个码点**；含控制字符、格式字符（含零宽）、代理项、行/段分隔符的一律
+`400 INVALID_REQUEST`。`%`、`_`、`\` 按字面量匹配，不当通配符。没有别名的成员
+（`profile.alias === null`）永远不会被命中。
+
+- 归一化与后端 `user_profiles.alias_search_key` 用的是同一个函数
+  （`unicode17_nfkc_lower_ws_v1`），所以 `FRO`、`ｆｒｏ`、`  fro  ` 命中同一批人。
+- `counts.all/owner/admin` **不随 `q` 变化**，始终是整个非封禁目录的计数；空结果
+  只看 `items.length === 0`，不要用 counts 判断。
+- `q` 与 `role`、`limit`、`cursor` 可共存。**cursor 同时绑定 `q`**：改了 `q`
+  （包括加上或去掉 `q`）后继续用旧 cursor 一律 `400 INVALID_REQUEST`，客户端每次
+  改查询词必须丢弃旧 cursor 从第一页重新拉。大小写与首尾空白不同但归一化后相同的
+  查询词算同一个 `q`，旧 cursor 仍然有效。
+- 带 `q` 的请求消耗与 `GET /v2/search` 同一个公共别名搜索配额（每账号 30/分钟、
+  每 IP 60/分钟、每账号 300/天），超限 `429 RATE_LIMITED`；不带 `q` 的普通目录
+  翻页不计入配额。客户端必须做 300ms 防抖 + 单飞，不要按键即发。
+- 服务端未配置配额密钥时，带 `q` 的请求 `503 CAPABILITY_UNAVAILABLE`（fail
+  closed），不带 `q` 的目录仍然可用。
+
+`q` 的完整错误码：`400 INVALID_REQUEST`（长度/字符/cursor 不匹配）、
+`401 AUTH_REQUIRED|AUTH_INVALID`、`403 PERMISSION_DENIED`（只在 `role=banned`）、
+`404 NOT_FOUND`、`429 RATE_LIMITED`、`503 CAPABILITY_UNAVAILABLE`。
 
 成员行的 `profile.publicProfileId` 可能为 `null`（该成员没有资料行）：这种行仍会
 列出并计入 `counts`，保证计数与可翻页行数一致，但 **不可作为任何治理动作的目标**，

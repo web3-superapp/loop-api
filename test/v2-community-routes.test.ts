@@ -24,7 +24,6 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
-  type CommunityMemberPageRecord,
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
@@ -141,7 +140,7 @@ function communityRepositoryFake() {
       expiresAt: "2026-09-14T01:00:00.000Z",
     }),
   );
-  const listMembersMock = vi.fn((): Promise<CommunityMemberPageRecord> =>
+  const listMembersMock = vi.fn<CommunityRepository["listMembers"]>(() =>
     Promise.resolve({
       community,
       viewerMembership: ownerMembership,
@@ -1096,6 +1095,179 @@ describe("LOOP API V2 community, social, and search modules", () => {
       headers: commonHeaders(),
     });
     expect(replayed.statusCode).toBe(200);
+  });
+
+  it("passes the member alias prefix through as the trimmed raw text", async () => {
+    const { app, listMembersMock, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=${encodeURIComponent("  Frog  ")}`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ aliasPrefix: "Frog", role: "all" }),
+    );
+    expect(consumeIssuanceQuota).toHaveBeenCalledTimes(1);
+    expect(consumeIssuanceQuota.mock.calls[0]?.[0].capability).toBe(
+      "public_alias_search",
+    );
+  });
+
+  it("never asks the repository for a prefix when q is absent", async () => {
+    const { app, listMembersMock, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledTimes(1);
+    expect(
+      Object.hasOwn(listMembersMock.mock.calls[0]?.[0] ?? {}, "aliasPrefix"),
+    ).toBe(false);
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty member page when the prefix matches nobody", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=zzz`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      items: unknown[];
+      counts: Record<string, unknown>;
+      nextCursor: string | null;
+    }>();
+    expect(body.items).toEqual([]);
+    expect(body.nextCursor).toBeNull();
+    // The segment counts describe the whole directory, so they do not shrink
+    // with the query.
+    expect(body.counts["all"]).toBe(2);
+  });
+
+  it("accepts a one code point prefix and normalizes it like the alias key", async () => {
+    const { app, listMembersMock } = await createApp();
+    for (const [raw, expected] of [
+      ["f", "f"],
+      ["\uFF26\uFF32\uFF2F", "\uFF26\uFF32\uFF2F"],
+      ["  frog  maxi  ", "frog  maxi"],
+    ] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, raw).toBe(200);
+      expect(listMembersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ aliasPrefix: expected }),
+      );
+    }
+  });
+
+  it("rejects an empty, over-long, or control-character member prefix", async () => {
+    const { app, listMembersMock } = await createApp();
+    for (const raw of [
+      "",
+      "   ",
+      "a".repeat(41),
+      "fr\u0000og",
+      "fr\u200bog",
+      "fr\u2028og",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, JSON.stringify(raw)).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    expect(listMembersMock).not.toHaveBeenCalled();
+  });
+
+  it("rate limits the member search from the shared alias quota", async () => {
+    const { app } = await createApp(fakes({ quotaExceeded: true }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=frog`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({
+      code: "RATE_LIMITED",
+      category: "rateLimit",
+    });
+  });
+
+  it("binds the member cursor to the alias prefix", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: Array.from({ length: 21 }, (_value, index) => ({
+        membershipId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+        role: "member" as const,
+        status: "active" as const,
+        joinedAt: createdAt,
+        profile,
+      })),
+      counts: { all: 21, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const first = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=fr`,
+      headers: commonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+    expect(cursor).not.toBeNull();
+    const encoded = encodeURIComponent(cursor ?? "");
+
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=fr&cursor=${encoded}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(200);
+
+    // The bound prefix is the normalized key, so case and outer whitespace
+    // continue the same page.
+    const equivalent = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(" FR ")}&cursor=${encoded}`,
+      headers: commonHeaders(),
+    });
+    expect(equivalent.statusCode).toBe(200);
+
+    for (const query of ["q=fro", "", "q=fr&role=admin"]) {
+      const rejected = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?${query}${query === "" ? "" : "&"}cursor=${encoded}`,
+        headers: commonHeaders(),
+      });
+      expect(rejected.statusCode, query).toBe(400);
+      expect(rejected.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
   });
 
   it("rejects unknown body and query fields", async () => {

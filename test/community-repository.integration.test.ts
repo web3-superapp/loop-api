@@ -140,14 +140,17 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     await dropTemporaryDatabase(databaseName);
   });
 
-  async function createAccount(label: string): Promise<{
+  async function createAccount(
+    label: string,
+    aliasOverride?: string,
+  ): Promise<{
     readonly userId: string;
     readonly publicProfileId: string;
   }> {
     const user = await database.internalUsers.getOrCreateByPrivyUserId(
       `did:privy:community:${label}:${randomUUID()}`,
     );
-    const alias = `member_${randomUUID().slice(0, 8)}`;
+    const alias = aliasOverride ?? `member_${randomUUID().slice(0, 8)}`;
     await profiles.activateProfile({
       ownerUserId: user.id,
       idempotencyKey: randomUUID(),
@@ -341,6 +344,178 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     expect(page.counts.all).toBe(9);
     expect(page.counts.owner).toBe(1);
     expect(page.items[0]?.role).toBe("owner");
+  });
+
+  it("never repeats a member across keyset pages", async () => {
+    const owner = await createAccount("keyset-owner");
+    const communityId = await createCommunity(owner.userId, "keyset-members");
+    for (let index = 0; index < 4; index += 1) {
+      const joiner = await createAccount(`keyset-joiner-${String(index)}`);
+      await join(joiner.userId, communityId);
+    }
+
+    const seen: string[] = [];
+    let after:
+      | {
+          readonly lastRoleRank: number;
+          readonly lastJoinedAt: string;
+          readonly lastMembershipId: string;
+        }
+      | undefined;
+    for (let request = 0; request < 5; request += 1) {
+      const pageRecord = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 2,
+        ...(after === undefined ? {} : { after }),
+      });
+      if (pageRecord.items.length === 0) {
+        break;
+      }
+      seen.push(...pageRecord.items.map((item) => item.membershipId));
+      const last = pageRecord.items.at(-1);
+      if (last === undefined) {
+        break;
+      }
+      after = {
+        lastRoleRank: last.role === "owner" ? 0 : last.role === "admin" ? 1 : 2,
+        lastJoinedAt: last.joinedAt,
+        lastMembershipId: last.membershipId,
+      };
+    }
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen).size).toBe(5);
+  });
+
+  it("narrows the member directory to an alias prefix without changing the counts", async () => {
+    const owner = await createAccount("prefix-owner", "Frogger");
+    const communityId = await createCommunity(owner.userId, "prefix-community");
+    const maxi = await createAccount("prefix-maxi", "frog maxi");
+    const fullwidth = await createAccount(
+      "prefix-fullwidth",
+      "\uFF26\uFF32\uFF2F\uFF27\uFF39",
+    );
+    const toad = await createAccount("prefix-toad", "Toad Only");
+    for (const account of [maxi, fullwidth, toad]) {
+      await join(account.userId, communityId);
+    }
+
+    const hit = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "fro",
+    });
+    expect(
+      hit.items.map((item) => item.profile.publicProfileId).sort(),
+    ).toEqual(
+      [owner.publicProfileId, maxi.publicProfileId, fullwidth.publicProfileId]
+        .slice()
+        .sort(),
+    );
+    // The owner still sorts first inside the narrowed page.
+    expect(hit.items[0]?.role).toBe("owner");
+    // The segment counts describe the whole directory, not the query.
+    expect(hit.counts.all).toBe(4);
+
+    const miss = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "zzz",
+    });
+    expect(miss.items).toEqual([]);
+    expect(miss.counts.all).toBe(4);
+
+    // The prefix is normalized exactly like the stored key, so a fullwidth or
+    // upper-case query reaches the same rows.
+    for (const prefix of ["FRO", "\uFF26\uFF32\uFF2F", "  fro  "]) {
+      const equivalent = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+        aliasPrefix: prefix,
+      });
+      expect(equivalent.items.length, prefix).toBe(3);
+    }
+  });
+
+  it("matches a member alias prefix literally and never as a pattern", async () => {
+    const owner = await createAccount("wildcard-owner", "Wildcard Owner");
+    const communityId = await createCommunity(owner.userId, "wildcard-members");
+    const percent = await createAccount("wildcard-percent", "100%_pure");
+    await join(percent.userId, communityId);
+
+    const literal = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "100%_",
+    });
+    expect(literal.items.map((item) => item.profile.alias)).toEqual([
+      "100%_pure",
+    ]);
+
+    for (const pattern of ["%", "_", "\\"]) {
+      const wildcard = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+        aliasPrefix: pattern,
+      });
+      expect(wildcard.items, pattern).toEqual([]);
+    }
+  });
+
+  it("keyset pages a narrowed member directory", async () => {
+    const owner = await createAccount("paged-owner", "Owner Only");
+    const communityId = await createCommunity(owner.userId, "paged-members");
+    const joiners = [];
+    for (let index = 0; index < 3; index += 1) {
+      const joiner = await createAccount(
+        `paged-joiner-${String(index)}`,
+        `Frog ${String(index)}`,
+      );
+      await join(joiner.userId, communityId);
+      joiners.push(joiner);
+    }
+
+    const first = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 2,
+      aliasPrefix: "frog",
+    });
+    expect(first.items).toHaveLength(2);
+    const last = first.items[1];
+    if (last === undefined) {
+      throw new Error("The narrowed page is missing its second row");
+    }
+    const second = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 2,
+      aliasPrefix: "frog",
+      after: {
+        lastRoleRank: 2,
+        lastJoinedAt: last.joinedAt,
+        lastMembershipId: last.membershipId,
+      },
+    });
+    expect(second.items).toHaveLength(1);
+    expect(
+      [...first.items, ...second.items].map(
+        (item) => item.profile.publicProfileId,
+      ),
+    ).toEqual(joiners.map((joiner) => joiner.publicProfileId));
   });
 
   it("replays an identical join and conflicts on a different digest", async () => {

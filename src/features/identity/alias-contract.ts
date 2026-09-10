@@ -3,6 +3,7 @@ import { z } from "zod";
 const maximumRawAliasLength = 256;
 const maximumAliasCodePoints = 40;
 const minimumSearchPrefixCodePoints = 2;
+const minimumMemberSearchPrefixCodePoints = 1;
 const maximumSearchResults = 20;
 const forbiddenAliasCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 const canonicalUuidPattern =
@@ -26,26 +27,58 @@ const boundedAliasSchema = z
   })
   .transform((value) => value.trim());
 
-const aliasPrefixSchema = z
-  .string()
-  .max(maximumRawAliasLength)
-  .superRefine((value, context) => {
-    const normalizedForValidation = value
-      .trim()
-      .normalize("NFKC")
-      .replace(/ +/g, " ");
-    const length = Array.from(normalizedForValidation).length;
+/**
+ * Shared alias prefix normalization: trim, NFKC, ASCII-space fold, then the
+ * alias character-safety rules. Only the minimum length differs between the
+ * public alias directory (2 code points) and the community member directory
+ * (1 code point, because that directory is already scoped to one community).
+ */
+function createAliasPrefixSchema(minimumCodePoints: number) {
+  return z
+    .string()
+    .max(maximumRawAliasLength)
+    .superRefine((value, context) => {
+      const normalizedForValidation = normalizeAliasSearchPrefix(value);
+      const length = Array.from(normalizedForValidation).length;
 
-    if (
-      length < minimumSearchPrefixCodePoints ||
-      length > maximumAliasCodePoints ||
-      forbiddenAliasCharacters.test(value) ||
-      forbiddenAliasCharacters.test(normalizedForValidation)
-    ) {
-      context.addIssue({ code: "custom" });
-    }
-  })
-  .transform((value) => value.trim());
+      if (
+        length < minimumCodePoints ||
+        length > maximumAliasCodePoints ||
+        forbiddenAliasCharacters.test(value) ||
+        forbiddenAliasCharacters.test(normalizedForValidation)
+      ) {
+        context.addIssue({ code: "custom" });
+      }
+    })
+    .transform((value) => value.trim());
+}
+
+/**
+ * Length and character screening form: trim, NFKC, and fold runs of ASCII
+ * spaces. Case is deliberately preserved here so the accepted code-point
+ * range matches the alias itself; the stored lookup key is still produced by
+ * PostgreSQL.
+ */
+export function normalizeAliasSearchPrefix(value: string): string {
+  return value.trim().normalize("NFKC").replace(/ +/g, " ");
+}
+
+/**
+ * The client-side mirror of `loop_alias_search_key_unicode17_v1`. Two queries
+ * with the same key return the same rows, so a list cursor binds this and not
+ * the caller's raw text.
+ */
+export function aliasSearchPrefixKey(value: string): string {
+  return normalizeAliasSearchPrefix(value).toLowerCase();
+}
+
+const aliasPrefixSchema = createAliasPrefixSchema(
+  minimumSearchPrefixCodePoints,
+);
+
+const memberSearchPrefixSchema = createAliasPrefixSchema(
+  minimumMemberSearchPrefixCodePoints,
+);
 
 const searchLimitSchema = z.number().int().min(1).max(maximumSearchResults);
 const uuidSchema = z.string().regex(canonicalUuidPattern);
@@ -55,6 +88,12 @@ export const aliasSearchLimits = Object.freeze({
   default: maximumSearchResults,
   maximum: maximumSearchResults,
   minimumPrefixCodePoints: minimumSearchPrefixCodePoints,
+});
+
+export const memberSearchLimits = Object.freeze({
+  minimumPrefixCodePoints: minimumMemberSearchPrefixCodePoints,
+  maximumPrefixCodePoints: maximumAliasCodePoints,
+  maximumRawLength: maximumRawAliasLength,
 });
 
 export type GroupAliasProjectionState = "pending" | "confirmed";
@@ -93,6 +132,15 @@ export interface GroupAliasSearchResource {
 
 export function parseAliasSearchPrefix(value: unknown): string {
   return aliasPrefixSchema.parse(value);
+}
+
+/**
+ * Community member-directory prefix (Decision 0040). Same normalization and
+ * character-safety rules as the public alias prefix; one code point is enough
+ * because the search is already narrowed to a single community.
+ */
+export function parseMemberSearchPrefix(value: unknown): string {
+  return memberSearchPrefixSchema.parse(value);
 }
 
 export function parseAliasSearchLimit(value: unknown): number {

@@ -1437,13 +1437,46 @@ export function createPostgresCommunityRepository(
             after.lastJoinedAt,
             after.lastMembershipId,
           );
+          // `joinedAt` travels through the cursor as the millisecond ISO form
+          // the response projects, so both the ordering and the keyset compare
+          // the millisecond-truncated column. Comparing the raw microsecond
+          // value against a truncated bound would re-emit the boundary row on
+          // the next page.
           keyset = `
             and (
               case membership.role
                 when 'owner' then 0 when 'admin' then 1 else 2 end,
-              membership.joined_at,
+              date_trunc('milliseconds', membership.joined_at),
               membership.membership_id
             ) > ($3::integer, $4::timestamptz, $5::uuid)
+          `;
+        }
+        // A member alias prefix narrows the same ordered directory: the key is
+        // derived by the stored-column function so the comparison matches
+        // `user_profiles.alias_search_key` exactly, and the LIKE metacharacters
+        // in the caller's text are escaped rather than interpolated. A
+        // membership whose profile row or alias is missing has a null key and
+        // is therefore never a search hit.
+        let aliasFilterSql = "";
+        const aliasPrefix = rawInput.aliasPrefix;
+        if (aliasPrefix !== undefined) {
+          values.push(aliasPrefix);
+          const placeholder = `$${String(values.length)}`;
+          aliasFilterSql = `
+            and profile.alias_search_key is not null
+            and profile.alias_search_key collate "C" like
+              replace(
+                replace(
+                  replace(
+                    public.loop_alias_search_key_unicode17_v1(
+                      ${placeholder}::text
+                    ) collate "C",
+                    '\\', '\\\\'
+                  ),
+                  '%', '\\%'
+                ),
+                '_', '\\_'
+              ) || '%' escape '\\'
           `;
         }
         const members = await pool.query<Record<string, unknown>>({
@@ -1462,11 +1495,12 @@ export function createPostgresCommunityRepository(
             where membership.community_id = $1
               ${statusFilterSql}
               ${roleFilterSql}
+              ${aliasFilterSql}
               ${keyset}
             order by
               case membership.role
                 when 'owner' then 0 when 'admin' then 1 else 2 end asc,
-              membership.joined_at asc,
+              date_trunc('milliseconds', membership.joined_at) asc,
               membership.membership_id asc
             limit $2
           `,

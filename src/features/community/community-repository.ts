@@ -130,6 +130,13 @@ export interface ListMembersInput {
   readonly communityId: string;
   readonly role: MemberRoleFilter;
   readonly limit: number;
+  /**
+   * Optional member alias prefix. The caller passes the trimmed raw text;
+   * PostgreSQL derives the comparison key with
+   * `loop_alias_search_key_unicode17_v1`, the same function that stores
+   * `user_profiles.alias_search_key`.
+   */
+  readonly aliasPrefix?: string | undefined;
   readonly after?: MemberListCursor | undefined;
 }
 

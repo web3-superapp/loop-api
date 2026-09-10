@@ -9172,7 +9172,7 @@
         "operationId": "listV2CommunityMembers",
         "summary": "List community members grouped by role",
         "tags": ["community"],
-        "description": "Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: \"banned\"`), which no other view contains.",
+        "description": "Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server and always describe the whole non-banned directory, so they do not shrink while `q` narrows the page. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: \"banned\"`), which no other view contains. `q` narrows the page to a member alias prefix, draws on the shared public alias search quota, and is bound into the cursor.",
         "parameters": [
           {
             "schema": {
@@ -9183,6 +9183,18 @@
             "name": "role",
             "required": false,
             "description": "`all`, `owner`, and `admin` list active and muted memberships only. `banned` is the governance view of the banned memberships and is available to an owner or admin only; any other viewer receives PERMISSION_DENIED. The segment counts stay the counts of the non-banned directory."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^(?![\\s\\S]*[\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}])[\\s\\S]*\\S[\\s\\S]*$"
+            },
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "description": "Member alias prefix. After trimming, NFKC normalization, lower-casing, and ASCII-space folding it must contain 1-40 Unicode code points; the match is a literal prefix of the member alias and never a substring. A member without an alias is never a hit. The query is bound into the cursor, so continuing a page after `q` changed is INVALID_REQUEST, and each request draws on the shared public alias search quota."
           },
           {
             "schema": {
@@ -9658,6 +9670,76 @@
               }
             }
           },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           "404": {
             "description": "Default Response",
             "headers": {
@@ -9759,6 +9841,76 @@
                       "type": "string",
                       "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
                     },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
                     "category": {
                       "type": "string",
                       "enum": [

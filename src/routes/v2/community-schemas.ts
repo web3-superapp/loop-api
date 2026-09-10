@@ -37,6 +37,7 @@ import {
   communityChannelMemberStates,
   streamChannelCidPatternSource,
 } from "../../features/communication/communication-contract.js";
+import { memberSearchLimits } from "../../features/identity/alias-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
@@ -863,6 +864,13 @@ export const memberListQuerySchema = {
       description:
         "`all`, `owner`, and `admin` list active and muted memberships only. `banned` is the governance view of the banned memberships and is available to an owner or admin only; any other viewer receives PERMISSION_DENIED. The segment counts stay the counts of the non-banned directory.",
     },
+    q: {
+      type: "string",
+      minLength: 1,
+      maxLength: memberSearchLimits.maximumRawLength,
+      pattern: safeTextPatternSource,
+      description: `Member alias prefix. After trimming, NFKC normalization, lower-casing, and ASCII-space folding it must contain ${String(memberSearchLimits.minimumPrefixCodePoints)}-${String(memberSearchLimits.maximumPrefixCodePoints)} Unicode code points; the match is a literal prefix of the member alias and never a substring. A member without an alias is never a hit. The query is bound into the cursor, so continuing a page after \`q\` changed is INVALID_REQUEST, and each request draws on the shared public alias search quota.`,
+    },
     cursor: cursorSchema,
     limit: listLimitSchema,
   },
@@ -1003,6 +1011,16 @@ export const commandErrors = {
 
 export const searchErrors = {
   ...readErrors,
+  429: v2ErrorResponseSchema(["RATE_LIMITED"]),
+} as const;
+
+/**
+ * The member directory adds 403 (the `role=banned` governance view) and 429
+ * (the alias search quota a `q` request consumes) to the read catalog.
+ */
+export const memberListErrors = {
+  ...readErrors,
+  403: v2ErrorResponseSchema(["PERMISSION_DENIED"]),
   429: v2ErrorResponseSchema(["RATE_LIMITED"]),
 } as const;
 

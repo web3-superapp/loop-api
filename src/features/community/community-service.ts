@@ -8,7 +8,11 @@ import {
 } from "../../core/http/v2-cursor.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { generateOpaqueId } from "../../core/ids/opaque-id.js";
-import { parseAliasSearchPrefix } from "../identity/alias-contract.js";
+import {
+  aliasSearchPrefixKey,
+  parseAliasSearchPrefix,
+  parseMemberSearchPrefix,
+} from "../identity/alias-contract.js";
 import { deriveStreamUserId } from "../identity/loop-identifiers.js";
 import {
   AliasSearchQuotaUnavailableError,
@@ -162,6 +166,10 @@ export interface UpdateCommunityInput extends CommunityCommandInput {
 export interface ListMembersInput extends ListInput {
   readonly communityId: unknown;
   readonly role: unknown;
+  /** Optional member alias prefix (Decision 0040). */
+  readonly q: unknown;
+  readonly canonicalClientIp: string;
+  readonly signal: AbortSignal;
 }
 
 export interface GovernMemberInput extends CommunityCommandInput {
@@ -791,19 +799,42 @@ export function createCommunityService(
     }
   }
 
-  async function memberPage(
-    ownerUserId: string,
-    communityId: string,
-    rawRole: unknown,
-    cursor: unknown,
-    limit: unknown,
-  ): Promise<CommunityMemberListResource> {
+  /**
+   * Shared member-directory projection. `search` is present only on the read
+   * route: the governance verbs re-project the unfiltered directory and never
+   * touch the search quota.
+   */
+  async function memberPage(input: {
+    readonly ownerUserId: string;
+    readonly communityId: string;
+    readonly role: unknown;
+    readonly cursor: unknown;
+    readonly limit: unknown;
+    readonly search: {
+      readonly q: unknown;
+      readonly canonicalClientIp: string;
+      readonly signal: AbortSignal;
+    } | null;
+  }): Promise<CommunityMemberListResource> {
+    const { ownerUserId, communityId, cursor, limit } = input;
     const role = parseEnumValue<MemberRoleFilter>(
-      rawRole,
+      input.role,
       [...memberRoleFilters],
       "all",
     );
-    const filter = communityMembersFilter(communityId, role);
+    let aliasPrefix: string | null = null;
+    if (input.search !== null && input.search.q !== undefined) {
+      try {
+        aliasPrefix = parseMemberSearchPrefix(input.search.q);
+      } catch {
+        throw V2ApiError.invalidRequest();
+      }
+    }
+    const filter = communityMembersFilter(
+      communityId,
+      role,
+      aliasPrefix === null ? null : aliasSearchPrefixKey(aliasPrefix),
+    );
     const request = page(
       ownerUserId,
       communityCursorRoutes.members,
@@ -812,6 +843,16 @@ export function createCommunityService(
       limit,
       communityListLimits,
     );
+    // A member search is an alias lookup, so it draws on the same public alias
+    // search budget; a directory page without `q` stays unmetered.
+    if (aliasPrefix !== null && input.search !== null) {
+      await options.searchQuota.consume({
+        scope: "public",
+        userId: ownerUserId,
+        canonicalClientIp: input.search.canonicalClientIp,
+        signal: input.search.signal,
+      });
+    }
     const lastRoleRank = readNumber(request.continuation, "roleRank");
     const lastJoinedAt = readString(request.continuation, "joinedAt");
     const lastMembershipId = readString(request.continuation, "membershipId");
@@ -820,6 +861,7 @@ export function createCommunityService(
       communityId,
       role,
       limit: request.limit + 1,
+      ...(aliasPrefix === null ? {} : { aliasPrefix }),
       ...(lastRoleRank === undefined ||
       lastJoinedAt === undefined ||
       lastMembershipId === undefined
@@ -1110,13 +1152,18 @@ export function createCommunityService(
     async listMembers(input) {
       const owner = assertPrincipal(input.principal);
       try {
-        return await memberPage(
-          owner.userId,
-          parseOpaqueUuid(input.communityId),
-          input.role,
-          input.cursor,
-          input.limit,
-        );
+        return await memberPage({
+          ownerUserId: owner.userId,
+          communityId: parseOpaqueUuid(input.communityId),
+          role: input.role,
+          cursor: input.cursor,
+          limit: input.limit,
+          search: {
+            q: input.q,
+            canonicalClientIp: input.canonicalClientIp,
+            signal: input.signal,
+          },
+        });
       } catch (error) {
         return mapFailure(error);
       }
@@ -1154,13 +1201,14 @@ export function createCommunityService(
           ]),
           requestId: input.requestId,
         });
-        return await memberPage(
-          owner.userId,
+        return await memberPage({
+          ownerUserId: owner.userId,
           communityId,
-          "all",
-          undefined,
-          undefined,
-        );
+          role: "all",
+          cursor: undefined,
+          limit: undefined,
+          search: null,
+        });
       } catch (error) {
         return mapFailure(error);
       }

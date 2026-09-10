@@ -546,11 +546,22 @@ export function communityDiscoverFilter(
   return canonicalFilter({ membership, sort, verification });
 }
 
+/**
+ * The member-directory cursor binds the alias prefix as well, so continuing a
+ * page after the query changed (or after it was added or removed) fails with
+ * INVALID_REQUEST instead of interleaving two different result sets. A page
+ * without `q` keeps the original two-component filter.
+ */
 export function communityMembersFilter(
   communityId: string,
   role: MemberRoleFilter,
+  aliasPrefix: string | null,
 ): string {
-  return canonicalFilter({ community: communityId, role });
+  return canonicalFilter(
+    aliasPrefix === null
+      ? { community: communityId, role }
+      : { community: communityId, q: filterDigest(aliasPrefix), role },
+  );
 }
 
 export function connectionsFilter(direction: ConnectionDirection): string {
