@@ -11,7 +11,12 @@ export type V2PrimaryTab =
 
 export type V2CapabilityAvailability = "available" | "deferred" | "unavailable";
 
-export type V2CapabilityEvidenceStatus = "notApplicable" | "pending";
+/**
+ * `confirmed` (Decision 0039) is published only when an operator recorded the
+ * external evidence in configuration; it never changes `availability`.
+ */
+export type V2CapabilityEvidenceStatus =
+  "notApplicable" | "pending" | "confirmed";
 
 /**
  * A configured gate whose `V2_CLIENT_POLICY_EFFECTIVE_AT` is still in the
@@ -103,6 +108,13 @@ export interface V2CapabilityProjection {
      * a mainnet-only deployment, keeping that document byte-identical.
      */
     readonly launchChainId?: LaunchChainId;
+    /**
+     * `voiceRooms` only, and only while `status` is `confirmed` (Decision
+     * 0039): the operator's archive reference for the Stream Dashboard
+     * evidence. Absent on every other capability and while the evidence is
+     * pending, keeping those documents byte-identical.
+     */
+    readonly reference?: string;
   };
 }
 
@@ -256,9 +268,10 @@ export const v2CommunicationRuntimeUnavailableReasonCode =
  * Decision 0005 pre-condition: Stream Dashboard evidence that the `audio_room`
  * `user` role does not carry `create-call`. `user` is the role a LOOP listener
  * is given (S4 integration, BUG-03: the application defines no `listener`
- * role), so it is that role's permission set the evidence must cover. Until it
- * is exported the capability stays evidence-pending even when the backend is
- * available.
+ * role), so it is that role's permission set the evidence must cover. Until an
+ * operator records the exported evidence in
+ * `STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF` (Decision 0039) the capability
+ * stays evidence-pending even when the backend is available.
  */
 export const v2VoiceRoomEvidencePendingReasonCode =
   "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" as const;
@@ -650,17 +663,28 @@ function chainVerificationReasonCode(
 
 /**
  * Voice rooms share the `communication` module gate, but they additionally
- * carry the outstanding Decision 0005 Dashboard evidence: the backend can be
- * available while the client locator must still stay unavailable.
+ * carry the Decision 0005 Dashboard evidence: the backend can be available
+ * while the client locator must still stay unavailable. The evidence is
+ * decided by configuration alone (Decision 0039) and is reported the same way
+ * whether the module is deferred, unavailable, or available; `reference` is
+ * present only once the operator confirmed it.
  */
 function voiceRoomsCapability(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
 ): V2CapabilityProjection {
-  const evidence = Object.freeze({
-    status: "pending" as const,
-    reasonCode: v2VoiceRoomEvidencePendingReasonCode,
-  });
+  const reference = config.streamAudioRoomUserRoleEvidenceRef;
+  const evidence =
+    reference === null
+      ? Object.freeze({
+          status: "pending" as const,
+          reasonCode: v2VoiceRoomEvidencePendingReasonCode,
+        })
+      : Object.freeze({
+          status: "confirmed" as const,
+          reasonCode: null,
+          reference,
+        });
   if (!config.v2ModulesEnabled.has("communication")) {
     return Object.freeze({
       capabilityId: "voiceRooms",

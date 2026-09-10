@@ -247,7 +247,7 @@ const capabilitiesResponseSchema = {
             properties: {
               status: {
                 type: "string",
-                enum: ["notApplicable", "pending"],
+                enum: ["notApplicable", "pending", "confirmed"],
               },
               reasonCode: nullableReasonCodeSchema,
               launchChainId: {
@@ -255,6 +255,13 @@ const capabilitiesResponseSchema = {
                 enum: [...launchChainIds],
                 description:
                   "Present on the launch capability only (Decision 0038): the chain slot the Launch module points at.",
+              },
+              reference: {
+                type: "string",
+                minLength: 1,
+                maxLength: 120,
+                description:
+                  "Present on the voiceRooms capability only while status is confirmed (Decision 0039): the operator's archive reference for the Stream Dashboard role evidence.",
               },
             },
           },

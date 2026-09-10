@@ -460,10 +460,15 @@ code. `walletRead` additionally needs Privy credentials and the cursor codec.
 `search`); otherwise they fail closed. `communication` projects two
 capabilities: `communityChat` and `voiceRooms`, both `available` only with the
 module enabled, the communication repository composed, the community runtime
-available, and Stream credentials present. `voiceRooms.evidence` is always
-`{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until the
-Decision 0005 Stream Dashboard role export exists, so the mobile locator stays
-unavailable even when the backend is available.
+available, and Stream credentials present. `voiceRooms.evidence` is
+`{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until an
+operator records the Decision 0005 Stream Dashboard role evidence in
+`STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF` (Decision 0039); it then becomes
+`{status: "confirmed", reasonCode: null, reference: "<label>"}`. The `reference`
+key is present only while confirmed and only on `voiceRooms` (absent, never
+`null`, elsewhere), and the switch never changes `availability`. Until it is
+confirmed the mobile locator stays unavailable even when the backend is
+available.
 
 V2 bootstrap has bounded session-creation quotas, exact durable replay, and
 owner/device/contract-bound request digests. Logout durably records either one

@@ -485,6 +485,132 @@ describe("LOOP API V2 communication module", () => {
     });
   });
 
+  describe("audio-room role evidence switch (Decision 0039)", () => {
+    const evidenceReference = "dashboard-2026-09-10-user-role-no-create-call";
+    type CapabilityDocument = {
+      readonly capabilityId: string;
+      readonly availability: string;
+      readonly reasonCode: string | null;
+      readonly evidence: Record<string, unknown>;
+    };
+
+    async function readCapabilities(
+      app: FastifyInstance,
+    ): Promise<Record<string, CapabilityDocument>> {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      expect(response.statusCode).toBe(200);
+      return Object.fromEntries(
+        jsonOf<{ capabilities: readonly CapabilityDocument[] }>(
+          response,
+        ).capabilities.map((entry) => [entry.capabilityId, entry]),
+      );
+    }
+
+    it("confirms the evidence with the configured reference and leaves availability to the runtime", async () => {
+      const { app } = await createApp(fakes(), {
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: ` ${evidenceReference} `,
+      });
+      const capabilities = await readCapabilities(app);
+      expect(capabilities["voiceRooms"]).toEqual({
+        capabilityId: "voiceRooms",
+        availability: "available",
+        reasonCode: null,
+        evidence: {
+          status: "confirmed",
+          reasonCode: null,
+          reference: evidenceReference,
+        },
+      });
+      expect(Object.keys(capabilities["voiceRooms"]?.evidence ?? {})).toEqual([
+        "status",
+        "reasonCode",
+        "reference",
+      ]);
+      // The reference never leaks into any other capability's document, and
+      // the sibling communication capability is untouched.
+      for (const [capabilityId, capability] of Object.entries(capabilities)) {
+        if (capabilityId !== "voiceRooms") {
+          expect(Object.keys(capability.evidence), capabilityId).toEqual([
+            "status",
+            "reasonCode",
+          ]);
+        }
+      }
+      expect(capabilities["communityChat"]).toEqual({
+        capabilityId: "communityChat",
+        availability: "available",
+        reasonCode: null,
+        evidence: { status: "notApplicable", reasonCode: null },
+      });
+    });
+
+    it("does not open an unavailable communication runtime: the module gate still fails closed", async () => {
+      // `communication` without `community` composes no community runtime,
+      // so the module is enabled but unavailable; the confirmed evidence
+      // must not turn that into `available`.
+      const { app } = await createApp(fakes(), {
+        V2_MODULES_ENABLED: "communication",
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: evidenceReference,
+      });
+      const capabilities = await readCapabilities(app);
+      expect(capabilities["voiceRooms"]).toEqual({
+        capabilityId: "voiceRooms",
+        availability: "unavailable",
+        reasonCode: "COMMUNICATION_RUNTIME_UNAVAILABLE",
+        evidence: {
+          status: "confirmed",
+          reasonCode: null,
+          reference: evidenceReference,
+        },
+      });
+    });
+
+    it("reports the confirmed evidence even while the communication module is not enabled", async () => {
+      const { app } = await createApp(fakes(), {
+        V2_MODULES_ENABLED: "",
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: evidenceReference,
+      });
+      const capabilities = await readCapabilities(app);
+      expect(capabilities["voiceRooms"]).toEqual({
+        capabilityId: "voiceRooms",
+        availability: "deferred",
+        reasonCode: "V2_COMMUNICATION_RUNTIME_DEFERRED",
+        evidence: {
+          status: "confirmed",
+          reasonCode: null,
+          reference: evidenceReference,
+        },
+      });
+    });
+
+    it("changes only the voiceRooms entry of the capabilities document", async () => {
+      const { app: pending } = await createApp(fakes(), {
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: "",
+      });
+      const { app: confirmed } = await createApp(fakes(), {
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: evidenceReference,
+      });
+      const before = await readCapabilities(pending);
+      const after = await readCapabilities(confirmed);
+      expect(before["voiceRooms"]?.evidence).toEqual({
+        status: "pending",
+        reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING",
+      });
+      const withoutVoiceRooms = (
+        capabilities: Record<string, CapabilityDocument>,
+      ): string =>
+        JSON.stringify(
+          Object.entries(capabilities).filter(
+            ([capabilityId]) => capabilityId !== "voiceRooms",
+          ),
+        );
+      expect(withoutVoiceRooms(after)).toBe(withoutVoiceRooms(before));
+    });
+  });
+
   it("creates a voice room and confirms the single Stream call", async () => {
     const { app, callMocks, communicationMocks } = await createApp();
     const response = await app.inject({

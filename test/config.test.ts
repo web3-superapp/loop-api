@@ -692,3 +692,82 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 });
+
+describe("audio-room user-role evidence reference (Decision 0039)", () => {
+  const key = "STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF";
+
+  it("keeps the evidence pending (null) when the key is unset or blank", () => {
+    expect(
+      loadConfig(validEnvironment()).streamAudioRoomUserRoleEvidenceRef,
+    ).toBeNull();
+    for (const blank of ["", " ", "\t", " \n "]) {
+      const environment = validEnvironment();
+      environment[key] = blank;
+      expect(
+        loadConfig(environment).streamAudioRoomUserRoleEvidenceRef,
+        JSON.stringify(blank),
+      ).toBeNull();
+    }
+  });
+
+  it("publishes a trimmed printable reference of 1 to 120 characters", () => {
+    const environment = validEnvironment();
+    environment[key] = "  dashboard-2026-09-10-user-role-no-create-call  ";
+    expect(loadConfig(environment).streamAudioRoomUserRoleEvidenceRef).toBe(
+      "dashboard-2026-09-10-user-role-no-create-call",
+    );
+
+    const longest = validEnvironment();
+    longest[key] = "x".repeat(120);
+    expect(loadConfig(longest).streamAudioRoomUserRoleEvidenceRef).toBe(
+      "x".repeat(120),
+    );
+
+    const single = validEnvironment();
+    single[key] = "a";
+    expect(loadConfig(single).streamAudioRoomUserRoleEvidenceRef).toBe("a");
+
+    // Non-ASCII printable text (an archive label in Chinese) is accepted.
+    const unicode = validEnvironment();
+    unicode[key] = "截图-2026-09-10 user 角色 Create call Not allowed";
+    expect(loadConfig(unicode).streamAudioRoomUserRoleEvidenceRef).toBe(
+      "截图-2026-09-10 user 角色 Create call Not allowed",
+    );
+  });
+
+  it("refuses a reference longer than 120 characters", () => {
+    const environment = validEnvironment();
+    environment[key] = "x".repeat(121);
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+    expect(() => loadConfig(environment)).toThrow(new RegExp(`${key}: .*120`));
+    // Trimming happens before the length check: padding does not rescue it.
+    const padded = validEnvironment();
+    padded[key] = ` ${"x".repeat(121)} `;
+    expect(() => loadConfig(padded)).toThrow(ConfigurationError);
+  });
+
+  it("refuses control, format, and other non-printable characters", () => {
+    for (const rejected of [
+      "dashboard\u0000ref",
+      "dashboard\u001bref",
+      "dashboard\tref",
+      "dashboard\nref",
+      "dashboard\rref",
+      "dashboard\u007fref",
+      "dashboard\u0085ref",
+      "dashboard\u200bref",
+      "dashboard\u202eref",
+      "dashboard\ufeffref",
+      "\u0007",
+    ]) {
+      const environment = validEnvironment();
+      environment[key] = rejected;
+      expect(() => loadConfig(environment), JSON.stringify(rejected)).toThrow(
+        ConfigurationError,
+      );
+      expect(() => loadConfig(environment), JSON.stringify(rejected)).toThrow(
+        new RegExp(`${key}: must not contain control`),
+      );
+    }
+  });
+});

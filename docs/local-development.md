@@ -303,6 +303,25 @@ warning. Testnet funds come from `https://www.bnbchain.org/en/testnet-faucet`.
 No Launch transaction, event lane, asset registry, or market data exists for
 97 yet (see `docs/decisions/0038-launch-chain-slot-bsc-testnet.md`).
 
+## Audio-room role evidence switch (Decision 0039)
+
+`GET /v2/meta/capabilities` reports `voiceRooms.evidence` as
+`{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until
+an operator records the Stream Dashboard evidence:
+
+```sh
+# only after the screenshot is archived; the value is its label, not a URL
+STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF=dashboard-2026-09-10-user-role-no-create-call
+```
+
+The evidence must show, for the `audio_room` call type **and** the Global
+video permissions, the `user` role with Create call = Not allowed, Read/Join
+allowed, Update/End = own only, Delete = Not allowed. With the key set the
+evidence becomes `{status: "confirmed", reasonCode: null, reference: "<label>"}`
+and the API logs the reference once at startup; availability is unchanged and
+still needs `community,communication` plus Stream credentials. Blank keeps the
+document byte-identical to the pending form (`test/fixtures/s9-baseline`).
+
 ## V2 support tickets: operator answer (Decision 0037)
 
 The API only creates and lists tickets. Status advances through the Dev

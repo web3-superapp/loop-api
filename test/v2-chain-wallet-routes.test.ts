@@ -732,6 +732,12 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
         ...fakes(),
         launchChainReadClient: launchClientFake(),
       }),
+      // Decision 0039: a blank evidence reference is the same as an unset
+      // one, so the capabilities document stays byte-identical as well.
+      await createApp(fakes(), {
+        LAUNCH_CHAIN_ID: "56",
+        STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: "",
+      }),
     ];
     for (const { app } of apps) {
       const status = await app.inject({

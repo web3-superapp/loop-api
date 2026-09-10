@@ -34,7 +34,7 @@ mixes contract versions.
 | DM                                                    | An accepted friendship (including one produced by accepting a message request) is the only DM admission rule. `/v2` wraps `POST /v2/chat/direct-channels`, `POST /v2/chat/groups`, `GET /v2/chat/operations/{operationId}`, `POST /v2/chat/token`, and `POST /v2/video/token` with camelCase fields, the seven-field error envelope, and the same state machine.                                                           |
 | Small groups                                          | The Decision 0025 3–30 member groups stay as they are. Group member management (kick, rename) stays unavailable; leaving is delivered as `DELETE /v2/chat/groups/{groupId}/membership`, which performs the backend `removeMembers`.                                                                                                                                                                                        |
 | Voice rooms                                           | Backend-prepared Stream Video `audio_room` with backstage enabled and the creator as host. Owner or admin opens a room; only the host may invite or remove speakers, mute everyone, or end the room. A listener raises a hand into a PostgreSQL queue with a sequence number. Room state is `live \| ended`; the participant count is a read-only Stream projection with `observedAt`.                                     |
-| Voice pre-condition                                   | Decision 0005 still requires Stream Dashboard evidence that the `audio_room` `listener` role does not carry `create-call`. Until it is exported the mobile locator stays unavailable; the backend and the contract ship now with the capability evidence pending.                                                                                                                                                          |
+| Voice pre-condition                                   | Decision 0005 still requires Stream Dashboard evidence that the `audio_room` `listener` role does not carry `create-call`. Until it is exported the mobile locator stays unavailable; the backend and the contract ship now with the capability evidence pending. Decision 0039 adds the operator switch (`STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF`) that turns the evidence `confirmed`.                                 |
 | Chat search, forward, merge, Token Card, Community AI | Client-side (Stream `client.search`, Stream `sendMessage`, local rendering) or unavailable. None of them adds a LOOP endpoint; chat content never enters `/v2/search`.                                                                                                                                                                                                                                                     |
 | E2EE                                                  | End-to-end encryption is not claimed anywhere.                                                                                                                                                                                                                                                                                                                                                                             |
 
@@ -198,7 +198,7 @@ shared `/health/*` endpoints).
 | Capability      | State                                                                                                                                                                                                                                                                               |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `communityChat` | `available` only with `communication` enabled, the PostgreSQL communication repository composed, the community runtime available, and Stream credentials present; otherwise `unavailable` (`COMMUNICATION_RUNTIME_UNAVAILABLE`) or `deferred` (`V2_COMMUNICATION_RUNTIME_DEFERRED`) |
-| `voiceRooms`    | The same availability, but `evidence` is always `{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until the Decision 0005 Dashboard export exists                                                                                                          |
+| `voiceRooms`    | The same availability, but `evidence` is `{status: "pending", reasonCode: "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING"}` until the Decision 0005 Dashboard export exists; Decision 0039 defines how an operator confirms it                                                              |
 
 ## Consequences
 
@@ -212,8 +212,9 @@ shared `/health/*` endpoints).
   untouched. The V2 wrapper adds no second state machine.
 - Voice-room participant counts, live speaking state, and presence remain
   Stream facts. LOOP publishes only what it can prove, with `observedAt`.
-- The `>3000` member Go/No-Go, the Decision 0005 role evidence, and real-device
-  Stream connection evidence all remain open.
+- The `>3000` member Go/No-Go, the Decision 0005 role evidence (confirmed
+  through the Decision 0039 switch once the Dashboard export exists), and
+  real-device Stream connection evidence all remain open.
 
 ## Rollback
 
@@ -238,4 +239,6 @@ above.
 | S3 FINDING-1/2: the member directory filtered out banned memberships (so an unban had no entry point) and an unban deleted the membership row (so it silently meant "removed from the community").                                 | `GET /v2/communities/{id}/members?role=banned` is a governance view restricted to an owner or admin (`viewer.canBan`); it returns the memberships whose `status` is `banned`, which the other views still exclude. `counts.all/owner/admin` remain the non-banned counts. `DELETE .../ban` now restores the membership to `role: member, status: active`, keeps the row and its `joined_at`, writes the `member_unbanned` audit as before, and enqueues an `add` channel-sync job (a no-op until the channel is provisioned). No governance action deletes a membership any more; leaving the community is the only path that does. |
 
 Still open after this revision: the Decision 0005 Dashboard export (now for the
-`user` role), the `>3000` member Go/No-Go, and real-device Stream evidence.
+`user` role; the evidence requirements and the operator switch that records it
+are Decision 0039), the `>3000` member Go/No-Go, and real-device Stream
+evidence.

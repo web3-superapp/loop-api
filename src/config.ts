@@ -76,6 +76,29 @@ const optionalPositiveIntegerString = (minimum: number, maximum: number) =>
   );
 
 /**
+ * Operator evidence reference for the Decision 0005/0032 audio-room role
+ * pre-condition (Decision 0039). It is published verbatim in
+ * `voiceRooms.evidence.reference` and in one startup log line, so it must be
+ * a short printable label (an archive name, never a URL with credentials and
+ * never a secret): 1–120 characters after trimming, no control, format,
+ * surrogate, private-use, or unassigned code points.
+ */
+const evidenceReferencePattern = /^\P{C}+$/u;
+
+const optionalEvidenceReference = z.preprocess(
+  blankStringToUndefined,
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(evidenceReferencePattern, {
+      message: "must not contain control or non-printable characters",
+    })
+    .optional(),
+);
+
+/**
  * Launch chain slot keys shared by the API and worker processes (Decision
  * 0038). `LAUNCH_CHAIN_ID=56` reuses the primary chain configuration and
  * refuses every `LAUNCH_BSC_*` override; `97` reads its own endpoint list.
@@ -219,6 +242,7 @@ const environmentSchema = z
     STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     STREAM_TOKEN_USER_LIMIT_PER_MINUTE: positiveIntegerString(1, 10_000),
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE: positiveIntegerString(1, 100_000),
+    STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: optionalEvidenceReference,
     SOCIAL_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     SOCIAL_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     PERP_READ_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
@@ -734,6 +758,14 @@ export interface AppConfig {
   readonly privy: PrivyConfig | null;
   readonly stream: StreamConfig | null;
   readonly streamTokenQuota: StreamTokenQuotaConfig | null;
+  /**
+   * Operator confirmation of the Decision 0005/0032 audio-room role evidence
+   * (Decision 0039): the archived Stream Dashboard reference proving the
+   * `user` role cannot create an `audio_room` call. `null` keeps
+   * `voiceRooms.evidence` pending; a value publishes it as `confirmed`. It
+   * never changes availability, which the communication runtime decides.
+   */
+  readonly streamAudioRoomUserRoleEvidenceRef: string | null;
   readonly social: SocialConfig | null;
   readonly perpReadCursor: PerpReadCursorConfig | null;
   readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
@@ -1342,6 +1374,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] ?? "10",
     STREAM_TOKEN_IP_LIMIT_PER_MINUTE:
       environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] ?? "60",
+    STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF:
+      environment["STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF"],
     SOCIAL_CURSOR_HMAC_SECRET: environment["SOCIAL_CURSOR_HMAC_SECRET"],
     SOCIAL_QUOTA_HMAC_SECRET: environment["SOCIAL_QUOTA_HMAC_SECRET"],
     PERP_READ_CURSOR_HMAC_SECRET: environment["PERP_READ_CURSOR_HMAC_SECRET"],
@@ -1480,6 +1514,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     privy,
     stream,
     streamTokenQuota,
+    streamAudioRoomUserRoleEvidenceRef:
+      parsed.data.STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF ?? null,
     social,
     perpReadCursor,
     hyperliquidPrivateReads,

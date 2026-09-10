@@ -1468,6 +1468,19 @@ export async function buildApp(
         // The client records the failure; nothing else to do here.
       });
   }
+  // Decision 0039: the operator confirmed the audio-room `user` role evidence
+  // in configuration. Log the reference once so a deployment that publishes
+  // `voiceRooms.evidence.status = "confirmed"` is traceable; it is an archive
+  // label, never a credential.
+  if (config.streamAudioRoomUserRoleEvidenceRef !== null) {
+    app.log.info(
+      {
+        capabilityId: "voiceRooms",
+        evidenceReference: config.streamAudioRoomUserRoleEvidenceRef,
+      },
+      "Audio room user-role evidence confirmed by operator configuration",
+    );
+  }
 
   app.addHook("onClose", async () => {
     await database.close();

@@ -19,20 +19,38 @@ Stream SDK，本模块不提供接口；`community-ai` 全部 unavailable。
   Bearer。
 - 前端必须先读 `GET /v2/meta/capabilities`（现共 **31** 项；以 `openapi/loop-api.v2.json` 为唯一计数来源，不要写死）：
 
-| capabilityId    | 期望                                                      | UI 含义                                                                                               |
-| --------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `communityChat` | `available`（模块启用 + 仓储 + 社区运行时 + Stream 凭据） | 社区官方群、DM、小群可用                                                                              |
-| `voiceRooms`    | `available`，但 `evidence.status` 恒为 `pending`          | **只要 `evidence.reasonCode` 是 `AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING`，语音房入口整页 unavailable** |
+| capabilityId    | 期望                                                                    | UI 含义                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `communityChat` | `available`（模块启用 + 仓储 + 社区运行时 + Stream 凭据）               | 社区官方群、DM、小群可用                                                                                                             |
+| `voiceRooms`    | `available`；`evidence.status` 为 `pending` 或 `confirmed`（决策 0039） | **只要 `evidence.status !== "confirmed"`（即 `reasonCode` 是 `AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING`），语音房入口整页 unavailable** |
 
 `availability: unavailable` + `COMMUNICATION_RUNTIME_UNAVAILABLE` 表示模块已
 启用但依赖未配齐；`deferred` + `V2_COMMUNICATION_RUNTIME_DEFERRED` 表示模块未
 启用。两种情况都不要调用本模块接口，也不要回退 fixture。
 
 `voiceRooms.evidence` 是决策 0005 的前置证据位：后端契约与实现已就绪，但
-Stream Dashboard 尚未导出「`audio_room` 的 `user` 角色不含 `create-call`」
-的证据。在证据到位（后端把 `evidence.status` 改为 `notApplicable`）之前，
-`voiceroom` / `voiceroom-full` 必须整页 unavailable 并解释原因，即使
-`availability` 已是 `available`。
+Stream Dashboard 必须先导出「`audio_room` 的 `user` 角色不含 `create-call`」
+的证据。证据由运维在后端环境变量 `STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF`
+里确认（决策 0039），前端只看响应：
+
+```jsonc
+// 未确认（默认；与 S7 逐字节相同）
+{ "status": "pending", "reasonCode": "AUDIO_ROOM_USER_ROLE_EVIDENCE_PENDING" }
+// 已确认：多一个 reference 键（1–120 个可打印字符，运维的截图归档标签）
+{ "status": "confirmed", "reasonCode": null, "reference": "dashboard-2026-09-10-user-role-no-create-call" }
+```
+
+- `evidence.status` 取值 `notApplicable | pending | confirmed`；`confirmed`
+  目前只出现在 `voiceRooms`。`reference` 键**仅在 `confirmed` 时出现**，其它
+  capability 与 `pending` 状态下**缺席而非 `null`**（沿用决策 0038 的规则），
+  严格解析时请把它声明为可选字段。
+- 在 `status` 变成 `confirmed` 之前，`voiceroom` / `voiceroom-full` 必须整页
+  unavailable 并解释原因，即使 `availability` 已是 `available`。
+- `confirmed` **不改变** `availability`：`deferred` / `unavailable` +
+  `confirmed` 仍然不能调用本模块接口。只有 `availability === "available"` 且
+  `evidence.status === "confirmed"` 同时成立，语音房入口才可打开。
+- `reference` 只用于展示 / 排障（例如放在 unavailable 说明或调试面板），不要
+  据它做任何逻辑判断。
 
 **角色映射（2026-09-08 修订，S4 BUG-03）**：LOOP 的 `role` 字段
 （`host | speaker | listener`）是 LOOP 语义，**不等于 Stream call role**。
