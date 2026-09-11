@@ -471,6 +471,7 @@ describe("LOOP API V2 launch module", () => {
       project: {
         reviewStatus: "approved",
         reviewReasonCode: null,
+        reviewReasonText: null,
         submittedAt: null,
         reviewedAt: null,
         version: null,
@@ -482,6 +483,67 @@ describe("LOOP API V2 launch module", () => {
       headers: s7CommonHeaders(),
     });
     expect(own.statusCode).toBe(404);
+  });
+
+  it("publishes an applicant-facing sentence beside the review reason code (Decision 0041)", async () => {
+    const returned: LaunchProjectRecord = {
+      ...draft,
+      reviewStatus: "returned",
+      reviewReasonCode: "needs_more_material",
+      submittedAt: createdAt,
+      reviewedAt: createdAt,
+      version: 2,
+    };
+    const { app } = await createApp(
+      repositoryFake({
+        getProject: vi.fn(() => Promise.resolve(returned)),
+        listProjects: vi.fn(() => Promise.resolve([returned])),
+      }),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const project = response.json<{
+      readonly project: {
+        readonly reviewReasonCode: string | null;
+        readonly reviewReasonText: string | null;
+      };
+    }>().project;
+    // The code stays the machine contract; the text is what a screen renders.
+    expect(project.reviewReasonCode).toBe("needs_more_material");
+    expect(project.reviewReasonText).toBe(
+      "材料还不完整，补齐后可以重新提交审核。",
+    );
+    expect(project.reviewReasonText).not.toContain("needs_more_material");
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/v2/launch/projects",
+      headers: s7CommonHeaders(),
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toMatchObject({
+      items: [
+        {
+          reviewReasonCode: "needs_more_material",
+          reviewReasonText: "材料还不完整，补齐后可以重新提交审核。",
+        },
+      ],
+    });
+
+    // A draft carries no reason, so there is no sentence either.
+    const drafting = await createApp();
+    const draftResponse = await drafting.app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(draftResponse.json()).toMatchObject({
+      project: { reviewReasonCode: null, reviewReasonText: null },
+    });
   });
 
   it("lists the caller's projects with an owner-bound cursor and rejects limit with cursor", async () => {

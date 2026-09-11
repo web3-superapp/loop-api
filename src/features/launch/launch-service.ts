@@ -16,6 +16,7 @@ import {
   launchProjectDigestParts,
   launchProjectListFilters,
   launchReasonCodes,
+  launchReviewReasonText,
   parseLaunchEnum,
   parseLaunchListLimit,
   parseLaunchOpaqueId,
@@ -336,6 +337,9 @@ function projectProjection(
     materialVersion: record.materialVersion,
     reviewStatus: record.reviewStatus,
     reviewReasonCode: owner ? record.reviewReasonCode : null,
+    reviewReasonText: owner
+      ? launchReviewReasonText(record.reviewStatus, record.reviewReasonCode)
+      : null,
     kyb: Object.freeze({
       status: "unavailable" as const,
       state: record.kybStatus,

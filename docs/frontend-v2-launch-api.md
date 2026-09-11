@@ -109,6 +109,7 @@ reasonCode: "KYB_PROVIDER_NOT_SELECTED"}`；页面显示"待接入"，不提供�
     "materialVersion": 1,
     "reviewStatus": "draft",
     "reviewReasonCode": null,
+    "reviewReasonText": null,
     "kyb": {
       "status": "unavailable",
       "state": "unavailable",
@@ -161,7 +162,7 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 | `draft`      | 可编辑、可提交                                  |
 | `submitted`  | 只读，"审核中"                                  |
 | `in_review`  | 只读，"审核中"                                  |
-| `returned`   | 可编辑、可重提；`reviewReasonCode` 显示退回原因 |
+| `returned`   | 可编辑、可重提；退回原因显示 `reviewReasonText` |
 | `approved`   | 只读；`launchId` 非空 → 进入目录                |
 | `rejected`   | 只读；不可重提                                  |
 
@@ -173,8 +174,43 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 
 ### 3.5 `GET /v2/launch/projects/{projectId}`
 
-本人可见任何状态；他人只可见 `approved`，且非本人投影中 `reviewReasonCode`、`submittedAt`、
-`reviewedAt`、`version` 一律为 `null`（审核轨迹与 CAS 版本只属于申请人）；否则 `404`。
+本人可见任何状态；他人只可见 `approved`，且非本人投影中 `reviewReasonCode`、
+`reviewReasonText`、`submittedAt`、`reviewedAt`、`version` 一律为 `null`（审核轨迹与 CAS
+版本只属于申请人）；否则 `404`。
+
+### 3.6 审核原因：`reviewReasonCode` 与 `reviewReasonText`（决策 0041）
+
+两个字段并列返回，`reviewReasonText` 为 `null` 当且仅当 `reviewReasonCode` 为 `null`：
+
+| 字段               | 用途                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| `reviewReasonCode` | 机器可读契约：埋点、日志、客户端分支判断。**不得上屏**       |
+| `reviewReasonText` | 同一个 code 的展示投影：一句中文，**原样渲染**，不得反向解析 |
+
+`reviewReasonText` 由后端生成，句子内容可能随文案调整而变化；客户端不得从 text 反推 code、
+不得按 text 做分支、不得再自行把 code 翻译成人话。需要分支时读 `reviewStatus` 或
+`reviewReasonCode`。
+
+后端当前的取值（catalog 内的 code 只在它所属的状态上生效，其余一律落到该状态的兜底句，
+因此屏幕上永远不会出现内部标识符）：
+
+| `reviewStatus` | `reviewReasonCode`           | `reviewReasonText`                                               |
+| -------------- | ---------------------------- | ---------------------------------------------------------------- |
+| 任意           | `null`                       | `null`                                                           |
+| `returned`     | `needs_more_material`        | 材料还不完整，补齐后可以重新提交审核。                           |
+| `returned`     | `official_links_unreachable` | 官方链接无法访问或核对，换成可访问的链接后可以重新提交。         |
+| `returned`     | `material_mismatch`          | 名称、代币符号与简介之间对不上，改一致后可以重新提交。           |
+| `returned`     | `ticker_conflict`            | 这个代币符号已被占用，换一个后可以重新提交。                     |
+| `rejected`     | `duplicate_submission`       | 同一个项目已经有一份申请在审核，这份重复申请不再处理。           |
+| `rejected`     | `policy_violation`           | 材料不符合上线规则，这份申请不会继续；调整后可以新建项目再提交。 |
+| `draft`        | 其它任意 code                | 项目还是草稿，材料填完就可以提交审核。                           |
+| `submitted`    | 其它任意 code                | 材料已提交，审核期间不能修改，有结果后状态会更新。               |
+| `in_review`    | 其它任意 code                | 材料正在审核，这期间不能修改，有结果后状态会更新。               |
+| `returned`     | 其它任意 code                | 材料被退回，修改后可以重新提交审核。                             |
+| `approved`     | 其它任意 code                | 审核已通过，材料不再可改，可以继续后面的发行安排。               |
+| `rejected`     | 其它任意 code                | 审核未通过，这份申请不能再提交，需要的话可以新建项目。           |
+
+"其它任意 code" 包含运维脚本的默认值 `operator_manual_review`：它不带信息，按状态出句子。
 
 ## 4. 目录与详情
 

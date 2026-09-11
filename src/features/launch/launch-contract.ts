@@ -412,6 +412,74 @@ export function reviewTransition(
   }
 }
 
+/**
+ * Applicant-facing review copy (Decision 0041). `reviewReasonCode` stays the
+ * machine-readable contract; `reviewReasonText` is its display projection and
+ * the only string a client may render. The catalog below is the operator
+ * vocabulary: each entry owns the single status it explains, so a code used
+ * against another status falls back to the status sentence instead of telling
+ * the applicant to do something the state machine forbids. A generic code
+ * (`operator_manual_review`) and any code outside the catalog resolve to the
+ * status sentence too, so an internal identifier can never reach a screen.
+ */
+const launchReviewReasonCatalog: Readonly<
+  Record<string, { readonly status: LaunchReviewStatus; readonly text: string }>
+> = Object.freeze({
+  needs_more_material: Object.freeze({
+    status: "returned",
+    text: "材料还不完整，补齐后可以重新提交审核。",
+  }),
+  official_links_unreachable: Object.freeze({
+    status: "returned",
+    text: "官方链接无法访问或核对，换成可访问的链接后可以重新提交。",
+  }),
+  material_mismatch: Object.freeze({
+    status: "returned",
+    text: "名称、代币符号与简介之间对不上，改一致后可以重新提交。",
+  }),
+  ticker_conflict: Object.freeze({
+    status: "returned",
+    text: "这个代币符号已被占用，换一个后可以重新提交。",
+  }),
+  duplicate_submission: Object.freeze({
+    status: "rejected",
+    text: "同一个项目已经有一份申请在审核，这份重复申请不再处理。",
+  }),
+  policy_violation: Object.freeze({
+    status: "rejected",
+    text: "材料不符合上线规则，这份申请不会继续；调整后可以新建项目再提交。",
+  }),
+});
+
+/** One sentence per status: what is blocked now, and what changes it. */
+const launchReviewStatusTexts: Readonly<Record<LaunchReviewStatus, string>> =
+  Object.freeze({
+    draft: "项目还是草稿，材料填完就可以提交审核。",
+    submitted: "材料已提交，审核期间不能修改，有结果后状态会更新。",
+    in_review: "材料正在审核，这期间不能修改，有结果后状态会更新。",
+    returned: "材料被退回，修改后可以重新提交审核。",
+    approved: "审核已通过，材料不再可改，可以继续后面的发行安排。",
+    rejected: "审核未通过，这份申请不能再提交，需要的话可以新建项目。",
+  });
+
+/**
+ * The display projection of `reviewReasonCode`. Null code means no review
+ * trail to show, so there is nothing to render either. A client renders this
+ * string as-is and never parses it back into a code.
+ */
+export function launchReviewReasonText(
+  status: LaunchReviewStatus,
+  reasonCode: string | null,
+): string | null {
+  if (reasonCode === null) {
+    return null;
+  }
+  const entry = launchReviewReasonCatalog[reasonCode];
+  return entry !== undefined && entry.status === status
+    ? entry.text
+    : launchReviewStatusTexts[status];
+}
+
 export const launchReviewEventTypes = Object.freeze({
   created: "project_created",
   updated: "project_updated",
@@ -539,6 +607,8 @@ export interface LaunchProjectProjection {
   readonly materialVersion: number;
   readonly reviewStatus: LaunchReviewStatus;
   readonly reviewReasonCode: string | null;
+  /** Display projection of `reviewReasonCode`; never parsed back into a code. */
+  readonly reviewReasonText: string | null;
   readonly kyb: UnavailableProjection & { readonly state: LaunchKybStatus };
   readonly attachments: UnavailableProjection;
   readonly submittedAt: string | null;

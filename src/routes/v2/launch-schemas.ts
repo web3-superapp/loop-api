@@ -137,6 +137,7 @@ const projectProjectionSchema = {
     "materialVersion",
     "reviewStatus",
     "reviewReasonCode",
+    "reviewReasonText",
     "kyb",
     "attachments",
     "submittedAt",
@@ -169,6 +170,16 @@ const projectProjectionSchema = {
         { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
         { type: "null" },
       ],
+      description:
+        "Machine-readable review reason for logs and client logic. Never render it; render reviewReasonText.",
+    },
+    reviewReasonText: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: 120 },
+        { type: "null" },
+      ],
+      description:
+        "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null.",
     },
     kyb: {
       type: "object",
@@ -192,7 +203,7 @@ const projectProjectionSchema = {
     version: {
       anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
       description:
-        "Compare-and-swap version for the owner; null (with reviewReasonCode, submittedAt, reviewedAt) when another account reads an approved project.",
+        "Compare-and-swap version for the owner; null (with reviewReasonCode, reviewReasonText, submittedAt, reviewedAt) when another account reads an approved project.",
     },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
