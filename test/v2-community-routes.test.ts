@@ -514,6 +514,144 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
   });
 
+  it("publishes each member row's own governance commands, not the viewer's flags", async () => {
+    const adminMembership: MembershipRecord = {
+      role: "admin",
+      status: "active",
+      joinedAt: createdAt,
+    };
+    const otherAdminId = "5f4e3d2c-1b0a-4987-8765-43210fedcba9";
+    const memberId = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+    const ownerId = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: adminMembership,
+      // The viewer is the admin whose own row carries `targetProfileId`.
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: "11111111-1111-4111-8111-111111111111",
+          role: "owner" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: ownerId },
+        },
+        {
+          membershipId: "22222222-2222-4222-8222-222222222222",
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: otherAdminId },
+        },
+        {
+          membershipId: "33333333-3333-4333-8333-333333333333",
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+        {
+          membershipId: "44444444-4444-4444-8444-444444444444",
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: memberId },
+        },
+        {
+          membershipId: "55555555-5555-4555-8555-555555555555",
+          role: "member" as const,
+          status: "muted" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: memberId },
+        },
+        {
+          membershipId: "66666666-6666-4666-8666-666666666666",
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: null },
+        },
+      ],
+      counts: { all: 6, owner: 1, admin: 2 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      viewer: Record<string, unknown>;
+      items: {
+        role: string;
+        status: string;
+        isSelf: boolean;
+        actions: string[];
+      }[];
+    }>();
+    expect(Object.keys(body.items[0] ?? {}).sort()).toEqual([
+      "actions",
+      "isSelf",
+      "joinedAt",
+      "miningPower",
+      "profile",
+      "role",
+      "status",
+    ]);
+    // The viewer-level flags still say this admin may mute and ban somewhere
+    // in the community...
+    expect(body.viewer).toMatchObject({ canMute: true, canBan: true });
+    // ...but no row the matrix denies carries the command.
+    expect(body.items.map((item) => item.actions)).toEqual([
+      // The owner is never a target.
+      [],
+      // Another admin: the cell that used to offer a doomed mute and ban.
+      [],
+      // The viewer's own row.
+      [],
+      ["mute", "ban"],
+      ["unmute", "ban"],
+      // No public profile ID, so no command can name the row.
+      [],
+    ]);
+    expect(body.items[2]?.isSelf).toBe(true);
+  });
+
+  it("gives a banned row exactly one published command", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: null,
+      items: [
+        {
+          membershipId: communityId,
+          role: "member" as const,
+          status: "banned" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      response.json<{ items: { actions: string[] }[] }>().items[0]?.actions,
+    ).toEqual(["unban"]);
+  });
+
   it("passes the banned governance filter through and projects the banned status", async () => {
     const dependencies = fakes();
     dependencies.listMembersMock.mockResolvedValue({

@@ -9,9 +9,12 @@ import {
   communityRoles,
   communitySelfPermissionMatrix,
   communityTargetActions,
+  memberRowActions,
   membershipAfterAction,
   targetStateAllowsAction,
   viewerPermissions,
+  type CommunityActorMembership,
+  type CommunityMembershipStatus,
   type CommunityRole,
   type CommunityTargetAction,
 } from "../src/features/community/community-policy.js";
@@ -244,5 +247,176 @@ describe("V2 community permission matrix", () => {
         status: "muted",
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * Row actions are the client-facing half of the same matrix. The table below
+ * is written out by hand rather than derived from `communityPermissionMatrix`,
+ * so widening a matrix cell (or a state precondition) fails here instead of
+ * silently reaching a member row.
+ *
+ * The `admin` actor against an `admin` target is the cell that regressed in
+ * the app: the observer-level `canMute`/`canBan` flags said "true" because
+ * they carry no target, and the member screen offered a mute and a ban the
+ * matrix had always denied, so the command always came back PERMISSION_DENIED.
+ */
+describe("V2 community member-row actions", () => {
+  /** `[actor role, target status, expected actions keyed by target role]`. */
+  const rows: readonly (readonly [
+    CommunityRole,
+    CommunityMembershipStatus,
+    Readonly<Record<CommunityRole, readonly CommunityTargetAction[]>>,
+  ])[] = [
+    [
+      "owner",
+      "active",
+      {
+        owner: [],
+        admin: ["revokeAdmin", "transferOwnership", "mute", "ban"],
+        member: ["assignAdmin", "transferOwnership", "mute", "ban"],
+      },
+    ],
+    [
+      "owner",
+      "muted",
+      {
+        owner: [],
+        admin: ["revokeAdmin", "unmute", "ban"],
+        member: ["assignAdmin", "unmute", "ban"],
+      },
+    ],
+    ["owner", "banned", { owner: [], admin: ["unban"], member: ["unban"] }],
+    ["admin", "active", { owner: [], admin: [], member: ["mute", "ban"] }],
+    ["admin", "muted", { owner: [], admin: [], member: ["unmute", "ban"] }],
+    ["admin", "banned", { owner: [], admin: [], member: ["unban"] }],
+    ["member", "active", { owner: [], admin: [], member: [] }],
+    ["member", "muted", { owner: [], admin: [], member: [] }],
+    ["member", "banned", { owner: [], admin: [], member: [] }],
+  ];
+
+  const row = (
+    actor: CommunityActorMembership | null,
+    targetRole: CommunityRole,
+    targetStatus: CommunityMembershipStatus,
+    overrides: { isSelf?: boolean; isAddressable?: boolean } = {},
+  ): readonly CommunityTargetAction[] =>
+    memberRowActions({
+      actor,
+      target: { role: targetRole, status: targetStatus },
+      isSelf: overrides.isSelf ?? false,
+      isAddressable: overrides.isAddressable ?? true,
+    });
+
+  it("publishes exactly the commands the matrix and the stored state allow, cell by cell", () => {
+    // Every actor role x target status pair is written down once, so the
+    // table cannot quietly stop covering a cell.
+    expect(rows.length).toBe(
+      communityRoles.length * communityMembershipStatuses.length,
+    );
+    for (const [actorRole, targetStatus, expected] of rows) {
+      for (const targetRole of communityRoles) {
+        expect(
+          row(active(actorRole), targetRole, targetStatus),
+          `${actorRole} -> ${targetRole}/${targetStatus}`,
+        ).toEqual(expected[targetRole]);
+      }
+    }
+  });
+
+  it("never offers an admin a mute or a ban against another admin", () => {
+    for (const status of communityMembershipStatuses) {
+      const actions = row(active("admin"), "admin", status);
+      expect(actions, `admin -> admin/${status}`).not.toContain("mute");
+      expect(actions, `admin -> admin/${status}`).not.toContain("ban");
+    }
+    // The whole cell is empty in every state, not merely free of mute and
+    // ban: an admin has no governance right at all over another admin, so
+    // even the restore of a banned admin row stays with the owner.
+    for (const status of communityMembershipStatuses) {
+      expect(row(active("admin"), "admin", status), status).toEqual([]);
+    }
+  });
+
+  it("gives a banned row exactly one command, and only to a viewer who may ban", () => {
+    for (const targetRole of ["admin", "member"] as const) {
+      expect(row(active("owner"), targetRole, "banned")).toEqual(["unban"]);
+    }
+    expect(row(active("admin"), "member", "banned")).toEqual(["unban"]);
+    expect(row(active("member"), "member", "banned")).toEqual([]);
+    expect(row(null, "member", "banned")).toEqual([]);
+  });
+
+  it("never offers a command against the owner's row", () => {
+    for (const actorRole of communityRoles) {
+      for (const status of communityMembershipStatuses) {
+        expect(
+          row(active(actorRole), "owner", status),
+          `${actorRole} -> owner/${status}`,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it("offers nothing to a non-member, a banned actor, or on the viewer's own row", () => {
+    for (const targetRole of communityRoles) {
+      for (const status of communityMembershipStatuses) {
+        expect(row(null, targetRole, status)).toEqual([]);
+        expect(
+          row({ role: "owner", status: "banned" }, targetRole, status),
+        ).toEqual([]);
+        expect(
+          row(active("owner"), targetRole, status, { isSelf: true }),
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it("offers nothing on a row no command can address", () => {
+    expect(
+      row(active("owner"), "member", "active", { isAddressable: false }),
+    ).toEqual([]);
+    expect(
+      row(active("admin"), "member", "active", { isAddressable: false }),
+    ).toEqual([]);
+  });
+
+  it("keeps a muted viewer's governance standing, as the matrix does", () => {
+    expect(row({ role: "admin", status: "muted" }, "member", "active")).toEqual(
+      ["mute", "ban"],
+    );
+  });
+
+  it("keeps the declared action order so the published list is deterministic", () => {
+    const actions = row(active("owner"), "member", "active");
+    const order = actions.map((action) =>
+      communityTargetActions.indexOf(action),
+    );
+    expect(order).toEqual([...order].sort((left, right) => left - right));
+  });
+
+  it("publishes only commands the write path would authorize", () => {
+    for (const actorRole of communityRoles) {
+      for (const targetRole of communityRoles) {
+        for (const targetStatus of communityMembershipStatuses) {
+          const actor = active(actorRole);
+          const target = { role: targetRole, status: targetStatus } as const;
+          const published = row(actor, targetRole, targetStatus);
+          for (const action of communityTargetActions) {
+            const authorized =
+              canPerformTargetAction({
+                actor,
+                action,
+                targetRole,
+                isSelf: false,
+              }) && targetStateAllowsAction(action, target);
+            expect(
+              published.includes(action),
+              `${actorRole} ${action} ${targetRole}/${targetStatus}`,
+            ).toBe(authorized);
+          }
+        }
+      }
+    }
   });
 });

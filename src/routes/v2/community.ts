@@ -292,7 +292,7 @@ export function registerV2CommunityRoutes(
         operationId: "listV2CommunityMembers",
         summary: "List community members grouped by role",
         description:
-          'Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server and always describe the whole non-banned directory, so they do not shrink while `q` narrows the page. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: "banned"`), which no other view contains. `q` narrows the page to a member alias prefix, draws on the shared public alias search quota, and is bound into the cursor.',
+          'Owner first, then admins, then members; inside a group the earliest join comes first. Each row carries `actions`: the governance commands this viewer may run against that row, computed from the actor x action x target permission matrix and the row\'s stored state, so a client renders exactly that list and derives nothing. Segment counts come from the server and always describe the whole non-banned directory, so they do not shrink while `q` narrows the page. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: "banned"`), which no other view contains. `q` narrows the page to a member alias prefix, draws on the shared public alias search quota, and is bound into the cursor.',
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

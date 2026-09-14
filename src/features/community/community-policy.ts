@@ -149,7 +149,17 @@ export interface CommunityViewerPermissions {
   readonly canBan: boolean;
 }
 
-/** Member-directory action flags for the viewer, derived from the matrix. */
+/**
+ * Viewer-level governance standing, derived from the matrix.
+ *
+ * These flags answer "does this viewer hold this right anywhere in this
+ * community" and nothing more: they carry no target role and no target state,
+ * so they gate viewer-level affordances only (the `role=banned` governance
+ * view, and whether the directory shows a governance affordance at all).
+ * Per-row command visibility is `memberRowActions`; deriving a row action
+ * from these booleans loses the target dimension and offers commands the
+ * matrix denies.
+ */
 export function viewerPermissions(
   actor: CommunityActorMembership | null,
 ): CommunityViewerPermissions {
@@ -162,6 +172,60 @@ export function viewerPermissions(
     canMute: can("mute"),
     canBan: can("ban"),
   });
+}
+
+export interface CommunityMemberRowActionsInput {
+  /** The viewer's own membership, or `null` when they never joined. */
+  readonly actor: CommunityActorMembership | null;
+  /** The membership the row describes. */
+  readonly target: CommunityActorMembership;
+  /** The row is the viewer's own membership. */
+  readonly isSelf: boolean;
+  /**
+   * The row carries a public profile ID. A membership without one cannot be
+   * named by `/v2/communities/{id}/members/{publicProfileId}/...`, so no
+   * command can reach it.
+   */
+  readonly isAddressable: boolean;
+}
+
+const noActions: readonly CommunityTargetAction[] = Object.freeze([]);
+
+/**
+ * The governance commands this viewer may actually run against this row.
+ *
+ * It is the same pair of predicates the write path evaluates, in the same
+ * order: `canPerformTargetAction` (the actor x action x target matrix) and
+ * then `targetStateAllowsAction` (the stored state precondition). A command
+ * can therefore only be offered when the matching write would be authorized
+ * on the state this very response projects, and a matrix cell can never be
+ * widened for the client without being widened for the write as well.
+ *
+ * This replaces the observer-level `canMute`/`canBan` booleans as the source
+ * of row-action visibility: those flags dropped the target dimension, so an
+ * admin looking at another admin was offered a mute and a ban the matrix had
+ * always denied.
+ *
+ * The result keeps `communityTargetActions` declaration order, so the list is
+ * deterministic for a given actor, target, and state.
+ */
+export function memberRowActions(
+  input: CommunityMemberRowActionsInput,
+): readonly CommunityTargetAction[] {
+  if (!input.isAddressable) {
+    return noActions;
+  }
+  return Object.freeze(
+    communityTargetActions.filter(
+      (action) =>
+        canPerformTargetAction({
+          actor: input.actor,
+          action,
+          targetRole: input.target.role,
+          isSelf: input.isSelf,
+        }) && targetStateAllowsAction(action, input.target),
+    ),
+  );
 }
 
 /**

@@ -299,6 +299,7 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
       "status": "active",
       "joinedAt": "…",
       "isSelf": false,
+      "actions": [],
       "miningPower": { "status": "unavailable", "reasonCode": "MINING_FORMULA_BASELINE_PENDING" }
     }
   ],
@@ -343,13 +344,41 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 `401 AUTH_REQUIRED|AUTH_INVALID`、`403 PERMISSION_DENIED`（只在 `role=banned`）、
 `404 NOT_FOUND`、`429 RATE_LIMITED`、`503 CAPABILITY_UNAVAILABLE`。
 
+`isSelf === true` 的那一行不可导航。
+
+**`items[].actions` —— 每行的治理动作清单（2026-09-14 新增，必填字段）**
+
+`actions` 是**这一行**当前可执行的治理动作，服务端按 4.7 的 actor × 动作 ×
+目标角色权限矩阵，再叠加目标当前状态的前置条件（与写接口执行的是同一对判断）
+逐行算出。取值来自固定枚举：
+
+`"assignAdmin"` | `"revokeAdmin"` | `"transferOwnership"` | `"mute"` |
+`"unmute"` | `"ban"` | `"unban"`
+
+顺序固定为上表顺序，数组元素不重复。**前端只渲染这个清单，不得再自行推导任何
+一个动作的可用性**：
+
+- 空数组 = 这一行不提供任何治理动作。owner 行、`isSelf === true` 的行、
+  `profile.publicProfileId === null` 的行、以及权限矩阵不允许的组合（例如
+  admin 看另一个 admin）都会返回 `[]`，前端不需要也不应该再写这些判断。
+- 被封禁的行只会返回 `["unban"]`。
+- 状态前置条件已经算进去了：已禁言的行不会出现 `"mute"`，只会出现 `"unmute"`；
+  非活跃成员不会出现 `"transferOwnership"`。
+- 动作名到写接口的映射：`assignAdmin` → `POST .../role {"role":"admin"}`，
+  `revokeAdmin` → `{"role":"member"}`，`transferOwnership` → `{"role":"owner"}`，
+  `mute`/`unmute` → `POST`/`DELETE .../mute`，`ban`/`unban` →
+  `POST`/`DELETE .../ban`。
+- 这是**投影而不是授权**：写接口仍会用同一张矩阵重新校验。清单只保证前端不再
+  给出注定 `403` 的入口。
+
+`viewer.canInviteAdmin/canMute/canBan` 是**观察者级**标记（"这个人在本社区里
+是否拥有某项权限"），不带目标维度，只用于决定是否显示"已封禁"seg
+（`viewer.canBan`）这类页面级入口。**不要用它们决定任何一行的动作**——之前正是
+这么做才让 admin 对另一个 admin 显示了禁言/封禁，点下去必然 403。
+
 成员行的 `profile.publicProfileId` 可能为 `null`（该成员没有资料行）：这种行仍会
 列出并计入 `counts`，保证计数与可翻页行数一致，但 **不可作为任何治理动作的目标**，
-前端要隐藏该行的操作入口，用 `loopId` 显示。
-
-`isSelf === true` 的那一行不可导航、
-不显示治理动作。治理动作可见性只看 `viewer.canInviteAdmin/canMute/canBan`，
-不要在前端复刻权限规则。
+此时 `actions` 恒为 `[]`，用 `loopId` 显示。
 
 ### 4.7 治理写接口
 
@@ -389,6 +418,9 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 单元格是"可以作用的目标角色"。owner 永远不能成为任何治理动作的目标；
 自己不能对自己执行治理动作；被封禁的操作者没有任何权限；被禁言的操作者
 保留治理权限（禁言只影响聊天）。
+
+这张表是服务端的唯一真相，**前端不需要复刻它**：4.6 的 `items[].actions`
+就是这张表按行算好的结果，前端照单渲染即可。
 
 错误：越权 `403 PERMISSION_DENIED`；状态不允许（禁言已禁言者、撤销非 admin、
 解封未封禁者、转让给非活跃成员）`409 DATA_STALE` → 刷新后重试；目标不在该

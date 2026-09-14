@@ -66,6 +66,7 @@ import {
 } from "./community-contract.js";
 import {
   communityRoleRank,
+  memberRowActions,
   viewerPermissions,
   type CommunityRole,
   type CommunityTargetAction,
@@ -287,6 +288,13 @@ export interface CommunityMemberProjection {
   readonly status: MembershipRecord["status"];
   readonly joinedAt: string;
   readonly isSelf: boolean;
+  /**
+   * The governance commands the viewer may run against *this* row, computed
+   * from the permission matrix and this row's stored state (`memberRowActions`).
+   * It is the client's only source of row-action visibility: an empty array
+   * means the row offers nothing, and the client adds no rule of its own.
+   */
+  readonly actions: readonly CommunityTargetAction[];
   readonly miningPower: UnavailableProjection;
 }
 
@@ -881,20 +889,27 @@ export function createCommunityService(
         online: unavailable(communityUnavailableReasonCodes.presence),
       }),
       items: Object.freeze(
-        items.map((item) =>
-          Object.freeze({
+        items.map((item) => {
+          const isSelf =
+            item.profile.publicProfileId !== null &&
+            item.profile.publicProfileId === record.viewerPublicProfileId;
+          return Object.freeze({
             profile: memberIdentity(item.profile),
             role: item.role,
             status: item.status,
             joinedAt: item.joinedAt,
-            isSelf:
-              item.profile.publicProfileId !== null &&
-              item.profile.publicProfileId === record.viewerPublicProfileId,
+            isSelf,
+            actions: memberRowActions({
+              actor: record.viewerMembership,
+              target: { role: item.role, status: item.status },
+              isSelf,
+              isAddressable: item.profile.publicProfileId !== null,
+            }),
             miningPower: unavailable(
               communityUnavailableReasonCodes.miningPower,
             ),
-          }),
-        ),
+          });
+        }),
       ),
       nextCursor:
         last === undefined

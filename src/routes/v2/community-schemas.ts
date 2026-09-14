@@ -32,6 +32,7 @@ import {
 import {
   communityMembershipStatuses,
   communityRoles,
+  communityTargetActions,
 } from "../../features/community/community-policy.js";
 import {
   communityChannelMemberStates,
@@ -220,15 +221,32 @@ export const membershipSchema = {
   },
 } as const;
 
+/**
+ * Viewer-level governance standing. The three booleans say whether the viewer
+ * holds a right anywhere in this community; they carry no target and never
+ * decide a row's commands. `items[].actions` is the only row-action source.
+ */
 export const viewerSchema = {
   type: "object",
   additionalProperties: false,
   required: ["membership", "canInviteAdmin", "canMute", "canBan"],
   properties: {
     membership: { anyOf: [membershipSchema, { type: "null" }] },
-    canInviteAdmin: { type: "boolean" },
-    canMute: { type: "boolean" },
-    canBan: { type: "boolean" },
+    canInviteAdmin: {
+      type: "boolean",
+      description:
+        "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands.",
+    },
+    canMute: {
+      type: "boolean",
+      description:
+        "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands.",
+    },
+    canBan: {
+      type: "boolean",
+      description:
+        "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands.",
+    },
   },
 } as const;
 
@@ -439,6 +457,7 @@ export const memberListResourceSchema = {
           "status",
           "joinedAt",
           "isSelf",
+          "actions",
           "miningPower",
         ],
         properties: {
@@ -447,6 +466,14 @@ export const memberListResourceSchema = {
           status: { type: "string", enum: [...communityMembershipStatuses] },
           joinedAt: { type: "string", format: "date-time" },
           isSelf: { type: "boolean" },
+          actions: {
+            type: "array",
+            uniqueItems: true,
+            maxItems: communityTargetActions.length,
+            items: { type: "string", enum: [...communityTargetActions] },
+            description:
+              "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write.",
+          },
           miningPower: unavailableSchema,
         },
       },

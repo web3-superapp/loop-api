@@ -4844,9 +4844,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "chat": {
@@ -5760,9 +5769,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "chat": {
@@ -6577,9 +6595,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "chat": {
@@ -7502,9 +7529,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "chat": {
@@ -8427,9 +8463,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "chat": {
@@ -9172,7 +9217,7 @@
         "operationId": "listV2CommunityMembers",
         "summary": "List community members grouped by role",
         "tags": ["community"],
-        "description": "Owner first, then admins, then members; inside a group the earliest join comes first. Segment counts come from the server and always describe the whole non-banned directory, so they do not shrink while `q` narrows the page. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: \"banned\"`), which no other view contains. `q` narrows the page to a member alias prefix, draws on the shared public alias search quota, and is bound into the cursor.",
+        "description": "Owner first, then admins, then members; inside a group the earliest join comes first. Each row carries `actions`: the governance commands this viewer may run against that row, computed from the actor x action x target permission matrix and the row's stored state, so a client renders exactly that list and derives nothing. Segment counts come from the server and always describe the whole non-banned directory, so they do not shrink while `q` narrows the page. Per-member mining power and the online count stay unavailable. `role=banned` is the owner/admin governance view that lists banned memberships (`status: \"banned\"`), which no other view contains. `q` narrows the page to a member alias prefix, draws on the shared public alias search quota, and is bound into the cursor.",
         "parameters": [
           {
             "schema": {
@@ -9380,9 +9425,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -9423,6 +9477,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -9483,6 +9538,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
@@ -10312,9 +10385,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -10355,6 +10437,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -10415,6 +10498,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
@@ -11243,9 +11344,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -11286,6 +11396,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -11346,6 +11457,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
@@ -12172,9 +12301,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -12215,6 +12353,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -12275,6 +12414,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
@@ -13103,9 +13260,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -13146,6 +13312,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -13206,6 +13373,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
@@ -14032,9 +14217,18 @@
                             { "type": "null" }
                           ]
                         },
-                        "canInviteAdmin": { "type": "boolean" },
-                        "canMute": { "type": "boolean" },
-                        "canBan": { "type": "boolean" }
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
                       }
                     },
                     "counts": {
@@ -14075,6 +14269,7 @@
                           "status",
                           "joinedAt",
                           "isSelf",
+                          "actions",
                           "miningPower"
                         ],
                         "properties": {
@@ -14135,6 +14330,24 @@
                             "format": "date-time"
                           },
                           "isSelf": { "type": "boolean" },
+                          "actions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 7,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "assignAdmin",
+                                "revokeAdmin",
+                                "transferOwnership",
+                                "mute",
+                                "unmute",
+                                "ban",
+                                "unban"
+                              ]
+                            },
+                            "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
+                          },
                           "miningPower": {
                             "type": "object",
                             "additionalProperties": false,
