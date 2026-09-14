@@ -1651,6 +1651,26 @@ export function createPostgresCommunityRepository(
               `,
               values: [communityId, actorUserId],
             });
+            // A transfer changes two roles, so it appends two audit rows
+            // (Decision 0042): this one records the previous owner giving
+            // ownership up, and the row every action appends below records
+            // the successor receiving it. Both carry the same
+            // `idempotency_record_id` and `request_id`, so the pair rebuilds
+            // as one irreversible command; only the reason code separates the
+            // outgoing leg from the incoming one.
+            await appendCommunityAudit(client, {
+              communityId,
+              actorUserId,
+              targetUserId: actorUserId,
+              eventType: "role_changed",
+              fromRole: actor.role,
+              toRole: "admin",
+              fromStatus: actor.status,
+              toStatus: actor.status,
+              reasonCode: `action_${action.toLowerCase()}_released`,
+              idempotencyRecordId: recordId,
+              requestId,
+            });
           }
           await client.query({
             text: `

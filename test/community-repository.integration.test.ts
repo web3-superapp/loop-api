@@ -832,6 +832,130 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     expect(page.counts.owner).toBe(1);
   });
 
+  it("audits both role changes of an ownership transfer under one command", async () => {
+    const owner = await createAccount("transfer-audit-owner");
+    const successor = await createAccount("transfer-audit-successor");
+    const communityId = await createCommunity(owner.userId, "transfer-audit");
+    await join(successor.userId, communityId);
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: successor.publicProfileId,
+      action: "assignAdmin",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        successor.publicProfileId,
+        "assignAdmin",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    const idempotencyKey = randomUUID();
+    const requestSha256 = commandDigest("community", "governMember", [
+      communityId,
+      successor.publicProfileId,
+      "transferOwnership",
+    ]);
+    const transfer = (): Promise<unknown> =>
+      repository.governMember({
+        actorUserId: owner.userId,
+        communityId,
+        targetPublicProfileId: successor.publicProfileId,
+        action: "transferOwnership",
+        idempotencyKey,
+        requestSha256,
+        requestId: randomUUID(),
+      });
+    const roleEvents = async (): Promise<readonly Record<string, unknown>[]> =>
+      (
+        await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              actor_user_id,
+              target_user_id,
+              from_role,
+              to_role,
+              reason_code,
+              idempotency_record_id,
+              request_id
+            from public.community_role_events
+            where community_id = $1 and event_type = 'role_changed'
+            order by occurred_at, event_id
+          `,
+          values: [communityId],
+        })
+      ).rows;
+
+    await transfer();
+    const audited = await roleEvents();
+    expect(
+      audited.map((row) => [
+        row["target_user_id"],
+        row["from_role"],
+        row["to_role"],
+        row["reason_code"],
+      ]),
+    ).toEqual([
+      [successor.userId, "member", "admin", "action_assignadmin"],
+      [owner.userId, "owner", "admin", "action_transferownership_released"],
+      [successor.userId, "admin", "owner", "action_transferownership"],
+    ]);
+    // Both halves of the transfer name the previous owner as the actor and
+    // share one command record and one request, so the pair reconstructs as a
+    // single irreversible action rather than as two unrelated demotions.
+    const transferred = audited.slice(1);
+    expect(transferred.map((row) => row["actor_user_id"])).toEqual([
+      owner.userId,
+      owner.userId,
+    ]);
+    expect(
+      new Set(transferred.map((row) => row["idempotency_record_id"])).size,
+    ).toBe(1);
+    expect(transferred[0]?.["idempotency_record_id"]).not.toBe(
+      audited[0]?.["idempotency_record_id"],
+    );
+    expect(new Set(transferred.map((row) => row["request_id"])).size).toBe(1);
+
+    // Replaying the same command returns the stored outcome; the pair stays a
+    // pair instead of becoming four rows.
+    await transfer();
+    expect(await roleEvents()).toEqual(audited);
+
+    // The pair is allowed because its two rows name different subjects. One
+    // command still cannot append two rows about the same account.
+    const duplicate = await pool
+      .query({
+        text: `
+          insert into public.community_role_events (
+            community_id,
+            actor_user_id,
+            target_user_id,
+            event_type,
+            from_role,
+            to_role,
+            idempotency_record_id,
+            request_id
+          )
+          values ($1, $2, $2, 'role_changed', 'owner', 'admin', $3, $4)
+        `,
+        values: [
+          communityId,
+          owner.userId,
+          transferred[0]?.["idempotency_record_id"],
+          randomUUID(),
+        ],
+      })
+      .then(
+        () => null,
+        (error: unknown) => postgresError(error),
+      );
+    expect(duplicate).toEqual({
+      code: "23505",
+      constraint: "community_role_events_idempotency_unique",
+    });
+  });
+
   it("removes both follow edges when a block is created", async () => {
     const first = await createAccount("block-first");
     const second = await createAccount("block-second");
