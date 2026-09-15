@@ -8,6 +8,7 @@ import {
   miningFormulaDocumentSchema,
   miningFormulaStatuses,
   miningPriceGuardRulesSchema,
+  miningReferencePriceQualities,
   miningWeightRangeDocumentSchema,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
@@ -114,11 +115,18 @@ const powerRowSchema = z
     asset_id: z.string().min(1),
     holding: decimalSchema,
     reference_price_usd: decimalSchema,
+    reference_price_quality: z.enum(miningReferencePriceQualities),
+    reference_price_proxy_asset_id: z.string().min(1).nullable(),
     weight: decimalSchema,
     power: decimalSchema,
     block_number: blockNumberSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    (row) =>
+      (row.reference_price_quality === "proxied") ===
+      (row.reference_price_proxy_asset_id !== null),
+  );
 
 /** `numeric::text` may carry trailing zeros; the wire form is canonical. */
 const numericTextSchema = z
@@ -140,7 +148,7 @@ const rankedAccountRowSchema = z
   .object({
     owner_user_id: opaqueIdSchema,
     total_power: numericTextSchema,
-    position: positionSchema,
+    position: positionSchema.nullable(),
     public_profile_id: opaqueIdSchema.nullable(),
     alias: z.string().min(1).nullable(),
     discoverable: z.boolean(),
@@ -262,7 +270,8 @@ function translate(error: unknown): never {
 
 /**
  * Per-account totals of one snapshot and their `rank()` among positive
- * totals. Zero-power accounts are in `totals` but hold no position.
+ * totals. Zero-power accounts are in `totals` but hold no position
+ * (`ranked` lists every account; `position` is null at zero power).
  */
 const accountTotalsSql = `
   totals as (
@@ -272,9 +281,13 @@ const accountTotalsSql = `
     group by owner_user_id
   ),
   ranked as (
-    select owner_user_id, total, rank() over (order by total desc) as position
+    select
+      owner_user_id,
+      total,
+      case
+        when total > 0 then rank() over (order by total desc)
+      end as position
     from totals
-    where total > 0
   )
 `;
 
@@ -560,9 +573,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               text: `
                 insert into public.mining_snapshot_powers (
                   snapshot_id, owner_user_id, asset_id, holding,
-                  reference_price_usd, weight, power, block_number
+                  reference_price_usd, reference_price_quality,
+                  reference_price_proxy_asset_id, weight, power, block_number
                 )
-                values ($1, $2, $3, $4, $5, $6, $7, $8)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
               `,
               values: [
                 snapshotId,
@@ -570,6 +584,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 power.assetId,
                 decimalSchema.parse(power.holding),
                 decimalSchema.parse(power.referencePriceUsd),
+                z
+                  .enum(miningReferencePriceQualities)
+                  .parse(power.referencePriceQuality),
+                power.referencePriceProxyAssetId,
                 decimalSchema.parse(power.weight),
                 decimalSchema.parse(power.power),
                 blockNumberSchema.parse(power.blockNumber),
@@ -732,7 +750,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const result = await pool.query({
           text: `
             select
-              owner_user_id, asset_id, holding, reference_price_usd, weight,
+              owner_user_id, asset_id, holding, reference_price_usd,
+              reference_price_quality, reference_price_proxy_asset_id, weight,
               power, block_number::text as block_number
             from public.mining_snapshot_powers
             where snapshot_id = $1 and owner_user_id = $2
@@ -748,6 +767,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               assetId: row.asset_id,
               holding: row.holding,
               referencePriceUsd: row.reference_price_usd,
+              referencePriceQuality: row.reference_price_quality,
+              referencePriceProxyAssetId: row.reference_price_proxy_asset_id,
               weight: row.weight,
               power: row.power,
               blockNumber: row.block_number,
@@ -769,12 +790,12 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
           text: `
             with ${accountTotalsSql}
             select
-              t.total::text as total_power,
+              r.total::text as total_power,
               r.position::int as position,
-              (select count(*) from ranked)::int as participant_count
-            from totals as t
-            left join ranked as r on r.owner_user_id = t.owner_user_id
-            where t.owner_user_id = $2
+              (select count(*) from ranked where position is not null)::int
+                as participant_count
+            from ranked as r
+            where r.owner_user_id = $2
           `,
           values: [snapshotId, ownerUserId],
         });
@@ -817,7 +838,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               and profile.profile_status = 'active'
             left join public.privacy_preferences_v2 as privacy
               on privacy.owner_user_id = r.owner_user_id
-            order by r.position asc, r.owner_user_id asc
+            order by r.position asc nulls last, r.owner_user_id asc
             limit $2
           `,
           values: [snapshotId, limit],

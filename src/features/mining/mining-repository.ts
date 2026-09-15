@@ -76,7 +76,8 @@ export interface MiningAccountStandingRecord {
 export interface MiningRankedAccountRecord {
   readonly ownerUserId: string;
   readonly totalPower: string;
-  readonly position: number;
+  /** Null while the account's power is zero (listed, not ranked). */
+  readonly position: number | null;
   readonly publicProfileId: string | null;
   readonly alias: string | null;
   readonly discoverable: boolean;

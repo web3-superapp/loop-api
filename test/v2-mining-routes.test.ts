@@ -386,6 +386,8 @@ describe("LOOP API V2 mining module", () => {
               assetId: cakeAsset,
               holding: "100",
               referencePriceUsd: "2.3",
+              referencePriceQuality: "fresh" as const,
+              referencePriceProxyAssetId: null,
               weight: "0.5",
               power: "115",
               blockNumber: "122037728",
@@ -395,6 +397,8 @@ describe("LOOP API V2 mining module", () => {
               assetId: loopAsset,
               holding: "1",
               referencePriceUsd: "885",
+              referencePriceQuality: "fresh" as const,
+              referencePriceProxyAssetId: null,
               weight: "1",
               power: "885",
               blockNumber: "122037728",
@@ -502,7 +506,8 @@ describe("LOOP API V2 mining module", () => {
           budget: "1000000",
           unitKey: "mining.rules.dailyOutput.unit.loopTokenPending",
           budgetStatus: "development_placeholder",
-          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          scope: "development_baseline",
         },
         accumulated: {
           status: "unavailable",
@@ -518,7 +523,7 @@ describe("LOOP API V2 mining module", () => {
         },
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -526,7 +531,7 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
         },
@@ -651,6 +656,8 @@ describe("LOOP API V2 mining module", () => {
             assetId: cakeAsset,
             holding: "100",
             referencePriceUsd: "2.3",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "0.5",
             power: "115",
             blockNumber: "122037728",
@@ -659,13 +666,15 @@ describe("LOOP API V2 mining module", () => {
             assetId: loopAsset,
             holding: "1",
             referencePriceUsd: "885",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "1",
             power: "885",
             blockNumber: "122037728",
           },
         ],
-        // Native BNB is weighted (1) and unbound, so the only way the lane
-        // skipped it is the price guard (its DexScreener price is proxied).
+        // Native BNB is weighted (1), unbound, and its WBNB proxy is
+        // declared, so the only way the lane skipped it is a stale price.
         excluded: [
           { assetId: nativeAsset, reasonCode: "MINING_PRICE_NOT_FRESH" },
         ],
@@ -673,7 +682,7 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
         },
@@ -752,32 +761,52 @@ describe("LOOP API V2 mining module", () => {
         url: "/v2/mining/rank?scope=communities",
         headers: s7CommonHeaders(),
       });
-      expect(communities.json()).toMatchObject({
-        scope: "communities",
+      const communityRanking = communities.json<{
+        scope: string;
         ranking: {
-          status: "available",
-          scope: "communities",
-          items: [
-            {
-              position: 1,
-              power: "230",
-              community: {
-                communityId,
-                name: "Frog Holders",
-                boundAssetId: cakeAsset,
-              },
-              weight: "0.5",
-              participants: 2,
-            },
-          ],
-          participants: 1,
-        },
-        myPosition: {
-          status: "unavailable",
-          reasonCode: "MINING_RANK_NOT_APPLICABLE",
-        },
+          status: string;
+          scope: string;
+          items: unknown[];
+          participants: number;
+        };
+        myPosition: unknown;
+      }>();
+      expect(communityRanking.scope).toBe("communities");
+      expect(communityRanking.ranking).toMatchObject({
+        status: "available",
+        scope: "communities",
+        participants: 1,
       });
-      expect(communities.body).not.toContain("Zero Holders");
+      expect(communityRanking.ranking.items).toHaveLength(2);
+      expect(communityRanking.ranking.items[0]).toEqual({
+        position: 1,
+        power: "230",
+        community: {
+          communityId,
+          name: "Frog Holders",
+          boundAssetId: cakeAsset,
+        },
+        weight: "0.5",
+        participants: 2,
+      });
+      expect(communityRanking.myPosition).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_RANK_NOT_APPLICABLE",
+      });
+      // A bound, weighted community at zero power is listed, not ranked.
+      expect(
+        communities.json<{ ranking: { items: unknown[] } }>().ranking.items[1],
+      ).toEqual({
+        position: null,
+        power: "0",
+        community: {
+          communityId: "d17b34a6-c3cc-4a24-87dd-dc165c80bd85",
+          name: "Zero Holders",
+          boundAssetId: cakeAsset,
+        },
+        weight: "0.5",
+        participants: 0,
+      });
       const unranked = await createApp(
         approvedRepository({
           getAccountStanding: vi.fn(() =>
@@ -819,7 +848,7 @@ describe("LOOP API V2 mining module", () => {
         weight: {
           status: "approved",
           value: "0.5",
-          configVersion: "miningFormula-devBaseline-2026-09-15",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
           reviewedAt: approvedAt,
         },
         communityPower: { status: "available", value: "230" },
@@ -887,7 +916,7 @@ describe("LOOP API V2 mining module", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         approved: {
-          configVersion: "miningFormula-devBaseline-2026-09-15",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
           status: "approved",
           scope: "development_baseline",
           assetWeights: {
@@ -909,7 +938,7 @@ describe("LOOP API V2 mining module", () => {
         pendingApproval: [{ configVersion: "miningFormulaV1-draft" }],
         baseline: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -936,10 +965,7 @@ describe("LOOP API V2 mining module", () => {
         capabilityId: "communityMining",
         availability: "unavailable",
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
-        evidence: {
-          status: "pending",
-          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
-        },
+        evidence: { status: "notApplicable", reasonCode: null },
       });
       const approved = await createApp(approvedRepository());
       const approvedCapabilities = await approved.app.inject({
@@ -960,10 +986,7 @@ describe("LOOP API V2 mining module", () => {
         capabilityId: "communityMining",
         availability: "available",
         reasonCode: null,
-        evidence: {
-          status: "pending",
-          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
-        },
+        evidence: { status: "notApplicable", reasonCode: null },
       });
       // The `mining` module gate is unchanged by the fact: it was available
       // before and stays available; its evidence still names the 02 freeze.

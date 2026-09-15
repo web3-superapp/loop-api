@@ -273,14 +273,17 @@ sequence is explicit and every step refuses `NODE_ENV=production`:
 
 ```sh
 pnpm mining:dev-baseline --confirm                                   # creates miningFormula-devBaseline-… (pending_approval)
-pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15 --confirm
+pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15-r2 --confirm
 pnpm mining:community-weight <communityId> <weight> --confirm        # 0.5 ≤ weight ≤ 2; the community must have a bound asset
 pnpm mining:snapshot --confirm                                       # one lane tick with the worker's real reader (DexScreener)
 ```
 
 Inputs are never invented: a wallet with zero balances yields zero power, a
 community without `boundAssetKey` has no community power, and native BNB is
-skipped while its price is proxied through WBNB.
+priced through the WBNB proxy the version declares, carried as `proxied` on
+its rows (Decision 0044). Never insert a `wallet_balance_snapshots` row by
+hand: the table has no provenance column, so a written row is a forged chain
+observation.
 
 ## Launch chain slot on the BSC testnet (Decision 0038)
 

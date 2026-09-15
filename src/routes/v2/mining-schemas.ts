@@ -4,6 +4,7 @@ import {
   configVersionPatternSource,
   miningDailyOutputUnitKey,
   miningFormulaScopes,
+  miningReferencePriceQualities,
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
   miningRankScopes,
@@ -97,18 +98,20 @@ const estimateSchema = {
         "unitKey",
         "budgetStatus",
         "formulaVersion",
+        "scope",
       ],
       properties: {
         status: { type: "string", const: "available" },
         value: {
           ...decimalSchema,
           description:
-            "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount.",
+            "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount. Always rendered beside formulaVersion and scope.",
         },
         budget: decimalSchema,
         unitKey: { type: "string", const: miningDailyOutputUnitKey },
         budgetStatus: { type: "string", const: "development_placeholder" },
         formulaVersion: { type: "string", pattern: configVersionPatternSource },
+        scope: scopeSchema,
       },
     },
   ],
@@ -216,6 +219,8 @@ export const miningAssetsResourceSchema = {
           "assetId",
           "holding",
           "referencePriceUsd",
+          "referencePriceQuality",
+          "referencePriceProxyAssetId",
           "weight",
           "power",
           "blockNumber",
@@ -224,6 +229,18 @@ export const miningAssetsResourceSchema = {
           assetId: { type: "string", pattern: assetIdPatternSource },
           holding: decimalSchema,
           referencePriceUsd: decimalSchema,
+          referencePriceQuality: {
+            type: "string",
+            enum: [...miningReferencePriceQualities],
+            description:
+              "fresh = the asset's own Provider price; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044).",
+          },
+          referencePriceProxyAssetId: {
+            anyOf: [
+              { type: "string", pattern: assetIdPatternSource },
+              { type: "null" },
+            ],
+          },
           weight: {
             ...decimalSchema,
             description:
@@ -345,7 +362,11 @@ const rankingSchema = {
             additionalProperties: false,
             required: ["position", "power", "display", "isSelf"],
             properties: {
-              position: { type: "integer", minimum: 1 },
+              position: {
+                anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+                description:
+                  "rank() among positive powers; null while the power is zero (in the snapshot, not ranked).",
+              },
               power: decimalSchema,
               display: rankDisplaySchema,
               isSelf: { type: "boolean" },
@@ -355,7 +376,8 @@ const rankingSchema = {
         participants: {
           type: "integer",
           minimum: 0,
-          description: "Accounts with positive power in the snapshot.",
+          description:
+            "Accounts with positive power in the snapshot; items may hold more rows (zero-power accounts with position null).",
         },
       },
     },
@@ -380,7 +402,11 @@ const rankingSchema = {
               "participants",
             ],
             properties: {
-              position: { type: "integer", minimum: 1 },
+              position: {
+                anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+                description:
+                  "rank() among communities with positive power; null while zero (bound and weighted, not ranked).",
+              },
               power: decimalSchema,
               community: {
                 type: "object",
@@ -423,7 +449,11 @@ export const miningRankResourceSchema = {
   ],
   properties: {
     scope: { type: "string", enum: [...miningRankScopes] },
-    ranking: rankingSchema,
+    ranking: {
+      ...rankingSchema,
+      description:
+        "Every account in the snapshot (users) or every bound community with an approved weight (communities), positive power first by rank, zero power after it with position null; at most 100 rows.",
+    },
     myPosition: positionSchema,
     snapshot: snapshotSchema,
     display: {

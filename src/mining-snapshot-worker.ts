@@ -161,19 +161,22 @@ export function createMiningSnapshotWorker(
         asset,
         { requireFresh: true },
       );
-      // A proxied (native) price is refused: the lane never substitutes an
-      // asset. The reference price is the deepest base pair's USD price.
-      const usable = fact.quality === "fresh" && proxyAsset === null;
+      // Freshness is the Provider fact's own (for the native asset: WBNB's
+      // observation time). Whether a proxied price may be used is decided
+      // by the pure computation against the version's declared proxies
+      // (Decision 0044); the lane only reports what it observed.
+      const usable = fact.quality === "fresh";
       prices.push({
         assetId: asset.assetId,
         priceUsd: usable ? (pair?.priceUsd ?? null) : null,
         quality: usable
-          ? "fresh"
-          : fact.quality === "fresh"
-            ? "proxied"
-            : fact.quality,
+          ? proxyAsset === null
+            ? "fresh"
+            : "proxied"
+          : fact.quality,
         fetchedAt: fact.fetchedAt,
         source: fact.source,
+        proxyAssetId: proxyAsset,
       });
     }
     const computation = computeMiningSnapshot(

@@ -12,31 +12,36 @@
 ## 0. 本步的硬前提（S20，决策 0043）
 
 **产品公式仍未冻结**（03 §19；`miningFormulaV1-draft` 仍是 `pending_approval`）。S20 新增了一个
-**自我描述的开发基线版本** `miningFormula-devBaseline-2026-09-15`（`scope: "development_baseline"`），
+**自我描述的开发基线版本** `miningFormula-devBaseline-2026-09-15-r2`（`scope: "development_baseline"`；r1 因缺 `priceProxies` 已退休，见决策 0044），
 只在 Development 环境由运维脚本批准；它让页面能算出数，**不代表数是产品口径**：
 
 - 每个已登记资产权重 `1`（算力 = 持仓的美元价值）；
 - 社区权重区间 `[0.5, 2]`，只能由运维脚本落值；
 - 日产出预算 `1000000`，`budgetStatus: "development_placeholder"`，单位 key
-  `mining.rules.dailyOutput.unit.loopTokenPending`（LOOP 奖励代币合约未定）。
+  `mining.rules.dailyOutput.unit.loopTokenPending`（LOOP 奖励代币合约未定）；
+- 原生 BNB 的参考价来自版本声明的代理 WBNB（`priceProxies`），每一行都标 `referencePriceQuality: "proxied"`
+  并给出代理资产（决策 0044）。
 
 **前端必须**：凡 `scope === "development_baseline"` 或 `budgetStatus === "development_placeholder"`
 的数字，一律加"开发基线（configVersion）"标签，不得表述为收益或承诺；`claimable`/`accumulated` 恒为
 `REWARD_AUTHORITY_PENDING`，领取按钮不可执行。
 
-2026-09-15 Development 实跑事实（可复核）：公式行已批准（`effectiveAt 2026-09-15T14:32:19.999Z`）；
-快照 `3d0a9993-fb1f-4cad-b786-04f55b90c106` @ block `122037728`，`priceVersion
-dexscreener:2026-09-15T14:32:19.293Z`，6 行算力（2 个钱包 × WBNB/USDT/Cake），**全部为 0**——两只开发钱包在
-BSC 主网上持仓为零；原生 BNB 因价格经 WBNB 代理被跳过（`MINING_PRICE_NOT_FRESH`）；13 个社区均未绑定资产
-（`COMMUNITY_ASSET_NOT_BOUND`）。要看到非零数字需要真实持仓与绑定资产的社区，后端不会造。
+2026-09-15 Development 实跑事实（可复核）：`miningFormula-devBaseline-2026-09-15-r2` 已批准
+（`effectiveAt 2026-09-15T14:57:37.026Z`，r1 同时退休）；两个已 verified 社区经产品写路径
+（`updateCommunity`，即 `PUT /v2/communities/{id}` 的命令）绑定资产并落权重：`mock-defi-morning → Cake`
+权重 `0.8`，`builders-guild → USDT` 权重 `1.5`（`0.49`/`2.01` 被拒，`0.5`/`2` 接受）；快照
+`0e358b31-e49f-48b9-89b2-c5c908c3ad5e` @ block `122037728`，`priceVersion dexscreener:2026-09-15T14:58:51.862Z`，
+8 行算力（2 个钱包 × Cake/USDT/WBNB/BNB），**全部为 0**——两只开发钱包在 BSC 主网上持仓为零，这是真实读数。
+BNB 行 `referencePriceQuality: "proxied"`、代理 WBNB、`713.42`。要看到非零数字需要真实持仓，后端不会造
+（`wallet_balance_snapshots` 没有来源字段，写一行等于伪造链上观测）。
 
 ## 1. 启用条件与 capability
 
-| capabilityId      | availability 条件                                                                                                                                                                                                           | evidence（恒定）                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `mining`          | `V2_MODULES_ENABLED` 含 `mining` + 仓储已组装                                                                                                                                                                               | `{status: "pending", reasonCode: "MINING_FORMULA_BASELINE_PENDING"}` |
-| `referral`        | 含 `referral` + 仓储已组装                                                                                                                                                                                                  | 同上（加成依赖公式）                                                 |
-| `communityMining` | 逐请求读库：无 `mining` 模块 → `deferred(V2_MINING_RUNTIME_DEFERRED)`；仓储缺失/读失败 → `unavailable(MINING_RUNTIME_UNAVAILABLE)`；无已批准且已生效版本 → `unavailable(MINING_FORMULA_BASELINE_PENDING)`；否则 `available` | 同上（02 冻结前恒 pending）                                          |
+| capabilityId      | availability 条件                                                                                                                                                                                       | evidence（恒定）                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `mining`          | `V2_MODULES_ENABLED` 含 `mining` + 仓储已组装                                                                                                                                                           | `{status: "pending", reasonCode: "MINING_FORMULA_BASELINE_PENDING"}`            |
+| `referral`        | 含 `referral` + 仓储已组装                                                                                                                                                                              | 同上（加成依赖公式）                                                            |
+| `communityMining` | 逐请求读库，**永不 `deferred`**：无 `mining` 模块或无已批准且已生效版本 → `unavailable(MINING_FORMULA_BASELINE_PENDING)`；仓储缺失/读失败 → `unavailable(MINING_RUNTIME_UNAVAILABLE)`；否则 `available` | `{status: "notApplicable", reasonCode: null}`（02 冻结看 `mining` 的 evidence） |
 
 `communityMining.available` 只说明"本部署有一个生效的 configVersion"，是否产品口径看
 `GET /v2/mining/rules.baseline.scope`。未启用模块时对应路径 `404 NOT_FOUND`。capability 总数仍为 **31**。
@@ -66,7 +71,8 @@ BSC 主网上持仓为零；原生 BNB 因价格经 WBNB 代理被跳过（`MINI
 | `COMMUNITY_WEIGHT_PENDING_REVIEW`    | 绑定了资产但生效版本下没有已批准权重               | `weight`、社区算力、`excluded`                                    |
 | `COMMUNITY_WEIGHT_AMBIGUOUS`         | 两个社区在同一资产上都有已批准权重（该资产被排除） | `excluded`                                                        |
 | `MINING_ASSET_WEIGHT_NOT_CONFIGURED` | 资产不在生效版本的 `assetWeights` 里               | `excluded`                                                        |
-| `MINING_PRICE_NOT_FRESH`             | 没有新鲜、非代理的参考价（原生 BNB 目前如此）      | `excluded`                                                        |
+| `MINING_PRICE_NOT_FRESH`             | 参考价不新鲜（代理价按代理源自己的观测时间判定）   | `excluded`                                                        |
+| `MINING_PRICE_PROXY_NOT_DECLARED`    | Provider 通过版本未声明的代理资产定价              | `excluded`                                                        |
 | `REWARD_AUTHORITY_PENDING`           | 没有奖励账本/合约                                  | `claimable`、`accumulated`、rewards `source`                      |
 
 HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`401 AUTH_*`、`404 NOT_FOUND`
@@ -100,17 +106,17 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   },
   "formula": {
     "status": "approved",
-    "configVersion": "miningFormula-devBaseline-2026-09-15",
-    "effectiveAt": "2026-09-15T14:32:19.999Z",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "effectiveAt": "2026-09-15T14:57:37.026Z",
     "scope": "development_baseline"
   },
   "snapshot": {
-    "snapshotId": "3d0a9993-fb1f-4cad-b786-04f55b90c106",
+    "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
     "blockNumber": "122037728",
     "blockHash": "0x3decab82b150493d90cb8fe47b3873c6e3b8c72aecf08ce91b4aceb266bda28a",
-    "formulaVersion": "miningFormula-devBaseline-2026-09-15",
-    "priceVersion": "dexscreener:2026-09-15T14:32:19.293Z",
-    "computedAt": "2026-09-15T14:32:21.446Z"
+    "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "priceVersion": "dexscreener:2026-09-15T14:58:51.862Z",
+    "computedAt": "2026-09-15T14:58:54.366Z"
   },
   "contractVersion": "2.0"
 }
@@ -125,16 +131,20 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   "budget": "1000000",
   "unitKey": "mining.rules.dailyOutput.unit.loopTokenPending",
   "budgetStatus": "development_placeholder",
-  "formulaVersion": "miningFormula-devBaseline-2026-09-15"
+  "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+  "scope": "development_baseline"
 }
 ```
 
-（`value = budget × power ÷ networkPower`，截断到 6 位小数；上例 1000000 × 1000 ÷ 4000。）
+（`value = budget × power ÷ networkPower`，截断到 6 位小数；上例 1000000 × 1000 ÷ 4000。**预算数字必须与
+`formulaVersion` 和 `scope` 同屏出现**，版本号本身就是"开发基线"标签。）
 
 没有生效版本时 `formula = {status: "unavailable", reasonCode: "MINING_FORMULA_BASELINE_PENDING", pendingVersion}`，
 其余数字块与 `snapshot` 都是 `MINING_FORMULA_BASELINE_PENDING`。
 
 ### 3.2 `GET /v2/mining/assets`（mining-assets）
+
+2026-09-15 Development 实际响应（账号 `cy`）：
 
 ```json
 {
@@ -143,8 +153,10 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
       "holding": "0",
-      "referencePriceUsd": "2.29",
-      "weight": "1",
+      "referencePriceUsd": "2.26",
+      "referencePriceQuality": "fresh",
+      "referencePriceProxyAssetId": null,
+      "weight": "0.8",
       "power": "0",
       "blockNumber": "122037728"
     },
@@ -152,33 +164,47 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
       "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
       "holding": "0",
       "referencePriceUsd": "0.9994",
-      "weight": "1",
+      "referencePriceQuality": "fresh",
+      "referencePriceProxyAssetId": null,
+      "weight": "1.5",
       "power": "0",
       "blockNumber": "122037728"
     },
     {
       "assetId": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
       "holding": "0",
-      "referencePriceUsd": "719.47",
+      "referencePriceUsd": "713.42",
+      "referencePriceQuality": "fresh",
+      "referencePriceProxyAssetId": null,
+      "weight": "1",
+      "power": "0",
+      "blockNumber": "122037728"
+    },
+    {
+      "assetId": "eip155:56:native",
+      "holding": "0",
+      "referencePriceUsd": "713.42",
+      "referencePriceQuality": "proxied",
+      "referencePriceProxyAssetId": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
       "weight": "1",
       "power": "0",
       "blockNumber": "122037728"
     }
   ],
-  "excluded": [
-    { "assetId": "eip155:56:native", "reasonCode": "MINING_PRICE_NOT_FRESH" }
-  ],
+  "excluded": [],
   "source": { "…快照…": "" },
   "referencePrice": {
     "status": "available",
-    "priceVersion": "dexscreener:2026-09-15T14:32:19.293Z"
+    "priceVersion": "dexscreener:2026-09-15T14:58:51.862Z"
   },
   "contractVersion": "2.0"
 }
 ```
 
-`included[].weight` 是生效权重（资产权重 × 已批准社区权重）；`excluded` 是账号持有但快照未计入的资产，
-原因按 lane 使用的同一输入重推。无快照时两个列表为空且三块 unavailable。资产名/符号从 Asset Registry 取。
+`included[].weight` 是生效权重（资产权重 × 已批准社区权重：Cake `0.8`、USDT `1.5` 来自两个绑定社区）；
+`referencePriceQuality: "proxied"` 时界面必须注明"价格来自 WBNB 代理"（`referencePriceProxyAssetId`）。
+`excluded` 是账号持有但快照未计入的资产，原因按 lane 使用的同一输入重推。无快照时两个列表为空且三块 unavailable。
+资产名/符号从 Asset Registry 取。
 
 ### 3.3 `GET /v2/mining/rewards`（mining-rewards）
 
@@ -226,52 +252,49 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 }
 ```
 
-- 只列算力 > 0 的账号/社区，最多 100 行；`rank()` 并列同名次；`participants` 为算力 > 0 的总数。
+- 列出快照中的全部账号（或生效版本下全部已绑定且权重已批准的社区），算力 > 0 的按 `rank()` 排在前（并列同名次），
+  算力为 0 的排在后且 `position: null`；最多 100 行；`participants` 只数算力 > 0 的。
 - `display.kind = "alias"` 仅当对方 `discoverable && !anonymousMode` 且有 alias；否则 `anonymous`（不给 ID）。
 - `scope=communities` 时 `items[] = {position, power, community: {communityId, name, boundAssetId}, weight, participants}`，
   `myPosition` 为 `MINING_RANK_NOT_APPLICABLE`。
-- 2026-09-15 Development：两种 scope `items: []`、`participants: 0`，`myPosition` 为 `MINING_RANK_NOT_RANKED`。
+- 2026-09-15 Development 实际响应：`scope=users` 列出 2 个账号（`position: null`、`power: "0"`，一个 alias 一个
+  anonymous），`myPosition` 为 `MINING_RANK_NOT_RANKED`；`scope=communities`：
+
+````json
+"items": [
+  { "position": null, "power": "0",
+    "community": { "communityId": "439cabe6-4c98-4f99-860f-192ad52403a1", "name": "Builders Guild",
+                   "boundAssetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955" },
+    "weight": "1.5", "participants": 0 },
+  { "position": null, "power": "0",
+    "community": { "communityId": "d17b34a6-c3cc-4a24-87dd-dc165c80bd85", "name": "DeFi 早读会",
+                   "boundAssetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82" },
+    "weight": "0.8", "participants": 0 }
+], "participants": 0
 - `scope` 非法 → `400`。
 
 ### 3.5 `GET /v2/mining/communities/{communityId}`（mining-community）
 
+2026-09-15 Development 实际响应（`mock-defi-morning`，账号 `cy`）：
+
 ```json
 {
-  "community": {
-    "communityId": "d17b34a6-c3cc-4a24-87dd-dc165c80bd85",
-    "name": "DeFi 早读会",
-    "boundAssetId": null
-  },
-  "weight": {
-    "status": "unavailable",
-    "reasonCode": "COMMUNITY_WEIGHT_PENDING_REVIEW",
-    "reviewStatus": "pending_review"
-  },
-  "communityPower": {
-    "status": "unavailable",
-    "reasonCode": "COMMUNITY_ASSET_NOT_BOUND"
-  },
-  "myContribution": {
-    "status": "unavailable",
-    "reasonCode": "COMMUNITY_ASSET_NOT_BOUND"
-  },
-  "rank": {
-    "status": "unavailable",
-    "reasonCode": "COMMUNITY_ASSET_NOT_BOUND"
-  },
-  "participants": {
-    "status": "unavailable",
-    "reasonCode": "COMMUNITY_ASSET_NOT_BOUND"
-  },
-  "snapshot": { "…": "" },
+  "community": { "communityId": "d17b34a6-c3cc-4a24-87dd-dc165c80bd85", "name": "DeFi 早读会",
+                 "boundAssetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82" },
+  "weight": { "status": "approved", "value": "0.8", "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+              "reviewedAt": "2026-09-15T14:58:52.089Z" },
+  "communityPower": { "status": "available", "value": "0" },
+  "myContribution": { "status": "available", "value": "0" },
+  "rank": { "status": "unavailable", "reasonCode": "MINING_RANK_NOT_RANKED" },
+  "participants": { "status": "available", "count": 0 },
+  "snapshot": { "…" : "" },
   "contractVersion": "2.0"
 }
-```
+````
 
-绑定资产且权重已批准时：`weight = {status: "approved", value: "0.5", configVersion, reviewedAt}`，
-`communityPower = {status: "available", value}`（未封禁成员在绑定资产上的算力之和），
-`myContribution`（本人在该资产上的算力）、`rank = {status: "available", position, power}`、
-`participants = {status: "available", count}`。社区不存在 → `404`。
+`communityPower` 为未封禁成员在绑定资产上的算力之和，`myContribution` 为本人在该资产上的算力，
+`participants.count` 为算力 > 0 的成员数；未绑定资产 → 四块 `COMMUNITY_ASSET_NOT_BOUND`；绑定但生效版本下无已批准权重 →
+`COMMUNITY_WEIGHT_PENDING_REVIEW`。社区不存在 → `404`。
 
 ### 3.6 `GET /v2/mining/rules`（mining-rules）
 
@@ -364,7 +387,8 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 }
 ```
 
-或 `{status: "unavailable", reasonCode}`。社区详情为社区算力（同 3.5 的 `communityPower`）；成员/关注为对方个人算力，
+（上面是 `mock-defi-morning` 的实际响应）或 `{status: "unavailable", reasonCode}`。社区详情为社区算力（同 3.5 的
+`communityPower`）——注意它只带版本与快照，不带权重与参与人数，"为什么是 0"要看 3.5；成员/关注为对方个人算力，
 对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`（本人自己的行仍可见）。未启用 `mining` 模块的部署恒为
 `MINING_FORMULA_BASELINE_PENDING`。
 
@@ -425,7 +449,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 ```sh
 pnpm mining:dev-baseline --confirm                                   # 从 registry 生成开发基线（pending_approval）
-pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15 --confirm
+pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15-r2 --confirm
 pnpm mining:community-weight <communityId> <weight> --confirm        # 0.5 ≤ weight ≤ 2，社区须已绑定资产
 pnpm mining:snapshot --confirm                                       # 跑一次 lane（需 DexScreener 可达）
 ```

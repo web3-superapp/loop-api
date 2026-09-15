@@ -192,11 +192,12 @@ capability's `evidence` carries `launchChainId`. `POST /v2/launch/{launchId}/int
 ### V2 mining module (Decisions 0036 and 0043, `V2_MODULES_ENABLED=mining`)
 
 The product formula (`miningFormulaV1-draft`) stays `pending_approval`. In
-Development the self-describing baseline `miningFormula-devBaseline-2026-09-15`
-(`scope: development_baseline`, every registered asset at weight 1, community
-range `[0.5, 2]`, placeholder daily output `1000000`) can be approved through
-the operator scripts, after which every read publishes snapshot numbers labelled
-with that scope. Frontend contract: `docs/frontend-v2-mining-api.md`.
+Development the self-describing baseline
+`miningFormula-devBaseline-2026-09-15-r2` (`scope: development_baseline`, every
+registered asset at weight 1, community range `[0.5, 2]`, placeholder daily
+output `1000000`, BNB priced through a declared WBNB proxy — Decisions 0043, 0044) can be approved through the operator scripts, after which every read
+publishes snapshot numbers labelled with that scope. Frontend contract:
+`docs/frontend-v2-mining-api.md`.
 
 | Method and path                            | Request                    | Success projection                                                                                              | Interface     | Capability                                                                                              |
 | ------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
@@ -462,9 +463,9 @@ An enabled module without a registrar reports
 `avatarUpload` capability is not module-gated and stays `unavailable` with
 `AVATAR_STORAGE_NOT_SELECTED` until a storage Provider decision exists, as does
 `communityPresence` (`STREAM_PRESENCE_NOT_CONNECTED`). `communityMining`
-(Decision 0043) is `deferred` without the `mining` module and otherwise reads
-the database per request: `available` once a formula version is approved and
-effective, `MINING_FORMULA_BASELINE_PENDING` before that,
+(Decisions 0043, 0044) is never `deferred`: it reads the database per request
+and is `available` once a formula version is approved and effective,
+`MINING_FORMULA_BASELINE_PENDING` before that or without the `mining` module,
 `MINING_RUNTIME_UNAVAILABLE` when the repository cannot answer. `community` and `search` report `available`
 only when the module is enabled and `buildApp` composed the PostgreSQL
 community repository and the V2 cursor codec (plus the public search quota for

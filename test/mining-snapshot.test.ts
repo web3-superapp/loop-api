@@ -61,9 +61,19 @@ function price(
   priceUsd: string | null,
   quality: MiningPriceInput["quality"] = "fresh",
   fetchedAt = "2026-09-08T00:00:00.000Z",
+  proxyAssetId: string | null = null,
 ): MiningPriceInput {
-  return { assetId, priceUsd, quality, fetchedAt, source: "dexscreener" };
+  return {
+    assetId,
+    priceUsd,
+    quality,
+    fetchedAt,
+    source: "dexscreener",
+    proxyAssetId,
+  };
 }
+const nativeAsset = "eip155:56:native";
+const wbnbAsset = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
 
 describe("scaleRawHolding", () => {
   it("scales smallest units exactly without floating point", () => {
@@ -101,6 +111,8 @@ describe("computeMiningSnapshot (pure)", () => {
         assetId: loopAsset,
         holding: "0.5",
         referencePriceUsd: "0.25",
+        referencePriceQuality: "fresh",
+        referencePriceProxyAssetId: null,
         weight: "1",
         power: "0.125",
         blockNumber: "118",
@@ -110,6 +122,8 @@ describe("computeMiningSnapshot (pure)", () => {
         assetId: loopAsset,
         holding: "2",
         referencePriceUsd: "0.25",
+        referencePriceQuality: "fresh",
+        referencePriceProxyAssetId: null,
         weight: "1",
         power: "0.5",
         blockNumber: "120",
@@ -192,6 +206,8 @@ describe("computeMiningSnapshot (pure)", () => {
         assetId: loopAsset,
         holding: "3",
         referencePriceUsd: "4",
+        referencePriceQuality: "fresh",
+        referencePriceProxyAssetId: null,
         weight: "1",
         power: "12",
         blockNumber: "100",
@@ -201,6 +217,8 @@ describe("computeMiningSnapshot (pure)", () => {
         assetId: communityAsset,
         holding: "10",
         referencePriceUsd: "2",
+        referencePriceQuality: "fresh",
+        referencePriceProxyAssetId: null,
         weight: "0.5",
         power: "10",
         blockNumber: "100",
@@ -278,7 +296,9 @@ describe("computeMiningSnapshot (pure)", () => {
     if (result.kind !== "computed") {
       return;
     }
-    expect(result.formulaVersion).toBe("miningFormula-devBaseline-2026-09-15");
+    expect(result.formulaVersion).toBe(
+      "miningFormula-devBaseline-2026-09-15-r2",
+    );
     expect(
       result.powers.map((row) => [row.ownerUserId, row.assetId, row.power]),
     ).toEqual([
@@ -292,7 +312,114 @@ describe("computeMiningSnapshot (pure)", () => {
     expect(result.skipped).toEqual([]);
   });
 
-  it("never uses a stale, proxied, or missing price", () => {
+  it("uses a declared proxy price and carries it as proxied; refuses an undeclared or wrong proxy (Decision 0044)", () => {
+    const declared = {
+      configVersion: "miningFormulaTestOnly",
+      document: {
+        ...testOnlyFormula.document,
+        assetWeights: { [nativeAsset]: "1", [loopAsset]: "1" },
+        priceProxies: { [nativeAsset]: wbnbAsset },
+      },
+    };
+    // 0.25 BNB × 720.78 (WBNB's own fresh price) × 1 = 180.195
+    const result = computeMiningSnapshot(
+      {
+        balances: [
+          balance(alice, nativeAsset, "250000000000000000"),
+          balance(alice, loopAsset, "1000000000000000000"),
+        ],
+        prices: [
+          price(
+            nativeAsset,
+            "720.78",
+            "proxied",
+            "2026-09-08T00:00:00.000Z",
+            wbnbAsset,
+          ),
+          // LOOP priced through some other asset the version never declared
+          price(
+            loopAsset,
+            "9",
+            "proxied",
+            "2026-09-08T00:00:00.000Z",
+            communityAsset,
+          ),
+        ],
+        communityWeights: [],
+      },
+      declared,
+    );
+    expect(result.kind).toBe("computed");
+    if (result.kind !== "computed") {
+      return;
+    }
+    expect(result.powers).toEqual([
+      {
+        ownerUserId: alice,
+        assetId: nativeAsset,
+        holding: "0.25",
+        referencePriceUsd: "720.78",
+        referencePriceQuality: "proxied",
+        referencePriceProxyAssetId: wbnbAsset,
+        weight: "1",
+        power: "180.195",
+        blockNumber: "100",
+      },
+    ]);
+    expect(result.skipped).toEqual([
+      { assetId: loopAsset, reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED" },
+    ]);
+    // The same proxied price under a version that declares no proxy.
+    const undeclared = computeMiningSnapshot(
+      {
+        balances: [balance(alice, nativeAsset, "250000000000000000")],
+        prices: [
+          price(
+            nativeAsset,
+            "720.78",
+            "proxied",
+            "2026-09-08T00:00:00.000Z",
+            wbnbAsset,
+          ),
+        ],
+        communityWeights: [],
+      },
+      {
+        configVersion: "miningFormulaTestOnly",
+        document: {
+          ...testOnlyFormula.document,
+          assetWeights: { [nativeAsset]: "1" },
+        },
+      },
+    );
+    expect(undeclared).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED",
+    });
+    // A stale proxy observation is stale on its own clock, declared or not.
+    const stale = computeMiningSnapshot(
+      {
+        balances: [balance(alice, nativeAsset, "250000000000000000")],
+        prices: [
+          price(
+            nativeAsset,
+            "720.78",
+            "stale",
+            "2026-09-08T00:00:00.000Z",
+            wbnbAsset,
+          ),
+        ],
+        communityWeights: [],
+      },
+      declared,
+    );
+    expect(stale).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "MINING_PRICE_NOT_FRESH",
+    });
+  });
+
+  it("never uses a stale, undeclared-proxy, or missing price", () => {
     const stale = computeMiningSnapshot(
       {
         balances: [balance(alice, loopAsset, "1000000000000000000")],
@@ -313,7 +440,10 @@ describe("computeMiningSnapshot (pure)", () => {
       },
       testOnlyFormula,
     );
-    expect(proxied.kind).toBe("unavailable");
+    expect(proxied).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED",
+    });
     const missing = computeMiningSnapshot(
       {
         balances: [balance(alice, loopAsset, "1000000000000000000")],
@@ -363,6 +493,8 @@ describe("computeMiningSnapshot (pure)", () => {
         assetId: loopAsset,
         holding: "4",
         referencePriceUsd: "1.5",
+        referencePriceQuality: "fresh",
+        referencePriceProxyAssetId: null,
         weight: "1",
         power: "6",
         blockNumber: "12",

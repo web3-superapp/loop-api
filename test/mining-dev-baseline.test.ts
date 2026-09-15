@@ -61,7 +61,7 @@ describe("development baseline documents", () => {
   it("names itself, weighs every registered asset at 1, and carries the placeholder budget inside the version", () => {
     assertMiningDevBaselineConstants();
     expect(miningDevBaselineConfigVersion).toBe(
-      "miningFormula-devBaseline-2026-09-15",
+      "miningFormula-devBaseline-2026-09-15-r2",
     );
     expect(miningDevBaselineConfigVersion).toMatch(/devBaseline/);
     expect(miningDevBaselineConfigVersion).not.toMatch(/V1\b/);
@@ -81,6 +81,8 @@ describe("development baseline documents", () => {
         budget: "1000000",
         unitKey: "mining.rules.dailyOutput.unit.loopTokenPending",
       },
+      // WBNB is not in this registry, so no proxy is declared for BNB.
+      priceProxies: {},
     });
     expect(miningDevBaselineDailyOutputBudget).toBe("1000000");
     expect(documents.weightRange.community).toEqual({
@@ -101,6 +103,23 @@ describe("development baseline documents", () => {
     expect(
       miningWeightRangeDocumentSchema.parse(documents.weightRange),
     ).toEqual(documents.weightRange);
+  });
+
+  it("declares the WBNB proxy for native BNB only when both are registered (Decision 0044)", () => {
+    const wbnb = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+    expect(
+      buildMiningDevBaselineDocuments(["eip155:56:native", wbnb]).formula
+        .priceProxies,
+    ).toEqual({ "eip155:56:native": wbnb });
+    expect(
+      buildMiningDevBaselineDocuments([wbnb]).formula.priceProxies,
+    ).toEqual({});
+    expect(() =>
+      miningFormulaDocumentSchema.parse({
+        ...documents.formula,
+        priceProxies: { [wbnb]: wbnb },
+      }),
+    ).toThrow();
   });
 
   it("deduplicates and sorts asset IDs, refuses a malformed one, and computes nothing from an empty registry", () => {
@@ -315,7 +334,7 @@ describe("baseline resolution", () => {
       )(),
     ).toEqual({
       status: "approved",
-      configVersion: "miningFormula-devBaseline-2026-09-15",
+      configVersion: "miningFormula-devBaseline-2026-09-15-r2",
       effectiveAt: approvedAt,
       scope: "development_baseline",
     });

@@ -24,6 +24,8 @@ export const miningReasonCodes = Object.freeze({
   assetWeightNotConfigured: "MINING_ASSET_WEIGHT_NOT_CONFIGURED",
   referralBoostPending: "MINING_FORMULA_BASELINE_PENDING",
   priceNotFresh: "MINING_PRICE_NOT_FRESH",
+  /** The Provider priced the asset through a proxy the version does not declare. */
+  priceProxyNotDeclared: "MINING_PRICE_PROXY_NOT_DECLARED",
   noBalanceInputs: "MINING_NO_BALANCE_INPUTS",
   /** The account has no balance row in the snapshot (no active wallet). */
   accountNotInSnapshot: "MINING_ACCOUNT_NOT_IN_SNAPSHOT",
@@ -88,12 +90,19 @@ export interface MiningDailyOutputDocument {
   readonly unitKey: typeof miningDailyOutputUnitKey;
 }
 
+/** How a power row's reference price was observed (Decision 0044). */
+export const miningReferencePriceQualities = ["fresh", "proxied"] as const;
+export type MiningReferencePriceQuality =
+  (typeof miningReferencePriceQualities)[number];
+
 /**
  * Formula document. `assetWeights` maps canonical asset IDs to decimal
  * weight strings and is empty in the product draft; the development
  * baseline lists every registered asset at weight 1. A community weight is
  * a second factor on the community's bound asset (Decision 0043), never a
- * replacement for the asset weight.
+ * replacement for the asset weight. `priceProxies` declares, per asset, the
+ * one asset whose Provider price may stand in for it (Decision 0044: native
+ * BNB ← WBNB); an undeclared proxy is refused.
  */
 export interface MiningFormulaDocument {
   readonly kind: "holding_times_reference_price_times_weight";
@@ -104,6 +113,7 @@ export interface MiningFormulaDocument {
   /** Absent on the product draft; present on the development baseline. */
   readonly scope?: MiningFormulaScope | undefined;
   readonly dailyOutput?: MiningDailyOutputDocument | undefined;
+  readonly priceProxies?: Readonly<Record<string, string>> | undefined;
 }
 
 /** Inclusive decimal bounds a reviewed community weight must satisfy. */
@@ -134,6 +144,9 @@ export interface MiningPriceGuardRule {
 const statusSchema = z.enum(["pending_approval", "approved"]);
 
 const decimalSchema = z.string().regex(unsignedDecimalPattern);
+const assetIdSchema = z
+  .string()
+  .regex(/^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/);
 
 export const miningDailyOutputDocumentSchema = z
   .object({
@@ -148,13 +161,18 @@ export const miningFormulaDocumentSchema = z
     kind: z.literal("holding_times_reference_price_times_weight"),
     expressionKey: z.string().min(1).max(128),
     dailyOutputKey: z.string().min(1).max(128),
-    assetWeights: z.record(
-      z.string().regex(/^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/),
-      decimalSchema,
-    ),
+    assetWeights: z.record(assetIdSchema, decimalSchema),
     referralBoost: z.object({ status: statusSchema }).strict(),
     scope: z.enum(miningFormulaScopes).optional(),
     dailyOutput: miningDailyOutputDocumentSchema.optional(),
+    priceProxies: z
+      .record(assetIdSchema, assetIdSchema)
+      .refine(
+        (proxies) =>
+          Object.entries(proxies).every(([asset, proxy]) => asset !== proxy),
+        { message: "an asset cannot proxy itself" },
+      )
+      .optional(),
   })
   .strict();
 

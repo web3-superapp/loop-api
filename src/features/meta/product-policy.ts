@@ -764,41 +764,33 @@ function walletIntentCapability(
 
 /**
  * `communityMining` (Decision 0043) is decided by the formula fact, never by
- * a constant: deferred with the `mining` module, unavailable while the
- * runtime is missing or no approved version is effective, available once a
- * version is in force. The evidence stays pending until 02 freezes the
- * product formula; a development baseline computes numbers but is not that
- * freeze, and the client labels it through `GET /v2/mining/rules`.
+ * a constant, and it is never `deferred`: nobody chose not to build it, it
+ * is blocked — by the `mining` module, by its runtime, or by the missing
+ * approved version — until a version is in force. Its evidence is not
+ * applicable: the product freeze is reported on the `mining` capability.
  */
 function communityMiningCapability(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
   baseline: MiningFormulaBaselineState,
 ): V2CapabilityProjection {
-  const evidence = Object.freeze({
-    status: "pending" as const,
-    reasonCode: v2CommunityMiningUnavailableReasonCode,
-  });
-  if (!config.v2ModulesEnabled.has("mining")) {
-    return Object.freeze({
-      capabilityId: "communityMining",
-      availability: "deferred",
-      reasonCode: v2MiningModuleDeferredReasonCode,
-      evidence,
-    });
-  }
-  const reasonCode = !runtime.miningRuntimeAvailable
-    ? v2MiningRuntimeUnavailableReasonCode
-    : baseline.status === "unavailable"
+  const reasonCode = !config.v2ModulesEnabled.has("mining")
+    ? v2CommunityMiningUnavailableReasonCode
+    : !runtime.miningRuntimeAvailable
       ? v2MiningRuntimeUnavailableReasonCode
-      : baseline.status === "pending"
-        ? v2CommunityMiningUnavailableReasonCode
-        : null;
+      : baseline.status === "unavailable"
+        ? v2MiningRuntimeUnavailableReasonCode
+        : baseline.status === "pending"
+          ? v2CommunityMiningUnavailableReasonCode
+          : null;
   return Object.freeze({
     capabilityId: "communityMining",
     availability: reasonCode === null ? "available" : "unavailable",
     reasonCode,
-    evidence,
+    evidence: Object.freeze({
+      status: "notApplicable",
+      reasonCode: null,
+    }),
   });
 }
 

@@ -83185,7 +83185,8 @@
                             "budget",
                             "unitKey",
                             "budgetStatus",
-                            "formulaVersion"
+                            "formulaVersion",
+                            "scope"
                           ],
                           "properties": {
                             "status": {
@@ -83195,7 +83196,7 @@
                             "value": {
                               "type": "string",
                               "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
-                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount."
+                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount. Always rendered beside formulaVersion and scope."
                             },
                             "budget": {
                               "type": "string",
@@ -83214,6 +83215,16 @@
                             "formulaVersion": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
                             }
                           }
                         }
@@ -83924,6 +83935,8 @@
                           "assetId",
                           "holding",
                           "referencePriceUsd",
+                          "referencePriceQuality",
+                          "referencePriceProxyAssetId",
                           "weight",
                           "power",
                           "blockNumber"
@@ -83940,6 +83953,20 @@
                           "referencePriceUsd": {
                             "type": "string",
                             "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                          },
+                          "referencePriceQuality": {
+                            "type": "string",
+                            "enum": ["fresh", "proxied"],
+                            "description": "fresh = the asset's own Provider price; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044)."
+                          },
+                          "referencePriceProxyAssetId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "weight": {
                             "type": "string",
@@ -84610,7 +84637,8 @@
                             "budget",
                             "unitKey",
                             "budgetStatus",
-                            "formulaVersion"
+                            "formulaVersion",
+                            "scope"
                           ],
                           "properties": {
                             "status": {
@@ -84620,7 +84648,7 @@
                             "value": {
                               "type": "string",
                               "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
-                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount."
+                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount. Always rendered beside formulaVersion and scope."
                             },
                             "budget": {
                               "type": "string",
@@ -84639,6 +84667,16 @@
                             "formulaVersion": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
                             }
                           }
                         }
@@ -85227,8 +85265,11 @@
                                 ],
                                 "properties": {
                                   "position": {
-                                    "type": "integer",
-                                    "minimum": 1
+                                    "anyOf": [
+                                      { "type": "integer", "minimum": 1 },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "rank() among positive powers; null while the power is zero (in the snapshot, not ranked)."
                                   },
                                   "power": {
                                     "type": "string",
@@ -85286,7 +85327,7 @@
                             "participants": {
                               "type": "integer",
                               "minimum": 0,
-                              "description": "Accounts with positive power in the snapshot."
+                              "description": "Accounts with positive power in the snapshot; items may hold more rows (zero-power accounts with position null)."
                             }
                           }
                         },
@@ -85323,8 +85364,11 @@
                                 ],
                                 "properties": {
                                   "position": {
-                                    "type": "integer",
-                                    "minimum": 1
+                                    "anyOf": [
+                                      { "type": "integer", "minimum": 1 },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "rank() among communities with positive power; null while zero (bound and weighted, not ranked)."
                                   },
                                   "power": {
                                     "type": "string",
@@ -85368,7 +85412,8 @@
                             "participants": { "type": "integer", "minimum": 0 }
                           }
                         }
-                      ]
+                      ],
+                      "description": "Every account in the snapshot (users) or every bound community with an approved weight (communities), positive power first by rank, zero power after it with position null; at most 100 rows."
                     },
                     "myPosition": {
                       "anyOf": [

@@ -722,6 +722,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             assetId: "eip155:56:native",
             holding: "2",
             referencePriceUsd: "1.25",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "1",
             power: "2.5",
             blockNumber: "120",
@@ -829,6 +831,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
 
   describe("development baseline (Decision 0043)", () => {
     const cakeAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const wbnbAsset = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
     const nativeAsset = "eip155:56:native";
     const hash = `0x${"d".repeat(64)}`;
     let baselineVersion = "";
@@ -857,14 +860,18 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           values (
             $1, 'eip155:56', '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82', 'Cake',
             'PancakeSwap Token', 18, 'pending', 'chain_call', 122037728, now()
+          ), (
+            $2, 'eip155:56', '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', 'WBNB',
+            'Wrapped BNB', 18, 'pending', 'chain_call', 122037728, now()
           )
           on conflict (asset_id) do nothing
         `,
-        values: [cakeAsset],
+        values: [cakeAsset, wbnbAsset],
       });
       const documents = buildMiningDevBaselineDocuments([
         nativeAsset,
         cakeAsset,
+        wbnbAsset,
       ]);
       baselineVersion = documents.configVersion;
       const created = await mining.createFormulaVersion({
@@ -875,13 +882,18 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         requestId: randomUUID(),
       });
       expect(created).toMatchObject({
-        configVersion: "miningFormula-devBaseline-2026-09-15",
+        configVersion: "miningFormula-devBaseline-2026-09-15-r2",
         status: "pending_approval",
         effectiveAt: null,
         formula: {
           scope: "development_baseline",
-          assetWeights: { [cakeAsset]: "1", [nativeAsset]: "1" },
+          assetWeights: {
+            [cakeAsset]: "1",
+            [nativeAsset]: "1",
+            [wbnbAsset]: "1",
+          },
           dailyOutput: { status: "development_placeholder", budget: "1000000" },
+          priceProxies: { [nativeAsset]: wbnbAsset },
         },
         weightRange: { community: { range: { min: "0.5", max: "2" } } },
       });
@@ -1012,12 +1024,14 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         // 1081.17 + 57.5 + 0.0000000000000001 + 34.5 + 0
         totalPower: "1173.1700000000000001",
         powers: [
-          // alice: 1.5 BNB × 720.78 × 1 = 1081.17
+          // alice: 1.5 BNB × 720.78 (WBNB's price, proxied) × 1 = 1081.17
           {
             ownerUserId: alice,
             assetId: nativeAsset,
             holding: "1.5",
             referencePriceUsd: "720.78",
+            referencePriceQuality: "proxied",
+            referencePriceProxyAssetId: wbnbAsset,
             weight: "1",
             power: "1081.17",
             blockNumber: "122037728",
@@ -1028,6 +1042,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             assetId: cakeAsset,
             holding: "50",
             referencePriceUsd: "2.3",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "0.5",
             power: "57.5",
             blockNumber: "122037728",
@@ -1038,6 +1054,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             assetId: nativeAsset,
             holding: "0.0000000000000001",
             referencePriceUsd: "1",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "1",
             power: "0.0000000000000001",
             blockNumber: "122037728",
@@ -1048,6 +1066,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             assetId: cakeAsset,
             holding: "30",
             referencePriceUsd: "2.3",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "0.5",
             power: "34.5",
             blockNumber: "122037728",
@@ -1058,6 +1078,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             assetId: nativeAsset,
             holding: "0",
             referencePriceUsd: "720.78",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
             weight: "1",
             power: "0",
             blockNumber: "122037728",
@@ -1099,6 +1121,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           assetId: cakeAsset,
           holding: "50",
           referencePriceUsd: "2.3",
+          referencePriceQuality: "fresh",
+          referencePriceProxyAssetId: null,
           weight: "0.5",
           power: "57.5",
           blockNumber: "122037728",
@@ -1108,6 +1132,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           assetId: nativeAsset,
           holding: "1.5",
           referencePriceUsd: "720.78",
+          referencePriceQuality: "proxied",
+          referencePriceProxyAssetId: wbnbAsset,
           weight: "1",
           power: "1081.17",
           blockNumber: "122037728",
@@ -1135,6 +1161,16 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           alias: `alias_${bob.slice(0, 8)}`,
           discoverable: true,
           anonymousMode: true,
+        },
+        // Zero power: listed after the ranked rows, with no position.
+        {
+          ownerUserId: carol,
+          totalPower: "0",
+          position: null,
+          publicProfileId: await profileOf(carol),
+          alias: `alias_${carol.slice(0, 8)}`,
+          discoverable: false,
+          anonymousMode: false,
         },
       ]);
       // Community standing: only non-banned members, only the bound asset.

@@ -23,6 +23,7 @@ import {
   type MiningFormulaStatus,
   type MiningPriceGuardRule,
   type MiningRankScope,
+  type MiningReferencePriceQuality,
   type MiningWeightRangeDocument,
   type UnavailableProjection,
 } from "./mining-contract.js";
@@ -83,7 +84,9 @@ export interface MiningEstimateProjection {
   readonly budget: string;
   readonly unitKey: string;
   readonly budgetStatus: MiningDailyOutputDocument["status"];
+  /** The version the budget belongs to; its name is the on-screen label. */
   readonly formulaVersion: string;
+  readonly scope: MiningFormulaScope | null;
 }
 
 export type MiningEstimateOrUnavailable =
@@ -118,6 +121,9 @@ export interface MiningIncludedAssetProjection {
   readonly assetId: string;
   readonly holding: string;
   readonly referencePriceUsd: string;
+  /** `proxied` = the declared proxy asset's price (Decision 0044). */
+  readonly referencePriceQuality: MiningReferencePriceQuality;
+  readonly referencePriceProxyAssetId: string | null;
   readonly weight: string;
   readonly power: string;
   readonly blockNumber: string;
@@ -161,14 +167,16 @@ export type MiningRankDisplayProjection =
     };
 
 export interface MiningRankedUserProjection {
-  readonly position: number;
+  /** Null while the power is zero: in the snapshot, not ranked. */
+  readonly position: number | null;
   readonly power: string;
   readonly display: MiningRankDisplayProjection;
   readonly isSelf: boolean;
 }
 
 export interface MiningRankedCommunityProjection {
-  readonly position: number;
+  /** Null while the power is zero: weighted and bound, not ranked. */
+  readonly position: number | null;
   readonly power: string;
   readonly community: {
     readonly communityId: string;
@@ -378,6 +386,7 @@ function estimateProjection(
     unitKey: dailyOutput.unitKey,
     budgetStatus: dailyOutput.status,
     formulaVersion: formula.configVersion,
+    scope: formula.formula.scope ?? null,
   });
 }
 
@@ -526,6 +535,8 @@ export function createMiningService(dependencies: {
                 assetId: row.assetId,
                 holding: row.holding,
                 referencePriceUsd: row.referencePriceUsd,
+                referencePriceQuality: row.referencePriceQuality,
+                referencePriceProxyAssetId: row.referencePriceProxyAssetId,
                 weight: row.weight,
                 power: row.power,
                 blockNumber: row.blockNumber,
@@ -610,17 +621,13 @@ export function createMiningService(dependencies: {
             configVersion: resolution.formula.configVersion,
             limit: miningRankLimit,
           });
-          const ranked = rows.filter(
-            (row): row is typeof row & { readonly position: number } =>
-              row.position !== null,
-          );
           return Object.freeze({
             scope,
             ranking: Object.freeze({
               status: "available" as const,
               scope: "communities" as const,
               items: Object.freeze(
-                ranked.map((row) =>
+                rows.map((row) =>
                   Object.freeze({
                     position: row.position,
                     power: row.power,
@@ -634,7 +641,7 @@ export function createMiningService(dependencies: {
                   }),
                 ),
               ),
-              participants: ranked.length,
+              participants: rows.filter((row) => row.position !== null).length,
             }),
             myPosition: unavailable(miningReasonCodes.rankNotApplicable),
             snapshot: snapshotProjection(snapshot),

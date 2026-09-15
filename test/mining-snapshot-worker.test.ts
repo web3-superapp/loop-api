@@ -243,10 +243,14 @@ describe("mining-snapshot lane", () => {
     expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
   });
 
-  it("stays idle when the only price is stale or proxied and never writes", async () => {
-    for (const [quality, proxy] of [
-      ["stale", null],
-      ["fresh", "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"],
+  it("stays idle when the only price is stale or an undeclared proxy and never writes", async () => {
+    for (const [quality, proxy, reasonCode] of [
+      ["stale", null, "MINING_PRICE_NOT_FRESH"],
+      [
+        "fresh",
+        "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "MINING_PRICE_PROXY_NOT_DECLARED",
+      ],
     ] as const) {
       const repository = repositoryFake({
         getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
@@ -258,9 +262,43 @@ describe("mining-snapshot lane", () => {
       });
       const result = await worker.runOnce();
       expect(result.kind).toBe("idle");
-      expect(result.reasonCode).toBe("MINING_PRICE_NOT_FRESH");
+      expect(result.reasonCode).toBe(reasonCode);
       expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
     }
+  });
+
+  it("writes a proxied row when the version declares the proxy and the proxy's own observation is fresh (Decision 0044)", async () => {
+    const wbnb = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          ...approvedTestFormula,
+          formula: {
+            ...approvedTestFormula.formula,
+            priceProxies: { [loopAssetId]: wbnb },
+          },
+        }),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: priceReader("fresh", wbnb),
+    });
+    const result = await worker.runOnce();
+    expect(result.kind).toBe("snapshotted");
+    expect(calls(repository, "writeSnapshot")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        powers: [
+          expect.objectContaining({
+            assetId: loopAssetId,
+            referencePriceQuality: "proxied",
+            referencePriceProxyAssetId: wbnb,
+            power: "2",
+          }),
+        ],
+      }),
+    );
   });
 
   it("stops the loop on abort and reports infrastructure backoff on a failure", async () => {

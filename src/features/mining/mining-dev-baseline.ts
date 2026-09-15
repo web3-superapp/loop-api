@@ -1,3 +1,4 @@
+import { bscWrappedNativeAssetId } from "../market/market-contract.js";
 import {
   isUnsignedDecimalString,
   miningDailyOutputUnitKey,
@@ -32,7 +33,7 @@ import {
  */
 
 export const miningDevBaselineConfigVersion =
-  "miningFormula-devBaseline-2026-09-15" as const;
+  "miningFormula-devBaseline-2026-09-15-r2" as const;
 
 /** Every registered, non-blocked asset weighs exactly one. */
 export const miningDevBaselineAssetWeight = "1" as const;
@@ -54,6 +55,16 @@ export const miningDevBaselineDailyOutputKey =
   "mining.rules.dailyOutput.shareOfNetworkPower" as const;
 
 const assetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/;
+const bscNativeAssetId = "eip155:56:native";
+
+/**
+ * Decision 0044: native BNB has no token address a DEX Provider can price;
+ * its reference price is WBNB's (a 1:1 wrapper on this chain), carried as
+ * `quality: proxied` on every row that uses it. Declared only when both
+ * assets are registered.
+ */
+export const miningDevBaselinePriceProxies: Readonly<Record<string, string>> =
+  Object.freeze({ [bscNativeAssetId]: bscWrappedNativeAssetId });
 
 export interface MiningDevBaselineDocuments {
   readonly configVersion: typeof miningDevBaselineConfigVersion;
@@ -77,6 +88,12 @@ export function buildMiningDevBaselineDocuments(
     }
     assetWeights[assetId] = miningDevBaselineAssetWeight;
   }
+  const priceProxies: Record<string, string> = {};
+  for (const [asset, proxy] of Object.entries(miningDevBaselinePriceProxies)) {
+    if (asset in assetWeights && proxy in assetWeights) {
+      priceProxies[asset] = proxy;
+    }
+  }
   return Object.freeze({
     configVersion: miningDevBaselineConfigVersion,
     formula: Object.freeze({
@@ -91,6 +108,7 @@ export function buildMiningDevBaselineDocuments(
         budget: miningDevBaselineDailyOutputBudget,
         unitKey: miningDailyOutputUnitKey,
       }),
+      priceProxies: Object.freeze(priceProxies),
     }),
     weightRange: Object.freeze({
       // The LOOP token has no contract, so its fixed-maximum weight rule is
@@ -114,8 +132,8 @@ export function buildMiningDevBaselineDocuments(
         "mining.rules.reviewFactor.loopPartnership",
       ]),
     }),
-    // No price guard is approved: the lane still requires a fresh,
-    // non-proxied Provider price, which is the only guard in force.
+    // No price guard is approved: the lane still requires a fresh Provider
+    // price (own or declared proxy), which is the only guard in force.
     priceGuardRules: Object.freeze([
       Object.freeze({
         ruleKey: "mining.rules.priceGuard.twap",

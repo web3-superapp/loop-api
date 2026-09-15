@@ -8,6 +8,7 @@ import {
   isUnsignedDecimalString,
   miningReasonCodes,
   type MiningFormulaDocument,
+  type MiningReferencePriceQuality,
 } from "./mining-contract.js";
 
 /**
@@ -43,9 +44,12 @@ export interface MiningBalanceInput {
 export interface MiningPriceInput {
   readonly assetId: string;
   readonly priceUsd: string | null;
+  /** The Provider fact's own quality; freshness is judged on `fetchedAt`. */
   readonly quality: "fresh" | "stale" | "proxied" | "derived" | "unavailable";
   readonly fetchedAt: string | null;
   readonly source: string;
+  /** The asset whose price was read in this asset's place, if any. */
+  readonly proxyAssetId?: string | null | undefined;
 }
 
 export interface MiningCommunityWeightInput {
@@ -66,6 +70,9 @@ export interface MiningSnapshotPower {
   readonly assetId: string;
   readonly holding: string;
   readonly referencePriceUsd: string;
+  /** `proxied` when the price is a declared proxy asset's (Decision 0044). */
+  readonly referencePriceQuality: MiningReferencePriceQuality;
+  readonly referencePriceProxyAssetId: string | null;
   readonly weight: string;
   readonly power: string;
   readonly blockNumber: string;
@@ -160,20 +167,61 @@ export function selectMiningWeight(
   };
 }
 
-function selectPrice(
+type PriceSelection =
+  | {
+      readonly kind: "price";
+      readonly priceUsd: string;
+      readonly fetchedAt: string;
+      readonly source: string;
+      readonly quality: MiningReferencePriceQuality;
+      readonly proxyAssetId: string | null;
+    }
+  | { readonly kind: "skip"; readonly reasonCode: string };
+
+/**
+ * A price is usable when the Provider fact is fresh on its own observation
+ * time. A price read through a proxy asset is usable only when the version
+ * declares exactly that proxy for the asset, and is then carried as
+ * `proxied` (Decision 0044); an undeclared proxy is refused.
+ */
+export function selectMiningPrice(
   assetId: string,
+  formula: MiningFormulaDocument,
   prices: readonly MiningPriceInput[],
-): MiningPriceInput | null {
+): PriceSelection {
   const price = prices.find((candidate) => candidate.assetId === assetId);
   if (
     price === undefined ||
-    price.quality !== "fresh" ||
+    (price.quality !== "fresh" && price.quality !== "proxied") ||
     !isUnsignedDecimalString(price.priceUsd) ||
     price.fetchedAt === null
   ) {
-    return null;
+    return { kind: "skip", reasonCode: miningReasonCodes.priceNotFresh };
   }
-  return price;
+  const proxyAssetId = price.proxyAssetId ?? null;
+  if (proxyAssetId === null && price.quality === "proxied") {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.priceProxyNotDeclared,
+    };
+  }
+  if (proxyAssetId !== null) {
+    const declared = formula.priceProxies?.[assetId];
+    if (declared === undefined || declared !== proxyAssetId) {
+      return {
+        kind: "skip",
+        reasonCode: miningReasonCodes.priceProxyNotDeclared,
+      };
+    }
+  }
+  return {
+    kind: "price",
+    priceUsd: price.priceUsd,
+    fetchedAt: price.fetchedAt,
+    source: price.source,
+    quality: proxyAssetId === null ? "fresh" : "proxied",
+    proxyAssetId,
+  };
 }
 
 function compareBlocks(left: string, right: string): number {
@@ -233,13 +281,17 @@ export function computeMiningSnapshot(
       continue;
     }
     const weight = selection.weight;
-    const price = selectPrice(balance.assetId, inputs.prices);
-    if (price === null || price.priceUsd === null || price.fetchedAt === null) {
+    const price = selectMiningPrice(
+      balance.assetId,
+      formula.document,
+      inputs.prices,
+    );
+    if (price.kind === "skip") {
       if (!skippedAssets.has(balance.assetId)) {
         skippedAssets.add(balance.assetId);
         skipped.push({
           assetId: balance.assetId,
-          reasonCode: miningReasonCodes.priceNotFresh,
+          reasonCode: price.reasonCode,
         });
       }
       continue;
@@ -268,6 +320,8 @@ export function computeMiningSnapshot(
             ? holding
             : addDecimalStrings(existing.holding, holding),
         referencePriceUsd: price.priceUsd,
+        referencePriceQuality: price.quality,
+        referencePriceProxyAssetId: price.proxyAssetId,
         weight,
         power:
           existing === undefined

@@ -429,15 +429,12 @@ describe("LOOP API V2 community, social, and search modules", () => {
       availability: "available",
       reasonCode: null,
     });
-    // Decision 0043: communityMining follows the mining module gate and the
-    // formula fact; this app does not enable `mining`, so it is deferred.
+    // Decision 0043: communityMining follows the formula fact; this app does
+    // not enable `mining`, so nothing can be in force and it stays blocked.
     expect(byId["communityMining"]).toMatchObject({
-      availability: "deferred",
-      reasonCode: "V2_MINING_RUNTIME_DEFERRED",
-      evidence: {
-        status: "pending",
-        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
-      },
+      availability: "unavailable",
+      reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      evidence: { status: "notApplicable", reasonCode: null },
     });
     expect(byId["communityPresence"]).toMatchObject({
       availability: "unavailable",
@@ -1598,7 +1595,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
         status: "available",
         power: "230.5",
         snapshotId,
-        formulaVersion: "miningFormula-devBaseline-2026-09-15",
+        formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
         computedAt: "2026-09-15T13:30:00.000Z",
       });
       const members = await app.inject({
@@ -1618,7 +1615,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
           status: "available",
           power: "3000",
           snapshotId,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           computedAt: "2026-09-15T13:30:00.000Z",
         },
         { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
@@ -1627,7 +1624,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
           status: "available",
           power: "12.5",
           snapshotId,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           computedAt: "2026-09-15T13:30:00.000Z",
         },
         { status: "unavailable", reasonCode: "MINING_ACCOUNT_NOT_IN_SNAPSHOT" },
