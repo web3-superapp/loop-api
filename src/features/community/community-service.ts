@@ -20,6 +20,10 @@ import {
   type AliasSearchQuota,
 } from "../identity/alias-search-quota.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import type {
+  CommunityMiningPowerReader,
+  MiningPowerProjection,
+} from "../mining/mining-power-reader.js";
 import type { AliasPolicy } from "../profile/alias-policy.js";
 import {
   blocksFilter,
@@ -227,7 +231,12 @@ export interface CommunityResource {
    */
   readonly chat: CommunityChatProjection;
   readonly voice: CommunityVoiceProjection;
-  readonly miningPower: UnavailableProjection;
+  /**
+   * The community's Mining Power under the latest snapshot (Decision 0043):
+   * its members' power on the bound asset. Unavailable without a formula in
+   * force, a snapshot, a bound asset, or an approved weight.
+   */
+  readonly miningPower: MiningPowerProjection;
   readonly onlineCount: UnavailableProjection;
   readonly announcements: UnavailableProjection;
   readonly officialLinks: UnavailableProjection;
@@ -295,7 +304,8 @@ export interface CommunityMemberProjection {
    * means the row offers nothing, and the client adds no rule of its own.
    */
   readonly actions: readonly CommunityTargetAction[];
-  readonly miningPower: UnavailableProjection;
+  /** The member's own power; `MINING_POWER_PRIVATE` unless they publish it. */
+  readonly miningPower: MiningPowerProjection;
 }
 
 export interface CommunityMemberListResource {
@@ -316,7 +326,7 @@ export interface ConnectionProjection {
   readonly profile: IdentityProjection;
   readonly createdAt: string;
   readonly viewerFollows: boolean;
-  readonly miningPower: UnavailableProjection;
+  readonly miningPower: MiningPowerProjection;
 }
 
 export interface ConnectionListResource {
@@ -656,13 +666,14 @@ function voiceProjection(
 function communityResource(
   record: CommunityDetailRecord,
   channel: CommunityChannelViewerRecord | null,
+  miningPower: MiningPowerProjection,
 ): CommunityResource {
   return Object.freeze({
     community: summary(record.community),
     viewer: viewerProjection(record.viewerMembership),
     chat: chatProjection(channel),
     voice: voiceProjection(channel),
-    miningPower: unavailable(communityUnavailableReasonCodes.mining),
+    miningPower,
     onlineCount: unavailable(communityUnavailableReasonCodes.presence),
     announcements: unavailable(communityUnavailableReasonCodes.announcements),
     officialLinks: unavailable(communityUnavailableReasonCodes.officialLinks),
@@ -683,6 +694,11 @@ export interface CommunityServiceOptions {
    * unavailable instead of a state the backend cannot prove.
    */
   readonly communicationRepository?: CommunicationRepository | null;
+  /**
+   * Read-only Mining Power projection (Decision 0043). Absent means the
+   * mining module is not composed, so every power reads unavailable.
+   */
+  readonly miningPower?: CommunityMiningPowerReader | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly searchQuota: AliasSearchQuota;
   readonly aliasPolicy: AliasPolicy;
@@ -712,6 +728,35 @@ export function createCommunityService(
     } catch {
       return null;
     }
+  }
+
+  const miningPowerReader = options.miningPower ?? null;
+  const miningPowerUnavailable = unavailable(
+    communityUnavailableReasonCodes.mining,
+  );
+
+  function communityMiningPower(
+    communityId: string,
+  ): Promise<MiningPowerProjection> {
+    if (miningPowerReader === null) {
+      return Promise.resolve(miningPowerUnavailable);
+    }
+    return miningPowerReader.readCommunityPower(communityId);
+  }
+
+  /** Powers keyed by public profile ID; a missing key reads unavailable. */
+  async function memberMiningPowers(
+    viewerUserId: string,
+    publicProfileIds: readonly (string | null)[],
+  ): Promise<ReadonlyMap<string, MiningPowerProjection>> {
+    const ids = publicProfileIds.filter((id): id is string => id !== null);
+    if (miningPowerReader === null || ids.length === 0) {
+      return new Map();
+    }
+    return miningPowerReader.readMemberPowers({
+      viewerUserId,
+      publicProfileIds: ids,
+    });
   }
 
   function codec(): V2CursorCodec {
@@ -879,6 +924,10 @@ export function createCommunityService(
     const hasMore = record.items.length > request.limit;
     const items = record.items.slice(0, request.limit);
     const last = items.at(-1);
+    const powers = await memberMiningPowers(
+      ownerUserId,
+      items.map((item) => item.profile.publicProfileId),
+    );
     return Object.freeze({
       community: summary(record.community),
       viewer: viewerProjection(record.viewerMembership),
@@ -905,9 +954,11 @@ export function createCommunityService(
               isSelf,
               isAddressable: item.profile.publicProfileId !== null,
             }),
-            miningPower: unavailable(
-              communityUnavailableReasonCodes.miningPower,
-            ),
+            miningPower:
+              (item.profile.publicProfileId === null
+                ? undefined
+                : powers.get(item.profile.publicProfileId)) ??
+              miningPowerUnavailable,
           });
         }),
       ),
@@ -1069,6 +1120,7 @@ export function createCommunityService(
         return communityResource(
           record,
           await channelProjection(owner.userId, record.community.communityId),
+          await communityMiningPower(record.community.communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1097,6 +1149,7 @@ export function createCommunityService(
         return communityResource(
           record,
           await channelProjection(owner.userId, communityId),
+          await communityMiningPower(communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1114,6 +1167,7 @@ export function createCommunityService(
         return communityResource(
           record,
           await channelProjection(owner.userId, communityId),
+          await communityMiningPower(communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1136,6 +1190,7 @@ export function createCommunityService(
         return communityResource(
           record,
           await channelProjection(owner.userId, communityId),
+          await communityMiningPower(communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1158,6 +1213,7 @@ export function createCommunityService(
         return communityResource(
           record,
           await channelProjection(owner.userId, communityId),
+          await communityMiningPower(communityId),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1315,6 +1371,10 @@ export function createCommunityService(
         const hasMore = records.length > request.limit;
         const items = records.slice(0, request.limit);
         const last = items.at(-1);
+        const powers = await memberMiningPowers(
+          owner.userId,
+          items.map((item) => item.profile.publicProfileId),
+        );
         return Object.freeze({
           direction,
           items: Object.freeze(
@@ -1323,9 +1383,9 @@ export function createCommunityService(
                 profile: freezeIdentity(item.profile),
                 createdAt: item.createdAt,
                 viewerFollows: item.viewerFollows,
-                miningPower: unavailable(
-                  communityUnavailableReasonCodes.miningPower,
-                ),
+                miningPower:
+                  powers.get(item.profile.publicProfileId) ??
+                  miningPowerUnavailable,
               }),
             ),
           ),

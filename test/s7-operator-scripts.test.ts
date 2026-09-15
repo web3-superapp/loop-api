@@ -15,6 +15,27 @@ import {
   parseMiningApproveFormulaRequest,
   runMiningApproveFormula,
 } from "../scripts/mining-approve-formula.js";
+import {
+  MiningCommunityWeightError,
+  parseMiningCommunityWeightRequest,
+  runMiningCommunityWeight,
+} from "../scripts/mining-community-weight.js";
+import {
+  MiningDevBaselineError,
+  parseMiningDevBaselineRequest,
+  runMiningDevBaseline,
+} from "../scripts/mining-dev-baseline.js";
+import {
+  MiningSnapshotScriptError,
+  parseMiningSnapshotRequest,
+  runMiningSnapshot,
+} from "../scripts/mining-snapshot.js";
+import { miningDevBaselineConfigVersion } from "../src/features/mining/mining-dev-baseline.js";
+import {
+  MiningCommunityAssetNotBoundError,
+  MiningFormulaExistsError,
+  MiningWeightOutOfRangeError,
+} from "../src/features/mining/mining-repository.js";
 import { venueEvidenceDigest } from "../src/features/launch/launch-contract.js";
 
 const projectId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
@@ -364,5 +385,316 @@ describe("pnpm mining:approve-formula", () => {
     expect(exitCode).toBe(0);
     expect(close).toHaveBeenCalledOnce();
     expect(stdout.contents()).toContain("miningFormulaV1-draft is approved");
+  });
+});
+
+describe("pnpm mining:dev-baseline (Decision 0043)", () => {
+  it("refuses production, requires --confirm, and rejects extra arguments", () => {
+    expect(() =>
+      parseMiningDevBaselineRequest(["node", "s", "--confirm"], production),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_dev_baseline_forbidden_in_production",
+      }),
+    );
+    expect(() =>
+      parseMiningDevBaselineRequest(["node", "s"], development),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_dev_baseline_confirmation_required",
+      }),
+    );
+    expect(() =>
+      parseMiningDevBaselineRequest(
+        ["node", "s", "--confirm", "extra"],
+        development,
+      ),
+    ).toThrow(MiningDevBaselineError);
+    expect(() =>
+      parseMiningDevBaselineRequest(["node", "s", "--confirm"], {
+        NODE_ENV: "development",
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_dev_baseline_database_unconfigured",
+      }),
+    );
+  });
+
+  it("creates the baseline from the registry with every asset at weight 1 and never approves it", async () => {
+    const createFormulaVersion = vi.fn(
+      (input: {
+        configVersion: string;
+        formula: {
+          assetWeights: Record<string, string>;
+          dailyOutput?: { budget: string; status: string };
+        };
+        weightRange: { community: { range?: { min: string; max: string } } };
+      }) =>
+        Promise.resolve({
+          ...input,
+          priceGuardRules: [],
+          status: "pending_approval" as const,
+          effectiveAt: null,
+          approvedAt: null,
+          createdAt: "2026-09-15T00:00:00.000Z",
+        }),
+    );
+    const close = vi.fn(() => Promise.resolve());
+    const stdout = outputWriter();
+    const exitCode = await runMiningDevBaseline({
+      argv: ["node", "s", "--confirm"],
+      environment: development,
+      stdout,
+      stderr: outputWriter(),
+      createRepositories: () => ({
+        mining: { createFormulaVersion: createFormulaVersion as never },
+        registry: {
+          listReadableAssets: () =>
+            Promise.resolve([
+              { assetId: "eip155:56:native" },
+              {
+                assetId: "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+              },
+            ] as never),
+        },
+        close,
+      }),
+    });
+    expect(exitCode).toBe(0);
+    expect(createFormulaVersion).toHaveBeenCalledOnce();
+    expect(createFormulaVersion.mock.calls[0]?.[0]).toMatchObject({
+      configVersion: miningDevBaselineConfigVersion,
+      formula: {
+        scope: "development_baseline",
+        assetWeights: {
+          "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82": "1",
+          "eip155:56:native": "1",
+        },
+        dailyOutput: { status: "development_placeholder", budget: "1000000" },
+      },
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(stdout.contents()).toContain("pending_approval");
+    expect(stdout.contents()).toContain("pnpm mining:approve-formula");
+  });
+
+  it("refuses an empty registry and an existing version", async () => {
+    const stderr = outputWriter();
+    expect(
+      await runMiningDevBaseline({
+        argv: ["node", "s", "--confirm"],
+        environment: development,
+        stdout: outputWriter(),
+        stderr,
+        createRepositories: () => ({
+          mining: { createFormulaVersion: vi.fn() as never },
+          registry: { listReadableAssets: () => Promise.resolve([]) },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(1);
+    expect(stderr.contents()).toContain(
+      "mining_dev_baseline_no_registered_assets",
+    );
+    const existing = outputWriter();
+    expect(
+      await runMiningDevBaseline({
+        argv: ["node", "s", "--confirm"],
+        environment: development,
+        stdout: outputWriter(),
+        stderr: existing,
+        createRepositories: () => ({
+          mining: {
+            createFormulaVersion: () =>
+              Promise.reject(new MiningFormulaExistsError()),
+          },
+          registry: {
+            listReadableAssets: () =>
+              Promise.resolve([{ assetId: "eip155:56:native" }] as never),
+          },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(1);
+    expect(existing.contents()).toContain("mining_dev_baseline_exists");
+  });
+});
+
+describe("pnpm mining:community-weight (Decision 0043)", () => {
+  const communityId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+
+  it("refuses production before opening a connection and validates its arguments", () => {
+    expect(() =>
+      parseMiningCommunityWeightRequest(
+        ["node", "s", communityId, "1", "--confirm"],
+        production,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_weight_forbidden_in_production",
+      }),
+    );
+    for (const argv of [
+      ["node", "s", communityId, "--confirm"],
+      ["node", "s", "not-a-uuid", "1", "--confirm"],
+      ["node", "s", communityId, "1.0e2", "--confirm"],
+      ["node", "s", communityId, "-1", "--confirm"],
+      ["node", "s", communityId, "1", "--confirm", "--config-version"],
+      ["node", "s", communityId, "1", "--confirm", "--unknown"],
+    ]) {
+      expect(() =>
+        parseMiningCommunityWeightRequest(argv, development),
+      ).toThrow(MiningCommunityWeightError);
+    }
+    expect(() =>
+      parseMiningCommunityWeightRequest(
+        ["node", "s", communityId, "1"],
+        development,
+      ),
+    ).toThrow(
+      expect.objectContaining({ code: "mining_weight_confirmation_required" }),
+    );
+    expect(
+      parseMiningCommunityWeightRequest(
+        [
+          "node",
+          "s",
+          communityId,
+          "0.5",
+          "--confirm",
+          "--config-version",
+          "v-x",
+        ],
+        development,
+      ),
+    ).toEqual({
+      communityId,
+      weight: "0.5",
+      configVersion: "v-x",
+      databaseUrl,
+    });
+  });
+
+  it("writes the weight under the approved version by default and maps repository refusals", async () => {
+    const setCommunityWeight = vi.fn(() =>
+      Promise.resolve({
+        communityId,
+        communityName: "Frog Holders",
+        boundAssetId: "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+        status: "approved" as const,
+        weight: "1.5",
+        configVersion: miningDevBaselineConfigVersion,
+        reviewedAt: "2026-09-15T00:00:00.000Z",
+      }),
+    );
+    const stdout = outputWriter();
+    expect(
+      await runMiningCommunityWeight({
+        argv: ["node", "s", communityId, "1.5", "--confirm"],
+        environment: development,
+        stdout,
+        stderr: outputWriter(),
+        createRepository: () => ({
+          repository: {
+            setCommunityWeight,
+            getApprovedFormula: () =>
+              Promise.resolve({
+                configVersion: miningDevBaselineConfigVersion,
+              } as never),
+          },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(0);
+    expect(setCommunityWeight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        communityId,
+        weight: "1.5",
+        configVersion: miningDevBaselineConfigVersion,
+      }),
+    );
+    expect(stdout.contents()).toContain("approved under");
+    for (const [error, code] of [
+      [new MiningWeightOutOfRangeError(), "mining_weight_out_of_range"],
+      [
+        new MiningCommunityAssetNotBoundError(),
+        "mining_weight_asset_not_bound",
+      ],
+    ] as const) {
+      const stderr = outputWriter();
+      expect(
+        await runMiningCommunityWeight({
+          argv: ["node", "s", communityId, "9", "--confirm"],
+          environment: development,
+          stdout: outputWriter(),
+          stderr,
+          createRepository: () => ({
+            repository: {
+              setCommunityWeight: () => Promise.reject(error),
+              getApprovedFormula: () =>
+                Promise.resolve({ configVersion: "v" } as never),
+            },
+            close: () => Promise.resolve(),
+          }),
+        }),
+      ).toBe(1);
+      expect(stderr.contents()).toContain(code);
+    }
+    const noVersion = outputWriter();
+    expect(
+      await runMiningCommunityWeight({
+        argv: ["node", "s", communityId, "1", "--confirm"],
+        environment: development,
+        stdout: outputWriter(),
+        stderr: noVersion,
+        createRepository: () => ({
+          repository: {
+            setCommunityWeight,
+            getApprovedFormula: () => Promise.resolve(null),
+          },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(1);
+    expect(noVersion.contents()).toContain("mining_weight_no_approved_version");
+  });
+});
+
+describe("pnpm mining:snapshot (Decision 0043)", () => {
+  it("refuses production and requires --confirm", () => {
+    expect(() =>
+      parseMiningSnapshotRequest(["node", "s", "--confirm"], production),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_snapshot_forbidden_in_production",
+      }),
+    );
+    expect(() =>
+      parseMiningSnapshotRequest(["node", "s"], development),
+    ).toThrow(MiningSnapshotScriptError);
+  });
+
+  it("runs the lane once and reports idle or snapshotted with skipped assets", async () => {
+    const idle = outputWriter();
+    expect(
+      await runMiningSnapshot({
+        argv: ["node", "s", "--confirm"],
+        environment: development,
+        stdout: idle,
+        stderr: outputWriter(),
+        createDependencies: () => ({
+          dependencies: {
+            repository: {
+              getApprovedFormula: () => Promise.resolve(null),
+            } as never,
+            registry: { listAssets: () => Promise.resolve([]) },
+            prices: { readAssetPrice: vi.fn() as never },
+          },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(1);
+    expect(idle.contents()).toContain("idle (MINING_FORMULA_BASELINE_PENDING)");
   });
 });

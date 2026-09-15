@@ -4936,17 +4936,57 @@
                       }
                     },
                     "miningPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "onlineCount": {
                       "type": "object",
@@ -5861,17 +5901,57 @@
                       }
                     },
                     "miningPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "onlineCount": {
                       "type": "object",
@@ -6687,17 +6767,57 @@
                       }
                     },
                     "miningPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "onlineCount": {
                       "type": "object",
@@ -7621,17 +7741,57 @@
                       }
                     },
                     "miningPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "onlineCount": {
                       "type": "object",
@@ -8555,17 +8715,57 @@
                       }
                     },
                     "miningPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "onlineCount": {
                       "type": "object",
@@ -9557,20 +9757,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -10517,20 +10754,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -11476,20 +11750,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -12433,20 +12744,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -13392,20 +13740,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -14349,20 +14734,57 @@
                             "description": "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write."
                           },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -16544,20 +16966,57 @@
                           },
                           "viewerFollows": { "type": "boolean" },
                           "miningPower": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["status", "reasonCode"],
-                            "properties": {
-                              "status": {
-                                "type": "string",
-                                "enum": ["unavailable"]
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
                               },
-                              "reasonCode": {
-                                "type": "string",
-                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                                "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
                               }
-                            }
+                            ]
                           }
                         }
                       }
@@ -82581,7 +83040,7 @@
         "operationId": "getV2MiningSummary",
         "summary": "Get the caller's Mining summary",
         "tags": ["mining"],
-        "description": "Power, network power, today's estimate, accumulated, claimable, and referral boost are unavailable until a formula version is approved (MINING_FORMULA_BASELINE_PENDING) and a reward authority exists (REWARD_AUTHORITY_PENDING). The pending formula version is named so the client can label it.",
+        "description": "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; accumulated and claimable stay REWARD_AUTHORITY_PENDING. formula.scope = development_baseline marks the Decision 0043 placeholder.",
         "parameters": [
           {
             "schema": {
@@ -82633,40 +83092,132 @@
                   ],
                   "properties": {
                     "power": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "value"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "networkPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "value"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "estimatedToday": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "value",
+                            "budget",
+                            "unitKey",
+                            "budgetStatus",
+                            "formulaVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount."
+                            },
+                            "budget": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "unitKey": {
+                              "type": "string",
+                              "enum": [
+                                "mining.rules.dailyOutput.unit.loopTokenPending"
+                              ]
+                            },
+                            "budgetStatus": {
+                              "type": "string",
+                              "enum": ["development_placeholder"]
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "accumulated": {
                       "type": "object",
@@ -82705,25 +83256,70 @@
                       }
                     },
                     "formula": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode", "pendingVersion"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "enum": ["MINING_FORMULA_BASELINE_PENDING"]
-                        },
-                        "pendingVersion": {
-                          "anyOf": [
-                            {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "configVersion",
+                            "effectiveAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["approved"]
+                            },
+                            "configVersion": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
                             },
-                            { "type": "null" }
-                          ]
+                            "effectiveAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "reasonCode",
+                            "pendingVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": ["MINING_FORMULA_BASELINE_PENDING"]
+                            },
+                            "pendingVersion": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "snapshot": {
                       "anyOf": [
@@ -83234,9 +83830,9 @@
     "/v2/mining/assets": {
       "get": {
         "operationId": "getV2MiningAssets",
-        "summary": "Get the caller's per-asset power composition (unavailable)",
+        "summary": "Get the caller's per-asset power composition",
         "tags": ["mining"],
-        "description": "Per-asset contribution, exclusion state, and reference price all derive from an approved formula and price-guard rules; every block is unavailable and the lists are empty by contract, never by absence of holdings.",
+        "description": "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
         "parameters": [
           {
             "schema": {
@@ -83285,42 +83881,192 @@
                   ],
                   "properties": {
                     "totalPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "value"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "included": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "assetId",
+                          "holding",
+                          "referencePriceUsd",
+                          "weight",
+                          "power",
+                          "blockNumber"
+                        ],
+                        "properties": {
+                          "assetId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                          },
+                          "holding": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                          },
+                          "referencePriceUsd": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                          },
+                          "weight": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                            "description": "The effective weight: the formula's asset weight, multiplied by the approved community weight when one community binds the asset."
+                          },
+                          "power": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                          },
+                          "blockNumber": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,19})$"
+                          }
                         }
                       }
                     },
-                    "included": { "type": "array", "maxItems": 0, "items": {} },
-                    "excluded": { "type": "array", "maxItems": 0, "items": {} },
-                    "source": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    "excluded": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "description": "Assets the account holds that the snapshot did not weight, with the reason re-derived from the same inputs the lane used.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["assetId", "reasonCode"],
+                        "properties": {
+                          "assetId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                          },
+                          "reasonCode": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                          }
                         }
                       }
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "snapshotId",
+                            "blockNumber",
+                            "blockHash",
+                            "formulaVersion",
+                            "priceVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "priceVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      ]
                     },
                     "referencePrice": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "priceVersion"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "priceVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -83774,9 +84520,9 @@
     "/v2/mining/rewards": {
       "get": {
         "operationId": "getV2MiningRewards",
-        "summary": "Get the caller's reward ledger (unavailable)",
+        "summary": "Get the caller's reward ledger",
         "tags": ["mining"],
-        "description": "claimable stays unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes in this step. The ledger structure exists but no route writes it.",
+        "description": "claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes. estimatedToday is the same share-of-network-power estimate as the summary. The ledger structure exists but no route writes it.",
         "parameters": [
           {
             "schema": {
@@ -83839,16 +84585,64 @@
                     },
                     "claimExecutable": { "type": "boolean", "enum": [false] },
                     "estimatedToday": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "value",
+                            "budget",
+                            "unitKey",
+                            "budgetStatus",
+                            "formulaVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                              "description": "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount."
+                            },
+                            "budget": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "unitKey": {
+                              "type": "string",
+                              "enum": [
+                                "mining.rules.dailyOutput.unit.loopTokenPending"
+                              ]
+                            },
+                            "budgetStatus": {
+                              "type": "string",
+                              "enum": ["development_placeholder"]
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "accumulated": {
                       "type": "object",
@@ -84327,9 +85121,9 @@
     "/v2/mining/rank": {
       "get": {
         "operationId": "getV2MiningRank",
-        "summary": "Get the user or community power ranking (unavailable)",
+        "summary": "Get the user or community power ranking",
         "tags": ["mining"],
-        "description": "scope=users|communities. Rankings use only confirmed server snapshots and stay unavailable until one exists under an approved formula. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label.",
+        "description": "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["users", "communities"] },
@@ -84388,28 +85182,228 @@
                       "enum": ["users", "communities"]
                     },
                     "ranking": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "scope",
+                            "items",
+                            "participants"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "scope": { "type": "string", "enum": ["users"] },
+                            "items": {
+                              "type": "array",
+                              "maxItems": 100,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "position",
+                                  "power",
+                                  "display",
+                                  "isSelf"
+                                ],
+                                "properties": {
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "display": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "kind",
+                                          "alias",
+                                          "publicProfileId"
+                                        ],
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["alias"]
+                                          },
+                                          "alias": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 64
+                                          },
+                                          "publicProfileId": {
+                                            "type": "string",
+                                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["kind", "labelKey"],
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["anonymous"]
+                                          },
+                                          "labelKey": {
+                                            "type": "string",
+                                            "enum": [
+                                              "mining.rank.anonymousMember"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "isSelf": { "type": "boolean" }
+                                }
+                              }
+                            },
+                            "participants": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Accounts with positive power in the snapshot."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "scope",
+                            "items",
+                            "participants"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": ["communities"]
+                            },
+                            "items": {
+                              "type": "array",
+                              "maxItems": 100,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "position",
+                                  "power",
+                                  "community",
+                                  "weight",
+                                  "participants"
+                                ],
+                                "properties": {
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "community": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "communityId",
+                                      "name",
+                                      "boundAssetId"
+                                    ],
+                                    "properties": {
+                                      "communityId": {
+                                        "type": "string",
+                                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                      },
+                                      "name": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1024
+                                      },
+                                      "boundAssetId": {
+                                        "type": "string",
+                                        "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                                      }
+                                    }
+                                  },
+                                  "weight": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "participants": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            },
+                            "participants": { "type": "integer", "minimum": 0 }
+                          }
                         }
-                      }
+                      ]
                     },
                     "myPosition": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "position", "power"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "position": { "type": "integer", "minimum": 1 },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "snapshot": {
                       "anyOf": [
@@ -84936,9 +85930,9 @@
     "/v2/mining/communities/{communityId}": {
       "get": {
         "operationId": "getV2MiningCommunity",
-        "summary": "Get a community's Mining weight record",
+        "summary": "Get a community's Mining weight record and standing",
         "tags": ["mining"],
-        "description": "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW). Community power, the caller's contribution, rank, and participant count are unavailable without an approved formula.",
+        "description": "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. COMMUNITY_ASSET_NOT_BOUND without a bound asset; COMMUNITY_WEIGHT_PENDING_REVIEW without a weight approved under the version in force.",
         "parameters": [
           {
             "schema": {
@@ -84993,6 +85987,7 @@
                     "myContribution",
                     "rank",
                     "participants",
+                    "snapshot",
                     "contractVersion"
                   ],
                   "properties": {
@@ -85073,52 +86068,196 @@
                       ]
                     },
                     "communityPower": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "value"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "description": "The non-banned members' power on the community's bound asset under the snapshot (the asset weight × the approved community weight is already inside each member's power)."
                     },
                     "myContribution": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "value"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "rank": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "position", "power"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "position": { "type": "integer", "minimum": 1 },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "participants": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "count"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 }
+                          }
                         }
-                      }
+                      ]
+                    },
+                    "snapshot": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "snapshotId",
+                            "blockNumber",
+                            "blockHash",
+                            "formulaVersion",
+                            "priceVersion",
+                            "computedAt"
+                          ],
+                          "properties": {
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "priceVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -85574,7 +86713,7 @@
         "operationId": "getV2MiningRules",
         "summary": "Get the versioned Mining rules",
         "tags": ["mining"],
-        "description": "Lists the approved formula version (null in this step) and the pending_approval versions, each with rule keys for the expression, daily output, weight range, and price guard (TWAP, multi-period/multi-source, liquidity cap). No weight number or reward promise is published before approval.",
+        "description": "Lists the approved formula version (null without one) and the pending_approval versions, each with its scope, asset weights, daily output document, weight range (with the community range once pinned), and price-guard rule keys. baseline names the version in force. A development_baseline version publishes placeholder numbers that the client must label as such; a product draft publishes rule keys only.",
         "parameters": [
           {
             "schema": {
@@ -85629,10 +86768,13 @@
                           "required": [
                             "configVersion",
                             "status",
+                            "scope",
                             "effectiveAt",
                             "approvedAt",
                             "expressionKey",
                             "dailyOutputKey",
+                            "assetWeights",
+                            "dailyOutput",
                             "weightRange",
                             "priceGuardRules",
                             "referralBoost"
@@ -85649,6 +86791,16 @@
                                 "approved",
                                 "retired"
                               ]
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
                             },
                             "effectiveAt": {
                               "anyOf": [
@@ -85671,6 +86823,43 @@
                               "type": "string",
                               "minLength": 1,
                               "maxLength": 128
+                            },
+                            "assetWeights": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                              },
+                              "propertyNames": {
+                                "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                              },
+                              "description": "Canonical asset ID → decimal weight. Empty on the product draft; every registered asset at 1 on the development baseline."
+                            },
+                            "dailyOutput": {
+                              "anyOf": [
+                                { "type": "null" },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "budget", "unitKey"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["development_placeholder"]
+                                    },
+                                    "budget": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "unitKey": {
+                                      "type": "string",
+                                      "enum": [
+                                        "mining.rules.dailyOutput.unit.loopTokenPending"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
                             },
                             "weightRange": {
                               "type": "object",
@@ -85710,6 +86899,22 @@
                                       "type": "string",
                                       "minLength": 1,
                                       "maxLength": 128
+                                    },
+                                    "range": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["min", "max"],
+                                      "properties": {
+                                        "min": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                        },
+                                        "max": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                        }
+                                      },
+                                      "description": "Inclusive bounds a reviewed community weight must satisfy under this version. Absent while the range is pending."
                                     }
                                   }
                                 },
@@ -85769,10 +86974,13 @@
                         "required": [
                           "configVersion",
                           "status",
+                          "scope",
                           "effectiveAt",
                           "approvedAt",
                           "expressionKey",
                           "dailyOutputKey",
+                          "assetWeights",
+                          "dailyOutput",
                           "weightRange",
                           "priceGuardRules",
                           "referralBoost"
@@ -85785,6 +86993,16 @@
                           "status": {
                             "type": "string",
                             "enum": ["pending_approval", "approved", "retired"]
+                          },
+                          "scope": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["development_baseline"]
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
                           },
                           "effectiveAt": {
                             "anyOf": [
@@ -85807,6 +87025,43 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 128
+                          },
+                          "assetWeights": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "propertyNames": {
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                            },
+                            "description": "Canonical asset ID → decimal weight. Empty on the product draft; every registered asset at 1 on the development baseline."
+                          },
+                          "dailyOutput": {
+                            "anyOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "budget", "unitKey"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["development_placeholder"]
+                                  },
+                                  "budget": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "unitKey": {
+                                    "type": "string",
+                                    "enum": [
+                                      "mining.rules.dailyOutput.unit.loopTokenPending"
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
                           },
                           "weightRange": {
                             "type": "object",
@@ -85846,6 +87101,22 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 128
+                                  },
+                                  "range": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["min", "max"],
+                                    "properties": {
+                                      "min": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      },
+                                      "max": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      }
+                                    },
+                                    "description": "Inclusive bounds a reviewed community weight must satisfy under this version. Absent while the range is pending."
                                   }
                                 }
                               },
@@ -85895,16 +87166,57 @@
                       }
                     },
                     "baseline": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "configVersion",
+                            "effectiveAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["approved"]
+                            },
+                            "configVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "effectiveAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "referral": {
                       "type": "object",

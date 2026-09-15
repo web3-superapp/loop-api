@@ -442,7 +442,7 @@ describe("LOOP API V2 meta policy gates", () => {
     expect(withRepository["avatarUpload"]?.availability).toBe("unavailable");
   });
 
-  it("keeps the module gate set and the capability projection consistent", () => {
+  it("keeps the module gate set and the capability projection consistent", async () => {
     const runtime = {
       sessionRuntimeAvailable: false,
       profileRuntimeAvailable: false,
@@ -462,6 +462,8 @@ describe("LOOP API V2 meta policy gates", () => {
       privySwapRuntimeAvailable: false,
       launchRuntimeAvailable: false,
       miningRuntimeAvailable: false,
+      miningFormulaBaseline: () =>
+        Promise.resolve({ status: "unavailable" as const }),
       referralRuntimeAvailable: false,
       securityRuntimeAvailable: false,
       settingsRuntimeAvailable: false,
@@ -470,7 +472,7 @@ describe("LOOP API V2 meta policy gates", () => {
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];
-      const projection = createV2ProductPolicyProjection(
+      const projection = await createV2ProductPolicyProjection(
         testConfig({ V2_MODULES_ENABLED: moduleId }),
         runtime,
       );

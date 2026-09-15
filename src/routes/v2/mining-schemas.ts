@@ -2,23 +2,30 @@ import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   configVersionPatternSource,
+  miningDailyOutputUnitKey,
+  miningFormulaScopes,
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
   miningRankScopes,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
 } from "../../features/mining/mining-contract.js";
+import { miningRankLimit } from "../../features/mining/mining-service.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { unavailableSchema } from "./launch-schemas.js";
 
 /**
- * Route schemas for the V2 mining module (Decision 0036). Every power,
- * reward, and rank block is the unavailable projection; the rules resource
- * carries only versioned rule *keys* (no weight numbers, no reward promise).
+ * Route schemas for the V2 mining module (Decisions 0036 and 0043). Every
+ * power, estimate, and rank block is a union of the unavailable projection
+ * and an `available` value read from a server snapshot under the formula
+ * version in force. Numbers are decimal strings; `scope:
+ * development_baseline` marks the Decision 0043 placeholder version so the
+ * client labels it as such.
  */
 
 const opaqueIdPatternSource =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const assetIdPatternSource = "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$";
 const nullableDateTimeSchema = {
   anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
 } as const;
@@ -27,28 +34,131 @@ const approvalStatusSchema = {
   type: "string",
   enum: ["pending_approval", "approved"],
 } as const;
+const decimalSchema = {
+  type: "string",
+  pattern: unsignedDecimalPatternSource,
+} as const;
+const scopeSchema = {
+  anyOf: [{ type: "string", enum: [...miningFormulaScopes] }, { type: "null" }],
+  description:
+    "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version.",
+} as const;
+
+const snapshotProjectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "snapshotId",
+    "blockNumber",
+    "blockHash",
+    "formulaVersion",
+    "priceVersion",
+    "computedAt",
+  ],
+  properties: {
+    snapshotId: { type: "string", pattern: opaqueIdPatternSource },
+    blockNumber: { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
+    blockHash: { type: "string", pattern: "^0x[0-9a-f]{64}$" },
+    formulaVersion: { type: "string", pattern: configVersionPatternSource },
+    priceVersion: { type: "string", pattern: priceVersionPatternSource },
+    computedAt: { type: "string", format: "date-time" },
+  },
+} as const;
 
 const snapshotSchema = {
+  anyOf: [unavailableSchema, snapshotProjectionSchema],
+} as const;
+
+const decimalOrUnavailableSchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "value"],
+      properties: {
+        status: { type: "string", const: "available" },
+        value: decimalSchema,
+      },
+    },
+  ],
+} as const;
+
+const estimateSchema = {
   anyOf: [
     unavailableSchema,
     {
       type: "object",
       additionalProperties: false,
       required: [
-        "snapshotId",
-        "blockNumber",
-        "blockHash",
+        "status",
+        "value",
+        "budget",
+        "unitKey",
+        "budgetStatus",
         "formulaVersion",
-        "priceVersion",
-        "computedAt",
       ],
       properties: {
-        snapshotId: { type: "string", pattern: opaqueIdPatternSource },
-        blockNumber: { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
-        blockHash: { type: "string", pattern: "^0x[0-9a-f]{64}$" },
+        status: { type: "string", const: "available" },
+        value: {
+          ...decimalSchema,
+          description:
+            "budget × accountPower ÷ networkPower, truncated to six fraction digits. An estimate of a placeholder budget, never a claimable amount.",
+        },
+        budget: decimalSchema,
+        unitKey: { type: "string", const: miningDailyOutputUnitKey },
+        budgetStatus: { type: "string", const: "development_placeholder" },
         formulaVersion: { type: "string", pattern: configVersionPatternSource },
-        priceVersion: { type: "string", pattern: priceVersionPatternSource },
-        computedAt: { type: "string", format: "date-time" },
+      },
+    },
+  ],
+} as const;
+
+const formulaStateSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "configVersion", "effectiveAt", "scope"],
+      properties: {
+        status: { type: "string", const: "approved" },
+        configVersion: { type: "string", pattern: configVersionPatternSource },
+        effectiveAt: { type: "string", format: "date-time" },
+        scope: scopeSchema,
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "reasonCode", "pendingVersion"],
+      properties: {
+        status: { type: "string", const: "unavailable" },
+        reasonCode: {
+          type: "string",
+          const: "MINING_FORMULA_BASELINE_PENDING",
+        },
+        pendingVersion: {
+          anyOf: [
+            { type: "string", pattern: configVersionPatternSource },
+            { type: "null" },
+          ],
+        },
+      },
+    },
+  ],
+} as const;
+
+const positionSchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "position", "power"],
+      properties: {
+        status: { type: "string", const: "available" },
+        position: { type: "integer", minimum: 1 },
+        power: decimalSchema,
       },
     },
   ],
@@ -70,30 +180,13 @@ export const miningSummaryResourceSchema = {
     "contractVersion",
   ],
   properties: {
-    power: unavailableSchema,
-    networkPower: unavailableSchema,
-    estimatedToday: unavailableSchema,
+    power: decimalOrUnavailableSchema,
+    networkPower: decimalOrUnavailableSchema,
+    estimatedToday: estimateSchema,
     accumulated: unavailableSchema,
     claimable: unavailableSchema,
     referralBoost: unavailableSchema,
-    formula: {
-      type: "object",
-      additionalProperties: false,
-      required: ["status", "reasonCode", "pendingVersion"],
-      properties: {
-        status: { type: "string", const: "unavailable" },
-        reasonCode: {
-          type: "string",
-          const: "MINING_FORMULA_BASELINE_PENDING",
-        },
-        pendingVersion: {
-          anyOf: [
-            { type: "string", pattern: configVersionPatternSource },
-            { type: "null" },
-          ],
-        },
-      },
-    },
+    formula: formulaStateSchema,
     snapshot: snapshotSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
@@ -112,11 +205,68 @@ export const miningAssetsResourceSchema = {
     "contractVersion",
   ],
   properties: {
-    totalPower: unavailableSchema,
-    included: { type: "array", maxItems: 0, items: {} },
-    excluded: { type: "array", maxItems: 0, items: {} },
-    source: unavailableSchema,
-    referencePrice: unavailableSchema,
+    totalPower: decimalOrUnavailableSchema,
+    included: {
+      type: "array",
+      maxItems: 500,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "assetId",
+          "holding",
+          "referencePriceUsd",
+          "weight",
+          "power",
+          "blockNumber",
+        ],
+        properties: {
+          assetId: { type: "string", pattern: assetIdPatternSource },
+          holding: decimalSchema,
+          referencePriceUsd: decimalSchema,
+          weight: {
+            ...decimalSchema,
+            description:
+              "The effective weight: the formula's asset weight, multiplied by the approved community weight when one community binds the asset.",
+          },
+          power: decimalSchema,
+          blockNumber: { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
+        },
+      },
+    },
+    excluded: {
+      type: "array",
+      maxItems: 500,
+      description:
+        "Assets the account holds that the snapshot did not weight, with the reason re-derived from the same inputs the lane used.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["assetId", "reasonCode"],
+        properties: {
+          assetId: { type: "string", pattern: assetIdPatternSource },
+          reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+        },
+      },
+    },
+    source: snapshotSchema,
+    referencePrice: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "priceVersion"],
+          properties: {
+            status: { type: "string", const: "available" },
+            priceVersion: {
+              type: "string",
+              pattern: priceVersionPatternSource,
+            },
+          },
+        },
+      ],
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -137,7 +287,7 @@ export const miningRewardsResourceSchema = {
   properties: {
     claimable: unavailableSchema,
     claimExecutable: { type: "boolean", const: false },
-    estimatedToday: unavailableSchema,
+    estimatedToday: estimateSchema,
     accumulated: unavailableSchema,
     ledger: { type: "array", maxItems: 0, items: {} },
     source: unavailableSchema,
@@ -151,6 +301,112 @@ export const miningRankQuerySchema = {
   properties: {
     scope: { type: "string", enum: [...miningRankScopes] },
   },
+} as const;
+
+const rankDisplaySchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "alias", "publicProfileId"],
+      properties: {
+        kind: { type: "string", const: "alias" },
+        alias: { type: "string", minLength: 1, maxLength: 64 },
+        publicProfileId: { type: "string", pattern: opaqueIdPatternSource },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "labelKey"],
+      properties: {
+        kind: { type: "string", const: "anonymous" },
+        labelKey: { type: "string", const: miningRankAnonymousMemberKey },
+      },
+    },
+  ],
+} as const;
+
+const rankingSchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "scope", "items", "participants"],
+      properties: {
+        status: { type: "string", const: "available" },
+        scope: { type: "string", const: "users" },
+        items: {
+          type: "array",
+          maxItems: miningRankLimit,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["position", "power", "display", "isSelf"],
+            properties: {
+              position: { type: "integer", minimum: 1 },
+              power: decimalSchema,
+              display: rankDisplaySchema,
+              isSelf: { type: "boolean" },
+            },
+          },
+        },
+        participants: {
+          type: "integer",
+          minimum: 0,
+          description: "Accounts with positive power in the snapshot.",
+        },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "scope", "items", "participants"],
+      properties: {
+        status: { type: "string", const: "available" },
+        scope: { type: "string", const: "communities" },
+        items: {
+          type: "array",
+          maxItems: miningRankLimit,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "position",
+              "power",
+              "community",
+              "weight",
+              "participants",
+            ],
+            properties: {
+              position: { type: "integer", minimum: 1 },
+              power: decimalSchema,
+              community: {
+                type: "object",
+                additionalProperties: false,
+                required: ["communityId", "name", "boundAssetId"],
+                properties: {
+                  communityId: {
+                    type: "string",
+                    pattern: opaqueIdPatternSource,
+                  },
+                  name: { type: "string", minLength: 1, maxLength: 1024 },
+                  boundAssetId: {
+                    type: "string",
+                    pattern: "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$",
+                  },
+                },
+              },
+              weight: decimalSchema,
+              participants: { type: "integer", minimum: 0 },
+            },
+          },
+        },
+        participants: { type: "integer", minimum: 0 },
+      },
+    },
+  ],
 } as const;
 
 export const miningRankResourceSchema = {
@@ -167,8 +423,8 @@ export const miningRankResourceSchema = {
   ],
   properties: {
     scope: { type: "string", enum: [...miningRankScopes] },
-    ranking: unavailableSchema,
-    myPosition: unavailableSchema,
+    ranking: rankingSchema,
+    myPosition: positionSchema,
     snapshot: snapshotSchema,
     display: {
       type: "object",
@@ -211,6 +467,7 @@ export const miningCommunityResourceSchema = {
     "myContribution",
     "rank",
     "participants",
+    "snapshot",
     "contractVersion",
   ],
   properties: {
@@ -240,7 +497,7 @@ export const miningCommunityResourceSchema = {
           required: ["status", "value", "configVersion", "reviewedAt"],
           properties: {
             status: { type: "string", const: "approved" },
-            value: { type: "string", pattern: unsignedDecimalPatternSource },
+            value: decimalSchema,
             configVersion: {
               type: "string",
               pattern: configVersionPatternSource,
@@ -260,10 +517,28 @@ export const miningCommunityResourceSchema = {
         },
       ],
     },
-    communityPower: unavailableSchema,
-    myContribution: unavailableSchema,
-    rank: unavailableSchema,
-    participants: unavailableSchema,
+    communityPower: {
+      ...decimalOrUnavailableSchema,
+      description:
+        "The non-banned members' power on the community's bound asset under the snapshot (the asset weight × the approved community weight is already inside each member's power).",
+    },
+    myContribution: decimalOrUnavailableSchema,
+    rank: positionSchema,
+    participants: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "count"],
+          properties: {
+            status: { type: "string", const: "available" },
+            count: { type: "integer", minimum: 0 },
+          },
+        },
+      ],
+    },
+    snapshot: snapshotSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -274,10 +549,13 @@ const formulaProjectionSchema = {
   required: [
     "configVersion",
     "status",
+    "scope",
     "effectiveAt",
     "approvedAt",
     "expressionKey",
     "dailyOutputKey",
+    "assetWeights",
+    "dailyOutput",
     "weightRange",
     "priceGuardRules",
     "referralBoost",
@@ -285,10 +563,33 @@ const formulaProjectionSchema = {
   properties: {
     configVersion: { type: "string", pattern: configVersionPatternSource },
     status: { type: "string", enum: [...miningFormulaStatuses] },
+    scope: scopeSchema,
     effectiveAt: nullableDateTimeSchema,
     approvedAt: nullableDateTimeSchema,
     expressionKey: ruleKeySchema,
     dailyOutputKey: ruleKeySchema,
+    assetWeights: {
+      type: "object",
+      additionalProperties: decimalSchema,
+      propertyNames: { pattern: assetIdPatternSource },
+      description:
+        "Canonical asset ID → decimal weight. Empty on the product draft; every registered asset at 1 on the development baseline.",
+    },
+    dailyOutput: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "budget", "unitKey"],
+          properties: {
+            status: { type: "string", const: "development_placeholder" },
+            budget: decimalSchema,
+            unitKey: { type: "string", const: miningDailyOutputUnitKey },
+          },
+        },
+      ],
+    },
     weightRange: {
       type: "object",
       additionalProperties: false,
@@ -310,6 +611,14 @@ const formulaProjectionSchema = {
           properties: {
             status: approvalStatusSchema,
             descriptionKey: ruleKeySchema,
+            range: {
+              type: "object",
+              additionalProperties: false,
+              required: ["min", "max"],
+              properties: { min: decimalSchema, max: decimalSchema },
+              description:
+                "Inclusive bounds a reviewed community weight must satisfy under this version. Absent while the range is pending.",
+            },
           },
         },
         reviewFactorKeys: { type: "array", maxItems: 16, items: ruleKeySchema },
@@ -352,7 +661,25 @@ export const miningRulesResourceSchema = {
       maxItems: 50,
       items: formulaProjectionSchema,
     },
-    baseline: unavailableSchema,
+    baseline: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "configVersion", "effectiveAt", "scope"],
+          properties: {
+            status: { type: "string", const: "approved" },
+            configVersion: {
+              type: "string",
+              pattern: configVersionPatternSource,
+            },
+            effectiveAt: { type: "string", format: "date-time" },
+            scope: scopeSchema,
+          },
+        },
+      ],
+    },
     referral: {
       type: "object",
       additionalProperties: false,

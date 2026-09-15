@@ -256,13 +256,31 @@ with `NODE_ENV=production`:
 pnpm launch:review <projectId> approve            # review|approve|return|reject
 pnpm launch:milestone <projectId> lbank spot APPLIED
 pnpm launch:milestone <projectId> lbank spot LISTED --evidence <url> --reviewer ops.alice
-pnpm mining:approve-formula miningFormulaV1-draft --confirm   # do NOT run: unfreezes the snapshot lane
+pnpm mining:approve-formula miningFormulaV1-draft --confirm   # do NOT run: the product draft has no parameters
 ```
 
 The `mining-snapshot` worker lane (`MINING_SNAPSHOT_ENABLED=true`) needs the
 market fact cache and registry; it stays idle until a formula version is
 approved. See `docs/frontend-v2-launch-api.md` and
 `docs/frontend-v2-mining-api.md`.
+
+### Mining development baseline (Decision 0043)
+
+The Development stack computes real numbers under a self-describing
+placeholder version (`scope: development_baseline`): every registered asset at
+weight 1, community range `[0.5, 2]`, placeholder daily output `1000000`. The
+sequence is explicit and every step refuses `NODE_ENV=production`:
+
+```sh
+pnpm mining:dev-baseline --confirm                                   # creates miningFormula-devBaseline-… (pending_approval)
+pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15 --confirm
+pnpm mining:community-weight <communityId> <weight> --confirm        # 0.5 ≤ weight ≤ 2; the community must have a bound asset
+pnpm mining:snapshot --confirm                                       # one lane tick with the worker's real reader (DexScreener)
+```
+
+Inputs are never invented: a wallet with zero balances yields zero power, a
+community without `boundAssetKey` has no community power, and native BNB is
+skipped while its price is proxied through WBNB.
 
 ## Launch chain slot on the BSC testnet (Decision 0038)
 

@@ -14,15 +14,17 @@ import {
 } from "./features/mining/mining-snapshot.js";
 
 /**
- * The `mining-snapshot` lane (Decision 0036), default off behind
- * `MINING_SNAPSHOT_ENABLED` in the standalone worker process.
+ * The `mining-snapshot` lane (Decisions 0036 and 0043), default off behind
+ * `MINING_SNAPSHOT_ENABLED` in the standalone worker process; the same
+ * `runOnce` is what `pnpm mining:snapshot --confirm` executes once.
  *
  * Each tick reads the approved formula version. Without one the lane is
  * idle (`MINING_FORMULA_BASELINE_PENDING`) and touches nothing else. With
  * one it gathers the latest observed balances, reads a *fresh* reference
- * price per weighted asset, the approved community weights, computes the
- * snapshot through the pure `computeMiningSnapshot`, and writes it. It never
- * settles a reward, never claims, and never estimates a price.
+ * price per formula-weighted asset, the community weight state of every
+ * bound community under that version, computes the snapshot through the
+ * pure `computeMiningSnapshot`, and writes it. It never settles a reward,
+ * never claims, and never estimates a price.
  */
 
 export const MINING_SNAPSHOT_LANE = "mining-snapshot" as const;
@@ -140,15 +142,12 @@ export function createMiningSnapshotWorker(
     if (balances.length === 0) {
       return idle(miningReasonCodes.noBalanceInputs);
     }
-    // Only assets that can carry a weight need a price read.
-    const weightedAssetIds = new Set<string>([
-      ...Object.keys(formula.formula.assetWeights),
-      ...communityWeights
-        .filter(
-          (weight) => weight.status === "approved" && weight.weight !== null,
-        )
-        .map((weight) => weight.assetId),
-    ]);
+    // Only assets the formula weights can enter a snapshot (a community
+    // weight is a second factor, never a weight of its own), so only those
+    // need a price read.
+    const weightedAssetIds = new Set<string>(
+      Object.keys(formula.formula.assetWeights),
+    );
     const candidateAssetIds = [
       ...new Set(balances.map((balance) => balance.assetId)),
     ].filter((assetId) => weightedAssetIds.has(assetId));

@@ -23,8 +23,15 @@ import {
   LaunchVersionConflictError,
   type LaunchRepository,
 } from "../src/features/launch/launch-repository.js";
+import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
 import {
+  MiningCommunityAssetNotBoundError,
+  MiningCommunityNotFoundError,
+  MiningCommunityWeightConflictError,
+  MiningFormulaExistsError,
+  MiningFormulaNotFoundError,
   MiningFormulaStateError,
+  MiningWeightOutOfRangeError,
   type MiningRepository,
 } from "../src/features/mining/mining-repository.js";
 import { generateInviteCode } from "../src/features/referral/invite-code.js";
@@ -769,21 +776,444 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         `,
         values: [current, retired],
       });
-      const currentInputs = await mining.listCommunityWeightInputs(
-        "miningFormulaTestOnly",
-      );
-      expect(currentInputs.map((row) => [row.communityId, row.weight])).toEqual(
-        [[current, "0.5"]],
-      );
+      // Decision 0043: every bound community is listed; a weight reviewed
+      // under another version reads as pending_review with no value.
+      const byCommunity = (
+        rows: readonly {
+          communityId: string;
+          weight: string | null;
+          status: string;
+        }[],
+      ) =>
+        Object.fromEntries(
+          rows
+            .filter(
+              (row) =>
+                row.communityId === current || row.communityId === retired,
+            )
+            .map((row) => [row.communityId, [row.status, row.weight]]),
+        );
       expect(
-        await mining.listCommunityWeightInputs("miningFormulaRetiredTestOnly"),
-      ).toHaveLength(1);
+        byCommunity(
+          await mining.listCommunityWeightInputs("miningFormulaTestOnly"),
+        ),
+      ).toEqual({
+        [current ?? ""]: ["approved", "0.5"],
+        [retired ?? ""]: ["pending_review", null],
+      });
       expect(
-        await mining.listCommunityWeightInputs("miningFormulaV1-draft"),
-      ).toEqual([]);
+        byCommunity(
+          await mining.listCommunityWeightInputs(
+            "miningFormulaRetiredTestOnly",
+          ),
+        ),
+      ).toEqual({
+        [current ?? ""]: ["pending_review", null],
+        [retired ?? ""]: ["approved", "0.9"],
+      });
+      expect(
+        byCommunity(
+          await mining.listCommunityWeightInputs("miningFormulaV1-draft"),
+        ),
+      ).toEqual({
+        [current ?? ""]: ["pending_review", null],
+        [retired ?? ""]: ["pending_review", null],
+      });
       // Retire it again so the seeded draft remains the only visible version.
       await pool.query({
         text: `update public.mining_formula_versions set status = 'retired' where config_version = 'miningFormulaTestOnly'`,
+      });
+      expect(await mining.getApprovedFormula()).toBeNull();
+    });
+  });
+
+  describe("development baseline (Decision 0043)", () => {
+    const cakeAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const nativeAsset = "eip155:56:native";
+    const hash = `0x${"d".repeat(64)}`;
+    let baselineVersion = "";
+    let boundCommunity = "";
+    let secondBoundCommunity = "";
+    let unboundCommunity = "";
+    let alice = "";
+    let bob = "";
+    let carol = "";
+
+    async function profileOf(userId: string): Promise<string> {
+      const result = await pool.query<{ public_profile_id: string }>({
+        text: `select public_profile_id from public.user_profiles where owner_user_id = $1`,
+        values: [userId],
+      });
+      return result.rows[0]?.public_profile_id ?? "";
+    }
+
+    it("creates the baseline version as pending_approval from the registry assets and refuses a duplicate", async () => {
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values (
+            $1, 'eip155:56', '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82', 'Cake',
+            'PancakeSwap Token', 18, 'pending', 'chain_call', 122037728, now()
+          )
+          on conflict (asset_id) do nothing
+        `,
+        values: [cakeAsset],
+      });
+      const documents = buildMiningDevBaselineDocuments([
+        nativeAsset,
+        cakeAsset,
+      ]);
+      baselineVersion = documents.configVersion;
+      const created = await mining.createFormulaVersion({
+        configVersion: documents.configVersion,
+        formula: documents.formula,
+        weightRange: documents.weightRange,
+        priceGuardRules: documents.priceGuardRules,
+        requestId: randomUUID(),
+      });
+      expect(created).toMatchObject({
+        configVersion: "miningFormula-devBaseline-2026-09-15",
+        status: "pending_approval",
+        effectiveAt: null,
+        formula: {
+          scope: "development_baseline",
+          assetWeights: { [cakeAsset]: "1", [nativeAsset]: "1" },
+          dailyOutput: { status: "development_placeholder", budget: "1000000" },
+        },
+        weightRange: { community: { range: { min: "0.5", max: "2" } } },
+      });
+      await expect(
+        mining.createFormulaVersion({
+          configVersion: documents.configVersion,
+          formula: documents.formula,
+          weightRange: documents.weightRange,
+          priceGuardRules: documents.priceGuardRules,
+          requestId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(MiningFormulaExistsError);
+      expect(await mining.getApprovedFormula()).toBeNull();
+    });
+
+    it("records a community weight only inside the version's range, on a bound asset, once per asset", async () => {
+      alice = await createUser(true, true);
+      bob = await createUser(true, true);
+      carol = await createUser(true, false);
+      const communities = await pool.query<{ community_id: string }>({
+        text: `
+          insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
+          values ('Cake Holders', 'cake-holders', $2, $1),
+                 ('Cake Rivals', 'cake-rivals', $2, $1),
+                 ('No Token', 'no-token', null, $1)
+          returning community_id
+        `,
+        values: [alice, cakeAsset],
+      });
+      [boundCommunity = "", secondBoundCommunity = "", unboundCommunity = ""] =
+        communities.rows.map((row) => row.community_id);
+      const attempt = (
+        communityId: string,
+        weight: string,
+        configVersion = baselineVersion,
+      ) =>
+        mining.setCommunityWeight({
+          communityId,
+          weight,
+          configVersion,
+          requestId: randomUUID(),
+        });
+      await expect(attempt(unboundCommunity, "1")).rejects.toBeInstanceOf(
+        MiningCommunityAssetNotBoundError,
+      );
+      await expect(attempt(boundCommunity, "0.499")).rejects.toBeInstanceOf(
+        MiningWeightOutOfRangeError,
+      );
+      await expect(attempt(boundCommunity, "2.001")).rejects.toBeInstanceOf(
+        MiningWeightOutOfRangeError,
+      );
+      // The product draft pins no range, so nothing can be reviewed under it.
+      await expect(
+        attempt(boundCommunity, "1", "miningFormulaV1-draft"),
+      ).rejects.toBeInstanceOf(MiningWeightOutOfRangeError);
+      await expect(
+        attempt(boundCommunity, "1", "miningFormulaNope"),
+      ).rejects.toBeInstanceOf(MiningFormulaNotFoundError);
+      await expect(
+        attempt(boundCommunity, "1", "miningFormulaRetiredTestOnly"),
+      ).rejects.toBeInstanceOf(MiningFormulaStateError);
+      await expect(attempt(randomUUID(), "1")).rejects.toBeInstanceOf(
+        MiningCommunityNotFoundError,
+      );
+      const stored = await attempt(boundCommunity, "1.5");
+      expect(stored).toMatchObject({
+        communityId: boundCommunity,
+        communityName: "Cake Holders",
+        boundAssetId: cakeAsset,
+        status: "approved",
+        weight: "1.5",
+        configVersion: baselineVersion,
+      });
+      expect(stored.reviewedAt).not.toBeNull();
+      // Boundaries are inclusive and a re-review replaces the value.
+      expect((await attempt(boundCommunity, "2")).weight).toBe("2");
+      expect((await attempt(boundCommunity, "0.5")).weight).toBe("0.5");
+      await expect(attempt(secondBoundCommunity, "1")).rejects.toBeInstanceOf(
+        MiningCommunityWeightConflictError,
+      );
+      const inputs = await mining.listCommunityWeightInputs(baselineVersion);
+      expect(inputs.find((row) => row.communityId === boundCommunity)).toEqual({
+        communityId: boundCommunity,
+        assetId: cakeAsset,
+        weight: "0.5",
+        status: "approved",
+      });
+      expect(
+        inputs.find((row) => row.communityId === secondBoundCommunity),
+      ).toEqual({
+        communityId: secondBoundCommunity,
+        assetId: cakeAsset,
+        weight: null,
+        status: "pending_review",
+      });
+      expect(inputs.some((row) => row.communityId === unboundCommunity)).toBe(
+        false,
+      );
+    });
+
+    it("aggregates standings, rankings, and member powers from stored snapshot rows with exact arithmetic and the privacy rule", async () => {
+      const approved = await mining.approveFormula({
+        configVersion: baselineVersion,
+        requestId: randomUUID(),
+      });
+      expect(approved.status).toBe("approved");
+      await pool.query({
+        text: `
+          insert into public.community_memberships (community_id, owner_user_id, role, status)
+          values ($1, $2, 'owner', 'active'), ($1, $3, 'member', 'active'), ($1, $4, 'member', 'banned')
+        `,
+        values: [boundCommunity, alice, bob, carol],
+      });
+      await pool.query({
+        text: `
+          insert into public.privacy_preferences_v2 (owner_user_id, discoverable, anonymous_mode, mining_power_visibility)
+          values ($1, true, false, 'everyone'), ($2, true, true, 'self')
+        `,
+        values: [alice, bob],
+      });
+      const snapshotId = randomUUID();
+      await mining.writeSnapshot({
+        snapshotId,
+        blockNumber: "122037728",
+        blockHash: hash,
+        formulaVersion: baselineVersion,
+        priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
+        // 1081.17 + 57.5 + 0.0000000000000001 + 34.5 + 0
+        totalPower: "1173.1700000000000001",
+        powers: [
+          // alice: 1.5 BNB × 720.78 × 1 = 1081.17
+          {
+            ownerUserId: alice,
+            assetId: nativeAsset,
+            holding: "1.5",
+            referencePriceUsd: "720.78",
+            weight: "1",
+            power: "1081.17",
+            blockNumber: "122037728",
+          },
+          // alice: 50 Cake × 2.3 × (1 × 0.5) = 57.5
+          {
+            ownerUserId: alice,
+            assetId: cakeAsset,
+            holding: "50",
+            referencePriceUsd: "2.3",
+            weight: "0.5",
+            power: "57.5",
+            blockNumber: "122037728",
+          },
+          // bob: dust BNB
+          {
+            ownerUserId: bob,
+            assetId: nativeAsset,
+            holding: "0.0000000000000001",
+            referencePriceUsd: "1",
+            weight: "1",
+            power: "0.0000000000000001",
+            blockNumber: "122037728",
+          },
+          // bob: 30 Cake × 2.3 × 0.5 = 34.5
+          {
+            ownerUserId: bob,
+            assetId: cakeAsset,
+            holding: "30",
+            referencePriceUsd: "2.3",
+            weight: "0.5",
+            power: "34.5",
+            blockNumber: "122037728",
+          },
+          // carol: zero (banned in the community, still an account)
+          {
+            ownerUserId: carol,
+            assetId: nativeAsset,
+            holding: "0",
+            referencePriceUsd: "720.78",
+            weight: "1",
+            power: "0",
+            blockNumber: "122037728",
+          },
+        ],
+      });
+      expect(
+        await mining.getAccountStanding({ snapshotId, ownerUserId: alice }),
+      ).toEqual({
+        totalPower: "1138.67",
+        position: 1,
+        participantCount: 2,
+      });
+      expect(
+        await mining.getAccountStanding({ snapshotId, ownerUserId: bob }),
+      ).toEqual({
+        totalPower: "34.5000000000000001",
+        position: 2,
+        participantCount: 2,
+      });
+      expect(
+        await mining.getAccountStanding({ snapshotId, ownerUserId: carol }),
+      ).toEqual({
+        totalPower: "0",
+        position: null,
+        participantCount: 2,
+      });
+      expect(
+        await mining.getAccountStanding({
+          snapshotId,
+          ownerUserId: randomUUID(),
+        }),
+      ).toBeNull();
+      expect(
+        await mining.listAccountPowers({ snapshotId, ownerUserId: alice }),
+      ).toEqual([
+        {
+          ownerUserId: alice,
+          assetId: cakeAsset,
+          holding: "50",
+          referencePriceUsd: "2.3",
+          weight: "0.5",
+          power: "57.5",
+          blockNumber: "122037728",
+        },
+        {
+          ownerUserId: alice,
+          assetId: nativeAsset,
+          holding: "1.5",
+          referencePriceUsd: "720.78",
+          weight: "1",
+          power: "1081.17",
+          blockNumber: "122037728",
+        },
+      ]);
+      const ranking = await mining.listAccountRanking({
+        snapshotId,
+        limit: 10,
+      });
+      expect(ranking).toEqual([
+        {
+          ownerUserId: alice,
+          totalPower: "1138.67",
+          position: 1,
+          publicProfileId: await profileOf(alice),
+          alias: `alias_${alice.slice(0, 8)}`,
+          discoverable: true,
+          anonymousMode: false,
+        },
+        {
+          ownerUserId: bob,
+          totalPower: "34.5000000000000001",
+          position: 2,
+          publicProfileId: await profileOf(bob),
+          alias: `alias_${bob.slice(0, 8)}`,
+          discoverable: true,
+          anonymousMode: true,
+        },
+      ]);
+      // Community standing: only non-banned members, only the bound asset.
+      // alice 57.5 + bob 34.5 = 92 (carol banned; BNB rows excluded).
+      const standing = await mining.getCommunityStanding({
+        snapshotId,
+        configVersion: baselineVersion,
+        communityId: boundCommunity,
+      });
+      expect(standing).toEqual({
+        communityId: boundCommunity,
+        communityName: "Cake Holders",
+        boundAssetId: cakeAsset,
+        weight: "0.5",
+        power: "92",
+        participantCount: 2,
+        position: 1,
+      });
+      expect(
+        await mining.getCommunityStanding({
+          snapshotId,
+          configVersion: baselineVersion,
+          communityId: secondBoundCommunity,
+        }),
+      ).toBeNull();
+      expect(
+        await mining.getCommunityStanding({
+          snapshotId,
+          configVersion: "miningFormulaV1-draft",
+          communityId: boundCommunity,
+        }),
+      ).toBeNull();
+      expect(
+        await mining.listCommunityRanking({
+          snapshotId,
+          configVersion: baselineVersion,
+          limit: 10,
+        }),
+      ).toEqual([standing]);
+      const memberPowers = await mining.listMemberPowers({
+        snapshotId,
+        publicProfileIds: [
+          await profileOf(alice),
+          await profileOf(bob),
+          await profileOf(carol),
+          randomUUID(),
+        ],
+      });
+      expect(
+        [...memberPowers]
+          .map((row) => [row.ownerUserId, row.totalPower, row.visibleToOthers])
+          .sort(),
+      ).toEqual(
+        [
+          [alice, "1138.67", true],
+          [bob, "34.5000000000000001", false],
+          [carol, "0", false],
+        ].sort(),
+      );
+      // Balance asset IDs come from the account's active wallets only.
+      const wallet = await pool.query<{ wallet_id: string }>({
+        text: `select wallet_id from public.account_wallets where owner_user_id = $1`,
+        values: [alice],
+      });
+      await pool.query({
+        text: `
+          insert into public.wallet_balance_snapshots (wallet_id, asset_id, block_number, block_hash, raw_value)
+          values ($1, $2, 122037728, $3, 0)
+        `,
+        values: [wallet.rows[0]?.wallet_id, cakeAsset, hash],
+      });
+      expect(await mining.listAccountBalanceAssetIds(alice)).toEqual([
+        cakeAsset,
+      ]);
+      expect(await mining.listAccountBalanceAssetIds(carol)).toEqual([]);
+      // Retire the baseline so later suites see no approved version.
+      await pool.query({
+        text: `update public.mining_formula_versions set status = 'retired' where config_version = $1`,
+        values: [baselineVersion],
       });
       expect(await mining.getApprovedFormula()).toBeNull();
     });

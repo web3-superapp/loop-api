@@ -427,7 +427,7 @@ export function registerV2MetaRoutes(
       reply.header("cache-control", "no-store");
       return reply
         .code(200)
-        .send(createV2CapabilitiesProjection(config, runtime));
+        .send(await createV2CapabilitiesProjection(config, runtime));
     },
   );
 }

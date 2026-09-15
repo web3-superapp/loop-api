@@ -205,7 +205,7 @@ describe("mining-snapshot lane", () => {
     );
   });
 
-  it("asks for community weights of the approved formula version only, so a retired version's weight never enters the snapshot", async () => {
+  it("asks for community weights of the approved formula version only and never weights an asset the formula does not list", async () => {
     const repository = repositoryFake({
       getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
       listBalanceInputs: vi.fn(() =>
@@ -232,10 +232,12 @@ describe("mining-snapshot lane", () => {
       "miningFormulaTestOnly",
     );
     expect(result.kind).toBe("idle");
+    // The community asset is not in the formula's assetWeights, so no price
+    // is even read for it and it is skipped as unweighted (Decision 0043).
     expect(result.skipped).toEqual([
       {
         assetId: communityAssetId,
-        reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+        reasonCode: "MINING_ASSET_WEIGHT_NOT_CONFIGURED",
       },
     ]);
     expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();

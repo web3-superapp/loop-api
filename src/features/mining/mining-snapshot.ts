@@ -11,14 +11,17 @@ import {
 } from "./mining-contract.js";
 
 /**
- * Pure Mining Power snapshot computation (Decision 0036, 03 §7.1).
+ * Pure Mining Power snapshot computation (Decisions 0036 and 0043, 03 §7.1).
  *
  * `power(account, asset) = holding × referencePriceUsd × weight`, where
  * `holding` is the observed raw balance scaled by the asset's decimals, the
- * reference price is a *fresh* market fact, and the weight is either the
- * formula's asset weight or an approved community weight for the asset. An
- * asset without a weight or without a fresh price contributes nothing and is
- * reported as skipped; nothing is ever assumed, defaulted, or interpolated.
+ * reference price is a *fresh* market fact, and `weight` is the formula's
+ * asset weight multiplied by the approved community weight when exactly one
+ * community binds the asset. An asset the formula does not weight, an asset
+ * bound to a community whose weight is still under review, an asset bound by
+ * two communities with approved weights, and an asset without a fresh price
+ * all contribute nothing and are reported as skipped; nothing is ever
+ * assumed, defaulted, or interpolated.
  *
  * The function has no I/O: the lane gathers inputs, this computes, the
  * repository writes. Every number is a canonical decimal string.
@@ -105,22 +108,56 @@ export function scaleRawHolding(rawValue: string, decimals: number): string {
   return formatRational(BigInt(rawValue), 10n ** BigInt(decimals), decimals);
 }
 
-function selectWeight(
+type WeightSelection =
+  | { readonly kind: "weight"; readonly weight: string }
+  | { readonly kind: "skip"; readonly reasonCode: string };
+
+/**
+ * The formula's asset weight is required; a community weight is a second
+ * factor on the community's bound asset. A bound asset whose weight is not
+ * approved under this version is excluded rather than weighted by the asset
+ * weight alone, so a community binding never silently drops its factor.
+ */
+export function selectMiningWeight(
   assetId: string,
   formula: MiningFormulaDocument,
   communityWeights: readonly MiningCommunityWeightInput[],
-): string | null {
-  const formulaWeight = formula.assetWeights[assetId];
-  if (isUnsignedDecimalString(formulaWeight)) {
-    return formulaWeight;
+): WeightSelection {
+  const assetWeight = formula.assetWeights[assetId];
+  if (!isUnsignedDecimalString(assetWeight)) {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.assetWeightNotConfigured,
+    };
   }
-  const approved = communityWeights.find(
-    (weight) =>
-      weight.assetId === assetId &&
-      weight.status === "approved" &&
-      isUnsignedDecimalString(weight.weight),
+  const bindings = communityWeights.filter(
+    (weight) => weight.assetId === assetId,
   );
-  return approved?.weight ?? null;
+  if (bindings.length === 0) {
+    return { kind: "weight", weight: assetWeight };
+  }
+  const approvedWeights = bindings.flatMap((weight) =>
+    weight.status === "approved" && isUnsignedDecimalString(weight.weight)
+      ? [weight.weight]
+      : [],
+  );
+  const [communityWeight, ...others] = approvedWeights;
+  if (communityWeight === undefined) {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.communityWeightPendingReview,
+    };
+  }
+  if (others.length > 0) {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.communityWeightAmbiguous,
+    };
+  }
+  return {
+    kind: "weight",
+    weight: multiplyDecimalStrings(assetWeight, communityWeight),
+  };
 }
 
 function selectPrice(
@@ -180,21 +217,22 @@ export function computeMiningSnapshot(
     ) {
       snapshotBlock = { number: balance.blockNumber, hash: balance.blockHash };
     }
-    const weight = selectWeight(
+    const selection = selectMiningWeight(
       balance.assetId,
       formula.document,
       inputs.communityWeights,
     );
-    if (weight === null) {
+    if (selection.kind === "skip") {
       if (!skippedAssets.has(balance.assetId)) {
         skippedAssets.add(balance.assetId);
         skipped.push({
           assetId: balance.assetId,
-          reasonCode: miningReasonCodes.communityWeightPendingReview,
+          reasonCode: selection.reasonCode,
         });
       }
       continue;
     }
+    const weight = selection.weight;
     const price = selectPrice(balance.assetId, inputs.prices);
     if (price === null || price.priceUsd === null || price.fetchedAt === null) {
       if (!skippedAssets.has(balance.assetId)) {
@@ -250,14 +288,17 @@ export function computeMiningSnapshot(
     latestPriceFetchedAt === null ||
     priceSource === null
   ) {
+    // Every asset was skipped: report the first skip's reason when all skips
+    // share it, otherwise the generic weight reason.
+    const [firstSkip] = skipped;
+    const uniform =
+      firstSkip !== undefined &&
+      skipped.every((skip) => skip.reasonCode === firstSkip.reasonCode);
     return Object.freeze({
       kind: "unavailable",
-      reasonCode:
-        skipped.every(
-          (skip) => skip.reasonCode === miningReasonCodes.priceNotFresh,
-        ) && skipped.length > 0
-          ? miningReasonCodes.priceNotFresh
-          : miningReasonCodes.communityWeightPendingReview,
+      reasonCode: uniform
+        ? firstSkip.reasonCode
+        : miningReasonCodes.communityWeightPendingReview,
       skipped: Object.freeze(skipped),
     });
   }

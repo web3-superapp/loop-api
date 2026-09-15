@@ -1,6 +1,10 @@
 import type { AppConfig, V2ModuleId } from "../../config.js";
 import type { ChainVerificationState } from "../../integrations/bsc/rpc-client.js";
 import { bscChainId, type LaunchChainId } from "../chain/chain-contract.js";
+import type {
+  MiningFormulaBaselineProbe,
+  MiningFormulaBaselineState,
+} from "../mining/mining-baseline.js";
 
 export const v2ContractVersion = "2.0" as const;
 export const v2ProductConfigVersion = "productPolicyV2.2026-09-01" as const;
@@ -195,6 +199,12 @@ export interface V2ProductPolicyRuntime {
   readonly launchChainId: LaunchChainId;
   /** `mining` module enabled with the mining repository composed (Decision 0036). */
   readonly miningRuntimeAvailable: boolean;
+  /**
+   * Whether a Mining formula version is approved and effective, read per
+   * request (Decision 0043). `communityMining` opens on this fact alone; the
+   * `mining` module gate stays a runtime question.
+   */
+  readonly miningFormulaBaseline: MiningFormulaBaselineProbe;
   /** `referral` module enabled with the referral repository composed (Decision 0036). */
   readonly referralRuntimeAvailable: boolean;
   /**
@@ -752,6 +762,46 @@ function walletIntentCapability(
   });
 }
 
+/**
+ * `communityMining` (Decision 0043) is decided by the formula fact, never by
+ * a constant: deferred with the `mining` module, unavailable while the
+ * runtime is missing or no approved version is effective, available once a
+ * version is in force. The evidence stays pending until 02 freezes the
+ * product formula; a development baseline computes numbers but is not that
+ * freeze, and the client labels it through `GET /v2/mining/rules`.
+ */
+function communityMiningCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+  baseline: MiningFormulaBaselineState,
+): V2CapabilityProjection {
+  const evidence = Object.freeze({
+    status: "pending" as const,
+    reasonCode: v2CommunityMiningUnavailableReasonCode,
+  });
+  if (!config.v2ModulesEnabled.has("mining")) {
+    return Object.freeze({
+      capabilityId: "communityMining",
+      availability: "deferred",
+      reasonCode: v2MiningModuleDeferredReasonCode,
+      evidence,
+    });
+  }
+  const reasonCode = !runtime.miningRuntimeAvailable
+    ? v2MiningRuntimeUnavailableReasonCode
+    : baseline.status === "unavailable"
+      ? v2MiningRuntimeUnavailableReasonCode
+      : baseline.status === "pending"
+        ? v2CommunityMiningUnavailableReasonCode
+        : null;
+  return Object.freeze({
+    capabilityId: "communityMining",
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence,
+  });
+}
+
 function unavailableCapability(
   capabilityId: string,
   reasonCode: string,
@@ -767,11 +817,14 @@ function unavailableCapability(
   });
 }
 
-export function createV2CapabilitiesProjection(
+export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
-): V2CapabilitiesProjection {
+): Promise<V2CapabilitiesProjection> {
   const { sessionRuntimeAvailable } = runtime;
+  // The formula fact is read per request so an approval made after startup
+  // (the operator script) opens the capability without a restart.
+  const miningBaseline = await runtime.miningFormulaBaseline();
   const privyConfigured = config.privy !== null;
   const streamCredentialsConfigured = config.stream !== null;
   const streamQuotaConfigured = config.streamTokenQuota !== null;
@@ -826,10 +879,7 @@ export function createV2CapabilitiesProjection(
       v2CommunicationRuntimeUnavailableReasonCode,
     ),
     voiceRoomsCapability(config, runtime),
-    unavailableCapability(
-      "communityMining",
-      v2CommunityMiningUnavailableReasonCode,
-    ),
+    communityMiningCapability(config, runtime, miningBaseline),
     unavailableCapability(
       "communityPresence",
       v2CommunityPresenceUnavailableReasonCode,
@@ -966,13 +1016,13 @@ export function createV2CapabilitiesProjection(
   });
 }
 
-export function createV2ProductPolicyProjection(
+export async function createV2ProductPolicyProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
   now: Date = new Date(),
-): V2ProductPolicyProjection {
+): Promise<V2ProductPolicyProjection> {
   return Object.freeze({
     clientPolicy: createV2ClientPolicyProjection(config, now),
-    capabilities: createV2CapabilitiesProjection(config, runtime),
+    capabilities: await createV2CapabilitiesProjection(config, runtime),
   });
 }

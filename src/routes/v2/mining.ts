@@ -24,9 +24,10 @@ import {
 } from "./mining-schemas.js";
 
 /**
- * V2 mining module routes (D18/D19 slots, Decision 0036). Registered only
- * when `V2_MODULES_ENABLED` contains `mining`. Every route is a read; with no
- * approved formula every power, reward, and rank is unavailable and the
+ * V2 mining module routes (D18/D19 slots, Decisions 0036 and 0043).
+ * Registered only when `V2_MODULES_ENABLED` contains `mining`. Every route
+ * is a read from the latest server snapshot under the formula version in
+ * force; without one every power, estimate, and rank is unavailable and the
  * rules page shows the pending version marked as such.
  */
 
@@ -48,7 +49,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningSummary",
         summary: "Get the caller's Mining summary",
         description:
-          "Power, network power, today's estimate, accumulated, claimable, and referral boost are unavailable until a formula version is approved (MINING_FORMULA_BASELINE_PENDING) and a reward authority exists (REWARD_AUTHORITY_PENDING). The pending formula version is named so the client can label it.",
+          "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; accumulated and claimable stay REWARD_AUTHORITY_PENDING. formula.scope = development_baseline marks the Decision 0043 placeholder.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -73,9 +74,9 @@ export function registerV2MiningRoutes(
     {
       schema: {
         operationId: "getV2MiningAssets",
-        summary: "Get the caller's per-asset power composition (unavailable)",
+        summary: "Get the caller's per-asset power composition",
         description:
-          "Per-asset contribution, exclusion state, and reference price all derive from an approved formula and price-guard rules; every block is unavailable and the lists are empty by contract, never by absence of holdings.",
+          "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -100,9 +101,9 @@ export function registerV2MiningRoutes(
     {
       schema: {
         operationId: "getV2MiningRewards",
-        summary: "Get the caller's reward ledger (unavailable)",
+        summary: "Get the caller's reward ledger",
         description:
-          "claimable stays unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes in this step. The ledger structure exists but no route writes it.",
+          "claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes. estimatedToday is the same share-of-network-power estimate as the summary. The ledger structure exists but no route writes it.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -127,9 +128,9 @@ export function registerV2MiningRoutes(
     {
       schema: {
         operationId: "getV2MiningRank",
-        summary: "Get the user or community power ranking (unavailable)",
+        summary: "Get the user or community power ranking",
         description:
-          "scope=users|communities. Rankings use only confirmed server snapshots and stay unavailable until one exists under an approved formula. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label.",
+          "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -143,6 +144,7 @@ export function registerV2MiningRoutes(
     async (request, reply) => {
       const query = request.query as { readonly scope?: unknown };
       const resource = await service.getRank({
+        principal: requireAuthenticatedLoopPrincipal(request),
         ...(query.scope === undefined ? {} : { scope: query.scope }),
       });
       reply.header("cache-control", "no-store");
@@ -155,9 +157,9 @@ export function registerV2MiningRoutes(
     {
       schema: {
         operationId: "getV2MiningCommunity",
-        summary: "Get a community's Mining weight record",
+        summary: "Get a community's Mining weight record and standing",
         description:
-          "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW). Community power, the caller's contribution, rank, and participant count are unavailable without an approved formula.",
+          "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. COMMUNITY_ASSET_NOT_BOUND without a bound asset; COMMUNITY_WEIGHT_PENDING_REVIEW without a weight approved under the version in force.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -172,6 +174,7 @@ export function registerV2MiningRoutes(
     async (request, reply) => {
       const params = request.params as CommunityParams;
       const resource = await service.getCommunity({
+        principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
       });
       reply.header("cache-control", "no-store");
@@ -186,7 +189,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningRules",
         summary: "Get the versioned Mining rules",
         description:
-          "Lists the approved formula version (null in this step) and the pending_approval versions, each with rule keys for the expression, daily output, weight range, and price guard (TWAP, multi-period/multi-source, liquidity cap). No weight number or reward promise is published before approval.",
+          "Lists the approved formula version (null without one) and the pending_approval versions, each with its scope, asset weights, daily output document, weight range (with the community range once pinned), and price-guard rule keys. baseline names the version in force. A development_baseline version publishes placeholder numbers that the client must label as such; a product draft publishes rule keys only.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

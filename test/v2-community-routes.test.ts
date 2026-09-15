@@ -29,6 +29,11 @@ import {
   type MembershipRecord,
 } from "../src/features/community/community-repository.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
+import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
+import {
+  createUnavailableMiningRepository,
+  type MiningRepository,
+} from "../src/features/mining/mining-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
@@ -330,7 +335,9 @@ describe("LOOP API V2 community, social, and search modules", () => {
   });
 
   async function createApp(
-    dependencies = fakes(),
+    dependencies: Omit<ReturnType<typeof fakes>, "database"> & {
+      readonly database: Database;
+    } = fakes(),
     overrides: Readonly<Record<string, string>> = {},
   ) {
     const app = await buildApp({
@@ -422,9 +429,15 @@ describe("LOOP API V2 community, social, and search modules", () => {
       availability: "available",
       reasonCode: null,
     });
+    // Decision 0043: communityMining follows the mining module gate and the
+    // formula fact; this app does not enable `mining`, so it is deferred.
     expect(byId["communityMining"]).toMatchObject({
-      availability: "unavailable",
-      reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      availability: "deferred",
+      reasonCode: "V2_MINING_RUNTIME_DEFERRED",
+      evidence: {
+        status: "pending",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      },
     });
     expect(byId["communityPresence"]).toMatchObject({
       availability: "unavailable",
@@ -1431,5 +1444,286 @@ describe("LOOP API V2 community, social, and search modules", () => {
       headers: commonHeaders(),
     });
     expect(query.statusCode).toBe(400);
+  });
+
+  describe("Mining Power projections under the development baseline (Decision 0043)", () => {
+    const documents = buildMiningDevBaselineDocuments(["eip155:56:native"]);
+    const approvedAt = "2026-09-15T08:00:00.000Z";
+    const snapshotId = "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    const publicMemberId = "5f4e3d2c-1b0a-4987-8765-43210fedcba9";
+    const privateMemberId = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+    const absentMemberId = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+    function miningFake(overrides: Partial<MiningRepository> = {}) {
+      return {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: vi.fn(() =>
+          Promise.resolve({
+            configVersion: documents.configVersion,
+            formula: documents.formula,
+            weightRange: documents.weightRange,
+            priceGuardRules: documents.priceGuardRules,
+            status: "approved" as const,
+            effectiveAt: approvedAt,
+            approvedAt,
+            createdAt: approvedAt,
+          }),
+        ),
+        getLatestSnapshot: vi.fn(() =>
+          Promise.resolve({
+            snapshotId,
+            blockNumber: "122037728",
+            blockHash: `0x${"c".repeat(64)}`,
+            formulaVersion: documents.configVersion,
+            priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
+            totalPower: "4000",
+            accountCount: 3,
+            computedAt: "2026-09-15T13:30:00.000Z",
+          }),
+        ),
+        getCommunityStanding: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId:
+              "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            weight: "1.5",
+            power: "230.5",
+            participantCount: 2,
+            position: 1,
+          }),
+        ),
+        listMemberPowers: vi.fn(() =>
+          Promise.resolve([
+            {
+              publicProfileId: targetProfileId,
+              ownerUserId: accountId,
+              totalPower: "12.5",
+              visibleToOthers: false,
+            },
+            {
+              publicProfileId: publicMemberId,
+              ownerUserId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+              totalPower: "3000",
+              visibleToOthers: true,
+            },
+            {
+              publicProfileId: privateMemberId,
+              ownerUserId: "d64786bb-408d-415d-8a69-6277d56c921b",
+              totalPower: "999",
+              visibleToOthers: false,
+            },
+            {
+              publicProfileId: absentMemberId,
+              ownerUserId: "3fa85f64-5717-4562-b3fc-2c963f66afa7",
+              totalPower: null,
+              visibleToOthers: true,
+            },
+          ]),
+        ),
+        ...overrides,
+      };
+    }
+
+    function memberRows(dependencies: ReturnType<typeof fakes>) {
+      dependencies.listMembersMock.mockResolvedValue({
+        community,
+        viewerMembership: {
+          role: "member",
+          status: "active",
+          joinedAt: createdAt,
+        },
+        viewerPublicProfileId: targetProfileId,
+        items: [
+          {
+            membershipId: "11111111-1111-4111-8111-111111111111",
+            role: "owner" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: publicMemberId },
+          },
+          {
+            membershipId: "22222222-2222-4222-8222-222222222222",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: privateMemberId },
+          },
+          {
+            membershipId: "33333333-3333-4333-8333-333333333333",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile,
+          },
+          {
+            membershipId: "44444444-4444-4444-8444-444444444444",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: absentMemberId },
+          },
+          {
+            membershipId: "55555555-5555-4555-8555-555555555555",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: null },
+          },
+        ],
+        counts: { all: 5, owner: 1, admin: 0 },
+      });
+    }
+
+    it("publishes the community's power and each member's own power under the privacy rule", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual({
+        status: "available",
+        power: "230.5",
+        snapshotId,
+        formulaVersion: "miningFormula-devBaseline-2026-09-15",
+        computedAt: "2026-09-15T13:30:00.000Z",
+      });
+      const members = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(members.statusCode).toBe(200);
+      const rows = members.json<{
+        items: {
+          profile: { publicProfileId: string | null };
+          miningPower: unknown;
+        }[];
+      }>().items;
+      expect(rows.map((row) => row.miningPower)).toEqual([
+        {
+          status: "available",
+          power: "3000",
+          snapshotId,
+          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          computedAt: "2026-09-15T13:30:00.000Z",
+        },
+        { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
+        // The viewer's own row is visible to the viewer even while private.
+        {
+          status: "available",
+          power: "12.5",
+          snapshotId,
+          formulaVersion: "miningFormula-devBaseline-2026-09-15",
+          computedAt: "2026-09-15T13:30:00.000Z",
+        },
+        { status: "unavailable", reasonCode: "MINING_ACCOUNT_NOT_IN_SNAPSHOT" },
+        {
+          status: "unavailable",
+          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        },
+      ]);
+      expect(members.body).not.toContain('"999"');
+    });
+
+    it("stays unavailable without a formula in force, a bound asset, or the mining module", async () => {
+      const pending = fakes();
+      memberRows(pending);
+      const pendingApp = await createApp(
+        {
+          ...pending,
+          database: {
+            ...pending.database,
+            mining: miningFake({
+              getApprovedFormula: vi.fn(() => Promise.resolve(null)),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const pendingDetail = await pendingApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(
+        pendingDetail.json<{ miningPower: unknown }>().miningPower,
+      ).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      });
+      const pendingMembers = await pendingApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      for (const row of pendingMembers.json<{
+        items: { miningPower: unknown }[];
+      }>().items) {
+        expect(row.miningPower).toEqual({
+          status: "unavailable",
+          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        });
+      }
+      const unbound = fakes();
+      const unboundApp = await createApp(
+        {
+          ...unbound,
+          database: {
+            ...unbound.database,
+            mining: miningFake({
+              getCommunityStanding: vi.fn(() => Promise.resolve(null)),
+              getCommunityWeight: vi.fn(() =>
+                Promise.resolve({
+                  communityId,
+                  communityName: "Frog Holders",
+                  boundAssetId: null,
+                  status: "pending_review" as const,
+                  weight: null,
+                  configVersion: null,
+                  reviewedAt: null,
+                }),
+              ),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const unboundDetail = await unboundApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(
+        unboundDetail.json<{ miningPower: unknown }>().miningPower,
+      ).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
+      });
+      // Without the mining module the community module composes no reader.
+      const withoutModule = await createApp(fakes());
+      const noModule = await withoutModule.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(noModule.json<{ miningPower: unknown }>().miningPower).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      });
+    });
   });
 });

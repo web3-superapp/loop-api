@@ -94,6 +94,45 @@ export const unavailableSchema = {
   },
 } as const;
 
+/**
+ * Mining Power as projected on a community, a member row, or a connection
+ * (Decision 0043): a decimal string read from the latest snapshot under the
+ * formula version in force, or the unavailable projection with its reason.
+ */
+export const miningPowerSchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "power",
+        "snapshotId",
+        "formulaVersion",
+        "computedAt",
+      ],
+      properties: {
+        status: { type: "string", const: "available" },
+        power: {
+          type: "string",
+          pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+        },
+        snapshotId: {
+          type: "string",
+          pattern:
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        },
+        formulaVersion: {
+          type: "string",
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        },
+        computedAt: { type: "string", format: "date-time" },
+      },
+    },
+  ],
+} as const;
+
 export const identityProjectionSchema = {
   type: "object",
   additionalProperties: false,
@@ -334,7 +373,7 @@ export const communityResourceSchema = {
     viewer: viewerSchema,
     chat: communityChatSchema,
     voice: communityVoiceSchema,
-    miningPower: unavailableSchema,
+    miningPower: miningPowerSchema,
     onlineCount: unavailableSchema,
     announcements: unavailableSchema,
     officialLinks: unavailableSchema,
@@ -474,7 +513,7 @@ export const memberListResourceSchema = {
             description:
               "The governance commands this viewer may run against this row, computed from the actor x action x target permission matrix and this row's stored state. The list is exhaustive and authoritative: an empty array means the row offers no command, and the client renders exactly these and derives nothing of its own. It is a projection, not an authorization: every command is re-checked against the same matrix on the write.",
           },
-          miningPower: unavailableSchema,
+          miningPower: miningPowerSchema,
         },
       },
     },
@@ -501,7 +540,7 @@ export const connectionListResourceSchema = {
           profile: identityProjectionSchema,
           createdAt: { type: "string", format: "date-time" },
           viewerFollows: { type: "boolean" },
-          miningPower: unavailableSchema,
+          miningPower: miningPowerSchema,
         },
       },
     },

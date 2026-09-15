@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 /**
- * V2 Mining wire contract (Decision 0036). No formula version is approved,
- * so every power, reward, and rank value is `unavailable` with
- * `MINING_FORMULA_BASELINE_PENDING`; `claimable` is `REWARD_AUTHORITY_PENDING`.
- * The draft formula carries rule text only (03 §19): no weight number, no
- * reward budget, no yield promise.
+ * V2 Mining wire contract (Decisions 0036 and 0043). Without an approved
+ * and effective formula version every power, reward, and rank value is
+ * `unavailable` with `MINING_FORMULA_BASELINE_PENDING`; `claimable` is
+ * always `REWARD_AUTHORITY_PENDING`. The product draft carries rule text
+ * only (03 §19); the development baseline (Decision 0043) carries explicit
+ * placeholder parameters that name themselves as such.
  */
 
 export const miningDraftFormulaVersion = "miningFormulaV1-draft" as const;
@@ -14,11 +15,41 @@ export const miningReasonCodes = Object.freeze({
   formulaBaselinePending: "MINING_FORMULA_BASELINE_PENDING",
   rewardAuthorityPending: "REWARD_AUTHORITY_PENDING",
   snapshotNotAvailable: "MINING_SNAPSHOT_NOT_AVAILABLE",
+  /** The latest snapshot was computed under a version that is no longer the approved one. */
+  snapshotStale: "MINING_SNAPSHOT_STALE",
   communityWeightPendingReview: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+  /** Two communities bind the same asset with an approved weight. */
+  communityWeightAmbiguous: "COMMUNITY_WEIGHT_AMBIGUOUS",
+  communityAssetNotBound: "COMMUNITY_ASSET_NOT_BOUND",
+  assetWeightNotConfigured: "MINING_ASSET_WEIGHT_NOT_CONFIGURED",
   referralBoostPending: "MINING_FORMULA_BASELINE_PENDING",
   priceNotFresh: "MINING_PRICE_NOT_FRESH",
   noBalanceInputs: "MINING_NO_BALANCE_INPUTS",
+  /** The account has no balance row in the snapshot (no active wallet). */
+  accountNotInSnapshot: "MINING_ACCOUNT_NOT_IN_SNAPSHOT",
+  /** Share of network power is undefined while the network total is zero. */
+  networkPowerZero: "MINING_NETWORK_POWER_ZERO",
+  /** The account has no positive power in the snapshot, so it holds no position. */
+  rankNotRanked: "MINING_RANK_NOT_RANKED",
+  /** `myPosition` has no meaning for the community scope. */
+  rankNotApplicable: "MINING_RANK_NOT_APPLICABLE",
+  /** The subject keeps `miningPowerVisibility: self`. */
+  powerPrivate: "MINING_POWER_PRIVATE",
+  /** The daily output budget of the approved version is not configured. */
+  dailyOutputNotConfigured: "MINING_DAILY_OUTPUT_NOT_CONFIGURED",
+  runtimeUnavailable: "MINING_RUNTIME_UNAVAILABLE",
 } as const);
+
+/**
+ * The scope a formula version declares about itself. `development_baseline`
+ * is the Decision 0043 placeholder: it lets the Development stack compute,
+ * and it is refused as a product fact by every production path.
+ */
+export const miningFormulaScopes = ["development_baseline"] as const;
+export type MiningFormulaScope = (typeof miningFormulaScopes)[number];
+
+export const miningDailyOutputUnitKey =
+  "mining.rules.dailyOutput.unit.loopTokenPending" as const;
 
 export const miningFormulaStatuses = [
   "pending_approval",
@@ -45,9 +76,24 @@ const unsignedDecimalPattern = new RegExp(unsignedDecimalPatternSource);
 const configVersionPattern = new RegExp(configVersionPatternSource);
 
 /**
+ * The only economic parameter of a formula version: the network-wide daily
+ * output the share-of-network-power rule distributes. The development
+ * baseline carries it as an explicit placeholder; a product version will
+ * replace the status once 02 freezes the budget.
+ */
+export interface MiningDailyOutputDocument {
+  readonly status: "development_placeholder";
+  /** Unsigned decimal string per day, in the unit named by `unitKey`. */
+  readonly budget: string;
+  readonly unitKey: typeof miningDailyOutputUnitKey;
+}
+
+/**
  * Formula document. `assetWeights` maps canonical asset IDs to decimal
- * weight strings and is empty in the draft; the community weight table
- * supplies reviewed weights per bound asset at snapshot time.
+ * weight strings and is empty in the product draft; the development
+ * baseline lists every registered asset at weight 1. A community weight is
+ * a second factor on the community's bound asset (Decision 0043), never a
+ * replacement for the asset weight.
  */
 export interface MiningFormulaDocument {
   readonly kind: "holding_times_reference_price_times_weight";
@@ -55,6 +101,15 @@ export interface MiningFormulaDocument {
   readonly dailyOutputKey: string;
   readonly assetWeights: Readonly<Record<string, string>>;
   readonly referralBoost: { readonly status: "pending_approval" | "approved" };
+  /** Absent on the product draft; present on the development baseline. */
+  readonly scope?: MiningFormulaScope | undefined;
+  readonly dailyOutput?: MiningDailyOutputDocument | undefined;
+}
+
+/** Inclusive decimal bounds a reviewed community weight must satisfy. */
+export interface MiningCommunityWeightRange {
+  readonly min: string;
+  readonly max: string;
 }
 
 export interface MiningWeightRangeDocument {
@@ -65,6 +120,8 @@ export interface MiningWeightRangeDocument {
   readonly community: {
     readonly status: "pending_approval" | "approved";
     readonly descriptionKey: string;
+    /** Present only once a version pins the community range. */
+    readonly range?: MiningCommunityWeightRange | undefined;
   };
   readonly reviewFactorKeys: readonly string[];
 }
@@ -76,6 +133,16 @@ export interface MiningPriceGuardRule {
 
 const statusSchema = z.enum(["pending_approval", "approved"]);
 
+const decimalSchema = z.string().regex(unsignedDecimalPattern);
+
+export const miningDailyOutputDocumentSchema = z
+  .object({
+    status: z.literal("development_placeholder"),
+    budget: decimalSchema,
+    unitKey: z.literal(miningDailyOutputUnitKey),
+  })
+  .strict();
+
 export const miningFormulaDocumentSchema = z
   .object({
     kind: z.literal("holding_times_reference_price_times_weight"),
@@ -83,11 +150,20 @@ export const miningFormulaDocumentSchema = z
     dailyOutputKey: z.string().min(1).max(128),
     assetWeights: z.record(
       z.string().regex(/^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/),
-      z.string().regex(unsignedDecimalPattern),
+      decimalSchema,
     ),
     referralBoost: z.object({ status: statusSchema }).strict(),
+    scope: z.enum(miningFormulaScopes).optional(),
+    dailyOutput: miningDailyOutputDocumentSchema.optional(),
   })
   .strict();
+
+export const miningCommunityWeightRangeSchema = z
+  .object({ min: decimalSchema, max: decimalSchema })
+  .strict()
+  .refine((range) => compareUnsignedDecimals(range.min, range.max) <= 0, {
+    message: "min must not exceed max",
+  });
 
 export const miningWeightRangeDocumentSchema = z
   .object({
@@ -95,11 +171,49 @@ export const miningWeightRangeDocumentSchema = z
       .object({ status: statusSchema, descriptionKey: z.string().min(1) })
       .strict(),
     community: z
-      .object({ status: statusSchema, descriptionKey: z.string().min(1) })
+      .object({
+        status: statusSchema,
+        descriptionKey: z.string().min(1),
+        range: miningCommunityWeightRangeSchema.optional(),
+      })
       .strict(),
     reviewFactorKeys: z.array(z.string().min(1).max(128)).max(16),
   })
   .strict();
+
+/**
+ * Exact comparison of two unsigned decimal strings with scaled integers; no
+ * floating point is ever produced.
+ */
+export function compareUnsignedDecimals(
+  left: string,
+  right: string,
+): -1 | 0 | 1 {
+  if (
+    !unsignedDecimalPattern.test(left) ||
+    !unsignedDecimalPattern.test(right)
+  ) {
+    throw new Error("Invalid unsigned decimal");
+  }
+  const [leftWhole = "0", leftFraction = ""] = left.split(".");
+  const [rightWhole = "0", rightFraction = ""] = right.split(".");
+  const scale = Math.max(leftFraction.length, rightFraction.length);
+  const a = BigInt(`${leftWhole}${leftFraction.padEnd(scale, "0")}`);
+  const b = BigInt(`${rightWhole}${rightFraction.padEnd(scale, "0")}`);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** True when `weight` lies inside the inclusive `[min, max]` range. */
+export function isCommunityWeightWithinRange(
+  weight: string,
+  range: MiningCommunityWeightRange,
+): boolean {
+  return (
+    isUnsignedDecimalString(weight) &&
+    compareUnsignedDecimals(weight, range.min) >= 0 &&
+    compareUnsignedDecimals(weight, range.max) <= 0
+  );
+}
 
 export const miningPriceGuardRulesSchema = z
   .array(

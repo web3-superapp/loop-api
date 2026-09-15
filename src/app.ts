@@ -292,6 +292,11 @@ import {
 } from "./features/launch/launch-service.js";
 import { createUnavailableLaunchRepository } from "./features/launch/launch-repository.js";
 import {
+  createMiningFormulaBaselineProbe,
+  createUnavailableMiningFormulaBaselineProbe,
+} from "./features/mining/mining-baseline.js";
+import { createMiningPowerReader } from "./features/mining/mining-power-reader.js";
+import {
   createMiningService,
   createUnavailableMiningService,
   type MiningService,
@@ -1030,6 +1035,14 @@ export async function buildApp(
     createCommunityService({
       repository: database.community ?? createUnavailableCommunityRepository(),
       communicationRepository: database.communication ?? null,
+      // Decision 0043: community, member, and connection Mining Power read
+      // the latest snapshot through the mining repository when the module
+      // is registered; otherwise they stay unavailable.
+      miningPower:
+        registeredV2ModuleIds(config).includes("mining") &&
+        database.mining !== undefined
+          ? createMiningPowerReader({ repository: database.mining })
+          : null,
       cursorCodec: v2CursorCodec,
       searchQuota: aliasSearchQuota,
       aliasPolicy: createAliasPolicy({
@@ -1360,6 +1373,12 @@ export async function buildApp(
           repository: database.mining ?? createUnavailableMiningRepository(),
         })
       : createUnavailableMiningService());
+  // Decision 0043: the `communityMining` capability reads the formula fact
+  // per request; without a mining repository the probe reports unavailable.
+  const miningFormulaBaseline =
+    miningRuntimeAvailable && database.mining !== undefined
+      ? createMiningFormulaBaselineProbe(database.mining)
+      : createUnavailableMiningFormulaBaselineProbe();
   const referralRuntimeAvailable =
     registeredModuleIds.includes("referral") &&
     (options.referralService !== undefined || database.referral !== undefined);
@@ -1607,6 +1626,7 @@ export async function buildApp(
         launchRuntimeAvailable,
         launchChainId: config.launchChain.chainId,
         miningRuntimeAvailable,
+        miningFormulaBaseline,
         referralRuntimeAvailable,
         securityRuntimeAvailable,
         settingsRuntimeAvailable,
