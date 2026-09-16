@@ -372,25 +372,98 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 与 S3 相同的静态快照（`edges`/`inviteCode` 恒 unavailable；真实数据走 `GET /v2/referral`）。
 
-## 4. 社区侧 `miningPower`（决策 0043）
+## 4. 社区侧 `miningPower`（决策 0043、0045）
 
-`GET /v2/communities/{id}.miningPower`、`GET /v2/communities/{id}/members.items[].miningPower`、
-`GET /v2/connections.items[].miningPower` 形状统一为：
+`GET /v2/communities/{id}.miningPower`（含 join/leave 等返回社区资源的写接口）、
+`GET /v2/communities/{id}/members.items[].miningPower`、`GET /v2/connections.items[].miningPower`
+共用**一个**定义（OpenAPI `miningPowerSchema`）。`available` 分支按 `subject` 分两种，都是**必填字段、无可选项**：
+
+| `subject`   | 谁的数                               | 字段                                                                                     |
+| ----------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `community` | 社区未封禁成员在绑定资产上的算力之和 | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`、`weight`、`participants` |
+| `account`   | 对方个人总算力（成员行、关注行）     | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`                           |
+
+- `scope` 与摘要页 `formula.scope`、规则页 `baseline.scope` **同一枚举同一来源**（生效版本的 `formula.scope`）：
+  `"development_baseline"` 或 `null`（产品版本）。**只用它打"开发基线"标签，不要从 `formulaVersion` 字符串猜**。
+- `weight` 与 3.5 的 `GET /v2/mining/communities/{id}.weight` **同一形状同一来源**（同一函数构造）：
+  `{status: "approved", value, configVersion, reviewedAt}` 或
+  `{status: "unavailable", reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW", reviewStatus: "pending_review"}`。
+- `participants` 与 3.5 的 `participants` 同形：`{status: "available", count}` 或 `{status: "unavailable", reasonCode}`。
+- 成员行 / 关注行是**一个人**跨资产的总算力，没有哪一个社区权重能解释它，所以 `account` 分支不带 `weight`/`participants`，
+  也不会用假 `reviewStatus` 凑一个 unavailable。按 `subject` 分支解码即可，不需要判断字段是否存在。
+- `unavailable` 分支**逐字节不变**：`{status: "unavailable", reasonCode}`，reasonCode 见 §2.1
+  （社区：`MINING_FORMULA_BASELINE_PENDING` / `MINING_SNAPSHOT_*` / `COMMUNITY_ASSET_NOT_BOUND` /
+  `COMMUNITY_WEIGHT_PENDING_REVIEW` / `MINING_RUNTIME_UNAVAILABLE`；成员/关注行另有 `MINING_POWER_PRIVATE` /
+  `MINING_ACCOUNT_NOT_IN_SNAPSHOT`）。未启用 `mining` 模块的部署恒为 `MINING_FORMULA_BASELINE_PENDING`。
+
+2026-09-16 Development 库实际投影（同一快照 `0e358b31-…`，两只开发钱包持仓为零，所以 `power`/`count` 都是真实的 0）：
+
+`GET /v2/communities/d17b34a6-c3cc-4a24-87dd-dc165c80bd85`（`mock-defi-morning`，Cake，权重 `0.8`）：
 
 ```json
 {
-  "status": "available",
-  "power": "230.5",
-  "snapshotId": "…",
-  "formulaVersion": "miningFormula-devBaseline-2026-09-15",
-  "computedAt": "…"
+  "miningPower": {
+    "status": "available",
+    "subject": "community",
+    "power": "0",
+    "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+    "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "computedAt": "2026-09-15T14:58:54.366Z",
+    "scope": "development_baseline",
+    "weight": {
+      "status": "approved",
+      "value": "0.8",
+      "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+      "reviewedAt": "2026-09-15T14:58:52.089Z"
+    },
+    "participants": { "status": "available", "count": 0 }
+  }
 }
 ```
 
-（上面是 `mock-defi-morning` 的实际响应）或 `{status: "unavailable", reasonCode}`。社区详情为社区算力（同 3.5 的
-`communityPower`）——注意它只带版本与快照，不带权重与参与人数，"为什么是 0"要看 3.5；成员/关注为对方个人算力，
-对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`（本人自己的行仍可见）。未启用 `mining` 模块的部署恒为
-`MINING_FORMULA_BASELINE_PENDING`。
+`GET /v2/communities/439cabe6-4c98-4f99-860f-192ad52403a1`（`builders-guild`，USDT，权重 `1.5`）：
+
+```json
+{
+  "miningPower": {
+    "status": "available",
+    "subject": "community",
+    "power": "0",
+    "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+    "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "computedAt": "2026-09-15T14:58:54.366Z",
+    "scope": "development_baseline",
+    "weight": {
+      "status": "approved",
+      "value": "1.5",
+      "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+      "reviewedAt": "2026-09-15T14:58:53.159Z"
+    },
+    "participants": { "status": "available", "count": 0 }
+  }
+}
+```
+
+`GET /v2/communities/439cabe6-…/members`（viewer 为 `cy`）两行的 `miningPower`：本人行 `account` 分支，
+`Voyager_09` 的 `miningPowerVisibility: self` 所以是 `MINING_POWER_PRIVATE`：
+
+```json
+[
+  {
+    "status": "available",
+    "subject": "account",
+    "power": "0",
+    "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+    "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "computedAt": "2026-09-15T14:58:54.366Z",
+    "scope": "development_baseline"
+  },
+  { "status": "unavailable", "reasonCode": "MINING_POWER_PRIVATE" }
+]
+```
+
+`GET /v2/connections.items[].miningPower` 与成员行走同一条读取路径、同一形状（`account` 分支）；Development 库
+目前没有任何 `follow_edges`，所以该路由对每个 viewer 都是 `items: []`，上面成员行的对象就是关注行会给出的对象。
 
 ## 5. 邀请关系（referral）
 

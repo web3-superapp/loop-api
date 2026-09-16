@@ -4958,10 +4958,14 @@
                           "additionalProperties": false,
                           "required": [
                             "status",
+                            "subject",
                             "power",
                             "snapshotId",
                             "formulaVersion",
-                            "computedAt"
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
                           ],
                           "properties": {
                             "status": {
@@ -4983,7 +4987,153 @@
                             "computedAt": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": ["pending_review"]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
                             }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
                           }
                         }
                       ]
@@ -5923,10 +6073,14 @@
                           "additionalProperties": false,
                           "required": [
                             "status",
+                            "subject",
                             "power",
                             "snapshotId",
                             "formulaVersion",
-                            "computedAt"
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
                           ],
                           "properties": {
                             "status": {
@@ -5948,7 +6102,153 @@
                             "computedAt": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": ["pending_review"]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
                             }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
                           }
                         }
                       ]
@@ -6789,10 +7089,14 @@
                           "additionalProperties": false,
                           "required": [
                             "status",
+                            "subject",
                             "power",
                             "snapshotId",
                             "formulaVersion",
-                            "computedAt"
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
                           ],
                           "properties": {
                             "status": {
@@ -6814,7 +7118,153 @@
                             "computedAt": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": ["pending_review"]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
                             }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
                           }
                         }
                       ]
@@ -7763,10 +8213,14 @@
                           "additionalProperties": false,
                           "required": [
                             "status",
+                            "subject",
                             "power",
                             "snapshotId",
                             "formulaVersion",
-                            "computedAt"
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
                           ],
                           "properties": {
                             "status": {
@@ -7788,7 +8242,153 @@
                             "computedAt": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": ["pending_review"]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
                             }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
                           }
                         }
                       ]
@@ -8737,10 +9337,14 @@
                           "additionalProperties": false,
                           "required": [
                             "status",
+                            "subject",
                             "power",
                             "snapshotId",
                             "formulaVersion",
-                            "computedAt"
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
                           ],
                           "properties": {
                             "status": {
@@ -8762,7 +9366,153 @@
                             "computedAt": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": ["pending_review"]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
                             }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
                           }
                         }
                       ]
@@ -9779,10 +10529,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -9804,6 +10558,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -10776,10 +11682,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -10801,6 +11711,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -11772,10 +12834,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -11797,6 +12863,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -12766,10 +13984,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -12791,6 +14013,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -13762,10 +15136,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -13787,6 +15165,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -14756,10 +16286,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -14781,6 +16315,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }
@@ -16988,10 +18674,14 @@
                                 "additionalProperties": false,
                                 "required": [
                                   "status",
+                                  "subject",
                                   "power",
                                   "snapshotId",
                                   "formulaVersion",
-                                  "computedAt"
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
                                 ],
                                 "properties": {
                                   "status": {
@@ -17013,6 +18703,158 @@
                                   "computedAt": {
                                     "type": "string",
                                     "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": ["pending_review"]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
                                   }
                                 }
                               }

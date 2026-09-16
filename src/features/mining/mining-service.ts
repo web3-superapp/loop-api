@@ -27,6 +27,12 @@ import {
   type MiningWeightRangeDocument,
   type UnavailableProjection,
 } from "./mining-contract.js";
+import {
+  projectCommunityWeight,
+  projectParticipants,
+  type MiningCommunityWeightProjection,
+  type MiningParticipantsProjection,
+} from "./mining-community-projection.js";
 import { estimateDailyOutputShare } from "./mining-daily-output.js";
 import {
   MiningRepositoryUnavailableError,
@@ -228,24 +234,13 @@ export interface MiningCommunityResource {
     readonly name: string;
     readonly boundAssetId: string | null;
   };
-  readonly weight:
-    | {
-        readonly status: "approved";
-        readonly value: string;
-        readonly configVersion: string;
-        readonly reviewedAt: string;
-      }
-    | {
-        readonly status: "unavailable";
-        readonly reasonCode: string;
-        readonly reviewStatus: "pending_review";
-      };
+  /** Shared with the community-side `miningPower` (Decision 0045). */
+  readonly weight: MiningCommunityWeightProjection;
   readonly communityPower: MiningDecimalOrUnavailable;
   readonly myContribution: MiningDecimalOrUnavailable;
   readonly rank: MiningPositionProjection;
-  readonly participants:
-    | { readonly status: "available"; readonly count: number }
-    | UnavailableProjection;
+  /** Shared with the community-side `miningPower` (Decision 0045). */
+  readonly participants: MiningParticipantsProjection;
   readonly snapshot: MiningSnapshotProjection | UnavailableProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -714,22 +709,7 @@ export function createMiningService(dependencies: {
         if (record === null) {
           throw V2ApiError.notFound();
         }
-        const weight =
-          record.status === "approved" &&
-          record.weight !== null &&
-          record.configVersion !== null &&
-          record.reviewedAt !== null
-            ? Object.freeze({
-                status: "approved" as const,
-                value: record.weight,
-                configVersion: record.configVersion,
-                reviewedAt: record.reviewedAt,
-              })
-            : Object.freeze({
-                status: "unavailable" as const,
-                reasonCode: miningReasonCodes.communityWeightPendingReview,
-                reviewStatus: "pending_review" as const,
-              });
+        const weight = projectCommunityWeight(record);
         const community = Object.freeze({
           communityId: record.communityId,
           name: record.communityName,
@@ -796,10 +776,7 @@ export function createMiningService(dependencies: {
                   position: standing.position,
                   power: standing.power,
                 }),
-          participants: Object.freeze({
-            status: "available" as const,
-            count: standing.participantCount,
-          }),
+          participants: projectParticipants(standing),
           snapshot: snapshotProjection(snapshot),
           contractVersion: v2ContractVersion,
         });

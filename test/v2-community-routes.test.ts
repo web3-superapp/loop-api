@@ -1490,6 +1490,20 @@ describe("LOOP API V2 community, social, and search modules", () => {
             position: 1,
           }),
         ),
+        getCommunityWeight: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId:
+              "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            status: "approved" as const,
+            weight: "1.5",
+            configVersion: documents.configVersion,
+            reviewedAt: "2026-09-15T09:00:00.000Z",
+          }),
+        ),
+        // The mining community page reads the caller's own rows; none here.
+        listAccountPowers: vi.fn(() => Promise.resolve([])),
         listMemberPowers: vi.fn(() =>
           Promise.resolve([
             {
@@ -1572,6 +1586,37 @@ describe("LOOP API V2 community, social, and search modules", () => {
       });
     }
 
+    /** Hand-written expectation for the community subject (Decision 0045). */
+    const communityPower = {
+      status: "available",
+      subject: "community",
+      power: "230.5",
+      snapshotId,
+      formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+      computedAt: "2026-09-15T13:30:00.000Z",
+      scope: "development_baseline",
+      weight: {
+        status: "approved",
+        value: "1.5",
+        configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+        reviewedAt: "2026-09-15T09:00:00.000Z",
+      },
+      participants: { status: "available", count: 2 },
+    } as const;
+
+    /** Hand-written expectation for an account subject (member or connection). */
+    function accountPower(power: string) {
+      return {
+        status: "available",
+        subject: "account",
+        power,
+        snapshotId,
+        formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+      } as const;
+    }
+
     it("publishes the community's power and each member's own power under the privacy rule", async () => {
       const dependencies = fakes();
       memberRows(dependencies);
@@ -1591,13 +1636,9 @@ describe("LOOP API V2 community, social, and search modules", () => {
         headers: commonHeaders(),
       });
       expect(detail.statusCode).toBe(200);
-      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual({
-        status: "available",
-        power: "230.5",
-        snapshotId,
-        formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
-        computedAt: "2026-09-15T13:30:00.000Z",
-      });
+      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual(
+        communityPower,
+      );
       const members = await app.inject({
         method: "GET",
         url: `/v2/communities/${communityId}/members`,
@@ -1611,22 +1652,10 @@ describe("LOOP API V2 community, social, and search modules", () => {
         }[];
       }>().items;
       expect(rows.map((row) => row.miningPower)).toEqual([
-        {
-          status: "available",
-          power: "3000",
-          snapshotId,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
-          computedAt: "2026-09-15T13:30:00.000Z",
-        },
+        accountPower("3000"),
         { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
         // The viewer's own row is visible to the viewer even while private.
-        {
-          status: "available",
-          power: "12.5",
-          snapshotId,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
-          computedAt: "2026-09-15T13:30:00.000Z",
-        },
+        accountPower("12.5"),
         { status: "unavailable", reasonCode: "MINING_ACCOUNT_NOT_IN_SNAPSHOT" },
         {
           status: "unavailable",
@@ -1634,6 +1663,179 @@ describe("LOOP API V2 community, social, and search modules", () => {
         },
       ]);
       expect(members.body).not.toContain('"999"');
+      // Neither field explains one person's total power, so the account
+      // subject carries neither (Decision 0045).
+      expect(rows[0]?.miningPower).not.toHaveProperty("weight");
+      expect(rows[0]?.miningPower).not.toHaveProperty("participants");
+    });
+
+    it("projects a connection's own power in the account shape (Decision 0045)", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            community: {
+              ...dependencies.communityRepository,
+              listConnections: vi.fn(() =>
+                Promise.resolve([
+                  {
+                    profile: { ...profile, publicProfileId: publicMemberId },
+                    createdAt,
+                    viewerFollows: true,
+                  },
+                  {
+                    profile: { ...profile, publicProfileId: privateMemberId },
+                    createdAt,
+                    viewerFollows: false,
+                  },
+                ]),
+              ),
+            },
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/connections?direction=following",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const rows = response.json<{ items: { miningPower: unknown }[] }>().items;
+      expect(rows.map((row) => row.miningPower)).toEqual([
+        accountPower("3000"),
+        { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
+      ]);
+    });
+
+    it("publishes the community's weight and participants from the same source as the mining page (Decision 0045)", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const [detail, joined, members, miningPage] = await Promise.all([
+        app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        }),
+        app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/join`,
+          headers: commandHeaders(),
+        }),
+        app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}/members`,
+          headers: commonHeaders(),
+        }),
+        app.inject({
+          method: "GET",
+          url: `/v2/mining/communities/${communityId}`,
+          headers: commonHeaders(),
+        }),
+      ]);
+      expect(detail.statusCode).toBe(200);
+      expect(joined.statusCode).toBe(200);
+      expect(members.statusCode).toBe(200);
+      expect(miningPage.statusCode).toBe(200);
+      const fromDetail = detail.json<{
+        miningPower: { weight: unknown; participants: unknown; power: string };
+      }>().miningPower;
+      // Every route that returns the community resource projects the same
+      // Mining Power object.
+      expect(joined.json<{ miningPower: unknown }>().miningPower).toEqual(
+        fromDetail,
+      );
+      // The card and the mining page cannot disagree: same weight object,
+      // same participants object, same power string.
+      const page = miningPage.json<{
+        weight: unknown;
+        participants: unknown;
+        communityPower: { status: string; value: string };
+      }>();
+      expect(fromDetail.weight).toEqual(page.weight);
+      expect(fromDetail.participants).toEqual(page.participants);
+      expect(page.communityPower).toEqual({
+        status: "available",
+        value: fromDetail.power,
+      });
+      // A member row inside the same directory answers with the same
+      // snapshot and scope as the community it belongs to.
+      const firstRow = members.json<{
+        items: {
+          miningPower: {
+            snapshotId: string;
+            formulaVersion: string;
+            computedAt: string;
+            scope: unknown;
+          };
+        }[];
+      }>().items[0]?.miningPower;
+      expect(firstRow).toMatchObject({
+        snapshotId,
+        formulaVersion: documents.configVersion,
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+      });
+    });
+
+    it("publishes scope null under a version that declares none", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const formulaWithoutScope = { ...documents.formula, scope: undefined };
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake({
+              getApprovedFormula: vi.fn(() =>
+                Promise.resolve({
+                  configVersion: documents.configVersion,
+                  formula: formulaWithoutScope,
+                  weightRange: documents.weightRange,
+                  priceGuardRules: documents.priceGuardRules,
+                  status: "approved" as const,
+                  effectiveAt: approvedAt,
+                  approvedAt,
+                  createdAt: approvedAt,
+                }),
+              ),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual({
+        ...communityPower,
+        scope: null,
+      });
+      const members = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(
+        members.json<{ items: { miningPower: unknown }[] }>().items[0]
+          ?.miningPower,
+      ).toEqual({ ...accountPower("3000"), scope: null });
     });
 
     it("stays unavailable without a formula in force, a bound asset, or the mining module", async () => {
@@ -1662,6 +1864,11 @@ describe("LOOP API V2 community, social, and search modules", () => {
         status: "unavailable",
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
       });
+      // The unavailable branch is byte-identical to the S20 wire form:
+      // exactly two keys in this order, no subject/scope/weight/participants.
+      expect(pendingDetail.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"MINING_FORMULA_BASELINE_PENDING"}',
+      );
       const pendingMembers = await pendingApp.app.inject({
         method: "GET",
         url: `/v2/communities/${communityId}/members`,
@@ -1676,6 +1883,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
         });
       }
       const unbound = fakes();
+      memberRows(unbound);
       const unboundApp = await createApp(
         {
           ...unbound,
@@ -1710,6 +1918,17 @@ describe("LOOP API V2 community, social, and search modules", () => {
         status: "unavailable",
         reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
       });
+      expect(unboundDetail.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"COMMUNITY_ASSET_NOT_BOUND"}',
+      );
+      const privateRow = await unboundApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(privateRow.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"MINING_POWER_PRIVATE"}',
+      );
       // Without the mining module the community module composes no reader.
       const withoutModule = await createApp(fakes());
       const noModule = await withoutModule.app.inject({

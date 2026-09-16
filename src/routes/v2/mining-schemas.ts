@@ -3,7 +3,6 @@ import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   configVersionPatternSource,
   miningDailyOutputUnitKey,
-  miningFormulaScopes,
   miningReferencePriceQualities,
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
@@ -14,6 +13,11 @@ import {
 import { miningRankLimit } from "../../features/mining/mining-service.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { unavailableSchema } from "./launch-schemas.js";
+import {
+  miningCommunityWeightSchema,
+  miningParticipantsSchema,
+  miningScopeSchema,
+} from "./mining-shared-schemas.js";
 
 /**
  * Route schemas for the V2 mining module (Decisions 0036 and 0043). Every
@@ -39,11 +43,7 @@ const decimalSchema = {
   type: "string",
   pattern: unsignedDecimalPatternSource,
 } as const;
-const scopeSchema = {
-  anyOf: [{ type: "string", enum: [...miningFormulaScopes] }, { type: "null" }],
-  description:
-    "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version.",
-} as const;
+const scopeSchema = miningScopeSchema;
 
 const snapshotProjectionSchema = {
   type: "object",
@@ -519,34 +519,7 @@ export const miningCommunityResourceSchema = {
         },
       },
     },
-    weight: {
-      anyOf: [
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["status", "value", "configVersion", "reviewedAt"],
-          properties: {
-            status: { type: "string", const: "approved" },
-            value: decimalSchema,
-            configVersion: {
-              type: "string",
-              pattern: configVersionPatternSource,
-            },
-            reviewedAt: { type: "string", format: "date-time" },
-          },
-        },
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["status", "reasonCode", "reviewStatus"],
-          properties: {
-            status: { type: "string", const: "unavailable" },
-            reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
-            reviewStatus: { type: "string", const: "pending_review" },
-          },
-        },
-      ],
-    },
+    weight: miningCommunityWeightSchema,
     communityPower: {
       ...decimalOrUnavailableSchema,
       description:
@@ -554,20 +527,7 @@ export const miningCommunityResourceSchema = {
     },
     myContribution: decimalOrUnavailableSchema,
     rank: positionSchema,
-    participants: {
-      anyOf: [
-        unavailableSchema,
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["status", "count"],
-          properties: {
-            status: { type: "string", const: "available" },
-            count: { type: "integer", minimum: 0 },
-          },
-        },
-      ],
-    },
+    participants: miningParticipantsSchema,
     snapshot: snapshotSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },

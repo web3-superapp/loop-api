@@ -42,6 +42,11 @@ import { memberSearchLimits } from "../../features/identity/alias-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
+  miningCommunityWeightSchema,
+  miningParticipantsSchema,
+  miningScopeSchema,
+} from "./mining-shared-schemas.js";
+import {
   parseV2CommonRequestMetadata,
   v2CommonHeadersSchema,
 } from "../../features/session/session-contract.js";
@@ -94,10 +99,33 @@ export const unavailableSchema = {
   },
 } as const;
 
+const availableMiningPowerProperties = {
+  status: { type: "string", const: "available" },
+  power: {
+    type: "string",
+    pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+  },
+  snapshotId: {
+    type: "string",
+    pattern:
+      "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  },
+  formulaVersion: {
+    type: "string",
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+  },
+  computedAt: { type: "string", format: "date-time" },
+  scope: miningScopeSchema,
+} as const;
+
 /**
  * Mining Power as projected on a community, a member row, or a connection
- * (Decision 0043): a decimal string read from the latest snapshot under the
- * formula version in force, or the unavailable projection with its reason.
+ * (Decisions 0043 and 0045): a decimal string read from the latest snapshot
+ * under the formula version in force, tagged with that version's `scope`, or
+ * the unavailable projection with its reason. `subject` tags what the number
+ * is: a community's members' power on its bound asset, explained by the
+ * same `weight` and `participants` as `GET /v2/mining/communities/{id}`, or
+ * one account's total power, which no single weight explains.
  */
 export const miningPowerSchema = {
   anyOf: [
@@ -107,27 +135,37 @@ export const miningPowerSchema = {
       additionalProperties: false,
       required: [
         "status",
+        "subject",
         "power",
         "snapshotId",
         "formulaVersion",
         "computedAt",
+        "scope",
+        "weight",
+        "participants",
       ],
       properties: {
-        status: { type: "string", const: "available" },
-        power: {
-          type: "string",
-          pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
-        },
-        snapshotId: {
-          type: "string",
-          pattern:
-            "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        },
-        formulaVersion: {
-          type: "string",
-          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
-        },
-        computedAt: { type: "string", format: "date-time" },
+        ...availableMiningPowerProperties,
+        subject: { type: "string", const: "community" },
+        weight: miningCommunityWeightSchema,
+        participants: miningParticipantsSchema,
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "subject",
+        "power",
+        "snapshotId",
+        "formulaVersion",
+        "computedAt",
+        "scope",
+      ],
+      properties: {
+        ...availableMiningPowerProperties,
+        subject: { type: "string", const: "account" },
       },
     },
   ],

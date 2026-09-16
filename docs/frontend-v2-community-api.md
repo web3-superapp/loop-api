@@ -265,11 +265,35 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 }
 ```
 
-`miningPower`（决策 0043）在有生效公式与快照时为
-`{ "status": "available", "power": "230.5", "snapshotId": "…", "formulaVersion": "…", "computedAt": "…" }`
-（社区未封禁成员在绑定资产上的算力之和，decimal 字符串）；成员行与关注行的 `miningPower` 同形，
-为对方个人算力，对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`。完整规则与 reasonCode
-见 `docs/frontend-v2-mining-api.md` §4。
+`miningPower`（决策 0043、0045）在有生效公式与快照时为 `subject: "community"` 分支，
+社区行自己就能解释"为什么是这个数"（开发库 `mock-defi-morning` 实际投影）：
+
+```json
+{
+  "status": "available",
+  "subject": "community",
+  "power": "0",
+  "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+  "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+  "computedAt": "2026-09-15T14:58:54.366Z",
+  "scope": "development_baseline",
+  "weight": {
+    "status": "approved",
+    "value": "0.8",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "reviewedAt": "2026-09-15T14:58:52.089Z"
+  },
+  "participants": { "status": "available", "count": 0 }
+}
+```
+
+`power` 是社区未封禁成员在绑定资产上的算力之和（decimal 字符串）；`scope` 与 mining 摘要页同源，
+`"development_baseline"` 时必须打"开发基线"标签；`weight`、`participants` 与
+`GET /v2/mining/communities/{id}` 的同名字段同形同源。成员行与关注行的 `miningPower` 是
+`subject: "account"` 分支（同前五个字段加 `scope`，不带 `weight`/`participants`），为对方个人总算力，
+对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`。`unavailable` 分支仍是
+`{status, reasonCode}` 两个字段。完整规则、全部 reasonCode 与三条路由的开发库样例见
+`docs/frontend-v2-mining-api.md` §4。
 
 `viewer.membership === null` 表示未加入（显示"加入"按钮）。`status === "muted"`
 表示被禁言，`banned` 表示被封禁。
@@ -309,7 +333,15 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
       "joinedAt": "…",
       "isSelf": false,
       "actions": [],
-      "miningPower": { "status": "unavailable", "reasonCode": "MINING_FORMULA_BASELINE_PENDING" }
+      "miningPower": {
+        "status": "available",
+        "subject": "account",
+        "power": "0",
+        "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+        "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+        "computedAt": "2026-09-15T14:58:54.366Z",
+        "scope": "development_baseline"
+      }
     }
   ],
   "nextCursor": null,
@@ -458,14 +490,30 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 ```json
 {
   "direction": "following",
-  "items": [{ "profile": { … }, "createdAt": "…", "viewerFollows": true, "miningPower": { … } }],
+  "items": [
+    {
+      "profile": { … },
+      "createdAt": "…",
+      "viewerFollows": true,
+      "miningPower": {
+        "status": "available",
+        "subject": "account",
+        "power": "0",
+        "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+        "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+        "computedAt": "2026-09-15T14:58:54.366Z",
+        "scope": "development_baseline"
+      }
+    }
+  ],
   "counts": { "following": 24, "followers": 108 },
   "nextCursor": null,
   "contractVersion": "2.0"
 }
 ```
 
-两个 seg 的计数用 `counts`。行内算力显示 unavailable。被自己屏蔽的账号不出现
+两个 seg 的计数用 `counts`。行内 `miningPower` 与成员行同形（`subject: "account"`，决策 0045），
+对方不公开时为 `MINING_POWER_PRIVATE`。被自己屏蔽的账号不出现
 在列表里。行点击进入 `dm`（D7 之前 `dm` 是 unavailable 占位并给出说明）。
 
 ### 4.10 `GET/POST/DELETE /v2/blocks` — `blocklist` 页

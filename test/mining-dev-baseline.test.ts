@@ -354,6 +354,123 @@ describe("baseline resolution", () => {
 });
 
 describe("community mining power reader", () => {
+  const communityId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+  const weightRecord = {
+    communityId,
+    communityName: "Frog Holders",
+    boundAssetId: "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+    status: "approved" as const,
+    weight: "0.8",
+    configVersion: documents.configVersion,
+    reviewedAt: "2026-09-15T09:00:00.000Z",
+  };
+
+  it("explains a community's power with the version scope, the reviewed weight, and the participant count (Decision 0045)", async () => {
+    const reader = createMiningPowerReader({
+      repository: {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: () => Promise.resolve(approved),
+        getLatestSnapshot: () => Promise.resolve(snapshot),
+        getCommunityWeight: () => Promise.resolve(weightRecord),
+        getCommunityStanding: () =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId: weightRecord.boundAssetId,
+            weight: "0.8",
+            power: "92",
+            participantCount: 3,
+            position: 1,
+          }),
+      },
+      now: () => now,
+    });
+    expect(await reader.readCommunityPower(communityId)).toEqual({
+      status: "available",
+      subject: "community",
+      power: "92",
+      snapshotId: snapshot.snapshotId,
+      formulaVersion: documents.configVersion,
+      computedAt: snapshot.computedAt,
+      scope: "development_baseline",
+      weight: {
+        status: "approved",
+        value: "0.8",
+        configVersion: documents.configVersion,
+        reviewedAt: "2026-09-15T09:00:00.000Z",
+      },
+      participants: { status: "available", count: 3 },
+    });
+  });
+
+  it("keeps the unavailable branch to status and reasonCode without a standing", async () => {
+    const reader = createMiningPowerReader({
+      repository: {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: () => Promise.resolve(approved),
+        getLatestSnapshot: () => Promise.resolve(snapshot),
+        getCommunityWeight: () =>
+          Promise.resolve({
+            ...weightRecord,
+            status: "pending_review" as const,
+            weight: null,
+            configVersion: null,
+            reviewedAt: null,
+          }),
+        getCommunityStanding: () => Promise.resolve(null),
+      },
+      now: () => now,
+    });
+    const projection = await reader.readCommunityPower(communityId);
+    expect(projection).toEqual({
+      status: "unavailable",
+      reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+    });
+    expect(JSON.stringify(projection)).toBe(
+      '{"status":"unavailable","reasonCode":"COMMUNITY_WEIGHT_PENDING_REVIEW"}',
+    );
+  });
+
+  it("projects an account's total power with the scope and no community facts", async () => {
+    const viewer = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
+    const profileId = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
+    const reader = createMiningPowerReader({
+      repository: {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: () =>
+          Promise.resolve({
+            ...approved,
+            // A product version declares no scope.
+            formula: { ...approved.formula, scope: undefined },
+          }),
+        getLatestSnapshot: () => Promise.resolve(snapshot),
+        listMemberPowers: () =>
+          Promise.resolve([
+            {
+              publicProfileId: profileId,
+              ownerUserId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+              totalPower: "1138.67",
+              visibleToOthers: true,
+            },
+          ]),
+      },
+      now: () => now,
+    });
+    const powers = await reader.readMemberPowers({
+      viewerUserId: viewer,
+      publicProfileIds: [profileId],
+    });
+    expect(powers.get(profileId)).toEqual({
+      status: "available",
+      subject: "account",
+      power: "1138.67",
+      snapshotId: snapshot.snapshotId,
+      formulaVersion: documents.configVersion,
+      computedAt: snapshot.computedAt,
+      scope: null,
+    });
+  });
+
   it("fails closed on any repository failure instead of estimating", async () => {
     const reader = createMiningPowerReader({
       repository: {
