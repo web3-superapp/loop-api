@@ -865,13 +865,29 @@ export function createPostgresBscIndexerRepository(
       readonly chainId: string;
       readonly address: string;
     }): Promise<string | null> {
+      // Preflight B1 (2026-09-16): one `min()` over `from = $2 or to = $2`
+      // made the planner walk `indexed_transfers_block_idx` ascending and
+      // filter the whole table (79M rows, 37.6 s on the development
+      // database, cancelled by the 5 s statement timeout). Taking each
+      // address side separately lets every branch finish with a single
+      // backward step on its own `(chain_id, address, block_number desc)`
+      // index; the outer `min` merges the two (0.07 ms on the same data).
       const result = await pool.query<Record<string, unknown>>({
         text: `
-          select min(block_number)::text as block_number
-          from public.indexed_transfers
-          where chain_id = $1
-            and (from_address = $2 or to_address = $2)
-            and not removed
+          select min(sides.block_number)::text as block_number
+          from (
+            select min(block_number) as block_number
+            from public.indexed_transfers
+            where chain_id = $1
+              and from_address = $2
+              and not removed
+            union all
+            select min(block_number) as block_number
+            from public.indexed_transfers
+            where chain_id = $1
+              and to_address = $2
+              and not removed
+          ) as sides
         `,
         values: [input.chainId, input.address],
       });

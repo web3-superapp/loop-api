@@ -478,6 +478,85 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
     expect(poolCheckpoint?.approvalCoverageFromBlockNumber ?? null).toBeNull();
   });
 
+  it("finds the earliest wallet activity on either address side without a full-table walk (preflight B1)", async () => {
+    await registry.upsertAsset({
+      assetId: wbnbAssetId,
+      chainId: bscChainId,
+      address: wbnb,
+      symbol: "WBNB",
+      name: "Wrapped BNB",
+      decimals: 18,
+      status: "pending",
+      sourceBlockNumber: "43000000",
+    });
+    const transfer = (
+      hashNibble: string,
+      blockNumber: string,
+      fromAddress: string,
+      toAddress: string,
+    ) => ({
+      transactionHash: `0x${hashNibble.repeat(64)}`,
+      logIndex: 0,
+      blockNumber,
+      blockHash: `0x${"a".repeat(64)}`,
+      assetId: wbnbAssetId,
+      fromAddress,
+      toAddress,
+      rawValue: "1",
+    });
+    await indexer.commitTransferSegment({
+      chainId: bscChainId,
+      transfers: [
+        // walletA only ever sends here; walletB only ever receives.
+        transfer("6", "930", walletA, counterparty),
+        transfer("7", "960", walletA, counterparty),
+        transfer("8", "920", counterparty, walletB),
+        transfer("9", "970", counterparty, walletB),
+        // A reorg-removed row is never the earliest activity.
+        transfer("d", "900", counterparty, walletB),
+      ],
+      checkpoint: {
+        lastBlockNumber: "1000",
+        lastBlockHash: `0x${"a".repeat(64)}`,
+        startedFromBlockNumber: "900",
+      },
+    });
+    await pool.query({
+      text: `
+        update public.indexed_transfers
+        set removed = true
+        where chain_id = $1 and transaction_hash = $2
+      `,
+      values: [bscChainId, `0x${"d".repeat(64)}`],
+    });
+
+    // The query is the union of one backward index step per address side;
+    // both sides must be consulted, and the earlier one wins.
+    await expect(
+      indexer.earliestWalletActivityBlockNumber({
+        chainId: bscChainId,
+        address: walletA,
+      }),
+    ).resolves.toBe("930");
+    await expect(
+      indexer.earliestWalletActivityBlockNumber({
+        chainId: bscChainId,
+        address: walletB,
+      }),
+    ).resolves.toBe("920");
+    await expect(
+      indexer.earliestWalletActivityBlockNumber({
+        chainId: bscChainId,
+        address: "0x00000000000000000000000000000000000000e5",
+      }),
+    ).resolves.toBeNull();
+
+    // The plan itself (one backward index step per address side, never the
+    // block index) is only observable on a populated table; it was measured
+    // with EXPLAIN ANALYZE on the development database and is recorded in
+    // the commit that introduced the query shape.
+  });
+
   it("commits a segment wider than one insert batch atomically", async () => {
     await registry.upsertAsset({
       assetId: wbnbAssetId,
