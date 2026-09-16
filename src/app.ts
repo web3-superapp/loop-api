@@ -109,6 +109,10 @@ import {
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 import {
+  createChainVerificationWatch,
+  type CreateChainVerificationWatchInput,
+} from "./integrations/bsc/chain-verification-watch.js";
+import {
   createPrivyBalanceReader,
   createPrivyWalletReader,
   createUnavailablePrivyBalanceReader,
@@ -409,6 +413,15 @@ export interface BuildAppOptions {
    * client and publishes nothing of its own.
    */
   readonly launchChainReadClient?: BscReadClient;
+  /**
+   * Test seam for the chain-verification watch (startup retry policy,
+   * projection re-probe throttle, clock, and sleep). Production uses the
+   * defaults in `chain-verification-watch.ts`.
+   */
+  readonly chainVerificationWatch?: Pick<
+    CreateChainVerificationWatchInput,
+    "retry" | "reprobeThrottleMs" | "monotonicMs" | "sleep"
+  >;
   readonly privyWalletReader?: PrivyWalletReader;
   readonly privyBalanceReader?: PrivyBalanceReader;
   readonly chainStatusService?: ChainStatusService;
@@ -1457,50 +1470,36 @@ export async function buildApp(
       cursorCodec: v2CursorCodec,
     });
 
-  // Chain-ID verification is probed once at startup and refreshed lazily by
-  // the read client, which owns the state. The capability projection reads it
-  // synchronously per request, so a recovery is reflected without a restart.
-  // A misconfigured endpoint is a loud warning and a closed capability, never
-  // a crash and never a silently wrong chain.
+  // Chain-ID verification is probed at startup and, while the outcome is
+  // `unreachable`/`unknown`, retried with exponential backoff; the read
+  // client owns the state. The capability projection reads it synchronously
+  // per request and itself schedules a throttled background re-probe when it
+  // observes a non-terminal state, so a cold start whose first probe failed
+  // heals within seconds without any client action (preflight 2026-09-16,
+  // 03 §4.5d). A misconfigured endpoint (`mismatched`) is a loud warning and
+  // a closed capability, never retried, never a crash, never a wrong chain.
+  const bscChainVerificationWatch = createChainVerificationWatch({
+    client: bscReadClient,
+    chainSlot: "primary",
+    logger: app.log,
+    ...(options.chainVerificationWatch ?? {}),
+  });
   if (chainRuntimeAvailable) {
-    void bscReadClient
-      .verifyChain()
-      .then((state) => {
-        if (state !== "verified") {
-          app.log.warn(
-            { chainId: bscChainId, chainVerification: state },
-            "BSC chain verification did not confirm the configured chain",
-          );
-        }
-      })
-      .catch(() => {
-        // The client records the failure; nothing else to do here.
-      });
+    void bscChainVerificationWatch.verifyAtStartup();
   }
-  // Same pattern for the launch chain slot (Decision 0038): probe once,
-  // warn on anything but `verified`, and let the projections read the live
-  // state per request.
-  if (
-    launchChainReadClient !== null &&
-    launchChainReadClient.endpointRefs.length > 0
-  ) {
-    void launchChainReadClient
-      .verifyChain()
-      .then((state) => {
-        if (state !== "verified") {
-          app.log.warn(
-            {
-              chainId: launchChainReadClient.chainId,
-              chainSlot: "launch",
-              chainVerification: state,
-            },
-            "Launch chain verification did not confirm the configured chain",
-          );
-        }
-      })
-      .catch(() => {
-        // The client records the failure; nothing else to do here.
-      });
+  // Same discipline for the launch chain slot (Decision 0038).
+  const launchChainVerificationWatch =
+    launchChainReadClient === null ||
+    launchChainReadClient.endpointRefs.length === 0
+      ? null
+      : createChainVerificationWatch({
+          client: launchChainReadClient,
+          chainSlot: "launch",
+          logger: app.log,
+          ...(options.chainVerificationWatch ?? {}),
+        });
+  if (launchChainVerificationWatch !== null) {
+    void launchChainVerificationWatch.verifyAtStartup();
   }
   // Decision 0039: the operator confirmed the audio-room `user` role evidence
   // in configuration. Log the reference once so a deployment that publishes
@@ -1517,6 +1516,8 @@ export async function buildApp(
   }
 
   app.addHook("onClose", async () => {
+    bscChainVerificationWatch.stop();
+    launchChainVerificationWatch?.stop();
     await database.close();
   });
 
@@ -1628,7 +1629,7 @@ export async function buildApp(
         searchRuntimeAvailable,
         bscRpcConfigured,
         chainRuntimeAvailable,
-        bscChainVerification: () => bscReadClient.currentVerification(),
+        bscChainVerification: () => bscChainVerificationWatch.current(),
         walletRuntimeAvailable,
         watchlistRuntimeAvailable,
         marketRuntimeAvailable,

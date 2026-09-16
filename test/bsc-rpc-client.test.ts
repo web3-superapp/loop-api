@@ -21,6 +21,7 @@ import {
   createUnavailableBscReadClient,
   endpointRefFor,
 } from "../src/integrations/bsc/rpc-client.js";
+import { createChainVerificationWatch } from "../src/integrations/bsc/chain-verification-watch.js";
 
 /**
  * Every case here drives the real viem client through an in-memory transport.
@@ -543,5 +544,88 @@ describe("BSC read client", () => {
     ).rejects.toMatchObject({ reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED" });
     // The primary unavailable client is unchanged.
     expect(createUnavailableBscReadClient().chainId).toBe("eip155:56");
+  });
+});
+
+describe("BSC read client — cold start self-healing (preflight 2026-09-16)", () => {
+  it("flips from unreachable to verified through the startup retry without any chain read", async () => {
+    let reachable = false;
+    const chainIdCalls: number[] = [];
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              chainIdCalls.push(Date.now());
+              return reachable
+                ? Promise.resolve("0x38")
+                : Promise.reject(new Error("endpoint unavailable"));
+            }
+            return Promise.reject(new Error(`unmocked ${request.method}`));
+          },
+          // The client's own probe must decide; no transport-level retries.
+          retryCount: 0,
+        }),
+    });
+    const sleeps: number[] = [];
+    const logger = { warn: vi.fn(), info: vi.fn() };
+    const watch = createChainVerificationWatch({
+      client,
+      chainSlot: "primary",
+      logger,
+      retry: {
+        maxAttempts: 5,
+        initialDelayMs: 2_000,
+        maxDelayMs: 16_000,
+        maxTotalMs: 60_000,
+      },
+      monotonicMs: () => sleeps.reduce((sum, ms) => sum + ms, 0),
+      sleep: (ms) => {
+        sleeps.push(ms);
+        // The endpoint comes back while the second delay is pending.
+        if (sleeps.length === 2) {
+          reachable = true;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    // Cold start: the projection reads `unknown` while the probe is pending.
+    const startup = watch.verifyAtStartup();
+    expect(client.currentVerification()).toBe("unknown");
+
+    await expect(startup).resolves.toBe("verified");
+    expect(client.currentVerification()).toBe("verified");
+    expect(watch.current()).toBe("verified");
+    expect(sleeps).toEqual([2_000, 4_000]);
+    // Each probe hits both endpoints of the fallback transport once.
+    expect(chainIdCalls.length).toBeGreaterThanOrEqual(3);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ chainVerification: "verified", attempt: 3 }),
+      expect.stringContaining("recovered"),
+    );
+  });
+
+  it("keeps a mismatched chain closed and never re-probes it from the projection", async () => {
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () => chainTransport({ chainId: "0x1" }),
+    });
+    const sleep = vi.fn(() => Promise.resolve());
+    const watch = createChainVerificationWatch({
+      client,
+      chainSlot: "primary",
+      logger: null,
+      sleep,
+      monotonicMs: () => 0,
+    });
+    await expect(watch.verifyAtStartup()).resolves.toBe("mismatched");
+    expect(sleep).not.toHaveBeenCalled();
+    expect(watch.current()).toBe("mismatched");
+    await expect(client.getHead()).rejects.toBeInstanceOf(
+      BscChainMismatchError,
+    );
   });
 });

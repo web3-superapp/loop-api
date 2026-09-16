@@ -685,6 +685,100 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     });
   });
 
+  it("re-probes a stalled chain verification from the capability projection instead of sustaining the closed state (preflight 2026-09-16)", async () => {
+    const dependencies = fakes();
+    // `endpoint` is what eth_chainId would answer now; `probed` is what the
+    // client last observed, which is all the projection may report.
+    let endpoint: "unreachable" | "verified" = "unreachable";
+    let probed: "unknown" | "unreachable" | "verified" = "unknown";
+    const verifyChain = vi.fn(() => {
+      probed = endpoint;
+      return Promise.resolve(probed);
+    });
+    const client = {
+      ...dependencies.bscReadClient,
+      verifyChain,
+      currentVerification: () => probed,
+    };
+    let clock = 0;
+    const app = await buildApp({
+      config: testConfig(),
+      contractSurface: "v2",
+      database: dependencies.database,
+      privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      bscReadClient: client,
+      privyWalletReader: dependencies.walletReader,
+      privyBalanceReader: dependencies.balanceReader,
+      chainVerificationWatch: {
+        // Startup gets a single probe here so the projection path is what
+        // heals the state.
+        retry: {
+          maxAttempts: 1,
+          initialDelayMs: 0,
+          maxDelayMs: 0,
+          maxTotalMs: 0,
+        },
+        reprobeThrottleMs: 30_000,
+        monotonicMs: () => clock,
+        sleep: () => Promise.resolve(),
+      },
+      logger: false,
+    });
+    apps.push(app);
+    await vi.waitFor(() => expect(verifyChain).toHaveBeenCalledTimes(1));
+    expect(probed).toBe("unreachable");
+
+    const readBscRead = async (): Promise<Record<string, unknown>> => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      return (
+        response
+          .json<{
+            readonly capabilities: readonly Record<string, unknown>[];
+          }>()
+          .capabilities.find(
+            (capability) => capability["capabilityId"] === "bscRead",
+          ) ?? {}
+      );
+    };
+
+    // Reading a non-terminal state reports it honestly and schedules one
+    // background re-probe; the endpoint is still down, so nothing changes.
+    expect(await readBscRead()).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "BSC_RPC_UNREACHABLE",
+    });
+    expect(verifyChain).toHaveBeenCalledTimes(2);
+    clock = 10_000;
+    expect(await readBscRead()).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "BSC_RPC_UNREACHABLE",
+    });
+    // Throttled: no second re-probe inside the window.
+    expect(verifyChain).toHaveBeenCalledTimes(2);
+
+    // The endpoint recovers. The next read past the window still reports
+    // what the client knows (unreachable) but triggers the re-probe that
+    // heals it; the read after that is available with no client action.
+    endpoint = "verified";
+    clock = 30_000;
+    expect(await readBscRead()).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "BSC_RPC_UNREACHABLE",
+    });
+    expect(verifyChain).toHaveBeenCalledTimes(3);
+    expect(await readBscRead()).toMatchObject({
+      availability: "available",
+      reasonCode: null,
+    });
+    // Verified is terminal: no further probes, however long it runs.
+    clock = 600_000;
+    await readBscRead();
+    expect(verifyChain).toHaveBeenCalledTimes(3);
+  });
+
   it("publishes endpoint health behind opaque references and the indexer lag", async () => {
     const { app } = await createApp();
     const response = await app.inject({
