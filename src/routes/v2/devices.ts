@@ -110,6 +110,8 @@ const deviceListResourceSchema = {
     },
     currentSessionId: {
       anyOf: [{ type: "string", pattern: uuidPatternSource }, { type: "null" }],
+      description:
+        "The X-Loop-Session-ID request header, echoed only when it names one of the rows in devices[]; otherwise null. A non-null value therefore always pairs with exactly one device whose isCurrent is true.",
     },
     riskSignals: {
       type: "object",

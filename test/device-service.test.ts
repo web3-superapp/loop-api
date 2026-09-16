@@ -102,3 +102,66 @@ describe("device service", () => {
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
   });
 });
+
+describe("device list current-session projection (preflight F3)", () => {
+  const listed: DeviceSession = {
+    sessionId: callerSessionId,
+    ownerUserId,
+    deviceId: "2d4e3f50-6b7c-4d8e-8f90-1b2c3d4e5f60",
+    clientPlatform: "ios",
+    clientVersion: "1.0.0",
+    authStrength: "providerAuthenticated",
+    policyVersion: "sessionPolicyV1",
+    status: "active",
+    createdAt: "2026-09-09T01:00:00.000Z",
+    lastSeenAt: "2026-09-09T01:00:00.000Z",
+    revokedAt: null,
+  };
+
+  function serviceWith(rows: readonly DeviceSession[]) {
+    return createDeviceService({
+      sessions: {
+        ...sessionsFake(() => Promise.reject(new Error("not used"))),
+        listByOwner: () => Promise.resolve(rows),
+      },
+      notifications: null,
+      logger: { warn: vi.fn() },
+      now: () => new Date("2026-09-09T02:00:00.000Z"),
+    });
+  }
+
+  it("projects currentSessionId as null when the header names no listed row", async () => {
+    const result = await serviceWith([listed, revoked]).list({
+      principal,
+      metadata: {
+        ...metadata,
+        sessionId: "11111111-2222-4333-8444-555555555555",
+      },
+    });
+    expect(result.currentSessionId).toBeNull();
+    expect(result.devices.some((device) => device.isCurrent)).toBe(false);
+    expect(result.devices).toHaveLength(2);
+  });
+
+  it("echoes currentSessionId with exactly one isCurrent row when the header names a listed row", async () => {
+    const result = await serviceWith([listed, revoked]).list({
+      principal,
+      metadata,
+    });
+    expect(result.currentSessionId).toBe(callerSessionId);
+    expect(
+      result.devices
+        .filter((device) => device.isCurrent)
+        .map((d) => d.sessionId),
+    ).toEqual([callerSessionId]);
+  });
+
+  it("keeps currentSessionId null without the header", async () => {
+    const result = await serviceWith([listed]).list({
+      principal,
+      metadata: { ...metadata, sessionId: null },
+    });
+    expect(result.currentSessionId).toBeNull();
+    expect(result.devices.some((device) => device.isCurrent)).toBe(false);
+  });
+});

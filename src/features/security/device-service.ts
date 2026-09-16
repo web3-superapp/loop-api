@@ -213,6 +213,17 @@ export function createDeviceService(
       const windowStart =
         observedAt.getTime() - deviceRiskPolicy.windowHours * 3_600_000;
       const visible = sessions.slice(0, deviceListLimit);
+      // Projection consistency (preflight F3, 2026-09-16): `currentSessionId`
+      // is echoed only when it names one of the rows being published, so a
+      // non-null value always pairs with exactly one `isCurrent: true`. A
+      // header naming a session this account does not have (revoked and
+      // aged out, re-seeded database, foreign owner) projects as `null`;
+      // the session itself is not created or assumed to exist.
+      const currentSessionId = visible.some(
+        (session) => session.sessionId === metadata.sessionId,
+      )
+        ? metadata.sessionId
+        : null;
       // Active sessions only, so the signal falls back after a revoke.
       const newSessions24h = visible.filter(
         (session) =>
@@ -221,9 +232,9 @@ export function createDeviceService(
       ).length;
       return Object.freeze({
         devices: Object.freeze(
-          visible.map((session) => project(session, metadata.sessionId)),
+          visible.map((session) => project(session, currentSessionId)),
         ),
-        currentSessionId: metadata.sessionId,
+        currentSessionId,
         riskSignals: Object.freeze({
           newSessions24h,
           highRiskNewDevice:

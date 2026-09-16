@@ -601,6 +601,58 @@ describe("LOOP API V2 security, settings, and support modules", () => {
       expect(body.riskSignals.highRiskNewDevice).toBe(true);
     });
 
+    it("projects currentSessionId as null when the session header names no listed row (preflight F3)", async () => {
+      const { app } = await createApp(
+        fakes({
+          sessions: [
+            session(),
+            session({
+              sessionId: otherSessionId,
+              deviceId: otherDeviceId,
+              createdAt: "2026-09-09T01:30:00.000Z",
+              lastSeenAt: "2026-09-09T01:30:00.000Z",
+            }),
+          ],
+        }),
+      );
+      const unknownSessionId = "11111111-2222-4333-8444-555555555555";
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": unknownSessionId },
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly devices: readonly { readonly isCurrent: boolean }[];
+        readonly currentSessionId: string | null;
+      }>();
+      // Invariant the client enforces: a non-null currentSessionId pairs with
+      // exactly one isCurrent row. An unknown header therefore projects null.
+      expect(body.currentSessionId).toBeNull();
+      expect(body.devices).toHaveLength(2);
+      expect(body.devices.every((device) => !device.isCurrent)).toBe(true);
+      expect(JSON.stringify(body)).not.toContain(unknownSessionId);
+
+      const known = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": otherSessionId },
+      });
+      const knownBody = known.json<{
+        readonly devices: readonly {
+          readonly sessionId: string;
+          readonly isCurrent: boolean;
+        }[];
+        readonly currentSessionId: string | null;
+      }>();
+      expect(knownBody.currentSessionId).toBe(otherSessionId);
+      expect(
+        knownBody.devices
+          .filter((device) => device.isCurrent)
+          .map((device) => device.sessionId),
+      ).toEqual([otherSessionId]);
+    });
+
     it("rejects an Idempotency-Key, an unknown X-Loop header, and a malformed session header on the read", async () => {
       const { app } = await createApp();
       for (const headers of [
