@@ -59,6 +59,7 @@ import {
   type CachedFact,
   type MarketFactService,
 } from "./market-fact-service.js";
+import { observedHolderCount } from "../../integrations/market/goplus-adapter.js";
 
 /**
  * V2 market read surface (Decision 0034).
@@ -438,6 +439,25 @@ function pairFactsFromSnapshot(
   });
 }
 
+/**
+ * Holder count as a fact: GoPlus reports "0" for tokens it keeps no holder
+ * index for (walkthrough B-9: BSC USDT), and a positive-supply token cannot
+ * have zero holders, so "0" is treated as not reported — here as well as
+ * at the adapter boundary, because a snapshot cached before that rule may
+ * still carry the placeholder for its TTL.
+ */
+function holderCountFact(
+  input: Omit<Parameters<typeof availableFact>[0], "value"> & {
+    readonly reported: string | null;
+  },
+): MarketFactProjection {
+  const { reported, ...provenance } = input;
+  const value = observedHolderCount(reported);
+  return value === null
+    ? unavailableFact(marketReasonCodes.factMissing)
+    : availableFact({ ...provenance, value });
+}
+
 export function createMarketReadService(
   input: CreateMarketReadServiceInput,
 ): MarketReadService {
@@ -705,17 +725,14 @@ export function createMarketReadService(
               ),
             ),
           });
-          holderCount =
-            fact.value.holderCount === null
-              ? unavailableFact(marketReasonCodes.factMissing)
-              : availableFact({
-                  value: fact.value.holderCount,
-                  source: fact.source,
-                  fetchedAt,
-                  ttlSeconds: fact.ttlSeconds,
-                  quality,
-                  reasonCode: fact.reasonCode,
-                });
+          holderCount = holderCountFact({
+            reported: fact.value.holderCount,
+            source: fact.source,
+            fetchedAt,
+            ttlSeconds: fact.ttlSeconds,
+            quality,
+            reasonCode: fact.reasonCode,
+          });
         }
       }
 
@@ -1200,16 +1217,14 @@ export function createMarketReadService(
             ? unavailableFact(
                 fact.reasonCode ?? marketReasonCodes.providerUnreachable,
               )
-            : fact.value.holderCount === null
-              ? unavailableFact(marketReasonCodes.factMissing)
-              : availableFact({
-                  value: fact.value.holderCount,
-                  source: fact.source,
-                  fetchedAt: fact.fetchedAt,
-                  ttlSeconds: fact.ttlSeconds,
-                  quality: fact.quality === "stale" ? "stale" : "fresh",
-                  reasonCode: fact.reasonCode,
-                });
+            : holderCountFact({
+                reported: fact.value.holderCount,
+                source: fact.source,
+                fetchedAt: fact.fetchedAt,
+                ttlSeconds: fact.ttlSeconds,
+                quality: fact.quality === "stale" ? "stale" : "fresh",
+                reasonCode: fact.reasonCode,
+              });
       }
       return Object.freeze({
         assetId: asset.assetId,

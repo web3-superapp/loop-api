@@ -15,6 +15,7 @@ import {
   createGoplusAdapter,
   goplusSignature,
   normalizeGoplusTokenSecurity,
+  observedHolderCount,
 } from "../src/integrations/market/goplus-adapter.js";
 import { MarketProviderError } from "../src/integrations/market/market-data-provider.js";
 import {
@@ -290,6 +291,36 @@ describe("GoPlus adapter", () => {
         holderCount: null,
       },
     );
+  });
+});
+
+describe("GoPlus holder count placeholder (walkthrough B-9)", () => {
+  it('treats holder_count "0" as not reported, never as a count of zero', () => {
+    // Real GoPlus answer for BSC USDT on 2026-09-16: supply 9.18e9, holder_count "0".
+    const snapshot = normalizeGoplusTokenSecurity(
+      {
+        code: 1,
+        message: "OK",
+        result: {
+          [usdt]: {
+            is_open_source: "1",
+            holder_count: "0",
+            total_supply: "9184991859.680809663064697687",
+          },
+        },
+      },
+      usdt,
+    );
+    expect(snapshot.holderCount).toBeNull();
+    expect(snapshot.facts).toContainEqual({
+      fact: "openSource",
+      value: "true",
+    });
+
+    expect(observedHolderCount("0")).toBeNull();
+    expect(observedHolderCount(null)).toBeNull();
+    expect(observedHolderCount("1")).toBe("1");
+    expect(observedHolderCount("1910790")).toBe("1910790");
   });
 });
 

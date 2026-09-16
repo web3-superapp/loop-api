@@ -99,6 +99,18 @@ const accessTokenResponseSchema = z
   })
   .passthrough();
 
+/**
+ * GoPlus answers `holder_count: "0"` for tokens it keeps no holder index
+ * for (walkthrough B-9, 2026-09-16: BSC USDT, total supply 9.18e9, came
+ * back as "0" while Cake came back as "1910790"). A token with a positive
+ * supply cannot have zero holders, so "0" is the provider's placeholder,
+ * not an observation, and it must never be published as a count of zero.
+ * The fact is reported as not reported.
+ */
+export function observedHolderCount(reported: string | null): string | null {
+  return reported === null || reported === "0" ? null : reported;
+}
+
 function optionalDecimal(value: unknown): string | null {
   if (value === undefined || value === null || value === "") {
     return null;
@@ -152,14 +164,17 @@ export function normalizeGoplusTokenSecurity(
       facts.push(Object.freeze({ fact, value }));
     }
   }
-  const holderCount = optionalDecimal(entry.holder_count);
-  if (holderCount !== null && !/^(0|[1-9][0-9]*)$/.test(holderCount)) {
+  const reportedHolderCount = optionalDecimal(entry.holder_count);
+  if (
+    reportedHolderCount !== null &&
+    !/^(0|[1-9][0-9]*)$/.test(reportedHolderCount)
+  ) {
     return malformed();
   }
   return Object.freeze({
     tokenAddress,
     facts: Object.freeze(facts),
-    holderCount,
+    holderCount: observedHolderCount(reportedHolderCount),
   });
 }
 

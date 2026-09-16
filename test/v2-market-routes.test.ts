@@ -624,6 +624,54 @@ describe("LOOP API V2 market module", () => {
     });
   });
 
+  it("never publishes a GoPlus holder_count of 0 as a count; it is not reported (walkthrough B-9)", async () => {
+    const dependencies = fakes();
+    // A snapshot as the fact cache may already hold it: the provider's "0"
+    // placeholder survived normalisation before the rule existed.
+    const securityProvider: SecurityFactsProvider = {
+      source: "goplus",
+      readTokenSecurity: (tokenAddress: string) =>
+        Promise.resolve({
+          value: {
+            tokenAddress,
+            facts: [{ fact: "openSource", value: "true" }],
+            holderCount: "0",
+          },
+          source: "goplus" as const,
+          fetchedAt: observedAt,
+          rawDigest: "b".repeat(64),
+        }),
+    };
+    const { app } = await createApp({ ...dependencies, securityProvider });
+    for (const url of [
+      `/v2/market/assets/${wbnbAssetId}`,
+      `/v2/market/assets/${wbnbAssetId}/holders`,
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, url).toBe(200);
+      expect(response.json(), url).toMatchObject({
+        holderCount: {
+          quality: "unavailable",
+          reasonCode: "MARKET_FACT_NOT_REPORTED",
+        },
+      });
+      expect(response.body, url).not.toMatch(/"value":\s*"0"/);
+    }
+    // The security facts themselves are still published.
+    const asset = await app.inject({
+      method: "GET",
+      url: `/v2/market/assets/${wbnbAssetId}`,
+      headers: commonHeaders(),
+    });
+    expect(asset.json()).toMatchObject({
+      security: { status: "available", source: "goplus" },
+    });
+  });
+
   it("publishes DexScreener and GoPlus facts with provenance and caches them", async () => {
     const { app, pairsProvider } = await createApp();
     const first = await app.inject({
