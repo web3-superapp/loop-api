@@ -5047,11 +5047,16 @@
                                     },
                                     "reasonCode": {
                                       "type": "string",
-                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                     },
                                     "reviewStatus": {
                                       "type": "string",
-                                      "enum": ["pending_review"]
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                     }
                                   }
                                 }
@@ -6162,11 +6167,16 @@
                                     },
                                     "reasonCode": {
                                       "type": "string",
-                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                     },
                                     "reviewStatus": {
                                       "type": "string",
-                                      "enum": ["pending_review"]
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                     }
                                   }
                                 }
@@ -7178,11 +7188,16 @@
                                     },
                                     "reasonCode": {
                                       "type": "string",
-                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                     },
                                     "reviewStatus": {
                                       "type": "string",
-                                      "enum": ["pending_review"]
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                     }
                                   }
                                 }
@@ -8302,11 +8317,16 @@
                                     },
                                     "reasonCode": {
                                       "type": "string",
-                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                     },
                                     "reviewStatus": {
                                       "type": "string",
-                                      "enum": ["pending_review"]
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                     }
                                   }
                                 }
@@ -9426,11 +9446,16 @@
                                     },
                                     "reasonCode": {
                                       "type": "string",
-                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                     },
                                     "reviewStatus": {
                                       "type": "string",
-                                      "enum": ["pending_review"]
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                     }
                                   }
                                 }
@@ -10618,11 +10643,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -11771,11 +11801,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -12923,11 +12958,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -14073,11 +14113,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -15225,11 +15270,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -16375,11 +16425,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -18763,11 +18818,16 @@
                                           },
                                           "reasonCode": {
                                             "type": "string",
-                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                                           },
                                           "reviewStatus": {
                                             "type": "string",
-                                            "enum": ["pending_review"]
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                                           }
                                         }
                                       }
@@ -84882,7 +84942,7 @@
         "operationId": "getV2MiningSummary",
         "summary": "Get the caller's Mining summary",
         "tags": ["mining"],
-        "description": "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; accumulated and claimable stay REWARD_AUTHORITY_PENDING. formula.scope = development_baseline marks the Decision 0043 placeholder.",
+        "description": "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; with one in force no slot emits that code. accumulated and claimable stay REWARD_AUTHORITY_PENDING; referralBoost is MINING_REFERRAL_BOOST_PENDING until a version approves the boost (Decision 0046). formula.scope = development_baseline marks the Decision 0043 placeholder.",
         "parameters": [
           {
             "schema": {
@@ -85109,6 +85169,7 @@
                       }
                     },
                     "formula": {
+                      "description": "The formula version in force (approved: configVersion + effectiveAt + scope) or, without one, MINING_FORMULA_BASELINE_PENDING naming the pending version. One definition for the summary, the composition page, and the ranking.",
                       "anyOf": [
                         {
                           "type": "object",
@@ -85685,7 +85746,7 @@
         "operationId": "getV2MiningAssets",
         "summary": "Get the caller's per-asset power composition",
         "tags": ["mining"],
-        "description": "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
+        "description": "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Every row carries the Asset Registry symbol. formula is the version in force, the same block as the summary. Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
         "parameters": [
           {
             "schema": {
@@ -85730,6 +85791,7 @@
                     "excluded",
                     "source",
                     "referencePrice",
+                    "formula",
                     "contractVersion"
                   ],
                   "properties": {
@@ -85775,6 +85837,7 @@
                         "additionalProperties": false,
                         "required": [
                           "assetId",
+                          "symbol",
                           "holding",
                           "referencePriceUsd",
                           "referencePriceQuality",
@@ -85787,6 +85850,17 @@
                           "assetId": {
                             "type": "string",
                             "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                          },
+                          "symbol": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 32
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
                           },
                           "holding": {
                             "type": "string",
@@ -85833,11 +85907,22 @@
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["assetId", "reasonCode"],
+                        "required": ["assetId", "symbol", "reasonCode"],
                         "properties": {
                           "assetId": {
                             "type": "string",
                             "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                          },
+                          "symbol": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 32
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
                           },
                           "reasonCode": {
                             "type": "string",
@@ -85932,6 +86017,73 @@
                             "priceVersion": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "formula": {
+                      "description": "The formula version in force (approved: configVersion + effectiveAt + scope) or, without one, MINING_FORMULA_BASELINE_PENDING naming the pending version. One definition for the summary, the composition page, and the ranking.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "configVersion",
+                            "effectiveAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["approved"]
+                            },
+                            "configVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "effectiveAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "reasonCode",
+                            "pendingVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": ["MINING_FORMULA_BASELINE_PENDING"]
+                            },
+                            "pendingVersion": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                },
+                                { "type": "null" }
+                              ]
                             }
                           }
                         }
@@ -87003,7 +87155,7 @@
         "operationId": "getV2MiningRank",
         "summary": "Get the user or community power ranking",
         "tags": ["mining"],
-        "description": "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope.",
+        "description": "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope. formula is the version in force, the same block as the summary.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["users", "communities"] },
@@ -87054,6 +87206,7 @@
                     "myPosition",
                     "snapshot",
                     "display",
+                    "formula",
                     "contractVersion"
                   ],
                   "properties": {
@@ -87364,6 +87517,73 @@
                           "enum": ["mining.rank.display.aliasOrAnonymous"]
                         }
                       }
+                    },
+                    "formula": {
+                      "description": "The formula version in force (approved: configVersion + effectiveAt + scope) or, without one, MINING_FORMULA_BASELINE_PENDING naming the pending version. One definition for the summary, the composition page, and the ranking.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "configVersion",
+                            "effectiveAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["approved"]
+                            },
+                            "configVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "effectiveAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "reasonCode",
+                            "pendingVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": ["MINING_FORMULA_BASELINE_PENDING"]
+                            },
+                            "pendingVersion": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -87819,7 +88039,7 @@
         "operationId": "getV2MiningCommunity",
         "summary": "Get a community's Mining weight record and standing",
         "tags": ["mining"],
-        "description": "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. COMMUNITY_ASSET_NOT_BOUND without a bound asset; COMMUNITY_WEIGHT_PENDING_REVIEW without a weight approved under the version in force.",
+        "description": "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with reasonCode + reviewStatus) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. Without a bound asset every block including weight is COMMUNITY_ASSET_NOT_BOUND (weight.reviewStatus not_applicable); bound without a weight approved under the version in force is COMMUNITY_WEIGHT_PENDING_REVIEW (reviewStatus pending_review).",
         "parameters": [
           {
             "schema": {
@@ -87944,11 +88164,13 @@
                             },
                             "reasonCode": {
                               "type": "string",
-                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
                             },
                             "reviewStatus": {
                               "type": "string",
-                              "enum": ["pending_review"]
+                              "enum": ["pending_review", "not_applicable"],
+                              "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
                             }
                           }
                         }
@@ -90170,7 +90392,7 @@
         "operationId": "getV2Referral",
         "summary": "Get the caller's invite code, binding, and level counts",
         "tags": ["referral"],
-        "description": "Issues the account's invite code on first read (one per account, random, unique). Counts per level are grouped by validationStatus; `valid` needs an approved Mining formula (D19), so the boost stays unavailable with MINING_FORMULA_BASELINE_PENDING. The claim window is [activatedAt, activatedAt + 7 days).",
+        "description": "Issues the account's invite code on first read (one per account, random, unique). Counts per level are grouped by validationStatus; `valid` needs a Mining formula version that approves the boost (D19), so the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). The claim window is [activatedAt, activatedAt + 7 days).",
         "parameters": [
           {
             "schema": {

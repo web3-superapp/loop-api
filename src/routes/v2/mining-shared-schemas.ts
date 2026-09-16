@@ -1,4 +1,5 @@
 import {
+  communityWeightReviewStatuses,
   configVersionPatternSource,
   miningFormulaScopes,
   unsignedDecimalPatternSource,
@@ -65,8 +66,17 @@ export const miningCommunityWeightSchema = {
       required: ["status", "reasonCode", "reviewStatus"],
       properties: {
         status: { type: "string", const: "unavailable" },
-        reasonCode: reasonCodeSchema,
-        reviewStatus: { type: "string", const: "pending_review" },
+        reasonCode: {
+          ...reasonCodeSchema,
+          description:
+            "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight.",
+        },
+        reviewStatus: {
+          type: "string",
+          enum: [...communityWeightReviewStatuses],
+          description:
+            "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046).",
+        },
       },
     },
   ],

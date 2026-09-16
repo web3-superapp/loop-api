@@ -2,6 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import {
+  createUnavailableChainRegistryRepository,
+  type AssetRecord,
+  type ChainRegistryRepository,
+} from "../src/database/chain-registry-repository.js";
 import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
 import {
   createUnavailableMiningRepository,
@@ -55,6 +60,60 @@ const draftFormula: MiningFormulaRecord = {
   createdAt,
 };
 
+/** Registry rows for the three assets the baseline block weights. */
+const registryAssets: readonly AssetRecord[] = [
+  {
+    assetId: "eip155:56:0x0000000000000000000000000000000000000001",
+    chainId: "eip155:56",
+    address: "0x0000000000000000000000000000000000000001",
+    symbol: "LOOP",
+    name: "LOOP Token",
+    decimals: 18,
+    status: "verified",
+    sourceKind: "chain_call",
+    sourceBlockNumber: "122000000",
+    sourceVerifiedAt: createdAt,
+    updatedAt: createdAt,
+  },
+  {
+    assetId: "eip155:56:0x0000000000000000000000000000000000000002",
+    chainId: "eip155:56",
+    address: "0x0000000000000000000000000000000000000002",
+    symbol: "Cake",
+    name: "PancakeSwap Token",
+    decimals: 18,
+    status: "verified",
+    sourceKind: "chain_call",
+    sourceBlockNumber: "122000000",
+    sourceVerifiedAt: createdAt,
+    updatedAt: createdAt,
+  },
+  {
+    assetId: "eip155:56:native",
+    chainId: "eip155:56",
+    address: null,
+    symbol: "BNB",
+    name: "BNB",
+    decimals: 18,
+    status: "verified",
+    sourceKind: "chain_native",
+    sourceBlockNumber: null,
+    sourceVerifiedAt: null,
+    updatedAt: createdAt,
+  },
+];
+
+function registryFake(
+  rows: readonly AssetRecord[] = registryAssets,
+): ChainRegistryRepository {
+  return {
+    ...createUnavailableChainRegistryRepository(),
+    listAssets: vi.fn((assetIds: readonly string[]) =>
+      Promise.resolve(rows.filter((row) => assetIds.includes(row.assetId))),
+    ),
+  };
+}
+
 function repositoryFake(
   overrides: Partial<MiningRepository> = {},
 ): MiningRepository {
@@ -88,11 +147,12 @@ describe("LOOP API V2 mining module", () => {
   async function createApp(
     repository = repositoryFake(),
     overrides: Readonly<Record<string, string>> = {},
+    chainRegistry: ChainRegistryRepository = registryFake(),
   ) {
     const app = await buildApp({
       config: s7TestConfig(overrides),
       contractSurface: "v2",
-      database: s7Database({ mining: repository }),
+      database: s7Database({ mining: repository, chainRegistry }),
       privyAccessTokenVerifier: s7PrivyVerifier(),
       logger: false,
     });
@@ -144,9 +204,10 @@ describe("LOOP API V2 mining module", () => {
         status: "unavailable",
         reasonCode: "REWARD_AUTHORITY_PENDING",
       },
+      // The boost slot names itself even here (Decision 0046).
       referralBoost: {
         status: "unavailable",
-        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        reasonCode: "MINING_REFERRAL_BOOST_PENDING",
       },
       formula: {
         status: "unavailable",
@@ -179,10 +240,28 @@ describe("LOOP API V2 mining module", () => {
       url: "/v2/mining/assets",
       headers: s7CommonHeaders(),
     });
-    expect(assets.json()).toMatchObject({
-      totalPower: { status: "unavailable" },
+    expect(assets.json()).toEqual({
+      totalPower: {
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      },
       included: [],
       excluded: [],
+      source: {
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      },
+      referencePrice: {
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      },
+      // The same block as the summary (Decision 0046).
+      formula: {
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        pendingVersion: "miningFormulaV1-draft",
+      },
+      contractVersion: "2.0",
     });
   });
 
@@ -205,6 +284,11 @@ describe("LOOP API V2 mining module", () => {
           anonymousMemberKey: "mining.rank.anonymousMember",
           ruleKey: "mining.rank.display.aliasOrAnonymous",
         },
+        formula: {
+          status: "unavailable",
+          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+          pendingVersion: "miningFormulaV1-draft",
+        },
       });
     }
     const unknown = await app.inject({
@@ -215,22 +299,53 @@ describe("LOOP API V2 mining module", () => {
     expect(unknown.statusCode).toBe(400);
   });
 
-  it("projects a community weight record as pending review or approved", async () => {
+  it("projects a community weight record as not bound, pending review, or approved", async () => {
     const { app } = await createApp();
-    const pending = await app.inject({
+    const unbound = await app.inject({
       method: "GET",
       url: `/v2/mining/communities/${communityId}`,
       headers: s7CommonHeaders(),
     });
-    expect(pending.statusCode).toBe(200);
-    expect(pending.json()).toMatchObject({
+    expect(unbound.statusCode).toBe(200);
+    // No bound asset: there is no weight to review, and the block says so
+    // in the same words as the standing blocks (Decision 0046).
+    expect(unbound.json()).toMatchObject({
       community: { communityId, name: "Frog Holders", boundAssetId: null },
+      weight: {
+        status: "unavailable",
+        reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
+        reviewStatus: "not_applicable",
+      },
+      communityPower: { status: "unavailable" },
+    });
+    expect(unbound.body).not.toContain("COMMUNITY_WEIGHT_PENDING_REVIEW");
+    const boundPending = await createApp(
+      repositoryFake({
+        getCommunityWeight: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId:
+              "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            status: "pending_review" as const,
+            weight: null,
+            configVersion: null,
+            reviewedAt: null,
+          }),
+        ),
+      }),
+    );
+    const pending = await boundPending.app.inject({
+      method: "GET",
+      url: `/v2/mining/communities/${communityId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(pending.json()).toMatchObject({
       weight: {
         status: "unavailable",
         reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
         reviewStatus: "pending_review",
       },
-      communityPower: { status: "unavailable" },
     });
     const approvedApp = await createApp(
       repositoryFake({
@@ -517,9 +632,11 @@ describe("LOOP API V2 mining module", () => {
           status: "unavailable",
           reasonCode: "REWARD_AUTHORITY_PENDING",
         },
+        // The boost is unapproved by the version in force; the page-level
+        // "no version" code would contradict `formula` (Decision 0046).
         referralBoost: {
           status: "unavailable",
-          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+          reasonCode: "MINING_REFERRAL_BOOST_PENDING",
         },
         formula: {
           status: "approved",
@@ -654,6 +771,7 @@ describe("LOOP API V2 mining module", () => {
         included: [
           {
             assetId: cakeAsset,
+            symbol: "Cake",
             holding: "100",
             referencePriceUsd: "2.3",
             referencePriceQuality: "fresh",
@@ -664,6 +782,7 @@ describe("LOOP API V2 mining module", () => {
           },
           {
             assetId: loopAsset,
+            symbol: "LOOP",
             holding: "1",
             referencePriceUsd: "885",
             referencePriceQuality: "fresh",
@@ -676,7 +795,11 @@ describe("LOOP API V2 mining module", () => {
         // Native BNB is weighted (1), unbound, and its WBNB proxy is
         // declared, so the only way the lane skipped it is a stale price.
         excluded: [
-          { assetId: nativeAsset, reasonCode: "MINING_PRICE_NOT_FRESH" },
+          {
+            assetId: nativeAsset,
+            symbol: "BNB",
+            reasonCode: "MINING_PRICE_NOT_FRESH",
+          },
         ],
         source: {
           snapshotId,
@@ -690,8 +813,58 @@ describe("LOOP API V2 mining module", () => {
           status: "available",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
         },
+        formula: {
+          status: "approved",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          effectiveAt: approvedAt,
+          scope: "development_baseline",
+        },
         contractVersion: "2.0",
       });
+    });
+
+    it("takes every symbol from the Asset Registry and fails closed when it cannot answer", async () => {
+      // A registry without a row for an asset yields null, never a guess
+      // from the address or the chain slot.
+      const partial = await createApp(
+        approvedRepository(),
+        {},
+        registryFake(registryAssets.filter((row) => row.symbol === "Cake")),
+      );
+      const partialResponse = await partial.app.inject({
+        method: "GET",
+        url: "/v2/mining/assets",
+        headers: s7CommonHeaders(),
+      });
+      expect(partialResponse.statusCode).toBe(200);
+      const body = partialResponse.json<{
+        included: { assetId: string; symbol: string | null }[];
+        excluded: { assetId: string; symbol: string | null }[];
+      }>();
+      expect(body.included.map((row) => [row.assetId, row.symbol])).toEqual([
+        [cakeAsset, "Cake"],
+        [loopAsset, null],
+      ]);
+      expect(body.excluded.map((row) => row.symbol)).toEqual([null]);
+      const unavailable = await createApp(
+        approvedRepository(),
+        {},
+        createUnavailableChainRegistryRepository(),
+      );
+      const failed = await unavailable.app.inject({
+        method: "GET",
+        url: "/v2/mining/assets",
+        headers: s7CommonHeaders(),
+      });
+      expect(failed.statusCode).toBe(503);
+      expect(failed.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+      // The summary does not read the registry and is unaffected.
+      const summary = await unavailable.app.inject({
+        method: "GET",
+        url: "/v2/mining/summary",
+        headers: s7CommonHeaders(),
+      });
+      expect(summary.statusCode).toBe(200);
     });
 
     it("keeps rewards unclaimable while carrying the same estimate", async () => {
@@ -754,6 +927,14 @@ describe("LOOP API V2 mining module", () => {
         },
         myPosition: { status: "available", position: 2, power: "1000" },
         snapshot: { snapshotId },
+        // The same block as the summary, so the ranking page can draw the
+        // development-baseline label from one field (Decision 0046).
+        formula: {
+          status: "approved",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          effectiveAt: approvedAt,
+          scope: "development_baseline",
+        },
       });
       expect(users.body).not.toContain('"alias":"me"');
       const communities = await app.inject({
@@ -792,6 +973,9 @@ describe("LOOP API V2 mining module", () => {
       expect(communityRanking.myPosition).toEqual({
         status: "unavailable",
         reasonCode: "MINING_RANK_NOT_APPLICABLE",
+      });
+      expect(communities.json()).toMatchObject({
+        formula: { status: "approved", scope: "development_baseline" },
       });
       // A bound, weighted community at zero power is listed, not ranked.
       expect(
@@ -879,6 +1063,13 @@ describe("LOOP API V2 mining module", () => {
         headers: s7CommonHeaders(),
       });
       expect(unboundResponse.json()).toMatchObject({
+        // The weight block agrees with the four standing blocks: nothing
+        // is bound, so nothing is under review (Decision 0046).
+        weight: {
+          status: "unavailable",
+          reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
+          reviewStatus: "not_applicable",
+        },
         communityPower: {
           status: "unavailable",
           reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
@@ -904,6 +1095,69 @@ describe("LOOP API V2 mining module", () => {
           reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
         },
       });
+    });
+
+    it("never emits MINING_FORMULA_BASELINE_PENDING from any slot while a version is in force", async () => {
+      // Structural: the code means "no version in force" and nothing else
+      // (Decision 0046). Walk every mining read, including the ones whose
+      // slots are unavailable for their own reasons.
+      const { app } = await createApp(
+        approvedRepository({
+          getAccountStanding: vi.fn(() => Promise.resolve(null)),
+          getCommunityStanding: vi.fn(() => Promise.resolve(null)),
+          getCommunityWeight: vi.fn(() =>
+            Promise.resolve({
+              communityId,
+              communityName: "Frog Holders",
+              boundAssetId: null,
+              status: "pending_review" as const,
+              weight: null,
+              configVersion: null,
+              reviewedAt: null,
+            }),
+          ),
+        }),
+      );
+      const collect = (value: unknown, into: string[]): string[] => {
+        if (typeof value === "string") {
+          into.push(value);
+        } else if (Array.isArray(value)) {
+          for (const item of value) {
+            collect(item, into);
+          }
+        } else if (value !== null && typeof value === "object") {
+          for (const item of Object.values(value)) {
+            collect(item, into);
+          }
+        }
+        return into;
+      };
+      const urls = [
+        "/v2/mining/summary",
+        "/v2/mining/assets",
+        "/v2/mining/rewards",
+        "/v2/mining/rank?scope=users",
+        "/v2/mining/rank?scope=communities",
+        `/v2/mining/communities/${communityId}`,
+        "/v2/mining/rules",
+      ];
+      for (const url of urls) {
+        const response = await app.inject({
+          method: "GET",
+          url,
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode, url).toBe(200);
+        const strings = collect(response.json(), []);
+        expect(strings, url).not.toContain("MINING_FORMULA_BASELINE_PENDING");
+        // The pages that carry `formula`/`baseline` still name the version
+        // in force (rewards has no such block and is out of scope).
+        if (!url.endsWith("/rewards")) {
+          expect(response.body, url).toContain(
+            "miningFormula-devBaseline-2026-09-15-r2",
+          );
+        }
+      }
     });
 
     it("publishes the baseline's parameters on the rules page, labelled as a development baseline", async () => {

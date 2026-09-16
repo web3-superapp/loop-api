@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { v2ContractVersion } from "../meta/product-policy.js";
+import { miningReasonCodes } from "../mining/mining-contract.js";
 import { parseInviteCode, InvalidInviteCodeError } from "./invite-code.js";
 
 /**
@@ -32,7 +33,8 @@ export type ReferralValidationStatus =
   (typeof referralValidationStatuses)[number];
 
 export const referralReasonCodes = Object.freeze({
-  boostPending: "MINING_FORMULA_BASELINE_PENDING",
+  /** The same slot as `GET /v2/mining/summary.referralBoost` (Decision 0046). */
+  boostPending: miningReasonCodes.referralBoostPending,
   claimWindowClosed: "REFERRAL_CLAIM_WINDOW_CLOSED",
   claimWindowNotActivated: "PROFILE_ACTIVATION_REQUIRED",
   alreadyBound: "REFERRAL_ALREADY_BOUND",

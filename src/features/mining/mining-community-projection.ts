@@ -1,5 +1,6 @@
 import {
   miningReasonCodes,
+  type CommunityWeightReviewStatus,
   type UnavailableProjection,
 } from "./mining-contract.js";
 import type {
@@ -26,32 +27,47 @@ export type MiningCommunityWeightProjection =
   | {
       readonly status: "unavailable";
       readonly reasonCode: string;
-      readonly reviewStatus: "pending_review";
+      readonly reviewStatus: CommunityWeightReviewStatus;
     };
 
 export type MiningParticipantsProjection =
   | { readonly status: "available"; readonly count: number }
   | UnavailableProjection;
 
-/** The reviewed weight as stored, or `pending_review` without one. */
+/**
+ * The reviewed weight as stored. Without one, the block says why in the
+ * same words as the four standing blocks (Decision 0046): a community that
+ * binds no asset is `COMMUNITY_ASSET_NOT_BOUND` with nothing to review; a
+ * bound community without an approved weight is `pending_review`.
+ */
 export function projectCommunityWeight(
   record: CommunityWeightRecord,
 ): MiningCommunityWeightProjection {
-  return record.status === "approved" &&
+  if (
+    record.status === "approved" &&
     record.weight !== null &&
     record.configVersion !== null &&
     record.reviewedAt !== null
-    ? Object.freeze({
-        status: "approved" as const,
-        value: record.weight,
-        configVersion: record.configVersion,
-        reviewedAt: record.reviewedAt,
-      })
-    : Object.freeze({
-        status: "unavailable" as const,
-        reasonCode: miningReasonCodes.communityWeightPendingReview,
-        reviewStatus: "pending_review" as const,
-      });
+  ) {
+    return Object.freeze({
+      status: "approved" as const,
+      value: record.weight,
+      configVersion: record.configVersion,
+      reviewedAt: record.reviewedAt,
+    });
+  }
+  if (record.boundAssetId === null) {
+    return Object.freeze({
+      status: "unavailable" as const,
+      reasonCode: miningReasonCodes.communityAssetNotBound,
+      reviewStatus: "not_applicable" as const,
+    });
+  }
+  return Object.freeze({
+    status: "unavailable" as const,
+    reasonCode: miningReasonCodes.communityWeightPendingReview,
+    reviewStatus: "pending_review" as const,
+  });
 }
 
 /** Members with positive power on the bound asset in the standing's snapshot. */

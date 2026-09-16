@@ -49,7 +49,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningSummary",
         summary: "Get the caller's Mining summary",
         description:
-          "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; accumulated and claimable stay REWARD_AUTHORITY_PENDING. formula.scope = development_baseline marks the Decision 0043 placeholder.",
+          "Power and network power come from the latest snapshot under the approved, effective formula version; estimatedToday is budget × power ÷ networkPower under that version's placeholder daily output (MINING_NETWORK_POWER_ZERO while the network total is zero). Without a version in force everything is MINING_FORMULA_BASELINE_PENDING and the pending version is named; with one in force no slot emits that code. accumulated and claimable stay REWARD_AUTHORITY_PENDING; referralBoost is MINING_REFERRAL_BOOST_PENDING until a version approves the boost (Decision 0046). formula.scope = development_baseline marks the Decision 0043 placeholder.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -76,7 +76,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningAssets",
         summary: "Get the caller's per-asset power composition",
         description:
-          "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
+          "included lists the caller's power rows of the latest snapshot (holding × reference price × effective weight); excluded lists held assets the lane skipped, with the reason re-derived from the same inputs (weight not configured, community weight pending or ambiguous, price not fresh). Every row carries the Asset Registry symbol. formula is the version in force, the same block as the summary. Without a snapshot under the version in force every block is unavailable and both lists are empty by contract.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -130,7 +130,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningRank",
         summary: "Get the user or community power ranking",
         description:
-          "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope.",
+          "scope=users|communities. Rankings use only server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope. formula is the version in force, the same block as the summary.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -159,7 +159,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningCommunity",
         summary: "Get a community's Mining weight record and standing",
         description:
-          "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with COMMUNITY_WEIGHT_PENDING_REVIEW) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. COMMUNITY_ASSET_NOT_BOUND without a bound asset; COMMUNITY_WEIGHT_PENDING_REVIEW without a weight approved under the version in force.",
+          "The reviewed weight (approved: decimal string + configVersion + reviewedAt; otherwise unavailable with reasonCode + reviewStatus) plus, under the latest snapshot of the version in force, the members' power on the bound asset, the caller's own contribution, the community's rank, and the participant count. Without a bound asset every block including weight is COMMUNITY_ASSET_NOT_BOUND (weight.reviewStatus not_applicable); bound without a weight approved under the version in force is COMMUNITY_WEIGHT_PENDING_REVIEW (reviewStatus pending_review).",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

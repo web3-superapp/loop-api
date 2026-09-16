@@ -20,12 +20,14 @@ import {
 } from "./mining-shared-schemas.js";
 
 /**
- * Route schemas for the V2 mining module (Decisions 0036 and 0043). Every
- * power, estimate, and rank block is a union of the unavailable projection
- * and an `available` value read from a server snapshot under the formula
- * version in force. Numbers are decimal strings; `scope:
+ * Route schemas for the V2 mining module (Decisions 0036, 0043, and 0046).
+ * Every power, estimate, and rank block is a union of the unavailable
+ * projection and an `available` value read from a server snapshot under the
+ * formula version in force. Numbers are decimal strings; `scope:
  * development_baseline` marks the Decision 0043 placeholder version so the
- * client labels it as such.
+ * client labels it as such. The summary, the composition page, and the
+ * ranking all publish the same `formula` block, so every page can draw that
+ * label from one field.
  */
 
 const opaqueIdPatternSource =
@@ -117,7 +119,15 @@ const estimateSchema = {
   ],
 } as const;
 
+const symbolSchema = {
+  anyOf: [{ type: "string", minLength: 1, maxLength: 32 }, { type: "null" }],
+  description:
+    "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess.",
+} as const;
+
 const formulaStateSchema = {
+  description:
+    "The formula version in force (approved: configVersion + effectiveAt + scope) or, without one, MINING_FORMULA_BASELINE_PENDING naming the pending version. One definition for the summary, the composition page, and the ranking.",
   anyOf: [
     {
       type: "object",
@@ -205,6 +215,7 @@ export const miningAssetsResourceSchema = {
     "excluded",
     "source",
     "referencePrice",
+    "formula",
     "contractVersion",
   ],
   properties: {
@@ -217,6 +228,7 @@ export const miningAssetsResourceSchema = {
         additionalProperties: false,
         required: [
           "assetId",
+          "symbol",
           "holding",
           "referencePriceUsd",
           "referencePriceQuality",
@@ -227,6 +239,7 @@ export const miningAssetsResourceSchema = {
         ],
         properties: {
           assetId: { type: "string", pattern: assetIdPatternSource },
+          symbol: symbolSchema,
           holding: decimalSchema,
           referencePriceUsd: decimalSchema,
           referencePriceQuality: {
@@ -259,9 +272,10 @@ export const miningAssetsResourceSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["assetId", "reasonCode"],
+        required: ["assetId", "symbol", "reasonCode"],
         properties: {
           assetId: { type: "string", pattern: assetIdPatternSource },
+          symbol: symbolSchema,
           reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
         },
       },
@@ -284,6 +298,7 @@ export const miningAssetsResourceSchema = {
         },
       ],
     },
+    formula: formulaStateSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -445,6 +460,7 @@ export const miningRankResourceSchema = {
     "myPosition",
     "snapshot",
     "display",
+    "formula",
     "contractVersion",
   ],
   properties: {
@@ -473,6 +489,7 @@ export const miningRankResourceSchema = {
         },
       },
     },
+    formula: formulaStateSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

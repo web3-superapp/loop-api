@@ -68,7 +68,7 @@ export function s7CommandHeaders(
 }
 
 export function s7Database(
-  extra: Pick<Database, "launch" | "mining" | "referral">,
+  extra: Pick<Database, "launch" | "mining" | "referral" | "chainRegistry">,
 ): Database {
   return {
     alerts: createUnavailableAlertRepository(),

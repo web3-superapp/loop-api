@@ -1,6 +1,10 @@
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import {
+  ChainRegistryUnavailableError,
+  type ChainRegistryRepository,
+} from "../../database/chain-registry-repository.js";
+import {
   referralRulesConfigVersion,
   referralRulesEffectiveAt,
   referralRulesV1,
@@ -43,11 +47,13 @@ import {
 import { selectMiningWeight } from "./mining-snapshot.js";
 
 /**
- * Mining read service (Decisions 0036 and 0043). Every number is read from
- * the latest snapshot computed under the formula version in force; without
- * one, every power, estimate, and rank is `unavailable` with a reason code
- * and the rules page shows the pending version marked as such. Rewards stay
- * `REWARD_AUTHORITY_PENDING`: no ledger row is ever written here.
+ * Mining read service (Decisions 0036, 0043, and 0046). Every number is
+ * read from the latest snapshot computed under the formula version in
+ * force; without one, every power, estimate, and rank is `unavailable` with
+ * a reason code and the rules page shows the pending version marked as
+ * such. Rewards stay `REWARD_AUTHORITY_PENDING`: no ledger row is ever
+ * written here. Asset symbols on the composition page come from the Asset
+ * Registry (the same rows the snapshot lane priced), never from a fixture.
  */
 
 export const miningRankLimit = 100;
@@ -125,6 +131,8 @@ export interface MiningSummaryResource {
 
 export interface MiningIncludedAssetProjection {
   readonly assetId: string;
+  /** The registry's on-chain `symbol()`; null only without a registry row. */
+  readonly symbol: string | null;
   readonly holding: string;
   readonly referencePriceUsd: string;
   /** `proxied` = the declared proxy asset's price (Decision 0044). */
@@ -137,6 +145,8 @@ export interface MiningIncludedAssetProjection {
 
 export interface MiningExcludedAssetProjection {
   readonly assetId: string;
+  /** The registry's on-chain `symbol()`; null only without a registry row. */
+  readonly symbol: string | null;
   readonly reasonCode: string;
 }
 
@@ -148,6 +158,8 @@ export interface MiningAssetsResource {
   readonly referencePrice:
     | { readonly status: "available"; readonly priceVersion: string }
     | UnavailableProjection;
+  /** The version in force, exactly as the summary publishes it (Decision 0046). */
+  readonly formula: MiningFormulaStateProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -225,6 +237,8 @@ export interface MiningRankResource {
     readonly anonymousMemberKey: typeof miningRankAnonymousMemberKey;
     readonly ruleKey: "mining.rank.display.aliasOrAnonymous";
   };
+  /** The version in force, exactly as the summary publishes it (Decision 0046). */
+  readonly formula: MiningFormulaStateProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -292,7 +306,10 @@ function translate(error: unknown): never {
   if (error instanceof V2ApiError) {
     throw error;
   }
-  if (error instanceof MiningRepositoryUnavailableError) {
+  if (
+    error instanceof MiningRepositoryUnavailableError ||
+    error instanceof ChainRegistryUnavailableError
+  ) {
     throw V2ApiError.capabilityUnavailable();
   }
   throw error;
@@ -387,10 +404,22 @@ function estimateProjection(
 
 export function createMiningService(dependencies: {
   readonly repository: MiningRepository;
+  /** Asset Registry rows: the only source of a row's `symbol`. */
+  readonly registry: Pick<ChainRegistryRepository, "listAssets">;
   readonly now?: () => Date;
 }): MiningService {
-  const { repository } = dependencies;
+  const { repository, registry } = dependencies;
   const now = dependencies.now ?? (() => new Date());
+
+  /** `assetId → symbol` for the given IDs; an ID without a row is absent. */
+  async function symbolsFor(
+    assetIds: readonly string[],
+  ): Promise<ReadonlyMap<string, string>> {
+    const unique = [...new Set(assetIds)];
+    const records =
+      unique.length === 0 ? [] : await registry.listAssets(unique);
+    return new Map(records.map((record) => [record.assetId, record.symbol]));
+  }
 
   async function pendingVersion(): Promise<string | null> {
     const versions = await repository.listFormulaVersions();
@@ -472,6 +501,7 @@ export function createMiningService(dependencies: {
     async getAssets(input) {
       try {
         const resolution = await baseline();
+        const formula = await formulaState(resolution);
         if (hasNoMiningSnapshot(resolution)) {
           const reason = missingReason(resolution);
           return Object.freeze({
@@ -480,6 +510,7 @@ export function createMiningService(dependencies: {
             excluded: Object.freeze([]),
             source: reason,
             referencePrice: reason,
+            formula,
             contractVersion: v2ContractVersion,
           });
         }
@@ -500,25 +531,28 @@ export function createMiningService(dependencies: {
             ),
           ]);
         const includedIds = new Set(powers.map((row) => row.assetId));
+        const excludedIds = heldAssetIds.filter(
+          (assetId) => !includedIds.has(assetId),
+        );
+        const symbols = await symbolsFor([...includedIds, ...excludedIds]);
         // An asset the account holds but the snapshot did not weight was
         // skipped by the lane; the reason is re-derived from the same
         // inputs the lane used (weight first, then the price guard).
-        const excluded = heldAssetIds
-          .filter((assetId) => !includedIds.has(assetId))
-          .map((assetId) => {
-            const selection = selectMiningWeight(
-              assetId,
-              resolution.formula.formula,
-              communityWeights,
-            );
-            return Object.freeze({
-              assetId,
-              reasonCode:
-                selection.kind === "skip"
-                  ? selection.reasonCode
-                  : miningReasonCodes.priceNotFresh,
-            });
+        const excluded = excludedIds.map((assetId) => {
+          const selection = selectMiningWeight(
+            assetId,
+            resolution.formula.formula,
+            communityWeights,
+          );
+          return Object.freeze({
+            assetId,
+            symbol: symbols.get(assetId) ?? null,
+            reasonCode:
+              selection.kind === "skip"
+                ? selection.reasonCode
+                : miningReasonCodes.priceNotFresh,
           });
+        });
         return Object.freeze({
           totalPower:
             standing === null
@@ -528,6 +562,7 @@ export function createMiningService(dependencies: {
             powers.map((row) =>
               Object.freeze({
                 assetId: row.assetId,
+                symbol: symbols.get(row.assetId) ?? null,
                 holding: row.holding,
                 referencePriceUsd: row.referencePriceUsd,
                 referencePriceQuality: row.referencePriceQuality,
@@ -544,6 +579,7 @@ export function createMiningService(dependencies: {
             status: "available" as const,
             priceVersion: snapshot.priceVersion,
           }),
+          formula,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -598,6 +634,7 @@ export function createMiningService(dependencies: {
           ruleKey: "mining.rank.display.aliasOrAnonymous" as const,
         });
         const resolution = await baseline();
+        const formula = await formulaState(resolution);
         if (hasNoMiningSnapshot(resolution)) {
           const reason = missingReason(resolution);
           return Object.freeze({
@@ -606,6 +643,7 @@ export function createMiningService(dependencies: {
             myPosition: reason,
             snapshot: reason,
             display,
+            formula,
             contractVersion: v2ContractVersion,
           });
         }
@@ -641,6 +679,7 @@ export function createMiningService(dependencies: {
             myPosition: unavailable(miningReasonCodes.rankNotApplicable),
             snapshot: snapshotProjection(snapshot),
             display,
+            formula,
             contractVersion: v2ContractVersion,
           });
         }
@@ -696,6 +735,7 @@ export function createMiningService(dependencies: {
                   }),
           snapshot: snapshotProjection(snapshot),
           display,
+          formula,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {

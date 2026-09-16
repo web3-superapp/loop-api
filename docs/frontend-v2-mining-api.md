@@ -1,4 +1,4 @@
-# 前端联调：V2 Mining（S7 骨架 + S20 开发基线）与邀请关系
+# 前端联调：V2 Mining（S7 骨架 + S20 开发基线 + S22a 走查修正）与邀请关系
 
 本文是 `mining` 与 `referral` 两个模块（决策 0036、0043）的前端交接契约。权威机器契约为
 `openapi/loop-api.v2.json`。通用规则沿用 `docs/frontend-v2-session-api.md` 与
@@ -25,6 +25,17 @@
 **前端必须**：凡 `scope === "development_baseline"` 或 `budgetStatus === "development_placeholder"`
 的数字，一律加"开发基线（configVersion）"标签，不得表述为收益或承诺；`claimable`/`accumulated` 恒为
 `REWARD_AUTHORITY_PENDING`，领取按钮不可执行。
+
+**S22a（决策 0046）对本契约的三处加法**（都是加字段/加码，不改路径、不删字段）：
+
+1. 邀请加成槽位有了自己的码 `MINING_REFERRAL_BOOST_PENDING`（`summary.referralBoost` 与 `GET /v2/referral.boost`）。
+   `MINING_FORMULA_BASELINE_PENDING` 从此**只**表示"没有生效的公式版本"；有生效版本时任何槽位都不会再发它。
+2. `GET /v2/mining/assets` 的 `included[]`/`excluded[]` 每行多了必填 `symbol`（Registry 的链上 `symbol()`，
+   native 行是 `BNB`；仅在 Registry 没有该资产行时为 `null`）；`assets` 与 `rank` 响应顶层多了 `formula`，
+   与 `summary.formula` **同一形状同一来源**，用它的 `scope` 打"开发基线"戳。
+3. 未绑定资产的社区，`weight` 块改为 `COMMUNITY_ASSET_NOT_BOUND` + `reviewStatus: "not_applicable"`
+   （原来错误地说成 `COMMUNITY_WEIGHT_PENDING_REVIEW` / `pending_review`）；`reviewStatus` 枚举现为
+   `pending_review | not_applicable`，与 reasonCode 一一对应。
 
 2026-09-15 Development 实跑事实（可复核）：`miningFormula-devBaseline-2026-09-15-r2` 已批准
 （`effectiveAt 2026-09-15T14:57:37.026Z`，r1 同时退休）；两个已 verified 社区经产品写路径
@@ -55,28 +66,53 @@ BNB 行 `referencePriceQuality: "proxied"`、代理 WBNB、`713.42`。要看到�
 
 ### 2.1 全部 reasonCode
 
-| reasonCode                           | 含义                                               | 出现位置                                                          |
-| ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------- |
-| `MINING_FORMULA_BASELINE_PENDING`    | 没有已批准且已生效的公式版本                       | 所有数字块、`snapshot`、capability                                |
-| `MINING_SNAPSHOT_NOT_AVAILABLE`      | 有生效版本但 lane 尚未算出快照                     | 所有数字块、`snapshot`                                            |
-| `MINING_SNAPSHOT_STALE`              | 最新快照是在另一个版本下算的                       | 同上                                                              |
-| `MINING_ACCOUNT_NOT_IN_SNAPSHOT`     | 该账号在快照里没有余额行（无激活钱包）             | `power`、`estimatedToday`、`myPosition`、`myContribution`、成员行 |
-| `MINING_NETWORK_POWER_ZERO`          | 全网算力为 0，份额无定义                           | `estimatedToday`                                                  |
-| `MINING_DAILY_OUTPUT_NOT_CONFIGURED` | 生效版本没有日产出预算（产品草稿）                 | `estimatedToday`                                                  |
-| `MINING_RANK_NOT_RANKED`             | 本人算力为 0，没有名次                             | `myPosition`、社区 `rank`                                         |
-| `MINING_RANK_NOT_APPLICABLE`         | `scope=communities` 时 `myPosition` 无意义         | `myPosition`                                                      |
-| `MINING_POWER_PRIVATE`               | 对方 `miningPowerVisibility: self`                 | 成员行、关注列表 `miningPower`                                    |
-| `MINING_RUNTIME_UNAVAILABLE`         | 仓储读失败                                         | 社区侧 `miningPower`、capability                                  |
-| `COMMUNITY_ASSET_NOT_BOUND`          | 社区未绑定资产                                     | 社区算力四块、社区详情 `miningPower`                              |
-| `COMMUNITY_WEIGHT_PENDING_REVIEW`    | 绑定了资产但生效版本下没有已批准权重               | `weight`、社区算力、`excluded`                                    |
-| `COMMUNITY_WEIGHT_AMBIGUOUS`         | 两个社区在同一资产上都有已批准权重（该资产被排除） | `excluded`                                                        |
-| `MINING_ASSET_WEIGHT_NOT_CONFIGURED` | 资产不在生效版本的 `assetWeights` 里               | `excluded`                                                        |
-| `MINING_PRICE_NOT_FRESH`             | 参考价不新鲜（代理价按代理源自己的观测时间判定）   | `excluded`                                                        |
-| `MINING_PRICE_PROXY_NOT_DECLARED`    | Provider 通过版本未声明的代理资产定价              | `excluded`                                                        |
-| `REWARD_AUTHORITY_PENDING`           | 没有奖励账本/合约                                  | `claimable`、`accumulated`、rewards `source`                      |
+| reasonCode                           | 含义                                               | 出现位置                                                                         |
+| ------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `MINING_FORMULA_BASELINE_PENDING`    | 没有已批准且已生效的公式版本（**只**表示这一件事） | 无生效版本时的所有数字块、`snapshot`、`formula`、capability                      |
+| `MINING_REFERRAL_BOOST_PENDING`      | 邀请加成尚未被生效版本批准（只说加成，不说别的）   | `summary.referralBoost`、`GET /v2/referral.boost`                                |
+| `MINING_SNAPSHOT_NOT_AVAILABLE`      | 有生效版本但 lane 尚未算出快照                     | 所有数字块、`snapshot`                                                           |
+| `MINING_SNAPSHOT_STALE`              | 最新快照是在另一个版本下算的                       | 同上                                                                             |
+| `MINING_ACCOUNT_NOT_IN_SNAPSHOT`     | 该账号在快照里没有余额行（无激活钱包）             | `power`、`estimatedToday`、`myPosition`、`myContribution`、成员行                |
+| `MINING_NETWORK_POWER_ZERO`          | 全网算力为 0，份额无定义                           | `estimatedToday`                                                                 |
+| `MINING_DAILY_OUTPUT_NOT_CONFIGURED` | 生效版本没有日产出预算（产品草稿）                 | `estimatedToday`                                                                 |
+| `MINING_RANK_NOT_RANKED`             | 本人算力为 0，没有名次                             | `myPosition`、社区 `rank`                                                        |
+| `MINING_RANK_NOT_APPLICABLE`         | `scope=communities` 时 `myPosition` 无意义         | `myPosition`                                                                     |
+| `MINING_POWER_PRIVATE`               | 对方 `miningPowerVisibility: self`                 | 成员行、关注列表 `miningPower`                                                   |
+| `MINING_RUNTIME_UNAVAILABLE`         | 仓储读失败                                         | 社区侧 `miningPower`、capability                                                 |
+| `COMMUNITY_ASSET_NOT_BOUND`          | 社区未绑定资产（无权重可审）                       | `weight`（`reviewStatus: not_applicable`）、社区算力四块、社区详情 `miningPower` |
+| `COMMUNITY_WEIGHT_PENDING_REVIEW`    | 绑定了资产但生效版本下没有已批准权重               | `weight`（`reviewStatus: pending_review`）、社区算力、`excluded`                 |
+| `COMMUNITY_WEIGHT_AMBIGUOUS`         | 两个社区在同一资产上都有已批准权重（该资产被排除） | `excluded`                                                                       |
+| `MINING_ASSET_WEIGHT_NOT_CONFIGURED` | 资产不在生效版本的 `assetWeights` 里               | `excluded`                                                                       |
+| `MINING_PRICE_NOT_FRESH`             | 参考价不新鲜（代理价按代理源自己的观测时间判定）   | `excluded`                                                                       |
+| `MINING_PRICE_PROXY_NOT_DECLARED`    | Provider 通过版本未声明的代理资产定价              | `excluded`                                                                       |
+| `REWARD_AUTHORITY_PENDING`           | 没有奖励账本/合约                                  | `claimable`、`accumulated`、rewards `source`                                     |
 
 HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`401 AUTH_*`、`404 NOT_FOUND`
-（社区不存在）、`503 CAPABILITY_UNAVAILABLE`（仓储不可用）。错误体固定七字段。
+（社区不存在）、`503 CAPABILITY_UNAVAILABLE`（挖矿仓储不可用；`assets` 另含 Asset Registry 不可用）。错误体固定七字段。
+
+### 2.2 `formula` 块（summary / assets / rank 共用）
+
+```json
+{
+  "status": "approved",
+  "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+  "effectiveAt": "2026-09-15T14:57:37.026Z",
+  "scope": "development_baseline"
+}
+```
+
+或无生效版本时：
+
+```json
+{
+  "status": "unavailable",
+  "reasonCode": "MINING_FORMULA_BASELINE_PENDING",
+  "pendingVersion": "miningFormulaV1-draft"
+}
+```
+
+三个接口同一定义、同一来源（生效版本的 `formula.scope`）。"开发基线"标签只看 `formula.scope`，不要从
+`formulaVersion` 字符串猜；`scope: null` 表示产品版本。
 
 ## 3. Mining 读接口
 
@@ -102,7 +138,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   },
   "referralBoost": {
     "status": "unavailable",
-    "reasonCode": "MINING_FORMULA_BASELINE_PENDING"
+    "reasonCode": "MINING_REFERRAL_BOOST_PENDING"
   },
   "formula": {
     "status": "approved",
@@ -139,12 +175,15 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 （`value = budget × power ÷ networkPower`，截断到 6 位小数；上例 1000000 × 1000 ÷ 4000。**预算数字必须与
 `formulaVersion` 和 `scope` 同屏出现**，版本号本身就是"开发基线"标签。）
 
+`referralBoost` 在两种状态下都是 `MINING_REFERRAL_BOOST_PENDING`——它只说"邀请加成还没批准"，不说页面其它部分；
+有生效版本时页面上**不会**出现 `MINING_FORMULA_BASELINE_PENDING`（服务端有结构性测试保证）。
+
 没有生效版本时 `formula = {status: "unavailable", reasonCode: "MINING_FORMULA_BASELINE_PENDING", pendingVersion}`，
 其余数字块与 `snapshot` 都是 `MINING_FORMULA_BASELINE_PENDING`。
 
 ### 3.2 `GET /v2/mining/assets`（mining-assets）
 
-2026-09-15 Development 实际响应（账号 `cy`）：
+2026-09-15 Development 实际响应（账号 `cy`；`symbol`/`formula` 为 S22a 加法，值按同一库的 Registry 行与生效版本补入）：
 
 ```json
 {
@@ -152,6 +191,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   "included": [
     {
       "assetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+      "symbol": "Cake",
       "holding": "0",
       "referencePriceUsd": "2.26",
       "referencePriceQuality": "fresh",
@@ -162,6 +202,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     },
     {
       "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      "symbol": "USDT",
       "holding": "0",
       "referencePriceUsd": "0.9994",
       "referencePriceQuality": "fresh",
@@ -172,6 +213,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     },
     {
       "assetId": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      "symbol": "WBNB",
       "holding": "0",
       "referencePriceUsd": "713.42",
       "referencePriceQuality": "fresh",
@@ -182,6 +224,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     },
     {
       "assetId": "eip155:56:native",
+      "symbol": "BNB",
       "holding": "0",
       "referencePriceUsd": "713.42",
       "referencePriceQuality": "proxied",
@@ -197,14 +240,25 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     "status": "available",
     "priceVersion": "dexscreener:2026-09-15T14:58:51.862Z"
   },
+  "formula": {
+    "status": "approved",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "effectiveAt": "2026-09-15T14:57:37.026Z",
+    "scope": "development_baseline"
+  },
   "contractVersion": "2.0"
 }
 ```
 
 `included[].weight` 是生效权重（资产权重 × 已批准社区权重：Cake `0.8`、USDT `1.5` 来自两个绑定社区）；
 `referencePriceQuality: "proxied"` 时界面必须注明"价格来自 WBNB 代理"（`referencePriceProxyAssetId`）。
-`excluded` 是账号持有但快照未计入的资产，原因按 lane 使用的同一输入重推。无快照时两个列表为空且三块 unavailable。
-资产名/符号从 Asset Registry 取。
+`excluded` 是账号持有但快照未计入的资产，原因按 lane 使用的同一输入重推，每行同样带 `symbol`：
+`{assetId, symbol, reasonCode}`。无快照时两个列表为空、三块 unavailable，`formula` 照常给出。
+
+- `symbol`（必填）：服务端从 Asset Registry 读（与行情模块同源，一次查询覆盖整页），native 行是 `BNB`。
+  只有 Registry 没有该资产行时才是 `null`——此时再退回显示缩略地址；**不要**再从地址或链槽位推名字。
+  Registry 读不到时整个接口 `503 CAPABILITY_UNAVAILABLE`（不会给一页没名字的行）。
+- `formula`：见 §2.2，与摘要页同一块；本页的"开发基线"戳从这里取。
 
 ### 3.3 `GET /v2/mining/rewards`（mining-rewards）
 
@@ -248,6 +302,12 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     "anonymousMemberKey": "mining.rank.anonymousMember",
     "ruleKey": "mining.rank.display.aliasOrAnonymous"
   },
+  "formula": {
+    "status": "approved",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "effectiveAt": "2026-09-15T14:57:37.026Z",
+    "scope": "development_baseline"
+  },
   "contractVersion": "2.0"
 }
 ```
@@ -260,7 +320,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 - 2026-09-15 Development 实际响应：`scope=users` 列出 2 个账号（`position: null`、`power: "0"`，一个 alias 一个
   anonymous），`myPosition` 为 `MINING_RANK_NOT_RANKED`；`scope=communities`：
 
-````json
+```json
 "items": [
   { "position": null, "power": "0",
     "community": { "communityId": "439cabe6-4c98-4f99-860f-192ad52403a1", "name": "Builders Guild",
@@ -271,6 +331,10 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
                    "boundAssetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82" },
     "weight": "0.8", "participants": 0 }
 ], "participants": 0
+```
+
+- 顶层 `scope` 是排行范围（`users | communities`）；版本的 `scope` 在 `formula.scope` 里（§2.2），两者不要混。
+  无生效版本时 `ranking`/`myPosition`/`snapshot` 都是 `MINING_FORMULA_BASELINE_PENDING`，`formula` 为 unavailable 分支。
 - `scope` 非法 → `400`。
 
 ### 3.5 `GET /v2/mining/communities/{communityId}`（mining-community）
@@ -279,32 +343,50 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 ```json
 {
-  "community": { "communityId": "d17b34a6-c3cc-4a24-87dd-dc165c80bd85", "name": "DeFi 早读会",
-                 "boundAssetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82" },
-  "weight": { "status": "approved", "value": "0.8", "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
-              "reviewedAt": "2026-09-15T14:58:52.089Z" },
+  "community": {
+    "communityId": "d17b34a6-c3cc-4a24-87dd-dc165c80bd85",
+    "name": "DeFi 早读会",
+    "boundAssetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"
+  },
+  "weight": {
+    "status": "approved",
+    "value": "0.8",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "reviewedAt": "2026-09-15T14:58:52.089Z"
+  },
   "communityPower": { "status": "available", "value": "0" },
   "myContribution": { "status": "available", "value": "0" },
   "rank": { "status": "unavailable", "reasonCode": "MINING_RANK_NOT_RANKED" },
   "participants": { "status": "available", "count": 0 },
-  "snapshot": { "…" : "" },
+  "snapshot": { "…": "" },
   "contractVersion": "2.0"
 }
-````
+```
 
 `communityPower` 为未封禁成员在绑定资产上的算力之和，`myContribution` 为本人在该资产上的算力，
 `participants.count` 为算力 > 0 的成员数；未绑定资产 → 四块 `COMMUNITY_ASSET_NOT_BOUND`；绑定但生效版本下无已批准权重 →
 `COMMUNITY_WEIGHT_PENDING_REVIEW`。社区不存在 → `404`。
+
+`weight` 块的三种取值（S22a，决策 0046；与社区侧 `miningPower.weight` 同一函数构造）：
+
+| 情形                         | `weight`                                                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 已批准                       | `{status: "approved", value, configVersion, reviewedAt}`                                                 |
+| 绑定了资产、无已批准权重     | `{status: "unavailable", reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW", reviewStatus: "pending_review"}` |
+| **未绑定资产**（无权重可审） | `{status: "unavailable", reasonCode: "COMMUNITY_ASSET_NOT_BOUND", reviewStatus: "not_applicable"}`       |
+
+`reviewStatus` 仍是必填键，枚举 `pending_review | not_applicable`，与 reasonCode 一一对应；未绑定时四个数字块与
+`weight` 说的是同一句话，不会再出现"权重待审"。
 
 ### 3.6 `GET /v2/mining/rules`（mining-rules）
 
 ```json
 {
   "approved": {
-    "configVersion": "miningFormula-devBaseline-2026-09-15",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
     "status": "approved",
     "scope": "development_baseline",
-    "effectiveAt": "2026-09-15T14:32:19.999Z",
+    "effectiveAt": "2026-09-15T14:57:37.026Z",
     "approvedAt": "…",
     "expressionKey": "mining.rules.formula.holdingTimesReferencePriceTimesWeight",
     "dailyOutputKey": "mining.rules.dailyOutput.shareOfNetworkPower",
@@ -351,8 +433,8 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   ],
   "baseline": {
     "status": "approved",
-    "configVersion": "miningFormula-devBaseline-2026-09-15",
-    "effectiveAt": "2026-09-15T14:32:19.999Z",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "effectiveAt": "2026-09-15T14:57:37.026Z",
     "scope": "development_baseline"
   },
   "referral": {
@@ -387,7 +469,9 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   `"development_baseline"` 或 `null`（产品版本）。**只用它打"开发基线"标签，不要从 `formulaVersion` 字符串猜**。
 - `weight` 与 3.5 的 `GET /v2/mining/communities/{id}.weight` **同一形状同一来源**（同一函数构造）：
   `{status: "approved", value, configVersion, reviewedAt}` 或
-  `{status: "unavailable", reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW", reviewStatus: "pending_review"}`。
+  `{status: "unavailable", reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW", reviewStatus: "pending_review"}`
+  （社区侧 `available` 分支只在有 standing 时出现，standing 只存在于已绑定且权重已批准的社区，所以这里实际只会
+  见到 `approved`；`not_applicable` 取值见 §3.5，未绑定社区在社区侧整体是 `unavailable(COMMUNITY_ASSET_NOT_BOUND)`）。
 - `participants` 与 3.5 的 `participants` 同形：`{status: "available", count}` 或 `{status: "unavailable", reasonCode}`。
 - 成员行 / 关注行是**一个人**跨资产的总算力，没有哪一个社区权重能解释它，所以 `account` 分支不带 `weight`/`participants`，
   也不会用假 `reviewStatus` 凑一个 unavailable。按 `subject` 分支解码即可，不需要判断字段是否存在。
@@ -485,7 +569,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
       "total": 3 },
     … level 2..5
   ],
-  "boost": { "status": "unavailable", "reasonCode": "MINING_FORMULA_BASELINE_PENDING" },
+  "boost": { "status": "unavailable", "reasonCode": "MINING_REFERRAL_BOOST_PENDING" },
   "rules": { "configVersion": "referralRulesV1", "effectiveAt": "2026-09-01T00:00:00.000Z", "appliesTo": "miningPower", "maximumDepth": 5, "claimWindowDays": 7 },
   "contractVersion": "2.0"
 }
@@ -496,7 +580,8 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   `{status: "unavailable", reasonCode: "PROFILE_ACTIVATION_REQUIRED"}`（未激活 LOOP ID）。
 - 绑定后 `binding.status = "bound"`，`inviter = {depth: 1, validationStatus, lockedAt, effectiveFrom, configVersion}`
   —— **不暴露邀请人身份**。
-- `levels[].counts` 按 `validationStatus` 分组；开发基线不验证边为 `valid`，`boost` 仍 unavailable。
+- `levels[].counts` 按 `validationStatus` 分组；开发基线不验证边为 `valid`，`boost` 仍 unavailable，
+  码是 `MINING_REFERRAL_BOOST_PENDING`（与摘要页 `referralBoost` 同一槽位同一码；S22a 前误用 `MINING_FORMULA_BASELINE_PENDING`）。
 - 一切表述为 "Mining Power 加成"，禁止"返佣/分红/下线收入"。
 
 ### 5.2 `POST /v2/referral/claim`

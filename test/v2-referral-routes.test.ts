@@ -151,9 +151,11 @@ describe("LOOP API V2 referral module", () => {
       total: 3,
     });
     expect(body.levels[2]).toMatchObject({ level: 3, total: 4 });
+    // The boost slot names itself; the page-level "no version in force"
+    // code is never used for it (Decision 0046).
     expect(body.boost).toEqual({
       status: "unavailable",
-      reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      reasonCode: "MINING_REFERRAL_BOOST_PENDING",
     });
     expect(body.rules).toEqual({
       configVersion: "referralRulesV1",

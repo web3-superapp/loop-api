@@ -1371,6 +1371,7 @@ export async function buildApp(
     (miningRuntimeAvailable
       ? createMiningService({
           repository: database.mining ?? createUnavailableMiningRepository(),
+          registry: chainRegistryRepository,
         })
       : createUnavailableMiningService());
   // Decision 0043: the `communityMining` capability reads the formula fact

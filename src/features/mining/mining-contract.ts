@@ -1,12 +1,16 @@
 import { z } from "zod";
 
 /**
- * V2 Mining wire contract (Decisions 0036 and 0043). Without an approved
- * and effective formula version every power, reward, and rank value is
- * `unavailable` with `MINING_FORMULA_BASELINE_PENDING`; `claimable` is
- * always `REWARD_AUTHORITY_PENDING`. The product draft carries rule text
- * only (03 §19); the development baseline (Decision 0043) carries explicit
- * placeholder parameters that name themselves as such.
+ * V2 Mining wire contract (Decisions 0036, 0043, and 0046). Without an
+ * approved and effective formula version every power, reward, and rank
+ * value is `unavailable` with `MINING_FORMULA_BASELINE_PENDING`; that code
+ * means exactly "no version in force" and is never emitted by any slot
+ * while a version is in force (Decision 0046). `claimable` is always
+ * `REWARD_AUTHORITY_PENDING`; the referral boost is
+ * `MINING_REFERRAL_BOOST_PENDING` until a version approves it. The product
+ * draft carries rule text only (03 §19); the development baseline
+ * (Decision 0043) carries explicit placeholder parameters that name
+ * themselves as such.
  */
 
 export const miningDraftFormulaVersion = "miningFormulaV1-draft" as const;
@@ -22,7 +26,11 @@ export const miningReasonCodes = Object.freeze({
   communityWeightAmbiguous: "COMMUNITY_WEIGHT_AMBIGUOUS",
   communityAssetNotBound: "COMMUNITY_ASSET_NOT_BOUND",
   assetWeightNotConfigured: "MINING_ASSET_WEIGHT_NOT_CONFIGURED",
-  referralBoostPending: "MINING_FORMULA_BASELINE_PENDING",
+  /**
+   * The referral boost itself is not approved by the version in force (or
+   * there is none). Says nothing about the rest of the page (Decision 0046).
+   */
+  referralBoostPending: "MINING_REFERRAL_BOOST_PENDING",
   priceNotFresh: "MINING_PRICE_NOT_FRESH",
   /** The Provider priced the asset through a proxy the version does not declare. */
   priceProxyNotDeclared: "MINING_PRICE_PROXY_NOT_DECLARED",
@@ -62,6 +70,18 @@ export type MiningFormulaStatus = (typeof miningFormulaStatuses)[number];
 
 export const communityWeightStatuses = ["pending_review", "approved"] as const;
 export type CommunityWeightStatus = (typeof communityWeightStatuses)[number];
+
+/**
+ * What an `unavailable` community weight says about its review: a bound
+ * community is `pending_review`; a community without a bound asset has
+ * nothing to review, so it is `not_applicable` (Decision 0046).
+ */
+export const communityWeightReviewStatuses = [
+  "pending_review",
+  "not_applicable",
+] as const;
+export type CommunityWeightReviewStatus =
+  (typeof communityWeightReviewStatuses)[number];
 
 export const miningRankScopes = ["users", "communities"] as const;
 export type MiningRankScope = (typeof miningRankScopes)[number];

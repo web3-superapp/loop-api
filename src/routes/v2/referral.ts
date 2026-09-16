@@ -242,7 +242,7 @@ export function registerV2ReferralRoutes(
         operationId: "getV2Referral",
         summary: "Get the caller's invite code, binding, and level counts",
         description:
-          "Issues the account's invite code on first read (one per account, random, unique). Counts per level are grouped by validationStatus; `valid` needs an approved Mining formula (D19), so the boost stays unavailable with MINING_FORMULA_BASELINE_PENDING. The claim window is [activatedAt, activatedAt + 7 days).",
+          "Issues the account's invite code on first read (one per account, random, unique). Counts per level are grouped by validationStatus; `valid` needs a Mining formula version that approves the boost (D19), so the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). The claim window is [activatedAt, activatedAt + 7 days).",
         tags: ["referral"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
