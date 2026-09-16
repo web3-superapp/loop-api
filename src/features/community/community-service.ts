@@ -26,6 +26,11 @@ import type {
 } from "../mining/mining-power-reader.js";
 import type { AliasPolicy } from "../profile/alias-policy.js";
 import {
+  communityPresenceNotObserved,
+  type CommunityPresenceProjection,
+  type CommunityPresenceReader,
+} from "./community-presence-reader.js";
+import {
   blocksFilter,
   commandDigest,
   communityCursorRoutes,
@@ -237,7 +242,12 @@ export interface CommunityResource {
    * force, a snapshot, a bound asset, or an approved weight.
    */
   readonly miningPower: MiningPowerProjection;
-  readonly onlineCount: UnavailableProjection;
+  /**
+   * Channel members currently connected to Stream (Decision 0047). Observed
+   * only by `GET /v2/communities/{id}`; every write returns
+   * `STREAM_PRESENCE_NOT_OBSERVED` because nothing was measured there.
+   */
+  readonly onlineCount: CommunityPresenceProjection;
   readonly announcements: UnavailableProjection;
   readonly officialLinks: UnavailableProjection;
   readonly contractVersion: typeof v2ContractVersion;
@@ -667,6 +677,7 @@ function communityResource(
   record: CommunityDetailRecord,
   channel: CommunityChannelViewerRecord | null,
   miningPower: MiningPowerProjection,
+  onlineCount: CommunityPresenceProjection,
 ): CommunityResource {
   return Object.freeze({
     community: summary(record.community),
@@ -674,7 +685,7 @@ function communityResource(
     chat: chatProjection(channel),
     voice: voiceProjection(channel),
     miningPower,
-    onlineCount: unavailable(communityUnavailableReasonCodes.presence),
+    onlineCount,
     announcements: unavailable(communityUnavailableReasonCodes.announcements),
     officialLinks: unavailable(communityUnavailableReasonCodes.officialLinks),
     contractVersion: v2ContractVersion,
@@ -699,6 +710,12 @@ export interface CommunityServiceOptions {
    * mining module is not composed, so every power reads unavailable.
    */
   readonly miningPower?: CommunityMiningPowerReader | null;
+  /**
+   * Read-only Stream presence observation (Decision 0047). Absent means no
+   * Stream credentials are composed, so `onlineCount` reads
+   * `STREAM_PRESENCE_NOT_CONNECTED`.
+   */
+  readonly presence?: CommunityPresenceReader | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly searchQuota: AliasSearchQuota;
   readonly aliasPolicy: AliasPolicy;
@@ -734,6 +751,24 @@ export function createCommunityService(
   const miningPowerUnavailable = unavailable(
     communityUnavailableReasonCodes.mining,
   );
+  const presenceReader = options.presence ?? null;
+  const presenceNotConnected = unavailable(
+    communityUnavailableReasonCodes.presence,
+  );
+
+  /**
+   * One Stream observation per detail read, bounded by the reader's own
+   * budget; it never throws, so a slow or failed Stream answer leaves the
+   * rest of the resource intact.
+   */
+  function communityPresence(
+    channel: CommunityChannelViewerRecord | null,
+  ): Promise<CommunityPresenceProjection> {
+    if (presenceReader === null) {
+      return Promise.resolve(presenceNotConnected);
+    }
+    return presenceReader.readCommunityPresence(channel);
+  }
 
   function communityMiningPower(
     communityId: string,
@@ -1121,6 +1156,7 @@ export function createCommunityService(
           record,
           await channelProjection(owner.userId, record.community.communityId),
           await communityMiningPower(record.community.communityId),
+          communityPresenceNotObserved,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1150,6 +1186,7 @@ export function createCommunityService(
           record,
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
+          communityPresenceNotObserved,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1164,10 +1201,12 @@ export function createCommunityService(
           viewerUserId: owner.userId,
           communityId,
         });
+        const channel = await channelProjection(owner.userId, communityId);
         return communityResource(
           record,
-          await channelProjection(owner.userId, communityId),
+          channel,
           await communityMiningPower(communityId),
+          await communityPresence(channel),
         );
       } catch (error) {
         return mapFailure(error);
@@ -1191,6 +1230,7 @@ export function createCommunityService(
           record,
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
+          communityPresenceNotObserved,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1214,6 +1254,7 @@ export function createCommunityService(
           record,
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
+          communityPresenceNotObserved,
         );
       } catch (error) {
         return mapFailure(error);

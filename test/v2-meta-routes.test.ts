@@ -457,6 +457,7 @@ describe("LOOP API V2 meta policy gates", () => {
       priceAlertsRuntimeAvailable: false,
       notificationsFeedRuntimeAvailable: false,
       communicationRuntimeAvailable: false,
+      communityPresenceRuntimeAvailable: false,
       walletIntentRuntimeAvailable: false,
       bscWritesEnabled: false,
       privySwapRuntimeAvailable: false,

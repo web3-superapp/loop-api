@@ -184,6 +184,13 @@ export interface V2ProductPolicyRuntime {
    */
   readonly communicationRuntimeAvailable: boolean;
   /**
+   * The community presence reader is composed (Decision 0047): Stream
+   * credentials (or an injected community channel gateway) together with
+   * the communication runtime that owns the channel records. Without both,
+   * `onlineCount` cannot be observed and the capability fails closed.
+   */
+  readonly communityPresenceRuntimeAvailable: boolean;
+  /**
    * `sendApprovals` / `swap` module enabled with the wallet-intent repository,
    * the control plane, the wallet inventory, an RPC endpoint, and
    * `BSC_WRITES_ENABLED` (Decision 0035). Evaluated per request together with
@@ -794,6 +801,33 @@ function communityMiningCapability(
   });
 }
 
+/**
+ * `communityPresence` (Decision 0047) is a runtime question, never a
+ * constant: it opens when the presence reader is composed. Without Stream
+ * credentials the reason is the same `STREAM_PRESENCE_NOT_CONNECTED` the
+ * field itself reports; with credentials but no communication runtime there
+ * are no channel records to read presence for.
+ */
+function communityPresenceCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const reasonCode = runtime.communityPresenceRuntimeAvailable
+    ? null
+    : config.stream === null
+      ? v2CommunityPresenceUnavailableReasonCode
+      : v2CommunicationRuntimeUnavailableReasonCode;
+  return Object.freeze({
+    capabilityId: "communityPresence",
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable",
+      reasonCode: null,
+    }),
+  });
+}
+
 function unavailableCapability(
   capabilityId: string,
   reasonCode: string,
@@ -872,10 +906,7 @@ export async function createV2CapabilitiesProjection(
     ),
     voiceRoomsCapability(config, runtime),
     communityMiningCapability(config, runtime, miningBaseline),
-    unavailableCapability(
-      "communityPresence",
-      v2CommunityPresenceUnavailableReasonCode,
-    ),
+    communityPresenceCapability(config, runtime),
     deliveredModuleCapability(
       config,
       "search",

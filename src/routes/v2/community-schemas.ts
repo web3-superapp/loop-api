@@ -171,6 +171,30 @@ export const miningPowerSchema = {
   ],
 } as const;
 
+/**
+ * The community "online" number (Decision 0047): the official channel's
+ * members whose Stream user holds a live connection at `observedAt`. It is
+ * an observation, so the timestamp is required and `source` says exactly
+ * what was counted. `count` is `0` only when Stream reported zero connected
+ * members; every failure is the unavailable projection with its reason.
+ */
+export const communityPresenceSchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "count", "observedAt", "source"],
+      properties: {
+        status: { type: "string", const: "available" },
+        count: { type: "integer", minimum: 0 },
+        observedAt: { type: "string", format: "date-time" },
+        source: { type: "string", const: "stream_member_presence" },
+      },
+    },
+  ],
+} as const;
+
 export const identityProjectionSchema = {
   type: "object",
   additionalProperties: false,
@@ -412,7 +436,7 @@ export const communityResourceSchema = {
     chat: communityChatSchema,
     voice: communityVoiceSchema,
     miningPower: miningPowerSchema,
-    onlineCount: unavailableSchema,
+    onlineCount: communityPresenceSchema,
     announcements: unavailableSchema,
     officialLinks: unavailableSchema,
     contractVersion: { type: "string", const: v2ContractVersion },

@@ -296,6 +296,7 @@ import {
   createUnavailableMiningFormulaBaselineProbe,
 } from "./features/mining/mining-baseline.js";
 import { createMiningPowerReader } from "./features/mining/mining-power-reader.js";
+import { createCommunityPresenceReader } from "./features/community/community-presence-reader.js";
 import {
   createMiningService,
   createUnavailableMiningService,
@@ -1030,11 +1031,27 @@ export async function buildApp(
     communityRepositoryComposed &&
     v2CursorCodec !== null &&
     config.streamTokenQuota !== null;
+  const streamCommunityChannelGateway =
+    options.streamCommunityChannelGateway ??
+    (config.stream === null
+      ? createUnavailableStreamCommunityChannelGateway()
+      : createStreamCommunityChannelGateway(config.stream));
+  // Decision 0047: the presence reader exists only when a Stream gateway
+  // that can answer exists; otherwise `onlineCount` and the capability
+  // report STREAM_PRESENCE_NOT_CONNECTED rather than a zero.
+  const communityPresenceReaderComposed =
+    config.stream !== null ||
+    options.streamCommunityChannelGateway !== undefined;
   const communityService =
     options.communityService ??
     createCommunityService({
       repository: database.community ?? createUnavailableCommunityRepository(),
       communicationRepository: database.communication ?? null,
+      presence: communityPresenceReaderComposed
+        ? createCommunityPresenceReader({
+            gateway: streamCommunityChannelGateway,
+          })
+        : null,
       // Decision 0043: community, member, and connection Mining Power read
       // the latest snapshot through the mining repository when the module
       // is registered; otherwise they stay unavailable.
@@ -1049,11 +1066,6 @@ export async function buildApp(
         blockedTerms: config.v2AliasBlockedTerms,
       }),
     });
-  const streamCommunityChannelGateway =
-    options.streamCommunityChannelGateway ??
-    (config.stream === null
-      ? createUnavailableStreamCommunityChannelGateway()
-      : createStreamCommunityChannelGateway(config.stream));
   const streamCallGateway =
     options.streamCallGateway ??
     (config.stream === null
@@ -1070,6 +1082,8 @@ export async function buildApp(
     (config.stream !== null ||
       options.streamCallGateway !== undefined ||
       options.streamCommunityChannelGateway !== undefined);
+  const communityPresenceRuntimeAvailable =
+    communityPresenceReaderComposed && communicationRuntimeAvailable;
   const communicationRepository =
     database.communication ?? createUnavailableCommunicationRepository();
   const chatService =
@@ -1621,6 +1635,7 @@ export async function buildApp(
         priceAlertsRuntimeAvailable,
         notificationsFeedRuntimeAvailable,
         communicationRuntimeAvailable,
+        communityPresenceRuntimeAvailable,
         walletIntentRuntimeAvailable,
         bscWritesEnabled: config.bscWrites !== null,
         privySwapRuntimeAvailable,

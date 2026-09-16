@@ -5144,17 +5144,49 @@
                       ]
                     },
                     "onlineCount": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "announcements": {
                       "type": "object",
@@ -6264,17 +6296,49 @@
                       ]
                     },
                     "onlineCount": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "announcements": {
                       "type": "object",
@@ -7285,17 +7349,49 @@
                       ]
                     },
                     "onlineCount": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "announcements": {
                       "type": "object",
@@ -8414,17 +8510,49 @@
                       ]
                     },
                     "onlineCount": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "announcements": {
                       "type": "object",
@@ -9543,17 +9671,49 @@
                       ]
                     },
                     "onlineCount": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
-                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "announcements": {
                       "type": "object",

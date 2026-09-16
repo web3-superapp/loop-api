@@ -35,7 +35,13 @@ import {
   type MiningRepository,
 } from "../src/features/mining/mining-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
+import { createUnavailableCommunicationRepository } from "../src/features/communication/communication-repository.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import {
+  createUnavailableStreamCommunityChannelGateway,
+  StreamChannelGatewayUnavailableError,
+  type StreamCommunityChannelGateway,
+} from "../src/integrations/stream/channel-gateway.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const otherAccountId = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
@@ -337,6 +343,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
   async function createApp(
     dependencies: Omit<ReturnType<typeof fakes>, "database"> & {
       readonly database: Database;
+      readonly streamCommunityChannelGateway?: StreamCommunityChannelGateway;
     } = fakes(),
     overrides: Readonly<Record<string, string>> = {},
   ) {
@@ -345,6 +352,12 @@ describe("LOOP API V2 community, social, and search modules", () => {
       contractSurface: "v2",
       database: dependencies.database,
       privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      ...(dependencies.streamCommunityChannelGateway === undefined
+        ? {}
+        : {
+            streamCommunityChannelGateway:
+              dependencies.streamCommunityChannelGateway,
+          }),
       logger: false,
     });
     apps.push(app);
@@ -1940,6 +1953,313 @@ describe("LOOP API V2 community, social, and search modules", () => {
         status: "unavailable",
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
       });
+    });
+  });
+
+  describe("Community presence from Stream member connections (Decision 0047)", () => {
+    const streamChannelId = `loop_community_${communityId.replaceAll("-", "")}`;
+    const observedAtPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+    function communicationFake(
+      channel: {
+        readonly provisioned: boolean;
+        readonly state: "created" | "failed" | "capacityPending";
+      } | null,
+    ) {
+      return {
+        ...createUnavailableCommunicationRepository(),
+        readCommunityChannel: vi.fn(() =>
+          Promise.resolve({
+            channel:
+              channel === null
+                ? null
+                : {
+                    communityId,
+                    streamChannelId,
+                    state: channel.state,
+                    memberCap: 3_000,
+                    provisioned: channel.provisioned,
+                  },
+            viewerMemberState: "synced" as const,
+            viewerIsCommunityMember: true,
+            currentVoiceRoomId: null,
+            currentVoiceRoomProvisioned: false,
+          }),
+        ),
+      };
+    }
+
+    function presenceGateway(
+      readCommunityChannelPresence: StreamCommunityChannelGateway["readCommunityChannelPresence"],
+    ): StreamCommunityChannelGateway {
+      return {
+        ...createUnavailableStreamCommunityChannelGateway(),
+        readCommunityChannelPresence,
+      };
+    }
+
+    async function presenceApp(
+      channel: Parameters<typeof communicationFake>[0],
+      gateway: StreamCommunityChannelGateway,
+      overrides: Readonly<Record<string, string>> = {},
+    ) {
+      const dependencies = fakes();
+      return createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            communication: communicationFake(channel),
+          },
+          streamCommunityChannelGateway: gateway,
+        },
+        { V2_MODULES_ENABLED: "community,search,communication", ...overrides },
+      );
+    }
+
+    it("publishes the observed count with its timestamp and source on the detail read only", async () => {
+      const read = vi.fn<
+        StreamCommunityChannelGateway["readCommunityChannelPresence"]
+      >(() =>
+        Promise.resolve({
+          status: "observed" as const,
+          channelId: streamChannelId,
+          onlineMemberCount: 3,
+          memberCount: 41,
+        }),
+      );
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(read),
+      );
+
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.statusCode).toBe(200);
+      const onlineCount = detail.json<{
+        onlineCount: {
+          status: string;
+          count: number;
+          observedAt: string;
+          source: string;
+        };
+      }>().onlineCount;
+      expect(onlineCount).toEqual({
+        status: "available",
+        count: 3,
+        observedAt: expect.stringMatching(observedAtPattern) as string,
+        source: "stream_member_presence",
+      });
+      expect(Date.parse(onlineCount.observedAt)).toBeLessThanOrEqual(
+        Date.now(),
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[0]).toMatchObject({
+        channelId: streamChannelId,
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+
+      // A write returns the same resource shape but observes nothing.
+      const joined = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(joined.statusCode).toBe(200);
+      expect(joined.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"STREAM_PRESENCE_NOT_OBSERVED"}',
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes a real zero when Stream reports no connected member", async () => {
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 0,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.json<{ onlineCount: unknown }>().onlineCount).toMatchObject(
+        { status: "available", count: 0, source: "stream_member_presence" },
+      );
+    });
+
+    it("keeps the three failure reasons apart and leaves the rest of the resource intact", async () => {
+      const cases: readonly [
+        Parameters<typeof communicationFake>[0],
+        StreamCommunityChannelGateway,
+        string,
+      ][] = [
+        // The community has no Stream channel yet.
+        [null, presenceGateway(vi.fn()), "COMMUNITY_CHANNEL_NOT_PROVISIONED"],
+        [
+          { provisioned: false, state: "created" },
+          presenceGateway(vi.fn()),
+          "COMMUNITY_CHANNEL_NOT_PROVISIONED",
+        ],
+        [
+          { provisioned: true, state: "failed" },
+          presenceGateway(vi.fn()),
+          "COMMUNITY_CHANNEL_PROVISION_FAILED",
+        ],
+        // Stream answered with a fault.
+        [
+          { provisioned: true, state: "created" },
+          presenceGateway(() =>
+            Promise.reject(new StreamChannelGatewayUnavailableError()),
+          ),
+          "STREAM_PRESENCE_READ_FAILED",
+        ],
+        // More members than the read is allowed to page.
+        [
+          { provisioned: true, state: "created" },
+          presenceGateway(() =>
+            Promise.resolve({
+              status: "bound_exceeded" as const,
+              channelId: streamChannelId,
+              memberBound: 500,
+            }),
+          ),
+          "STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED",
+        ],
+      ];
+      for (const [channel, gateway, reasonCode] of cases) {
+        const { app } = await presenceApp(channel, gateway);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode, reasonCode).toBe(200);
+        expect(detail.body, reasonCode).toContain(
+          `"onlineCount":{"status":"unavailable","reasonCode":"${reasonCode}"}`,
+        );
+        const body = detail.json<{
+          community: { communityId: string };
+          viewer: { membership: { role: string } | null };
+          chat: { status: string };
+          contractVersion: string;
+        }>();
+        expect(body.community.communityId).toBe(communityId);
+        expect(body.viewer).toMatchObject({ membership: { role: "owner" } });
+        expect(body.contractVersion).toBe("2.0");
+      }
+    });
+
+    it("reports STREAM_PRESENCE_NOT_CONNECTED without Stream, from the field and the capability alike", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            communication: communicationFake({
+              provisioned: true,
+              state: "created",
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,communication" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"STREAM_PRESENCE_NOT_CONNECTED"}',
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toEqual({
+        capabilityId: "communityPresence",
+        availability: "unavailable",
+        reasonCode: "STREAM_PRESENCE_NOT_CONNECTED",
+        evidence: { status: "notApplicable", reasonCode: null },
+      });
+    });
+
+    it("opens the communityPresence capability when Stream and the communication runtime are composed", async () => {
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(vi.fn()),
+        {
+          STREAM_API_KEY: "stream_test_api_key",
+          STREAM_API_SECRET: "s".repeat(32),
+        },
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toEqual({
+        capabilityId: "communityPresence",
+        availability: "available",
+        reasonCode: null,
+        evidence: { status: "notApplicable", reasonCode: null },
+      });
+    });
+
+    it("fails the capability closed when Stream is configured but the communication runtime is not", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          streamCommunityChannelGateway: presenceGateway(vi.fn()),
+        },
+        {
+          V2_MODULES_ENABLED: "community,search",
+          STREAM_API_KEY: "stream_test_api_key",
+          STREAM_API_SECRET: "s".repeat(32),
+        },
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toMatchObject({
+        availability: "unavailable",
+        reasonCode: "COMMUNICATION_RUNTIME_UNAVAILABLE",
+      });
+      // No channel record can exist without the communication runtime.
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"COMMUNICATION_RUNTIME_UNAVAILABLE"}',
+      );
     });
   });
 });

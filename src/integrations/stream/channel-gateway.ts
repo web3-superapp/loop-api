@@ -537,6 +537,35 @@ export interface StreamCommunityChannelProjection {
   readonly memberCount: number | null;
 }
 
+export interface ReadStreamCommunityChannelPresenceInput {
+  readonly channelId: string;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Community presence as Stream lets a server read it (Decision 0047).
+ * `watcher_count` is never published to a server-side (API secret) read,
+ * even while a client is watching the channel, so the only presence fact a
+ * server can observe is each channel member's `user.online` flag returned
+ * by the member query. `observed` counts the members that flag is `true`
+ * for; `bound_exceeded` means the channel has more members than the paging
+ * budget covers, and no partial count is ever published as a total.
+ */
+export type StreamCommunityChannelPresenceResult =
+  | Readonly<{
+      status: "observed";
+      channelId: string;
+      /** Channel members whose Stream user currently holds a connection. */
+      onlineMemberCount: number;
+      /** Members the count covers: every member of the channel. */
+      memberCount: number;
+    }>
+  | Readonly<{
+      status: "bound_exceeded";
+      channelId: string;
+      memberBound: number;
+    }>;
+
 export interface StreamCommunityChannelGateway {
   upsertCommunityChannel(
     input: UpsertStreamCommunityChannelInput,
@@ -547,9 +576,22 @@ export interface StreamCommunityChannelGateway {
   removeMembers(
     input: StreamCommunityChannelMemberInput,
   ): Promise<StreamCommunityChannelProjection>;
+  readCommunityChannelPresence(
+    input: ReadStreamCommunityChannelPresenceInput,
+  ): Promise<StreamCommunityChannelPresenceResult>;
 }
 
 const maximumCommunityChannelMemberBatch = 100;
+/** Stream's member query page size; the presence read never asks for more. */
+export const communityPresencePageSize = 100;
+/**
+ * Pages the presence read is allowed to spend on one community. Beyond
+ * `communityPresencePageSize * communityPresenceMaximumPages` members the
+ * read reports `bound_exceeded` instead of a count it did not finish.
+ */
+export const communityPresenceMaximumPages = 5;
+export const communityPresenceMemberBound =
+  communityPresencePageSize * communityPresenceMaximumPages;
 
 /**
  * Status codes Stream returns for a client error that is worth retrying: a
@@ -722,11 +764,58 @@ function validateCommunityChannelResponse(
   });
 }
 
+function parsePresenceInput(
+  value: unknown,
+): ReadStreamCommunityChannelPresenceInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["channelId", "signal"]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !(value["signal"] instanceof AbortSignal)
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    signal: value["signal"],
+  });
+}
+
+/**
+ * One page of the member query, reduced to the two numbers the presence
+ * read needs. A member without a user object, or a user whose `online` is
+ * not a boolean, is a projection mismatch: the count must not silently
+ * treat "unknown" as "offline".
+ */
+function reduceMemberPage(value: unknown): {
+  readonly pageSize: number;
+  readonly online: number;
+} {
+  if (!isRecord(value) || !Array.isArray(value["members"])) {
+    return projectionMismatch();
+  }
+  let online = 0;
+  for (const member of value["members"] as unknown[]) {
+    if (
+      !isRecord(member) ||
+      !isRecord(member["user"]) ||
+      typeof member["user"]["online"] !== "boolean"
+    ) {
+      return projectionMismatch();
+    }
+    if (member["user"]["online"]) {
+      online += 1;
+    }
+  }
+  return { pageSize: (value["members"] as unknown[]).length, online };
+}
+
 export function createUnavailableStreamCommunityChannelGateway(): StreamCommunityChannelGateway {
   return Object.freeze({
     upsertCommunityChannel: unavailablePromise,
     addMembers: unavailablePromise,
     removeMembers: unavailablePromise,
+    readCommunityChannelPresence: unavailablePromise,
   });
 }
 
@@ -836,6 +925,57 @@ export function createStreamCommunityChannelGateway(
       rawInput: StreamCommunityChannelMemberInput,
     ): Promise<StreamCommunityChannelProjection> {
       return mutateMembers(rawInput, "remove");
+    },
+
+    async readCommunityChannelPresence(
+      rawInput: ReadStreamCommunityChannelPresenceInput,
+    ): Promise<StreamCommunityChannelPresenceResult> {
+      const input = parsePresenceInput(rawInput);
+      try {
+        let memberCount = 0;
+        let onlineMemberCount = 0;
+        for (let page = 0; page < communityPresenceMaximumPages; page += 1) {
+          input.signal.throwIfAborted();
+          // Read-only: the member query neither creates the channel nor
+          // touches its membership. Stream ignores an `online` filter, so
+          // every member is paged and counted here. The sort makes offset
+          // paging deterministic across pages.
+          const response = await client.chat
+            .channel(streamChannelType, input.channelId)
+            .queryMembers({
+              payload: {
+                filter_conditions: {},
+                sort: [{ field: "created_at", direction: 1 }],
+                limit: communityPresencePageSize,
+                offset: page * communityPresencePageSize,
+              },
+            });
+          input.signal.throwIfAborted();
+          const reduced = reduceMemberPage(response);
+          memberCount += reduced.pageSize;
+          onlineMemberCount += reduced.online;
+          if (reduced.pageSize < communityPresencePageSize) {
+            return Object.freeze({
+              status: "observed" as const,
+              channelId: input.channelId,
+              onlineMemberCount,
+              memberCount,
+            });
+          }
+        }
+        // Every page came back full: the channel may have more members than
+        // the budget covers, and a count of the first N is not a total.
+        return Object.freeze({
+          status: "bound_exceeded" as const,
+          channelId: input.channelId,
+          memberBound: communityPresenceMemberBound,
+        });
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
     },
   });
 }

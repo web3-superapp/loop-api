@@ -252,7 +252,16 @@ export function unavailable(reasonCode: string): UnavailableProjection {
 }
 
 export const communityUnavailableReasonCodes = Object.freeze({
+  /** No Stream credentials: the presence reader is not composed. */
   presence: "STREAM_PRESENCE_NOT_CONNECTED",
+  /** The response was produced by a write; only the detail read observes. */
+  presenceNotObserved: "STREAM_PRESENCE_NOT_OBSERVED",
+  /** Stream answered with a fault, a rejection, or an unexpected shape. */
+  presenceReadFailed: "STREAM_PRESENCE_READ_FAILED",
+  /** The presence read did not finish inside its budget. */
+  presenceReadTimeout: "STREAM_PRESENCE_READ_TIMEOUT",
+  /** More channel members than the paging budget covers (Decision 0047). */
+  presenceMemberBound: "STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED",
   unread: "STREAM_UNREAD_NOT_CONNECTED",
   liveVoice: "STREAM_VOICE_NOT_CONNECTED",
   mining: "MINING_FORMULA_BASELINE_PENDING",
