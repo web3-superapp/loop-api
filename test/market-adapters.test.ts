@@ -348,7 +348,7 @@ describe("GeckoTerminal adapter", () => {
     });
   });
 
-  it("lists new pools by address and counts pool-id rows instead of calling them malformed", () => {
+  it("lists address pools and Uniswap V4 pool-id pools under poolRef and counts only malformed rows (Decision 0052)", () => {
     const pool = (address: string, dex: string) => ({
       attributes: {
         address,
@@ -365,18 +365,33 @@ describe("GeckoTerminal adapter", () => {
     });
     // The live 2026-09-17 page: Uniswap V4 pools on BSC are keyed by a
     // 32-byte pool id, which is a Provider fact rather than a broken body.
-    const v4PoolId = `0x${"a".repeat(64)}`;
+    // Both forms are listed under `poolRef`, each in its own shape.
+    const v4PoolId = `0x${"Ab".repeat(32)}`;
     const snapshot = normalizeGeckoterminalNewPools({
       data: [
         pool(v4PoolId, "uniswap-v4-bsc"),
         pool("0x16B9a82891338f9bA80E2D6970FdDA79D1eb0daE", "pancakeswap_v2"),
-        pool(v4PoolId, "uniswap-v4-bsc"),
+        pool("0x1234", "pancakeswap_v2"),
       ],
     });
-    expect(snapshot.omittedPoolCount).toBe(2);
+    // Only the row keyed by neither form is omitted; the page survives it.
+    expect(snapshot.omittedPoolCount).toBe(1);
     expect(snapshot.pools).toEqual([
       {
-        poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+        poolRef: { kind: "poolId", poolId: `0x${"ab".repeat(32)}` },
+        dexId: "uniswap-v4-bsc",
+        name: "X / WBNB",
+        baseTokenAddress: usdt,
+        quoteTokenAddress: wbnb,
+        createdAt: "2026-09-17T06:44:36.000Z",
+        reserveUsd: "0.572352096797398",
+        volumeH24Usd: "366.0165360544",
+      },
+      {
+        poolRef: {
+          kind: "address",
+          address: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+        },
         dexId: "pancakeswap_v2",
         name: "X / WBNB",
         baseTokenAddress: usdt,
@@ -386,11 +401,9 @@ describe("GeckoTerminal adapter", () => {
         volumeH24Usd: "366.0165360544",
       },
     ]);
-    // Anything that is neither an address nor a pool id is still malformed.
+    // A body that does not fit the envelope is still malformed as a whole.
     expect(() =>
-      normalizeGeckoterminalNewPools({
-        data: [pool("0x1234", "pancakeswap_v2")],
-      }),
+      normalizeGeckoterminalNewPools({ data: [{ attributes: {} }] }),
     ).toThrow(MarketProviderError);
   });
 

@@ -45,3 +45,20 @@
 
 - **是否要 self-unmute 意图**：被 host 静音的发言人在设备上自行开麦后，名单的 `muted` 仍为 true 直到下一次角色变化。若产品要「已重新开麦」，需要一个本人可调用的 `DELETE …/speakers/{pid}/mute`（本步没做，避免超出任务单）。
 - 举手队列 `GET …/hand-raises` 仍对所有成员发布完整 `profile`（0032 既有行为），与名单的匿名规则不一致；是否收敛，另议。
+
+## 3. 新币发现列出 Uniswap V4 池（`items[].poolRef`）
+
+### 事实
+
+S30（决策 0050）把 GeckoTerminal 用 32 字节 pool id 标识的 `uniswap-v4-bsc` 池计成 `omittedCount`、不列出。2026-09-17 13:58 实测一页 20 条里 7 条是 V4 池。用户裁决「列出来」。
+
+### 裁决
+
+| 项目              | 裁决                                                                                                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 标识              | `items[].poolAddress` **删除**，改为 `items[].poolRef` 判别联合：`{kind:"address", address}`（合约池，PancakeSwap 等 V2/V3 风格）或 `{kind:"poolId", poolId}`（Uniswap V4 singleton 内的池，`0x` + 64 小写 hex）。pool id **不**塞进地址字段假装是地址。 |
+| Provider 层       | `NewPoolSnapshot.poolRef: PoolRef`；`normalizeGeckoterminalNewPools` 逐行分类：地址 → `address`（规范化小写）；pool id → `poolId`（小写）；二者皆非 → 该行省略并计数，**不再让整页作废**（响应信封本身坏掉仍是 `MARKET_PROVIDER_RESPONSE_MALFORMED`）。  |
+| `omittedCount`    | 保留、必填，但只计**真正畸形**（既非地址也非 pool id）的行；正常应为 0。                                                                                                                                                                                 |
+| `registryAssetId` | V4 池照常按 `baseTokenAddress` 对 registry 解析，与地址池同一条路径。                                                                                                                                                                                    |
+| 落地页            | `poolRef.kind == "address"` 可跳 PancakeSwap 交易对页 / 资产页；`poolRef.kind == "poolId"` 的行**只展示不跳转**——V4 池没有交易对页面，pool id 也不能送进任何按地址取数的端点。                                                                           |
+| 不做              | 不为 V4 池接 K 线 / 成交 / 安全事实（Provider 的 OHLCV、trades 端点按地址取）；`overview.newPairs` 只是可用性状态，不变。                                                                                                                                |

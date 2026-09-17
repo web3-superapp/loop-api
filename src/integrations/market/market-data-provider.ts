@@ -125,8 +125,18 @@ export interface PoolOhlcvSnapshot {
   readonly candles: readonly OhlcvCandle[];
 }
 
+/**
+ * How the Provider identifies a pool (Decision 0052 §3). Most BSC DEX pools
+ * are contracts and carry an address; Uniswap V4 pools live inside one
+ * singleton and are keyed by a 32-byte pool id. The two are never conflated:
+ * a pool id is not an address and is never re-labelled as one.
+ */
+export type PoolRef =
+  | Readonly<{ kind: "address"; address: string }>
+  | Readonly<{ kind: "poolId"; poolId: string }>;
+
 export interface NewPoolSnapshot {
-  readonly poolAddress: string;
+  readonly poolRef: PoolRef;
   readonly dexId: string;
   readonly name: string;
   readonly baseTokenAddress: string | null;
@@ -139,9 +149,10 @@ export interface NewPoolSnapshot {
 export interface NewPoolsSnapshot {
   readonly pools: readonly NewPoolSnapshot[];
   /**
-   * Pools the Provider listed under an identifier that is not an EVM address
-   * (Uniswap V4 pools on BSC are keyed by a 32-byte pool id). They are
-   * counted, never re-labelled as addresses and never silently dropped.
+   * Rows whose pool identifier is neither an EVM address nor a 32-byte pool
+   * id. Both known forms are listed under `poolRef`; only a genuinely
+   * malformed identifier is omitted, and it is counted rather than silently
+   * dropped or allowed to fail the whole page.
    */
   readonly omittedPoolCount: number;
 }

@@ -442,7 +442,10 @@ function candlesProviderFake(): {
           value: {
             pools: [
               {
-                poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+                poolRef: {
+                  kind: "address" as const,
+                  address: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+                },
                 dexId: "pancakeswap_v2",
                 name: "WBNB / USDT",
                 baseTokenAddress: wbnb,
@@ -451,8 +454,22 @@ function candlesProviderFake(): {
                 reserveUsd: "13659.417",
                 volumeH24Usd: "8957.0388621769",
               },
+              {
+                // A Uniswap V4 pool: keyed by pool id, registry match by base token.
+                poolRef: {
+                  kind: "poolId" as const,
+                  poolId: `0x${"ab".repeat(32)}`,
+                },
+                dexId: "uniswap-v4-bsc",
+                name: "WBNB / USDT",
+                baseTokenAddress: wbnb,
+                quoteTokenAddress: usdt,
+                createdAt: "2026-09-17T06:50:00.000Z",
+                reserveUsd: "42.5",
+                volumeH24Usd: null,
+              },
             ],
-            omittedPoolCount: 6,
+            omittedPoolCount: 0,
           },
           source: "geckoterminal" as const,
           fetchedAt,
@@ -926,7 +943,7 @@ describe("LOOP API V2 market module", () => {
     });
   });
 
-  it("lists new pairs with the registry match and the omitted pool-id count", async () => {
+  it("lists address and Uniswap V4 pool-id pairs under poolRef with the registry match (Decision 0052)", async () => {
     const { provider } = candlesProviderFake();
     const { app } = await createApp(fakes({ candlesProvider: provider }));
     const response = await app.inject({
@@ -940,14 +957,25 @@ describe("LOOP API V2 market module", () => {
         status: "available",
         source: "geckoterminal",
         quality: "fresh",
-        omittedCount: 6,
+        omittedCount: 0,
         items: [
           {
-            poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+            poolRef: {
+              kind: "address",
+              address: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+            },
             dexId: "pancakeswap_v2",
             baseTokenAddress: wbnb,
             registryAssetId: wbnbAssetId,
             reserveUsd: "13659.417",
+          },
+          {
+            poolRef: { kind: "poolId", poolId: `0x${"ab".repeat(32)}` },
+            dexId: "uniswap-v4-bsc",
+            baseTokenAddress: wbnb,
+            registryAssetId: wbnbAssetId,
+            reserveUsd: "42.5",
+            volumeH24Usd: null,
           },
         ],
       },

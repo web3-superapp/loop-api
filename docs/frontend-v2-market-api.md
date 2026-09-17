@@ -292,17 +292,34 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
     "ttlSeconds": 60,
     "quality": "fresh",
     "reasonCode": null,
-    "omittedCount": 6,
+    "omittedCount": 0,
     "items": [
       {
-        "poolAddress": "0x…",
-        "dexId": "pancakeswap_v3",
-        "name": "X / WBNB",
+        "poolRef": {
+          "kind": "poolId",
+          "poolId": "0xffac50ac4e2b84e81d3edbf15aa9855b35fac78fb11c4e3b8223930587146621"
+        },
+        "dexId": "uniswap-v4-bsc",
+        "name": "priceless / U 0.163%",
+        "baseTokenAddress": "0x7d03759e5b41e36899833cb2e008455d69a24444",
+        "quoteTokenAddress": "0xce24439f2d9c6a2289f741120fe202248b666666",
+        "registryAssetId": null,
+        "createdAt": "2026-09-17T13:54:07.000Z",
+        "reserveUsd": "4.4257",
+        "volumeH24Usd": "3428.8481615718"
+      },
+      {
+        "poolRef": {
+          "kind": "address",
+          "address": "0xde5f97199161e6e91ea601a1a27c2d604362ffff"
+        },
+        "dexId": "four-meme",
+        "name": "NMS / BNB",
         "baseTokenAddress": "0x…",
         "quoteTokenAddress": "0x…",
         "registryAssetId": null,
         "createdAt": "…",
-        "reserveUsd": "12345.6",
+        "reserveUsd": "…",
         "volumeH24Usd": "…"
       }
     ]
@@ -319,11 +336,17 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
 不要按其它字段自行判定风险。
 
 - **Development 栈已启用 GeckoTerminal（决策 0050）**；仓库默认与生产仍关闭。
-- `omittedCount`（必填整数）：GeckoTerminal 把 BSC 上的 Uniswap V4 池按 **32 字节
-  pool id** 列出（没有合约地址）。`poolAddress` 只发布地址，所以这些行不进
-  `items`，但会计数——2026-09-17 实测一页 20 条里有 6 条。页面要把它显示出来
-  （例如"另有 6 个 Uniswap V4 池未列出"），不要当成没有。
-- `registryAssetId` 只在 base token 已登记时非空；`dexId` 是 GeckoTerminal 的
+- **`poolRef`（决策 0052，破坏性：`poolAddress` 字段已删除）**是判别联合：
+  - `{kind:"address", address}`：合约池（PancakeSwap 等 V2/V3 风格），`address`
+    是小写 EVM 地址，可跳交易对页 / 资产页。
+  - `{kind:"poolId", poolId}`：**Uniswap V4** 池（`dexId: "uniswap-v4-bsc"`），
+    `poolId` 是 `0x` + 64 位小写 hex 的 32 字节 pool id，**不是地址**。V4 池住在
+    singleton 合约里，没有 PancakeSwap 交易对页面：这类行**只展示不跳转**，也
+    不要把 `poolId` 送进任何按地址取数的接口（K 线 / 成交 / 安全事实都不支持）。
+  - 上面样例是 2026-09-17 13:58 Development 栈实测：一页 20 条里 7 条是 V4 池。
+- `omittedCount`（必填整数）现在只计**真正畸形**的行（既不是地址也不是 pool id），
+  正常为 0；非 0 时页面可提示"另有 N 行无法识别"。
+- `registryAssetId` 只在 base token 已登记时非空（V4 池同样按 base token 解析）；`dexId` 是 GeckoTerminal 的
   字符串标识（`pancakeswap_v2`、`four-meme`、`uniswap-v4-bsc`……），不要当枚举解析。
 
 ## 9. `GET /v2/market/smart-money` → `smart-money` 页

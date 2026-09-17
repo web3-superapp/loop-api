@@ -27,6 +27,7 @@ import {
 } from "./market-contract.js";
 import type { BscReadClient } from "../../integrations/bsc/rpc-client.js";
 import type {
+  PoolRef,
   TokenPairSnapshot,
   TokenPairsSnapshot,
 } from "../../integrations/market/market-data-provider.js";
@@ -258,7 +259,12 @@ export interface MarketHoldersResource {
 }
 
 export interface NewPairRow {
-  readonly poolAddress: string;
+  /**
+   * The Provider's pool identifier (Decision 0052 §3): a contract address
+   * for V2/V3-style pools, a 32-byte pool id for Uniswap V4 pools inside the
+   * singleton. A pool id is never dressed up as an address.
+   */
+  readonly poolRef: PoolRef;
   readonly dexId: string;
   readonly name: string;
   readonly baseTokenAddress: string | null;
@@ -279,7 +285,7 @@ export interface MarketNewPairsResource {
         readonly quality: "fresh" | "stale";
         readonly reasonCode: string | null;
         readonly items: readonly NewPairRow[];
-        /** Provider rows keyed by a non-address pool id (Uniswap V4) and therefore not listed. */
+        /** Rows whose pool identifier is neither an address nor a pool id; both known forms are listed. */
         readonly omittedCount: number;
       }
     | UnavailableBlock;
@@ -1300,7 +1306,7 @@ export function createMarketReadService(
           items: Object.freeze(
             fact.value.pools.map((pool) =>
               Object.freeze({
-                poolAddress: pool.poolAddress,
+                poolRef: pool.poolRef,
                 dexId: pool.dexId,
                 name: pool.name,
                 baseTokenAddress: pool.baseTokenAddress,

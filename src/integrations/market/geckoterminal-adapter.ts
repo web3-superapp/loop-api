@@ -16,6 +16,7 @@ import type {
   OhlcvReadOptions,
   OhlcvTimeframe,
   PoolOhlcvSnapshot,
+  PoolRef,
   PoolTradeSnapshot,
   PoolTradesSnapshot,
   ProviderObservation,
@@ -212,6 +213,25 @@ export function normalizeGeckoterminalOhlcv(
 
 /** Uniswap V4 pools have no contract of their own; GeckoTerminal keys them by pool id. */
 const poolIdPattern = /^0x[0-9a-fA-F]{64}$/;
+const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Classify the Provider's pool identifier (Decision 0052 §3). An address and
+ * a 32-byte pool id are both real Provider facts and both are listed; a
+ * value that is neither is the only malformed row.
+ */
+function poolRefOf(value: string): PoolRef | null {
+  if (evmAddressPattern.test(value)) {
+    return Object.freeze({ kind: "address" as const, address: address(value) });
+  }
+  if (poolIdPattern.test(value)) {
+    return Object.freeze({
+      kind: "poolId" as const,
+      poolId: `0x${value.slice(2).toLowerCase()}`,
+    });
+  }
+  return null;
+}
 
 export function normalizeGeckoterminalNewPools(
   json: unknown,
@@ -220,34 +240,38 @@ export function normalizeGeckoterminalNewPools(
   if (!parsed.success) {
     return malformed();
   }
-  // A 32-byte pool id is a real Provider fact, not a malformed response, but
-  // it is not an address and the contract publishes pool addresses only: the
-  // row is omitted and counted. Anything else that is not an address is still
-  // malformed.
-  const listed = parsed.data.data.filter(
-    (pool) => !poolIdPattern.test(pool.attributes.address),
-  );
-  const omittedPoolCount = parsed.data.data.length - listed.length;
-  const pools: NewPoolSnapshot[] = listed.map((pool) =>
-    Object.freeze({
-      poolAddress: address(pool.attributes.address),
-      dexId: pool.relationships?.dex?.data.id ?? "unknown",
-      name: pool.attributes.name,
-      baseTokenAddress: addressFromTokenId(
-        pool.relationships?.base_token?.data.id,
-      ),
-      quoteTokenAddress: addressFromTokenId(
-        pool.relationships?.quote_token?.data.id,
-      ),
-      createdAt:
-        pool.attributes.pool_created_at === null ||
-        pool.attributes.pool_created_at === undefined
-          ? null
-          : timestamp(pool.attributes.pool_created_at),
-      reserveUsd: decimal(pool.attributes.reserve_in_usd),
-      volumeH24Usd: decimal(pool.attributes.volume_usd?.h24),
-    }),
-  );
+  let omittedPoolCount = 0;
+  const pools: NewPoolSnapshot[] = [];
+  for (const pool of parsed.data.data) {
+    const poolRef = poolRefOf(pool.attributes.address);
+    if (poolRef === null) {
+      // A row the Provider keyed by something that is neither form is the
+      // only genuinely malformed row: it is omitted and counted, and does
+      // not fail the page around it.
+      omittedPoolCount += 1;
+      continue;
+    }
+    pools.push(
+      Object.freeze({
+        poolRef,
+        dexId: pool.relationships?.dex?.data.id ?? "unknown",
+        name: pool.attributes.name,
+        baseTokenAddress: addressFromTokenId(
+          pool.relationships?.base_token?.data.id,
+        ),
+        quoteTokenAddress: addressFromTokenId(
+          pool.relationships?.quote_token?.data.id,
+        ),
+        createdAt:
+          pool.attributes.pool_created_at === null ||
+          pool.attributes.pool_created_at === undefined
+            ? null
+            : timestamp(pool.attributes.pool_created_at),
+        reserveUsd: decimal(pool.attributes.reserve_in_usd),
+        volumeH24Usd: decimal(pool.attributes.volume_usd?.h24),
+      }),
+    );
+  }
   return Object.freeze({ pools: Object.freeze(pools), omittedPoolCount });
 }
 

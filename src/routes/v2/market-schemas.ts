@@ -22,6 +22,9 @@ import {
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { assetResourceSchema, unavailableSchema } from "./chain-schemas.js";
 
+/** A 32-byte hex identifier (Uniswap V4 pool id), lower-case and 0x-prefixed. */
+const bytes32PatternSource = "^0x[0-9a-f]{64}$";
+
 /**
  * Route schemas for the V2 market surface (Decision 0034). Every number is a
  * canonical decimal string; every fact carries its source, fetch time, TTL,
@@ -624,7 +627,7 @@ export const marketNewPairsResourceSchema = {
               type: "integer",
               minimum: 0,
               description:
-                "Provider rows keyed by a 32-byte pool id instead of a contract address (Uniswap V4 on BSC); they are not listed because `poolAddress` is an address, and they are counted here so the page can say so.",
+                "Provider rows whose pool identifier is neither a contract address nor a 32-byte pool id. Both known forms are listed under `poolRef` (Decision 0052), so this is the count of genuinely malformed rows and is normally 0; it is published so a page never silently drops a row.",
             },
             items: {
               type: "array",
@@ -633,7 +636,7 @@ export const marketNewPairsResourceSchema = {
                 type: "object",
                 additionalProperties: false,
                 required: [
-                  "poolAddress",
+                  "poolRef",
                   "dexId",
                   "name",
                   "baseTokenAddress",
@@ -644,9 +647,37 @@ export const marketNewPairsResourceSchema = {
                   "volumeH24Usd",
                 ],
                 properties: {
-                  poolAddress: {
-                    type: "string",
-                    pattern: evmAddressPatternSource,
+                  poolRef: {
+                    description:
+                      "How the Provider identifies the pool. `address` is a pool contract (PancakeSwap and other V2/V3-style DEXes) and can be opened as a pair page; `poolId` is a Uniswap V4 pool inside the singleton, identified by its 32-byte pool id, which has no contract and no pair page of its own: display it, do not navigate.",
+                    oneOf: [
+                      {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["kind", "address"],
+                        properties: {
+                          kind: { type: "string", const: "address" },
+                          address: {
+                            type: "string",
+                            pattern: evmAddressPatternSource,
+                          },
+                        },
+                      },
+                      {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["kind", "poolId"],
+                        properties: {
+                          kind: { type: "string", const: "poolId" },
+                          poolId: {
+                            type: "string",
+                            pattern: bytes32PatternSource,
+                            description:
+                              "Lower-case 0x-prefixed 32-byte pool id. Not an address; never send it to an address-based endpoint.",
+                          },
+                        },
+                      },
+                    ],
                   },
                   dexId: { type: "string", minLength: 1, maxLength: 64 },
                   name: { type: "string", maxLength: 128 },
