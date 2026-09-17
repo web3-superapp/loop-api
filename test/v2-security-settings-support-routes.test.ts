@@ -513,10 +513,18 @@ describe("LOOP API V2 security, settings, and support modules", () => {
         clientVersion: "1.0.0",
         status: "active",
         authStrength: "providerAuthenticated",
+        sessionShortId: "3d4e",
         isCurrent: true,
+        isCurrentDevice: true,
         createdAt: "2026-09-08T20:00:00.000Z",
         lastSeenAt: "2026-09-08T20:00:00.000Z",
         revokedAt: null,
+      });
+      expect(body.devices[1]).toMatchObject({
+        sessionId: otherSessionId,
+        sessionShortId: "4e5f",
+        isCurrent: false,
+        isCurrentDevice: false,
       });
       expect(body.currentSessionId).toBe(currentSessionId);
       expect(body.riskSignals).toEqual({

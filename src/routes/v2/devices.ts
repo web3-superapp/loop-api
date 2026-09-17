@@ -55,7 +55,9 @@ const deviceSchema = {
     "clientVersion",
     "status",
     "authStrength",
+    "sessionShortId",
     "isCurrent",
+    "isCurrentDevice",
     "createdAt",
     "lastSeenAt",
     "revokedAt",
@@ -72,16 +74,30 @@ const deviceSchema = {
     },
     status: { type: "string", enum: ["active", "revoked"] },
     authStrength: { type: "string", const: "providerAuthenticated" },
+    sessionShortId: {
+      type: "string",
+      pattern: "^[0-9a-f]{4}$",
+      description:
+        "Last four hex digits of sessionId: the server-defined short form to show on the row so two sessions of the same device and version stay distinguishable (Decision 0049).",
+    },
     isCurrent: {
       type: "boolean",
       description:
         "True only for the session named by the optional X-Loop-Session-ID request header.",
     },
-    createdAt: dateTimeSchema,
+    isCurrentDevice: {
+      type: "boolean",
+      description:
+        "True for every row whose deviceId equals the current session's device, including that device's older sessions (isCurrent false). False for every row when no current session is listed (Decision 0049).",
+    },
+    createdAt: {
+      ...dateTimeSchema,
+      description: "First sign-in of this session; show it to the minute.",
+    },
     lastSeenAt: {
       ...dateTimeSchema,
       description:
-        "Bootstrap observation time; not a continuous presence signal (Decision 0027).",
+        "Bootstrap observation time; not a continuous presence signal (Decision 0027). Do not render it on the isCurrent row: that session is in use right now.",
     },
     revokedAt: nullableDateTimeSchema,
   },

@@ -156,6 +156,43 @@ describe("device list current-session projection (preflight F3)", () => {
     ).toEqual([callerSessionId]);
   });
 
+  it("marks the current device's older session as isCurrentDevice but not isCurrent (walkthrough B-14)", async () => {
+    const olderSameDevice: DeviceSession = {
+      ...listed,
+      sessionId: "2d4e3f50-6b7c-4d8e-8f90-1b2c3d4e5fab",
+      createdAt: "2026-09-03T01:00:00.000Z",
+      lastSeenAt: "2026-09-03T01:00:00.000Z",
+    };
+    const result = await serviceWith([listed, olderSameDevice, revoked]).list({
+      principal,
+      metadata,
+    });
+    expect(
+      result.devices.map((device) => ({
+        sessionShortId: device.sessionShortId,
+        isCurrent: device.isCurrent,
+        isCurrentDevice: device.isCurrentDevice,
+      })),
+    ).toEqual([
+      { sessionShortId: "3d4e", isCurrent: true, isCurrentDevice: true },
+      { sessionShortId: "5fab", isCurrent: false, isCurrentDevice: true },
+      { sessionShortId: "4e5f", isCurrent: false, isCurrentDevice: false },
+    ]);
+  });
+
+  it("marks no row as isCurrentDevice when the header names no listed session", async () => {
+    const result = await serviceWith([listed, revoked]).list({
+      principal,
+      metadata: {
+        ...metadata,
+        sessionId: "11111111-2222-4333-8444-555555555555",
+      },
+    });
+    expect(result.devices.every((device) => !device.isCurrentDevice)).toBe(
+      true,
+    );
+  });
+
   it("keeps currentSessionId null without the header", async () => {
     const result = await serviceWith([listed]).list({
       principal,

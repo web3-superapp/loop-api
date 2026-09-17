@@ -54,9 +54,25 @@ X-Loop-Client-Version: 1.0.0
       "clientVersion": "1.0.0",
       "status": "active",
       "authStrength": "providerAuthenticated",
+      "sessionShortId": "3d4e",
       "isCurrent": true,
+      "isCurrentDevice": true,
       "createdAt": "2026-09-08T20:00:00.000Z",
       "lastSeenAt": "2026-09-08T20:00:00.000Z",
+      "revokedAt": null
+    },
+    {
+      "sessionId": "1c3d2e4f-5a6b-4c7d-9e8f-0a1b2c3d4e5f",
+      "deviceId": "2d4e3f50-6b7c-4d8e-8f90-1b2c3d4e5f60",
+      "platform": "ios",
+      "clientVersion": "1.0.0",
+      "status": "active",
+      "authStrength": "providerAuthenticated",
+      "sessionShortId": "4e5f",
+      "isCurrent": false,
+      "isCurrentDevice": true,
+      "createdAt": "2026-09-03T01:00:00.000Z",
+      "lastSeenAt": "2026-09-03T01:00:00.000Z",
       "revokedAt": null
     }
   ],
@@ -87,9 +103,19 @@ X-Loop-Client-Version: 1.0.0
   但 `newSessions24h` 仍不是"当前设备数"，不要拿它渲染设备列表长度。
 - `isCurrent` 只有在请求带了 `X-Loop-Session-ID` 且匹配时为 `true`；不带时
   `currentSessionId: null`、全部 `false`——前端应始终带上。
+- **每行必须能区分（S27c / 决策 0049，走查 B-14）**：同一台设备的两条会话
+  `platform`/`clientVersion` 完全一样，只渲染这两项加相对时间会得到两行相同的字串。
+  行的显示建议：`platform · clientVersion · 会话 {sessionShortId} · 首次登录 {createdAt 到分钟}`。
+  - `sessionShortId`：`sessionId` 最后 4 位十六进制，服务端统一定义的缩写，不要自己截。
+  - `isCurrent`：**会话**是本次请求 `X-Loop-Session-ID` 所指的那条 → 标「本次会话」，
+    这一行**不要**渲染 `lastSeenAt`（它正在被使用），写「正在使用」。
+  - `isCurrentDevice`：**设备**与当前会话是同一台（`deviceId` 相同），包含这台设备的旧会话
+    （`isCurrent: false`）→ 标「本设备 · 旧会话」；不带 header 或 header 不匹配时全部 `false`。
+    上例第二行就是走查里被显示成第二个「当前设备」的那条。
+  - `createdAt` 是该会话的首次登录时间，必须上屏到分钟。
 - `lastSeenAt` 是 bootstrap 观测时间（决策 0027），**不是**持续活跃时间；原型
-  的"上海 · 今天 09:41"里的地理位置没有后端来源，不渲染。设备名称也没有后端
-  字段，用 `platform` + `clientVersion` 展示。
+  的"上海 · 今天 09:41"里的地理位置没有后端来源，不渲染。设备型号 / 名称还没有后端
+  字段（需要新的 bootstrap header，待主代理决策），用 `platform` + `clientVersion` 展示。
 - `riskSignals.highRiskNewDevice`：24h 内新建 session ≥ 2（阈值随 `policy`
   下发，不要写死）。只做提示，后端不强制 MFA / 冷却。
 - `revokeAll` 恒 `unavailable`：原型"下线所有其他设备"按钮显示为需要二次验证、

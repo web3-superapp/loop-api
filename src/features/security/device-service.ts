@@ -37,7 +37,20 @@ export interface DeviceProjection {
   readonly clientVersion: string;
   readonly status: "active" | "revoked";
   readonly authStrength: "providerAuthenticated";
+  /**
+   * Last four hex digits of `sessionId` (Decision 0049): the server-defined
+   * short form both ends show so two rows of the same device and version
+   * stay distinguishable.
+   */
+  readonly sessionShortId: string;
+  /** True only for the session named by `X-Loop-Session-ID`. */
   readonly isCurrent: boolean;
+  /**
+   * True for every row whose `deviceId` equals the current session's device,
+   * including the device's older sessions (`isCurrent: false`). False for
+   * every row when no current session is listed.
+   */
+  readonly isCurrentDevice: boolean;
   readonly createdAt: string;
   readonly lastSeenAt: string;
   readonly revokedAt: string | null;
@@ -165,6 +178,7 @@ function revokeDigest(
 function project(
   session: DeviceSession,
   currentSessionId: string | null,
+  currentDeviceId: string | null,
 ): DeviceProjection {
   return Object.freeze({
     sessionId: session.sessionId,
@@ -173,7 +187,10 @@ function project(
     clientVersion: session.clientVersion,
     status: session.status,
     authStrength: session.authStrength,
+    sessionShortId: session.sessionId.slice(-4),
     isCurrent: session.sessionId === currentSessionId,
+    isCurrentDevice:
+      currentDeviceId !== null && session.deviceId === currentDeviceId,
     createdAt: session.createdAt,
     lastSeenAt: session.lastSeenAt,
     revokedAt: session.revokedAt,
@@ -219,11 +236,11 @@ export function createDeviceService(
       // header naming a session this account does not have (revoked and
       // aged out, re-seeded database, foreign owner) projects as `null`;
       // the session itself is not created or assumed to exist.
-      const currentSessionId = visible.some(
-        (session) => session.sessionId === metadata.sessionId,
-      )
-        ? metadata.sessionId
-        : null;
+      const currentSession =
+        visible.find((session) => session.sessionId === metadata.sessionId) ??
+        null;
+      const currentSessionId = currentSession?.sessionId ?? null;
+      const currentDeviceId = currentSession?.deviceId ?? null;
       // Active sessions only, so the signal falls back after a revoke.
       const newSessions24h = visible.filter(
         (session) =>
@@ -232,7 +249,9 @@ export function createDeviceService(
       ).length;
       return Object.freeze({
         devices: Object.freeze(
-          visible.map((session) => project(session, currentSessionId)),
+          visible.map((session) =>
+            project(session, currentSessionId, currentDeviceId),
+          ),
         ),
         currentSessionId,
         riskSignals: Object.freeze({
