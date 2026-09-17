@@ -1150,8 +1150,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           position: 1,
           publicProfileId: await profileOf(alice),
           alias: `alias_${alice.slice(0, 8)}`,
-          discoverable: true,
           anonymousMode: false,
+          powerVisibleToOthers: true,
         },
         {
           ownerUserId: bob,
@@ -1159,8 +1159,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           position: 2,
           publicProfileId: await profileOf(bob),
           alias: `alias_${bob.slice(0, 8)}`,
-          discoverable: true,
           anonymousMode: true,
+          powerVisibleToOthers: false,
         },
         // Zero power: listed after the ranked rows, with no position.
         {
@@ -1169,8 +1169,9 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           position: null,
           publicProfileId: await profileOf(carol),
           alias: `alias_${carol.slice(0, 8)}`,
-          discoverable: false,
           anonymousMode: false,
+          // No privacy row: mining_power_visibility defaults to `self`.
+          powerVisibleToOthers: false,
         },
       ]);
       // Community standing: only non-banned members, only the bound asset.

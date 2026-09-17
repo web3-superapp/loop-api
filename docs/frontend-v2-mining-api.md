@@ -277,19 +277,24 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
       {
         "position": 1,
         "power": "3000",
+        "powerVisibility": "everyone",
         "display": {
           "kind": "alias",
           "alias": "whale",
-          "publicProfileId": "…"
+          "publicProfileId": "…",
+          "audience": "everyone"
         },
         "isSelf": false
       },
       {
         "position": 2,
         "power": "1000",
+        "powerVisibility": "self",
         "display": {
-          "kind": "anonymous",
-          "labelKey": "mining.rank.anonymousMember"
+          "kind": "alias",
+          "alias": "me",
+          "publicProfileId": "…",
+          "audience": "self"
         },
         "isSelf": true
       }
@@ -300,7 +305,8 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   "snapshot": { "…": "" },
   "display": {
     "anonymousMemberKey": "mining.rank.anonymousMember",
-    "ruleKey": "mining.rank.display.aliasOrAnonymous"
+    "ruleKey": "mining.rank.display.anonymousModeOnly",
+    "powerRuleKey": "mining.rank.power.ownerVisibility"
   },
   "formula": {
     "status": "approved",
@@ -314,7 +320,27 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 - 列出快照中的全部账号（或生效版本下全部已绑定且权重已批准的社区），算力 > 0 的按 `rank()` 排在前（并列同名次），
   算力为 0 的排在后且 `position: null`；最多 100 行；`participants` 只数算力 > 0 的。
-- `display.kind = "alias"` 仅当对方 `discoverable && !anonymousMode` 且有 alias；否则 `anonymous`（不给 ID）。
+- **显示名与算力数值由两个独立开关决定（S27c / 决策 0049，替代原"可被发现且非匿名"规则）**：
+  - `display`：只看隐私中心的**匿名模式**。别人的行：`!anonymousMode` 且有 alias → `alias`，否则
+    `anonymous`（不给 ID）。**本人行永远是 `alias`**（自己不可能对自己匿名）；本人开着匿名模式时
+    `audience: "self"`，表示"别人看到的是匿名成员"，前端在本人行加一句"其他人看到的是匿名成员"；
+    否则 `audience: "everyone"`。「可被发现 / 显示 LOOP ID」在这里**什么都不决定**。
+  - `power`：只看隐私中心的**算力可见范围**（`mining_power_visibility`）。别人的行且行主设为 `self` →
+    `power: null`（渲染"仅本人可见"，不是"读不到"）；本人行永远有数值。`powerVisibility` 是行主的设置
+    原样下发，本人行为 `self` 时可提示"仅自己可见"。
+  - `position`、`participants` 永远公开，不受两个开关影响。
+  - 四种组合：
+
+    | `anonymousMode` | 算力可见范围 | 别人看到                 | 本人看到                        |
+    | --------------- | ------------ | ------------------------ | ------------------------------- |
+    | 关              | everyone     | 别名 + 算力              | 别名（audience everyone）+ 算力 |
+    | 关              | self         | 别名 + `power: null`     | 别名（audience everyone）+ 算力 |
+    | 开              | everyone     | 匿名成员 + 算力          | 别名（audience self）+ 算力     |
+    | 开              | self         | 匿名成员 + `power: null` | 别名（audience self）+ 算力     |
+
+  - `display.ruleKey` 换成了 `mining.rank.display.anonymousModeOnly`（中文：「匿名模式开启时其他人看到的是匿名成员」），
+    新增 `display.powerRuleKey = mining.rank.power.ownerVisibility`（「算力数值按对方的可见范围设置显示」）；
+    旧键 `mining.rank.display.aliasOrAnonymous` 不再下发。
 - `scope=communities` 时 `items[] = {position, power, community: {communityId, name, boundAssetId}, weight, participants}`，
   `myPosition` 为 `MINING_RANK_NOT_APPLICABLE`。
 - 2026-09-15 Development 实际响应：`scope=users` 列出 2 个账号（`position: null`、`power: "0"`，一个 alias 一个

@@ -6,6 +6,8 @@ import {
   miningReferencePriceQualities,
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
+  miningRankDisplayRuleKey,
+  miningRankPowerRuleKey,
   miningRankScopes,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
@@ -335,16 +337,26 @@ export const miningRankQuerySchema = {
   },
 } as const;
 
+const rankVisibilitySchema = {
+  type: "string",
+  enum: ["everyone", "self"],
+} as const;
+
 const rankDisplaySchema = {
   anyOf: [
     {
       type: "object",
       additionalProperties: false,
-      required: ["kind", "alias", "publicProfileId"],
+      required: ["kind", "alias", "publicProfileId", "audience"],
       properties: {
         kind: { type: "string", const: "alias" },
         alias: { type: "string", minLength: 1, maxLength: 64 },
         publicProfileId: { type: "string", pattern: opaqueIdPatternSource },
+        audience: {
+          ...rankVisibilitySchema,
+          description:
+            "self only on the viewer's own row while anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (Decision 0049).",
+        },
       },
     },
     {
@@ -375,14 +387,29 @@ const rankingSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["position", "power", "display", "isSelf"],
+            required: [
+              "position",
+              "power",
+              "powerVisibility",
+              "display",
+              "isSelf",
+            ],
             properties: {
               position: {
                 anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
                 description:
-                  "rank() among positive powers; null while the power is zero (in the snapshot, not ranked).",
+                  "rank() among positive powers; null while the power is zero (in the snapshot, not ranked). Always public.",
               },
-              power: decimalSchema,
+              power: {
+                anyOf: [decimalSchema, { type: "null" }],
+                description:
+                  "Null only when the row is not the viewer's and its owner set mining power visibility to self (Decision 0049).",
+              },
+              powerVisibility: {
+                ...rankVisibilitySchema,
+                description:
+                  "The owner's mining_power_visibility setting, published verbatim.",
+              },
               display: rankDisplaySchema,
               isSelf: { type: "boolean" },
             },
@@ -475,7 +502,7 @@ export const miningRankResourceSchema = {
     display: {
       type: "object",
       additionalProperties: false,
-      required: ["anonymousMemberKey", "ruleKey"],
+      required: ["anonymousMemberKey", "ruleKey", "powerRuleKey"],
       properties: {
         anonymousMemberKey: {
           type: "string",
@@ -483,9 +510,15 @@ export const miningRankResourceSchema = {
         },
         ruleKey: {
           type: "string",
-          const: "mining.rank.display.aliasOrAnonymous",
+          const: miningRankDisplayRuleKey,
           description:
-            "A ranked account is shown by alias only when its profile is discoverable and not in anonymous mode; otherwise by the anonymous member label.",
+            "Anonymous mode alone decides whether others see the alias; discoverable is not consulted; the viewer always sees their own alias (Decision 0049).",
+        },
+        powerRuleKey: {
+          type: "string",
+          const: miningRankPowerRuleKey,
+          description:
+            "mining_power_visibility alone decides whether others see the power number; the position is always public; the viewer always sees their own power.",
         },
       },
     },

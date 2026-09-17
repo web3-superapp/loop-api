@@ -151,8 +151,8 @@ const rankedAccountRowSchema = z
     position: positionSchema.nullable(),
     public_profile_id: opaqueIdSchema.nullable(),
     alias: z.string().min(1).nullable(),
-    discoverable: z.boolean(),
     anonymous_mode: z.boolean(),
+    power_visible_to_others: z.boolean(),
   })
   .strict();
 
@@ -830,8 +830,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               r.position::int as position,
               profile.public_profile_id,
               profile.alias,
-              coalesce(privacy.discoverable, false) as discoverable,
-              coalesce(privacy.anonymous_mode, false) as anonymous_mode
+              coalesce(privacy.anonymous_mode, false) as anonymous_mode,
+              coalesce(privacy.mining_power_visibility, 'self') = 'everyone'
+                as power_visible_to_others
             from ranked as r
             left join public.user_profiles as profile
               on profile.owner_user_id = r.owner_user_id
@@ -852,8 +853,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               position: row.position,
               publicProfileId: row.public_profile_id,
               alias: row.alias,
-              discoverable: row.discoverable,
               anonymousMode: row.anonymous_mode,
+              powerVisibleToOthers: row.power_visible_to_others,
             });
           }),
         );

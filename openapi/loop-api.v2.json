@@ -87415,6 +87415,7 @@
                                 "required": [
                                   "position",
                                   "power",
+                                  "powerVisibility",
                                   "display",
                                   "isSelf"
                                 ],
@@ -87424,11 +87425,22 @@
                                       { "type": "integer", "minimum": 1 },
                                       { "type": "null" }
                                     ],
-                                    "description": "rank() among positive powers; null while the power is zero (in the snapshot, not ranked)."
+                                    "description": "rank() among positive powers; null while the power is zero (in the snapshot, not ranked). Always public."
                                   },
                                   "power": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "Null only when the row is not the viewer's and its owner set mining power visibility to self (Decision 0049)."
+                                  },
+                                  "powerVisibility": {
                                     "type": "string",
-                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    "enum": ["everyone", "self"],
+                                    "description": "The owner's mining_power_visibility setting, published verbatim."
                                   },
                                   "display": {
                                     "anyOf": [
@@ -87438,7 +87450,8 @@
                                         "required": [
                                           "kind",
                                           "alias",
-                                          "publicProfileId"
+                                          "publicProfileId",
+                                          "audience"
                                         ],
                                         "properties": {
                                           "kind": {
@@ -87453,6 +87466,11 @@
                                           "publicProfileId": {
                                             "type": "string",
                                             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                          },
+                                          "audience": {
+                                            "type": "string",
+                                            "enum": ["everyone", "self"],
+                                            "description": "self only on the viewer's own row while anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (Decision 0049)."
                                           }
                                         }
                                       },
@@ -87665,7 +87683,11 @@
                     "display": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["anonymousMemberKey", "ruleKey"],
+                      "required": [
+                        "anonymousMemberKey",
+                        "ruleKey",
+                        "powerRuleKey"
+                      ],
                       "properties": {
                         "anonymousMemberKey": {
                           "type": "string",
@@ -87673,8 +87695,13 @@
                         },
                         "ruleKey": {
                           "type": "string",
-                          "description": "A ranked account is shown by alias only when its profile is discoverable and not in anonymous mode; otherwise by the anonymous member label.",
-                          "enum": ["mining.rank.display.aliasOrAnonymous"]
+                          "description": "Anonymous mode alone decides whether others see the alias; discoverable is not consulted; the viewer always sees their own alias (Decision 0049).",
+                          "enum": ["mining.rank.display.anonymousModeOnly"]
+                        },
+                        "powerRuleKey": {
+                          "type": "string",
+                          "description": "mining_power_visibility alone decides whether others see the power number; the position is always public; the viewer always sees their own power.",
+                          "enum": ["mining.rank.power.ownerVisibility"]
                         }
                       }
                     },

@@ -88,6 +88,16 @@ export type MiningRankScope = (typeof miningRankScopes)[number];
 
 /** Anonymous member display key used whenever the alias may not be shown. */
 export const miningRankAnonymousMemberKey = "mining.rank.anonymousMember";
+/**
+ * Rank display rule (Decision 0049): anonymous mode alone decides whether
+ * others see the alias; the viewer always sees their own alias.
+ */
+export const miningRankDisplayRuleKey = "mining.rank.display.anonymousModeOnly";
+/**
+ * Rank power rule (Decision 0049): `mining_power_visibility` alone decides
+ * whether others see the number; the position is always public.
+ */
+export const miningRankPowerRuleKey = "mining.rank.power.ownerVisibility";
 
 export const unsignedDecimalPatternSource =
   "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$";

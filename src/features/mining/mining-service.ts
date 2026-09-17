@@ -19,6 +19,8 @@ import {
 } from "./mining-baseline.js";
 import {
   miningRankAnonymousMemberKey,
+  miningRankDisplayRuleKey,
+  miningRankPowerRuleKey,
   miningRankScopes,
   miningReasonCodes,
   unavailable,
@@ -41,6 +43,7 @@ import { estimateDailyOutputShare } from "./mining-daily-output.js";
 import {
   MiningRepositoryUnavailableError,
   type MiningFormulaRecord,
+  type MiningRankedAccountRecord,
   type MiningRepository,
   type MiningSnapshotRecord,
 } from "./mining-repository.js";
@@ -173,11 +176,19 @@ export interface MiningRewardsResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/** The owner's `mining_power_visibility` setting, published verbatim. */
+export type MiningRankPowerVisibility = "everyone" | "self";
+
 export type MiningRankDisplayProjection =
   | {
       readonly kind: "alias";
       readonly alias: string;
       readonly publicProfileId: string;
+      /**
+       * `self` only on the viewer's own row while anonymous mode is on: the
+       * owner still sees the alias, everyone else sees the anonymous label.
+       */
+      readonly audience: MiningRankPowerVisibility;
     }
   | {
       readonly kind: "anonymous";
@@ -187,7 +198,12 @@ export type MiningRankDisplayProjection =
 export interface MiningRankedUserProjection {
   /** Null while the power is zero: in the snapshot, not ranked. */
   readonly position: number | null;
-  readonly power: string;
+  /**
+   * Null only when the row is not the viewer's and its owner limits power
+   * visibility to `self` (Decision 0049). The position stays public.
+   */
+  readonly power: string | null;
+  readonly powerVisibility: MiningRankPowerVisibility;
   readonly display: MiningRankDisplayProjection;
   readonly isSelf: boolean;
 }
@@ -235,7 +251,8 @@ export interface MiningRankResource {
   readonly snapshot: MiningSnapshotProjection | UnavailableProjection;
   readonly display: {
     readonly anonymousMemberKey: typeof miningRankAnonymousMemberKey;
-    readonly ruleKey: "mining.rank.display.aliasOrAnonymous";
+    readonly ruleKey: typeof miningRankDisplayRuleKey;
+    readonly powerRuleKey: typeof miningRankPowerRuleKey;
   };
   /** The version in force, exactly as the summary publishes it (Decision 0046). */
   readonly formula: MiningFormulaStateProjection;
@@ -399,6 +416,44 @@ function estimateProjection(
     budgetStatus: dailyOutput.status,
     formulaVersion: formula.configVersion,
     scope: formula.formula.scope ?? null,
+  });
+}
+
+/**
+ * One ranked row as the viewer sees it (Decision 0049). Anonymous mode alone
+ * decides the name others see; `mining_power_visibility` alone decides
+ * whether others see the number; `discoverable` decides nothing here. The
+ * viewer always sees their own alias and power.
+ */
+function projectRankedUser(
+  row: MiningRankedAccountRecord,
+  viewerUserId: string,
+): MiningRankedUserProjection {
+  const isSelf = row.ownerUserId === viewerUserId;
+  const display: MiningRankDisplayProjection =
+    row.alias !== null &&
+    row.publicProfileId !== null &&
+    (isSelf || !row.anonymousMode)
+      ? Object.freeze({
+          kind: "alias" as const,
+          alias: row.alias,
+          publicProfileId: row.publicProfileId,
+          audience: row.anonymousMode
+            ? ("self" as const)
+            : ("everyone" as const),
+        })
+      : Object.freeze({
+          kind: "anonymous" as const,
+          labelKey: miningRankAnonymousMemberKey,
+        });
+  return Object.freeze({
+    position: row.position,
+    power: isSelf || row.powerVisibleToOthers ? row.totalPower : null,
+    powerVisibility: row.powerVisibleToOthers
+      ? ("everyone" as const)
+      : ("self" as const),
+    display,
+    isSelf,
   });
 }
 
@@ -631,7 +686,8 @@ export function createMiningService(dependencies: {
         }
         const display = Object.freeze({
           anonymousMemberKey: miningRankAnonymousMemberKey,
-          ruleKey: "mining.rank.display.aliasOrAnonymous" as const,
+          ruleKey: miningRankDisplayRuleKey,
+          powerRuleKey: miningRankPowerRuleKey,
         });
         const resolution = await baseline();
         const formula = await formulaState(resolution);
@@ -699,27 +755,7 @@ export function createMiningService(dependencies: {
             status: "available" as const,
             scope: "users" as const,
             items: Object.freeze(
-              rows.map((row) =>
-                Object.freeze({
-                  position: row.position,
-                  power: row.totalPower,
-                  display:
-                    row.discoverable &&
-                    !row.anonymousMode &&
-                    row.alias !== null &&
-                    row.publicProfileId !== null
-                      ? Object.freeze({
-                          kind: "alias" as const,
-                          alias: row.alias,
-                          publicProfileId: row.publicProfileId,
-                        })
-                      : Object.freeze({
-                          kind: "anonymous" as const,
-                          labelKey: miningRankAnonymousMemberKey,
-                        }),
-                  isSelf: row.ownerUserId === input.principal.userId,
-                }),
-              ),
+              rows.map((row) => projectRankedUser(row, input.principal.userId)),
             ),
             participants: standing?.participantCount ?? 0,
           }),

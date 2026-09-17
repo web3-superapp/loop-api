@@ -282,7 +282,8 @@ describe("LOOP API V2 mining module", () => {
         },
         display: {
           anonymousMemberKey: "mining.rank.anonymousMember",
-          ruleKey: "mining.rank.display.aliasOrAnonymous",
+          ruleKey: "mining.rank.display.anonymousModeOnly",
+          powerRuleKey: "mining.rank.power.ownerVisibility",
         },
         formula: {
           status: "unavailable",
@@ -541,8 +542,8 @@ describe("LOOP API V2 mining module", () => {
               position: 1,
               publicProfileId: "d64786bb-408d-415d-8a69-6277d56c921b",
               alias: "whale",
-              discoverable: true,
               anonymousMode: false,
+              powerVisibleToOthers: true,
             },
             {
               ownerUserId: s7AccountId,
@@ -550,8 +551,8 @@ describe("LOOP API V2 mining module", () => {
               position: 2,
               publicProfileId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
               alias: "me",
-              discoverable: false,
               anonymousMode: false,
+              powerVisibleToOthers: false,
             },
           ]),
         ),
@@ -889,7 +890,7 @@ describe("LOOP API V2 mining module", () => {
       });
     });
 
-    it("ranks users with the alias-or-anonymous rule and communities with an approved weight", async () => {
+    it("ranks users by anonymous mode and power visibility, and communities with an approved weight", async () => {
       const { app } = await createApp(approvedRepository());
       const users = await app.inject({
         method: "GET",
@@ -906,19 +907,27 @@ describe("LOOP API V2 mining module", () => {
             {
               position: 1,
               power: "3000",
+              powerVisibility: "everyone",
               display: {
                 kind: "alias",
                 alias: "whale",
                 publicProfileId: "d64786bb-408d-415d-8a69-6277d56c921b",
+                audience: "everyone",
               },
               isSelf: false,
             },
+            // The viewer's own row: power visibility `self` never hides the
+            // number from its owner, and a switched-off discoverable flag
+            // never makes the owner anonymous to themselves (B-18).
             {
               position: 2,
               power: "1000",
+              powerVisibility: "self",
               display: {
-                kind: "anonymous",
-                labelKey: "mining.rank.anonymousMember",
+                kind: "alias",
+                alias: "me",
+                publicProfileId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+                audience: "everyone",
               },
               isSelf: true,
             },
@@ -927,6 +936,11 @@ describe("LOOP API V2 mining module", () => {
         },
         myPosition: { status: "available", position: 2, power: "1000" },
         snapshot: { snapshotId },
+        display: {
+          anonymousMemberKey: "mining.rank.anonymousMember",
+          ruleKey: "mining.rank.display.anonymousModeOnly",
+          powerRuleKey: "mining.rank.power.ownerVisibility",
+        },
         // The same block as the summary, so the ranking page can draw the
         // development-baseline label from one field (Decision 0046).
         formula: {
@@ -936,7 +950,6 @@ describe("LOOP API V2 mining module", () => {
           scope: "development_baseline",
         },
       });
-      expect(users.body).not.toContain('"alias":"me"');
       const communities = await app.inject({
         method: "GET",
         url: "/v2/mining/rank?scope=communities",
@@ -1013,6 +1026,85 @@ describe("LOOP API V2 mining module", () => {
           reasonCode: "MINING_RANK_NOT_RANKED",
         },
       });
+    });
+
+    it("projects the two privacy switches independently for the viewer and for others (Decision 0049)", async () => {
+      const otherProfile = "d64786bb-408d-415d-8a69-6277d56c921b";
+      const selfProfile = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
+      const combinations = [
+        { anonymousMode: false, powerVisibleToOthers: true },
+        { anonymousMode: false, powerVisibleToOthers: false },
+        { anonymousMode: true, powerVisibleToOthers: true },
+        { anonymousMode: true, powerVisibleToOthers: false },
+      ] as const;
+      for (const combination of combinations) {
+        const { app } = await createApp(
+          approvedRepository({
+            listAccountRanking: vi.fn(() =>
+              Promise.resolve([
+                {
+                  ownerUserId: other,
+                  totalPower: "3000",
+                  position: 1,
+                  publicProfileId: otherProfile,
+                  alias: "whale",
+                  ...combination,
+                },
+                {
+                  ownerUserId: s7AccountId,
+                  totalPower: "1000",
+                  position: 2,
+                  publicProfileId: selfProfile,
+                  alias: "me",
+                  ...combination,
+                },
+              ]),
+            ),
+          }),
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users",
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        const items = response.json<{
+          ranking: { items: readonly Record<string, unknown>[] };
+        }>().ranking.items;
+        const powerVisibility = combination.powerVisibleToOthers
+          ? "everyone"
+          : "self";
+        // Someone else's row: anonymous mode decides the name, power
+        // visibility decides the number, and the position stays public.
+        expect(items[0]).toEqual({
+          position: 1,
+          power: combination.powerVisibleToOthers ? "3000" : null,
+          powerVisibility,
+          display: combination.anonymousMode
+            ? { kind: "anonymous", labelKey: "mining.rank.anonymousMember" }
+            : {
+                kind: "alias",
+                alias: "whale",
+                publicProfileId: otherProfile,
+                audience: "everyone",
+              },
+          isSelf: false,
+        });
+        // The viewer's own row: always the alias and the number; `audience`
+        // tells the owner what everyone else is shown.
+        expect(items[1]).toEqual({
+          position: 2,
+          power: "1000",
+          powerVisibility,
+          display: {
+            kind: "alias",
+            alias: "me",
+            publicProfileId: selfProfile,
+            audience: combination.anonymousMode ? "self" : "everyone",
+          },
+          isSelf: true,
+        });
+      }
     });
 
     it("projects a community's standing, the caller's contribution on the bound asset, and the reasons it has none", async () => {

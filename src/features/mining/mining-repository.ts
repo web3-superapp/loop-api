@@ -80,8 +80,14 @@ export interface MiningRankedAccountRecord {
   readonly position: number | null;
   readonly publicProfileId: string | null;
   readonly alias: string | null;
-  readonly discoverable: boolean;
+  /** `privacy_preferences_v2.anonymous_mode`; false when the account has no row. */
   readonly anonymousMode: boolean;
+  /**
+   * `privacy_preferences_v2.mining_power_visibility = 'everyone'`; false when
+   * the account has no row (the column defaults to `self`), the same default
+   * `listMemberPowers` applies (Decision 0049).
+   */
+  readonly powerVisibleToOthers: boolean;
 }
 
 /**
