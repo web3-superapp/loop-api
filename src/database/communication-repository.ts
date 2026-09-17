@@ -8,6 +8,7 @@ import {
   communityChannelStates,
   deriveVoiceCallId,
   handRaiseStates,
+  voiceRoomMemberRoleFilters,
   voiceRoomProvisionStates,
   voiceRoomRoles,
   voiceRoomStates,
@@ -32,8 +33,11 @@ import {
   type CommunityChannelViewerRecord,
   type CreateVoiceRoomInput,
   type HandRaiseQueueEntryRecord,
+  type ListVoiceRoomMembersInput,
   type VoiceRoomCommandInput,
   type VoiceRoomIdentity,
+  type VoiceRoomMemberPageRecord,
+  type VoiceRoomMemberRecord,
   type VoiceRoomRecord,
   type VoiceRoomTargetCommandInput,
   type VoiceRoomTargetRecord,
@@ -501,7 +505,7 @@ export function createPostgresCommunicationRepository(
 ): CommunicationRepository {
   async function targetCommand(
     rawInput: VoiceRoomTargetCommandInput,
-    action: "invite" | "remove",
+    action: "invite" | "remove" | "mute",
   ): Promise<VoiceRoomTargetRecord> {
     const actorUserId = userIdSchema.parse(rawInput.actorUserId);
     const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
@@ -558,15 +562,56 @@ export function createPostgresCommunicationRepository(
       if (fromRole === "host") {
         throw new CommunicationPermissionDeniedError();
       }
+      if (action === "mute") {
+        // A per-member mute is LOOP intent on a joined speaker (0052 §2).
+        // Muting a listener or an already muted speaker is stale, exactly
+        // like inviting a speaker or removing a listener.
+        if (fromRole !== "speaker") {
+          throw new CommunicationDataStaleError();
+        }
+        const muted = await client.query({
+          text: `
+            update public.voice_room_members
+            set muted_at = clock_timestamp(), updated_at = clock_timestamp()
+            where voice_room_id = $1
+              and owner_user_id = $2
+              and state = 'joined'
+              and role = 'speaker'
+              and muted_at is null
+          `,
+          values: [voiceRoomId, target.userId],
+        });
+        if (muted.rowCount === 0) {
+          throw new CommunicationDataStaleError();
+        }
+        await appendVoiceRoomAudit(client, {
+          voiceRoomId,
+          actorUserId,
+          targetUserId: target.userId,
+          eventType: "speaker_muted",
+          fromRole,
+          toRole: fromRole,
+          idempotencyRecordId: recordId,
+          requestId,
+        });
+        return Object.freeze({
+          room: await readViewerRecord(client, room, actorUserId),
+          targetStreamUserId: deriveStreamUserId(target.userId),
+          targetRole: fromRole,
+          profile: target.profile,
+        });
+      }
       const toRole: VoiceRoomRole =
         action === "invite" ? "speaker" : "listener";
       if (fromRole === toRole) {
         throw new CommunicationDataStaleError();
       }
+      // Every role transition clears the mute intent: a freshly invited
+      // speaker starts unmuted and a listener cannot carry one.
       await client.query({
         text: `
           update public.voice_room_members
-          set role = $3, updated_at = clock_timestamp()
+          set role = $3, muted_at = null, updated_at = clock_timestamp()
           where voice_room_id = $1 and owner_user_id = $2
         `,
         values: [voiceRoomId, target.userId, toRole],
@@ -972,7 +1017,11 @@ export function createPostgresCommunicationRepository(
           await client.query({
             text: `
               update public.voice_room_members
-              set state = 'left', role = 'listener', updated_at = clock_timestamp()
+              set
+                state = 'left',
+                role = 'listener',
+                muted_at = null,
+                updated_at = clock_timestamp()
               where voice_room_id = $1 and owner_user_id = $2
             `,
             values: [voiceRoomId, actorUserId],
@@ -1201,6 +1250,104 @@ export function createPostgresCommunicationRepository(
       return targetCommand(rawInput, "remove").catch(translateRepositoryError);
     },
 
+    muteSpeaker(
+      rawInput: VoiceRoomTargetCommandInput,
+    ): Promise<VoiceRoomTargetRecord> {
+      return targetCommand(rawInput, "mute").catch(translateRepositoryError);
+    },
+
+    async listVoiceRoomMembers(
+      rawInput: ListVoiceRoomMembersInput,
+    ): Promise<VoiceRoomMemberPageRecord> {
+      try {
+        const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
+        const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
+        const role = z.enum(voiceRoomMemberRoleFilters).parse(rawInput.role);
+        const limit = limitSchema.parse(rawInput.limit);
+        return await withTransaction(pool, async (client) => {
+          const room = await readVoiceRoom(client, voiceRoomId);
+          await requireCommunityStanding(
+            client,
+            room.communityId,
+            viewerUserId,
+          );
+          const viewer = await readViewerRecord(client, room, viewerUserId);
+          const values: unknown[] = [voiceRoomId, role, limit];
+          let keyset = "";
+          const after = rawInput.after;
+          if (after !== undefined) {
+            values.push(
+              dateSchema.parse(new Date(after.lastJoinedAt)),
+              publicProfileIdSchema.parse(after.lastPublicProfileId),
+            );
+            // `joinedAt` travels through the cursor in the millisecond ISO
+            // form the response projects, so the keyset compares the
+            // millisecond-truncated column (the community directory rule).
+            keyset = `
+              and (
+                date_trunc('milliseconds', member.joined_at),
+                profile.public_profile_id
+              ) > ($4::timestamptz, $5::uuid)
+            `;
+          }
+          // The roster is the LOOP `joined` set by role intent. Stream
+          // session participants are never mixed in: presence is
+          // `observed.participantCount` on the room resource.
+          const result = await client.query<Record<string, unknown>>({
+            text: `
+              select
+                member.owner_user_id,
+                member.role,
+                member.joined_at,
+                (member.muted_at is not null) as muted,
+                exists (
+                  select 1
+                  from public.voice_room_hand_raises as raise
+                  where raise.voice_room_id = member.voice_room_id
+                    and raise.owner_user_id = member.owner_user_id
+                    and raise.state = 'pending'
+                ) as hand_raised,
+                profile.public_profile_id,
+                profile.alias,
+                coalesce(privacy.anonymous_mode, false) as anonymous_mode
+              from public.voice_room_members as member
+              join public.user_profiles as profile
+                on profile.owner_user_id = member.owner_user_id
+              left join public.privacy_preferences_v2 as privacy
+                on privacy.owner_user_id = member.owner_user_id
+              where member.voice_room_id = $1
+                and member.state = 'joined'
+                and member.role = $2
+                ${keyset}
+              order by
+                date_trunc('milliseconds', member.joined_at) asc,
+                profile.public_profile_id asc
+              limit $3
+            `,
+            values,
+          });
+          const items: VoiceRoomMemberRecord[] = result.rows.map((row) =>
+            Object.freeze({
+              ownerUserId: userIdSchema.parse(row["owner_user_id"]),
+              publicProfileId: publicProfileIdSchema.parse(
+                row["public_profile_id"],
+              ),
+              alias:
+                row["alias"] === null ? null : z.string().parse(row["alias"]),
+              anonymousMode: z.boolean().parse(row["anonymous_mode"]),
+              role: z.enum(voiceRoomMemberRoleFilters).parse(row["role"]),
+              joinedAt: dateSchema.parse(row["joined_at"]).toISOString(),
+              handRaised: z.boolean().parse(row["hand_raised"]),
+              muted: z.boolean().parse(row["muted"]),
+            }),
+          );
+          return Object.freeze({ room: viewer, items: Object.freeze(items) });
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
     async recordMuteAll(
       rawInput: VoiceRoomCommandInput,
     ): Promise<VoiceRoomViewerRecord> {
@@ -1222,6 +1369,19 @@ export function createPostgresCommunicationRepository(
           }
           const room = await requireLiveRoom(client, voiceRoomId);
           await requireHost(client, voiceRoomId, actorUserId);
+          // Mute-all is the same LOOP intent applied to every joined speaker
+          // (0052 §2); the roster's `muted` reflects it after this commit.
+          await client.query({
+            text: `
+              update public.voice_room_members
+              set muted_at = clock_timestamp(), updated_at = clock_timestamp()
+              where voice_room_id = $1
+                and state = 'joined'
+                and role = 'speaker'
+                and muted_at is null
+            `,
+            values: [voiceRoomId],
+          });
           await appendVoiceRoomAudit(client, {
             voiceRoomId,
             actorUserId,

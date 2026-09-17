@@ -1,4 +1,4 @@
-export const latestMigrationName = "000028_v2_mining_reference_price_quality";
+export const latestMigrationName = "000029_v2_voice_room_member_mute";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

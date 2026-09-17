@@ -110,6 +110,13 @@ export interface StreamCallMuteAllInput {
   readonly signal: AbortSignal;
 }
 
+export interface StreamCallMuteUserInput {
+  readonly callId: string;
+  readonly mutedByStreamUserId: string;
+  readonly streamUserId: string;
+  readonly signal: AbortSignal;
+}
+
 export interface StreamCallEndInput {
   readonly callId: string;
   readonly signal: AbortSignal;
@@ -147,6 +154,8 @@ export interface StreamCallGateway {
   updateCallMembers(input: StreamCallMembersInput): Promise<void>;
   updateUserPermissions(input: StreamCallPermissionsInput): Promise<void>;
   muteUsers(input: StreamCallMuteAllInput): Promise<void>;
+  /** Mute one member's audio (Decision 0052 §2); the same official endpoint with `user_ids`. */
+  muteUser(input: StreamCallMuteUserInput): Promise<void>;
   endCall(input: StreamCallEndInput): Promise<void>;
   queryMembers(input: StreamCallEndInput): Promise<StreamCallMemberObservation>;
   observeSession(
@@ -363,6 +372,7 @@ export function createUnavailableStreamCallGateway(): StreamCallGateway {
     updateCallMembers: unavailablePromise,
     updateUserPermissions: unavailablePromise,
     muteUsers: unavailablePromise,
+    muteUser: unavailablePromise,
     endCall: unavailablePromise,
     queryMembers: unavailablePromise,
     observeSession: unavailablePromise,
@@ -573,6 +583,38 @@ export function createStreamCallGateway(
         await client.video.call(streamCallType, callId).muteUsers({
           audio: true,
           mute_all_users: true,
+          muted_by_id: mutedByStreamUserId,
+        });
+        signal.throwIfAborted();
+      } catch (error) {
+        return sanitizeProviderFailure(error, signal);
+      }
+    },
+
+    async muteUser(rawInput: StreamCallMuteUserInput): Promise<void> {
+      if (
+        !isRecord(rawInput) ||
+        !hasExactKeys(rawInput, [
+          "callId",
+          "mutedByStreamUserId",
+          "streamUserId",
+          "signal",
+        ]) ||
+        !isCallId(rawInput["callId"]) ||
+        !isStreamUserId(rawInput["mutedByStreamUserId"]) ||
+        !isStreamUserId(rawInput["streamUserId"])
+      ) {
+        return unavailable();
+      }
+      const callId = rawInput["callId"];
+      const mutedByStreamUserId = rawInput["mutedByStreamUserId"];
+      const streamUserId = rawInput["streamUserId"];
+      const signal = parseSignal(rawInput["signal"]);
+      try {
+        signal.throwIfAborted();
+        await client.video.call(streamCallType, callId).muteUsers({
+          audio: true,
+          user_ids: [streamUserId],
           muted_by_id: mutedByStreamUserId,
         });
         signal.throwIfAborted();

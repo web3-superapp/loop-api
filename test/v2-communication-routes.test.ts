@@ -23,6 +23,7 @@ import {
   type CommunicationRepository,
   type VoiceRoomViewerRecord,
 } from "../src/features/communication/communication-repository.js";
+import { createVoiceRoomService } from "../src/features/communication/voice-room-service.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
@@ -86,6 +87,45 @@ function room(
     joinedCount: 6,
     ...overrides,
   });
+}
+
+const anonymousProfileId = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+const selfProfileId = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+/** Three listeners: an alias, an anonymous member, and the viewer itself (anonymous). */
+function rosterRows() {
+  return [
+    {
+      ownerUserId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
+      publicProfileId: targetProfileId,
+      alias: "frog_maxi",
+      anonymousMode: false,
+      role: "listener" as const,
+      joinedAt: createdAt,
+      handRaised: true,
+      muted: false,
+    },
+    {
+      ownerUserId: "8e34ca80-6356-49a8-b534-e7a197c52a77",
+      publicProfileId: anonymousProfileId,
+      alias: "hidden_frog",
+      anonymousMode: true,
+      role: "listener" as const,
+      joinedAt: "2026-09-08T01:00:01.000Z",
+      handRaised: false,
+      muted: false,
+    },
+    {
+      ownerUserId: accountId,
+      publicProfileId: selfProfileId,
+      alias: "cy",
+      anonymousMode: true,
+      role: "listener" as const,
+      joinedAt: "2026-09-08T01:00:02.000Z",
+      handRaised: false,
+      muted: false,
+    },
+  ];
 }
 
 function testConfig(overrides: Readonly<Record<string, string>> = {}) {
@@ -204,6 +244,17 @@ function communicationRepositoryFake(
         profile,
       }),
     ),
+    muteSpeaker: vi.fn(() =>
+      Promise.resolve({
+        room: room(),
+        targetStreamUserId: `loop_${targetProfileId.replaceAll("-", "")}`,
+        targetRole: "speaker" as const,
+        profile,
+      }),
+    ),
+    listVoiceRoomMembers: vi.fn(() =>
+      Promise.resolve({ room: room(), items: rosterRows() }),
+    ),
     recordMuteAll: vi.fn(() => Promise.resolve(room())),
     endVoiceRoom: vi.fn(() =>
       Promise.resolve(
@@ -260,6 +311,7 @@ function callGatewayFake(overrides: Partial<StreamCallGateway> = {}): {
     updateCallMembers: vi.fn(() => Promise.resolve()),
     updateUserPermissions: vi.fn(() => Promise.resolve()),
     muteUsers: vi.fn(() => Promise.resolve()),
+    muteUser: vi.fn(() => Promise.resolve()),
     endCall: vi.fn(() => Promise.resolve()),
     queryMembers: vi.fn(() =>
       Promise.resolve({
@@ -742,6 +794,7 @@ describe("LOOP API V2 communication module", () => {
     const communication = communicationRepositoryFake({
       inviteSpeaker: vi.fn(denied),
       removeSpeaker: vi.fn(denied),
+      muteSpeaker: vi.fn(denied),
       recordMuteAll: vi.fn(denied),
       endVoiceRoom: vi.fn(denied),
     });
@@ -749,6 +802,10 @@ describe("LOOP API V2 communication module", () => {
     for (const [method, url] of [
       ["POST", `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}`],
       ["DELETE", `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}`],
+      [
+        "POST",
+        `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}/mute`,
+      ],
       ["POST", `/v2/voice-rooms/${voiceRoomId}/mute-all`],
       ["POST", `/v2/voice-rooms/${voiceRoomId}/end`],
     ] as const) {
@@ -765,8 +822,302 @@ describe("LOOP API V2 communication module", () => {
       });
     }
     expect(callMocks["muteUsers"]).not.toHaveBeenCalled();
+    expect(callMocks["muteUser"]).not.toHaveBeenCalled();
     expect(callMocks["endCall"]).not.toHaveBeenCalled();
     expect(callMocks["updateUserPermissions"]).not.toHaveBeenCalled();
+  });
+
+  describe("roster (Decision 0052)", () => {
+    it("lists the host's row commands and applies the anonymous display rule", async () => {
+      const { app, communicationMocks } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({
+        role: "listener",
+        items: [
+          {
+            publicProfileId: targetProfileId,
+            display: {
+              kind: "alias",
+              alias: "frog_maxi",
+              publicProfileId: targetProfileId,
+              audience: "everyone",
+            },
+            role: "listener",
+            joinedAt: createdAt,
+            handRaised: true,
+            muted: false,
+            isSelf: false,
+            commands: ["invite_speaker"],
+          },
+          {
+            // Anonymous to everyone but addressable by the host.
+            publicProfileId: anonymousProfileId,
+            display: {
+              kind: "anonymous",
+              labelKey: "voiceRoom.member.anonymousMember",
+            },
+            role: "listener",
+            joinedAt: "2026-09-08T01:00:01.000Z",
+            handRaised: false,
+            muted: false,
+            isSelf: false,
+            commands: ["invite_speaker"],
+          },
+          {
+            // The viewer's own row while its anonymous mode is on.
+            publicProfileId: selfProfileId,
+            display: {
+              kind: "alias",
+              alias: "cy",
+              publicProfileId: selfProfileId,
+              audience: "self",
+            },
+            role: "listener",
+            joinedAt: "2026-09-08T01:00:02.000Z",
+            handRaised: false,
+            muted: false,
+            isSelf: true,
+            commands: ["invite_speaker"],
+          },
+        ],
+        nextCursor: null,
+        display: {
+          anonymousMemberKey: "voiceRoom.member.anonymousMember",
+          ruleKey: "voiceRoom.member.display.anonymousModeOnly",
+        },
+        contractVersion: "2.0",
+      });
+      expect(communicationMocks["listVoiceRoomMembers"]).toHaveBeenCalledWith({
+        voiceRoomId,
+        viewerUserId: accountId,
+        role: "listener",
+        limit: 51,
+      });
+    });
+
+    it("gives a non-host no commands and hides the anonymous member's target", async () => {
+      const communication = communicationRepositoryFake({
+        listVoiceRoomMembers: vi.fn(() =>
+          Promise.resolve({
+            room: room({ viewerRole: "listener" }),
+            items: rosterRows(),
+          }),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = jsonOf<{
+        items: readonly {
+          publicProfileId: string | null;
+          commands: readonly string[];
+          display: { kind: string };
+        }[];
+      }>(response);
+      expect(body.items.map((item) => item.commands)).toEqual([[], [], []]);
+      expect(body.items.map((item) => item.publicProfileId)).toEqual([
+        targetProfileId,
+        null,
+        selfProfileId,
+      ]);
+      expect(body.items[1]?.display.kind).toBe("anonymous");
+    });
+
+    it("offers remove and mute on an unmuted speaker and only remove once muted", async () => {
+      const communication = communicationRepositoryFake({
+        listVoiceRoomMembers: vi.fn(() =>
+          Promise.resolve({
+            room: room(),
+            items: [
+              { ...rosterRows()[0]!, role: "speaker" as const, muted: false },
+              { ...rosterRows()[1]!, role: "speaker" as const, muted: true },
+            ],
+          }),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=speaker`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(
+        jsonOf<{ items: readonly { commands: readonly string[] }[] }>(
+          response,
+        ).items.map((item) => item.commands),
+      ).toEqual([["remove_speaker", "mute"], ["remove_speaker"]]);
+    });
+
+    it("pages with an owner-bound cursor that carries the page size", async () => {
+      const rows = rosterRows();
+      const communication = communicationRepositoryFake({
+        listVoiceRoomMembers: vi.fn((input: { readonly after?: unknown }) =>
+          Promise.resolve({
+            room: room(),
+            items: input.after === undefined ? rows : rows.slice(2),
+          }),
+        ),
+      });
+      const { app, communicationMocks } = await createApp(
+        fakes({ communication }),
+      );
+      const first = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener&limit=2`,
+        headers: commonHeaders(),
+      });
+      expect(first.statusCode).toBe(200);
+      const firstBody = jsonOf<{
+        items: readonly unknown[];
+        nextCursor: string | null;
+      }>(first);
+      expect(firstBody.items).toHaveLength(2);
+      expect(typeof firstBody.nextCursor).toBe("string");
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(second.statusCode).toBe(200);
+      expect(jsonOf<{ nextCursor: string | null }>(second).nextCursor).toBe(
+        null,
+      );
+      expect(
+        communicationMocks["listVoiceRoomMembers"],
+      ).toHaveBeenLastCalledWith({
+        voiceRoomId,
+        viewerUserId: accountId,
+        role: "listener",
+        limit: 3,
+        after: {
+          lastJoinedAt: "2026-09-08T01:00:01.000Z",
+          lastPublicProfileId: anonymousProfileId,
+        },
+      });
+
+      for (const url of [
+        // cursor and limit are mutually exclusive
+        `/v2/voice-rooms/${voiceRoomId}/members?role=listener&limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        // the view is bound into the cursor
+        `/v2/voice-rooms/${voiceRoomId}/members?role=speaker&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        // role is required and enumerated
+        `/v2/voice-rooms/${voiceRoomId}/members`,
+        `/v2/voice-rooms/${voiceRoomId}/members?role=host`,
+      ]) {
+        const rejected = await app.inject({
+          method: "GET",
+          url,
+          headers: commonHeaders(),
+        });
+        expect(rejected.statusCode).toBe(400);
+        expect(rejected.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
+
+    it("keeps the roster closed without a cursor codec", async () => {
+      const dependencies = fakes();
+      const app = await buildApp({
+        config: testConfig(),
+        contractSurface: "v2",
+        database: dependencies.database,
+        privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+        streamCallGateway: dependencies.callGateway,
+        streamCommunityChannelGateway: dependencies.channelGateway,
+        voiceRoomService: createVoiceRoomService({
+          repository: dependencies.communication,
+          callGateway: dependencies.callGateway,
+          cursorCodec: null,
+        }),
+        logger: false,
+      });
+      apps.push(app);
+      // A page that would need a continuation cannot be signed, so it fails
+      // closed instead of publishing an unpageable list.
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener&limit=2`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+    });
+
+    it("mutes one speaker through the host's row command", async () => {
+      const { app, callMocks, communicationMocks } = await createApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        viewer: { role: "host" },
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(communicationMocks["muteSpeaker"]).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: accountId,
+          voiceRoomId,
+          targetPublicProfileId: targetProfileId,
+        }),
+      );
+      expect(callMocks["muteUser"]).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callId,
+          mutedByStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+          streamUserId: `loop_${targetProfileId.replaceAll("-", "")}`,
+        }),
+      );
+      expect(callMocks["muteUsers"]).not.toHaveBeenCalled();
+    });
+
+    it("reports an unconfirmed per-member mute without failing the command", async () => {
+      const callGateway = callGatewayFake({
+        muteUser: vi.fn(() => Promise.reject(new Error("provider"))),
+      });
+      const { app } = await createApp(fakes({ callGateway }));
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        providerSync: {
+          status: "unconfirmed",
+          reasonCode: "STREAM_CALL_MUTE_UNCONFIRMED",
+        },
+      });
+    });
+
+    it("rejects muting a listener or an already muted speaker as DATA_STALE", async () => {
+      const communication = communicationRepositoryFake({
+        muteSpeaker: vi.fn(() =>
+          Promise.reject(new CommunicationDataStaleError()),
+        ),
+      });
+      const { app, callMocks } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: "DATA_STALE" });
+      expect(callMocks["muteUser"]).not.toHaveBeenCalled();
+    });
   });
 
   it("grants send-audio when the host invites a speaker", async () => {

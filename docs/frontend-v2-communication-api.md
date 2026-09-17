@@ -200,12 +200,14 @@ POST   /v2/communities/{communityId}/voice-rooms          # owner/admin 开房
 GET    /v2/communities/{communityId}/voice-rooms/current  # 当前直播中的房间
 GET    /v2/voice-rooms/{voiceRoomId}
 GET    /v2/voice-rooms/{voiceRoomId}/hand-raises
+GET    /v2/voice-rooms/{voiceRoomId}/members?role=speaker|listener   # 名单（决策 0052）
 POST   /v2/voice-rooms/{voiceRoomId}/join
 POST   /v2/voice-rooms/{voiceRoomId}/leave
 POST   /v2/voice-rooms/{voiceRoomId}/hand-raise
 DELETE /v2/voice-rooms/{voiceRoomId}/hand-raise
 POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 邀请发言
 DELETE /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 移出发言
+POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute  # host 逐人静音（决策 0052）
 POST   /v2/voice-rooms/{voiceRoomId}/mute-all                     # host
 POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
 ```
@@ -302,6 +304,138 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   `live` 房间；重复开房返回 `409 RESOURCE_CONFLICT`。
 - `GET .../voice-rooms/current` 在没有直播时返回
   `{current: null, reasonCode: "COMMUNITY_VOICE_ROOM_NOT_LIVE", contractVersion}`。
+
+### 发言人 / 听众名单（决策 0052）
+
+`GET /v2/voice-rooms/{id}/members?role=listener`（或 `role=speaker`），`role` 必填；
+`limit`（默认 50、上限 100）与 `cursor` 互斥；`cursor` 绑定视图，换 `role` 续页是
+`400 INVALID_REQUEST`。读权限与房间资源相同（社区成员）。
+
+**数据口径**：名单是 LOOP 的「已加入」意图（`voice_room_members` 中 `joined`
+的 speaker / listener），host 不在任何视图；**不含 Stream 在线状态**。「N 人在线」
+仍读房间资源的 `participants.observed.participantCount`；名单行数 ≈
+`speakerCount` / `listenerCount`。
+
+开发库 `builders-guild` 房（host `Voyager_09`）以 host 身份读听众：
+
+```json
+{
+  "role": "listener",
+  "items": [
+    {
+      "publicProfileId": "8fcb7ade-c1dd-44ee-a6e0-5f80abbdc55e",
+      "display": {
+        "kind": "alias",
+        "alias": "Voyager_344",
+        "publicProfileId": "8fcb7ade-c1dd-44ee-a6e0-5f80abbdc55e",
+        "audience": "everyone"
+      },
+      "role": "listener",
+      "joinedAt": "2026-09-17T13:45:10.600Z",
+      "handRaised": false,
+      "muted": false,
+      "isSelf": false,
+      "commands": ["invite_speaker"]
+    },
+    {
+      "publicProfileId": "4678e354-1e9f-4f6a-8c80-ab9aecbcfe3c",
+      "display": {
+        "kind": "anonymous",
+        "labelKey": "voiceRoom.member.anonymousMember"
+      },
+      "role": "listener",
+      "joinedAt": "2026-09-17T13:45:20.065Z",
+      "handRaised": false,
+      "muted": false,
+      "isSelf": false,
+      "commands": ["invite_speaker"]
+    },
+    {
+      "publicProfileId": "2323c2b1-0e71-4e25-8c92-d94bcfec0ef7",
+      "display": {
+        "kind": "alias",
+        "alias": "DeFiMaxi_349",
+        "publicProfileId": "2323c2b1-0e71-4e25-8c92-d94bcfec0ef7",
+        "audience": "everyone"
+      },
+      "role": "listener",
+      "joinedAt": "2026-09-17T13:45:25.046Z",
+      "handRaised": true,
+      "muted": false,
+      "isSelf": false,
+      "commands": ["invite_speaker"]
+    }
+  ],
+  "nextCursor": null,
+  "display": {
+    "anonymousMemberKey": "voiceRoom.member.anonymousMember",
+    "ruleKey": "voiceRoom.member.display.anonymousModeOnly"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+同一房间以普通成员 `cy` 读（非 host）：匿名行 `publicProfileId: null`、所有行
+`commands: []`：
+
+```json
+{
+  "publicProfileId": null,
+  "display": {
+    "kind": "anonymous",
+    "labelKey": "voiceRoom.member.anonymousMember"
+  },
+  "role": "listener",
+  "joinedAt": "2026-09-17T13:45:20.065Z",
+  "handRaised": false,
+  "muted": false,
+  "isSelf": false,
+  "commands": []
+}
+```
+
+host 邀请 `Voyager_344` 发言并静音后读 `role=speaker`：
+
+```json
+{
+  "publicProfileId": "8fcb7ade-c1dd-44ee-a6e0-5f80abbdc55e",
+  "display": {
+    "kind": "alias",
+    "alias": "Voyager_344",
+    "publicProfileId": "8fcb7ade-…",
+    "audience": "everyone"
+  },
+  "role": "speaker",
+  "joinedAt": "2026-09-17T13:45:10.600Z",
+  "handRaised": false,
+  "muted": true,
+  "isSelf": false,
+  "commands": ["remove_speaker"]
+}
+```
+
+规则：
+
+- **`display` 沿用挖矿榜（决策 0049）**：`{kind:"alias", alias, publicProfileId, audience}`
+  或 `{kind:"anonymous", labelKey}`。对方开了匿名模式就是 `anonymous`；本人永远看到
+  自己的别名，开匿名时 `audience:"self"`（可提示"别人看到的是匿名"）。`labelKey`
+  用 `display.anonymousMemberKey` 做 i18n。
+- **行顶层 `publicProfileId` 可为 null**：host 视角恒非空（命令目标）；非 host
+  视角匿名行为 null——不要试图解析、不要跳资料页。
+- **`commands[]` 是唯一的行命令来源**（S17 做法）：渲染恰好这些按钮，不要自己
+  按 `viewer.role` 推。`invite_speaker` → `POST …/speakers/{pid}`；`remove_speaker`
+  → `DELETE …/speakers/{pid}`；`mute` → `POST …/speakers/{pid}/mute`。非 host
+  视角所有行都是 `[]`。写路径按同一谓词复核，不是授权。
+- **`handRaised`**：该成员有 pending 举手（listener 视图有意义；speaker 恒 false）。
+  举手顺序仍看 `GET …/hand-raises`。
+- **`muted` 只是 host 的 LOOP 侧意图**（逐人静音或全体静音后为 true），**不是**
+  麦克风状态——Stream 才是媒体状态的真相，被静音者在设备上可以自己开麦。每次角色
+  变化（邀请 / 移出 / 离开）清零。没有 unmute 命令。
+- 逐人静音：`POST /v2/voice-rooms/{id}/speakers/{pid}/mute`，host only；目标是
+  listener 或已静音 → `409 DATA_STALE`；对自己 → `403`。响应是房间资源，
+  `providerSync` 说明那一次 Stream `muteUsers(user_ids)` 是否确认。
+- 分页：`nextCursor` 非空才有下一页；`limit` 与 `cursor` 同时传是 `400`。没有
+  cursor 密钥时需要续页的响应 `503 CAPABILITY_UNAVAILABLE`。
 
 ### Development 上怎么试（决策 0050）
 

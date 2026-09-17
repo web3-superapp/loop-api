@@ -704,6 +704,36 @@ describe("Stream audio_room call gateway", () => {
     });
   });
 
+  it("mutes one member's audio through the same endpoint with user_ids (Decision 0052)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await gateway.muteUser({
+      callId,
+      mutedByStreamUserId: hostUserId,
+      streamUserId: memberUserId,
+      signal: signal(),
+    });
+
+    expect(requestBody(fetchMock, 0)).toEqual({
+      audio: true,
+      user_ids: [memberUserId],
+      muted_by_id: hostUserId,
+    });
+    await expect(
+      gateway.muteUser({
+        callId,
+        mutedByStreamUserId: hostUserId,
+        streamUserId: "not-a-loop-user",
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("projects an observed member count with its own observedAt", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       jsonResponse({

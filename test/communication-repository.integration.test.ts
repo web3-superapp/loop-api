@@ -981,6 +981,304 @@ describe("PostgreSQL V2 communication repository", () => {
     expect(queue).toHaveLength(0);
   });
 
+  function targetCommand(
+    operation:
+      | "voiceRoomSpeakerInvite"
+      | "voiceRoomSpeakerRemove"
+      | "voiceRoomSpeakerMute",
+    actorUserId: string,
+    voiceRoomId: string,
+    targetPublicProfileId: string,
+  ) {
+    return {
+      actorUserId,
+      voiceRoomId,
+      targetPublicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest(operation, [
+        voiceRoomId,
+        targetPublicProfileId,
+      ]),
+      requestId: randomUUID(),
+    };
+  }
+
+  it("lists the roster by role in join order with hand raise, anonymous mode, and mute intent (Decision 0052)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const members = [] as { userId: string; publicProfileId: string }[];
+    for (let index = 0; index < 4; index += 1) {
+      const member = await createAccount();
+      await join(member.userId, communityId);
+      await joinRoom(member.userId, voiceRoomId);
+      members.push(member);
+    }
+    const [first, second, third, fourth] = members as [
+      (typeof members)[number],
+      (typeof members)[number],
+      (typeof members)[number],
+      (typeof members)[number],
+    ];
+    await communication.raiseHand({
+      actorUserId: second.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomHandRaise", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+    await pool.query({
+      text: `
+        insert into public.privacy_preferences_v2 (owner_user_id, anonymous_mode)
+        values ($1, true)
+      `,
+      values: [third.userId],
+    });
+    await communication.inviteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerInvite",
+        owner.userId,
+        voiceRoomId,
+        first.publicProfileId,
+      ),
+    );
+
+    const listeners = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+    });
+    expect(listeners.room.viewerRole).toBe("host");
+    expect(listeners.items.map((item) => item.publicProfileId)).toEqual([
+      second.publicProfileId,
+      third.publicProfileId,
+      fourth.publicProfileId,
+    ]);
+    expect(listeners.items.map((item) => item.handRaised)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(listeners.items.map((item) => item.anonymousMode)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(listeners.items.every((item) => !item.muted)).toBe(true);
+    // The host is in neither view; the invited member moved to the speakers.
+    const speakers = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: fourth.userId,
+      role: "speaker",
+      limit: 10,
+    });
+    expect(speakers.room.viewerRole).toBe("listener");
+    expect(speakers.items).toHaveLength(1);
+    expect(speakers.items[0]).toMatchObject({
+      publicProfileId: first.publicProfileId,
+      role: "speaker",
+      handRaised: false,
+      muted: false,
+    });
+
+    // Keyset continuation: the page after the first listener row.
+    const secondPage = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+      after: {
+        lastJoinedAt: listeners.items[0]!.joinedAt,
+        lastPublicProfileId: listeners.items[0]!.publicProfileId,
+      },
+    });
+    expect(secondPage.items.map((item) => item.publicProfileId)).toEqual([
+      third.publicProfileId,
+      fourth.publicProfileId,
+    ]);
+
+    // A non-member of the community cannot read the roster.
+    const stranger = await createAccount();
+    await expect(
+      communication.listVoiceRoomMembers({
+        voiceRoomId,
+        viewerUserId: stranger.userId,
+        role: "listener",
+        limit: 10,
+      }),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+  });
+
+  it("records the host's mute intent per speaker, on mute-all, and clears it on every role transition (Decision 0052)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const speaker = await createAccount();
+    const other = await createAccount();
+    const listener = await createAccount();
+    for (const account of [speaker, other, listener]) {
+      await join(account.userId, communityId);
+      await joinRoom(account.userId, voiceRoomId);
+    }
+    for (const account of [speaker, other]) {
+      await communication.inviteSpeaker(
+        targetCommand(
+          "voiceRoomSpeakerInvite",
+          owner.userId,
+          voiceRoomId,
+          account.publicProfileId,
+        ),
+      );
+    }
+
+    // Only the host; a listener target and a repeat are stale.
+    await expect(
+      communication.muteSpeaker(
+        targetCommand(
+          "voiceRoomSpeakerMute",
+          other.userId,
+          voiceRoomId,
+          speaker.publicProfileId,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+    await expect(
+      communication.muteSpeaker(
+        targetCommand(
+          "voiceRoomSpeakerMute",
+          owner.userId,
+          voiceRoomId,
+          listener.publicProfileId,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+    const muted = await communication.muteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerMute",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    expect(muted.targetRole).toBe("speaker");
+    expect(muted.room.speakerCount).toBe(2);
+    await expect(
+      communication.muteSpeaker(
+        targetCommand(
+          "voiceRoomSpeakerMute",
+          owner.userId,
+          voiceRoomId,
+          speaker.publicProfileId,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+    const audit = await pool.query({
+      text: `
+        select 1 from public.voice_room_events
+        where voice_room_id = $1 and event_type = 'speaker_muted' and target_user_id = $2
+      `,
+      values: [voiceRoomId, speaker.userId],
+    });
+    expect(audit.rowCount).toBe(1);
+
+    const afterMute = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "speaker",
+      limit: 10,
+    });
+    expect(
+      afterMute.items.map((item) => [item.publicProfileId, item.muted]),
+    ).toEqual([
+      [speaker.publicProfileId, true],
+      [other.publicProfileId, false],
+    ]);
+
+    // Mute-all is the same intent applied to every joined speaker.
+    await communication.recordMuteAll({
+      actorUserId: owner.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomMuteAll", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const afterMuteAll = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "speaker",
+      limit: 10,
+    });
+    expect(afterMuteAll.items.every((item) => item.muted)).toBe(true);
+    const listenersUntouched = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+    });
+    expect(listenersUntouched.items.map((item) => item.muted)).toEqual([false]);
+
+    // Remove → listener clears it; re-invite starts unmuted.
+    await communication.removeSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerRemove",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    const mutedColumn = async (userId: string) =>
+      (
+        await pool.query<{ muted_at: Date | null; role: string }>({
+          text: `select muted_at, role from public.voice_room_members where voice_room_id = $1 and owner_user_id = $2`,
+          values: [voiceRoomId, userId],
+        })
+      ).rows[0];
+    expect(await mutedColumn(speaker.userId)).toEqual({
+      muted_at: null,
+      role: "listener",
+    });
+    await communication.inviteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerInvite",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    expect(await mutedColumn(speaker.userId)).toEqual({
+      muted_at: null,
+      role: "speaker",
+    });
+    // Leaving clears it too.
+    await communication.leaveVoiceRoom({
+      actorUserId: other.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomLeave", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(await mutedColumn(other.userId)).toEqual({
+      muted_at: null,
+      role: "listener",
+    });
+    // The schema itself refuses a muted listener.
+    await expect(
+      pool.query({
+        text: `update public.voice_room_members set muted_at = clock_timestamp() where voice_room_id = $1 and owner_user_id = $2`,
+        values: [voiceRoomId, listener.userId],
+      }),
+    ).rejects.toThrow(/voice_room_members_muted_role_check/);
+  });
+
   it("ends the room and makes every later write stale", async () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);

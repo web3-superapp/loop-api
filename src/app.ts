@@ -1115,6 +1115,7 @@ export async function buildApp(
       ? createVoiceRoomService({
           repository: communicationRepository,
           callGateway: streamCallGateway,
+          cursorCodec: v2CursorCodec,
         })
       : createUnavailableVoiceRoomService());
   const watchlistService =

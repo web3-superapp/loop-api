@@ -3,6 +3,7 @@ import type {
   CommunityChannelState,
   CommunityChannelSyncKind,
   HandRaiseState,
+  VoiceRoomMemberRoleFilter,
   VoiceRoomProvisionState,
   VoiceRoomRole,
   VoiceRoomState,
@@ -84,6 +85,39 @@ export interface VoiceRoomTargetRecord {
   readonly profile: VoiceRoomIdentity;
 }
 
+/**
+ * One roster row (Decision 0052 §2): a LOOP `joined` member with its role
+ * intent. `anonymousMode` is the member's `privacy_preferences_v2` flag so the
+ * service can apply the leaderboard display rule; `muted` is the host's
+ * LOOP-side mute intent, never Stream media state.
+ */
+export interface VoiceRoomMemberRecord {
+  readonly ownerUserId: string;
+  readonly publicProfileId: string;
+  readonly alias: string | null;
+  readonly anonymousMode: boolean;
+  readonly role: VoiceRoomMemberRoleFilter;
+  readonly joinedAt: string;
+  readonly handRaised: boolean;
+  readonly muted: boolean;
+}
+
+export interface VoiceRoomMemberPageRecord {
+  readonly room: VoiceRoomViewerRecord;
+  readonly items: readonly VoiceRoomMemberRecord[];
+}
+
+export interface ListVoiceRoomMembersInput {
+  readonly voiceRoomId: string;
+  readonly viewerUserId: string;
+  readonly role: VoiceRoomMemberRoleFilter;
+  readonly limit: number;
+  readonly after?: {
+    readonly lastJoinedAt: string;
+    readonly lastPublicProfileId: string;
+  };
+}
+
 export interface CommunicationCommandInput {
   readonly actorUserId: string;
   readonly idempotencyKey: string;
@@ -140,10 +174,21 @@ export interface CommunicationRepository {
     readonly viewerUserId: string;
     readonly limit: number;
   }): Promise<readonly HandRaiseQueueEntryRecord[]>;
+  /**
+   * The roster: LOOP `joined` members of one role view in join order, keyed
+   * by (millisecond joined_at, publicProfileId). It reads no Stream state.
+   */
+  listVoiceRoomMembers(
+    input: ListVoiceRoomMembersInput,
+  ): Promise<VoiceRoomMemberPageRecord>;
   inviteSpeaker(
     input: VoiceRoomTargetCommandInput,
   ): Promise<VoiceRoomTargetRecord>;
   removeSpeaker(
+    input: VoiceRoomTargetCommandInput,
+  ): Promise<VoiceRoomTargetRecord>;
+  /** Host only; the target must be a joined, not yet muted speaker. */
+  muteSpeaker(
     input: VoiceRoomTargetCommandInput,
   ): Promise<VoiceRoomTargetRecord>;
   recordMuteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
@@ -309,8 +354,10 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     raiseHand: unavailable,
     cancelHandRaise: unavailable,
     listHandRaises: unavailable,
+    listVoiceRoomMembers: unavailable,
     inviteSpeaker: unavailable,
     removeSpeaker: unavailable,
+    muteSpeaker: unavailable,
     recordMuteAll: unavailable,
     endVoiceRoom: unavailable,
     prepareChatGroupLeave: unavailable,

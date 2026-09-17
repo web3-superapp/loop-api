@@ -66,6 +66,50 @@ export type VoiceRoomMemberState = (typeof voiceRoomMemberStates)[number];
 export const handRaiseStates = ["pending", "invited", "cancelled"] as const;
 export type HandRaiseState = (typeof handRaiseStates)[number];
 
+/**
+ * Roster views (Decision 0052 §2). The roster lists LOOP `joined` members by
+ * role intent; the host is neither a speaker nor a listener and appears in
+ * neither view.
+ */
+export const voiceRoomMemberRoleFilters = ["speaker", "listener"] as const;
+export type VoiceRoomMemberRoleFilter =
+  (typeof voiceRoomMemberRoleFilters)[number];
+
+/**
+ * Row commands the server hands the host (the S17 pattern): computed from the
+ * viewer's role and the row's stored state, re-checked by the same predicate
+ * on the write. A non-host viewer always receives an empty list.
+ */
+export const voiceRoomMemberCommands = [
+  "invite_speaker",
+  "remove_speaker",
+  "mute",
+] as const;
+export type VoiceRoomMemberCommand = (typeof voiceRoomMemberCommands)[number];
+
+/** The mining leaderboard's display rule reused: anonymous mode alone decides. */
+export const voiceRoomMemberAnonymousKey =
+  "voiceRoom.member.anonymousMember" as const;
+export const voiceRoomMemberDisplayRuleKey =
+  "voiceRoom.member.display.anonymousModeOnly" as const;
+
+export const voiceRoomMemberListLimits = Object.freeze({
+  default: 50,
+  maximum: 100,
+});
+
+export const voiceRoomCursorRoutes = Object.freeze({
+  members: "voiceRoomMembers",
+} as const);
+
+/** Canonical cursor filter: the room and the role view are both bound. */
+export function voiceRoomMembersFilter(
+  voiceRoomId: string,
+  role: VoiceRoomMemberRoleFilter,
+): string {
+  return `${voiceRoomId}:${role}`;
+}
+
 export const streamChannelCidPatternSource =
   "^messaging:loop_community_[0-9a-f]{32}$";
 export const streamCallCidPatternSource =

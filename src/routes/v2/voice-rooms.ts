@@ -10,6 +10,7 @@ import { parseV2CommandMetadata } from "../../features/community/community-contr
 import type { VoiceRoomService } from "../../features/communication/voice-room-service.js";
 import {
   assertNoBodyOrQueryV2,
+  assertNoBodyV2,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
   validateCommandHeaders,
@@ -22,6 +23,8 @@ import {
   handRaiseQueueResourceSchema,
   voiceRoomCurrentResourceSchema,
   voiceRoomIdParamsSchema,
+  voiceRoomMemberListQuerySchema,
+  voiceRoomMemberListResourceSchema,
   voiceRoomResourceSchema,
   voiceRoomSpeakerParamsSchema,
 } from "./communication-schemas.js";
@@ -196,6 +199,48 @@ export function registerV2VoiceRoomRoutes(
     },
   );
 
+  app.get(
+    "/v2/voice-rooms/:voiceRoomId/members",
+    {
+      schema: {
+        operationId: "listV2VoiceRoomMembers",
+        summary: "List the speaker or listener roster",
+        description:
+          "The LOOP `joined` members of one role view in join order (Decision 0052). It is the authorization roster, not presence: Stream session participants are never mixed in, and 'people in the room now' stays `participants.observed.participantCount` on the room resource. Names follow the leaderboard display rule (anonymous mode alone decides what others see). Each row carries `commands`, the host's executable row commands; a non-host viewer gets an empty list on every row. `limit` and `cursor` are mutually exclusive.",
+        tags: ["communication"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: voiceRoomIdParamsSchema,
+        querystring: voiceRoomMemberListQuerySchema,
+        response: {
+          200: voiceRoomMemberListResourceSchema,
+          ...communicationReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as VoiceRoomParams;
+      const query = request.query as {
+        readonly role?: unknown;
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await service.listMembers({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        voiceRoomId: params.voiceRoomId,
+        role: query.role,
+        cursor: query.cursor,
+        limit: query.limit,
+        signal: request.signal,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
   const simpleCommands = [
     [
       "post",
@@ -295,22 +340,33 @@ export function registerV2VoiceRoomRoutes(
   const speakerCommands = [
     [
       "post",
+      "",
       "inviteV2VoiceRoomSpeaker",
       "Invite a listener to speak",
-      "Host only. The LOOP role commits first, then Stream is granted send-audio for that member in one attempt.",
+      "Host only. The LOOP role commits first, then Stream is granted send-audio for that member in one attempt. The roster's `invite_speaker` command.",
       "inviteSpeaker",
     ],
     [
       "delete",
+      "",
       "removeV2VoiceRoomSpeaker",
       "Move a speaker back to listener",
-      "Host only. Stream's send-audio permission is revoked in the same single attempt.",
+      "Host only. Stream's send-audio permission is revoked in the same single attempt. The roster's `remove_speaker` command; it clears the mute intent.",
       "removeSpeaker",
+    ],
+    [
+      "post",
+      "/mute",
+      "muteV2VoiceRoomSpeaker",
+      "Mute one speaker",
+      "Host only; the roster's `mute` command (Decision 0052). The LOOP mute intent commits first (a listener or an already muted speaker is DATA_STALE), then one Stream muteUsers call for that member is attempted. Stream stays authoritative for the live microphone; there is no unmute command, the intent clears on the next role transition.",
+      "muteSpeaker",
     ],
   ] as const;
 
   for (const [
     method,
+    suffix,
     operationId,
     summary,
     description,
@@ -319,7 +375,7 @@ export function registerV2VoiceRoomRoutes(
     const register =
       method === "post" ? app.post.bind(app) : app.delete.bind(app);
     register(
-      "/v2/voice-rooms/:voiceRoomId/speakers/:publicProfileId",
+      `/v2/voice-rooms/:voiceRoomId/speakers/:publicProfileId${suffix}`,
       {
         schema: {
           operationId,

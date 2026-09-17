@@ -12,13 +12,23 @@ import {
 import {
   handRaiseStates,
   streamCallCidPatternSource,
+  voiceRoomMemberAnonymousKey,
+  voiceRoomMemberCommands,
+  voiceRoomMemberDisplayRuleKey,
+  voiceRoomMemberListLimits,
+  voiceRoomMemberRoleFilters,
   voiceRoomProvisionStates,
   voiceRoomRoles,
   voiceRoomStates,
 } from "../../features/communication/communication-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
-import { commandErrors, readErrors } from "./community-schemas.js";
+import {
+  commandErrors,
+  cursorSchema,
+  nullableCursorSchema,
+  readErrors,
+} from "./community-schemas.js";
 
 /**
  * V2 communication route schemas (Decision 0032). Route schemas are the
@@ -495,6 +505,137 @@ export const voiceRoomCurrentResourceSchema = {
         { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
         { type: "null" },
       ],
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const voiceRoomMemberListQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["role"],
+  properties: {
+    role: {
+      type: "string",
+      enum: [...voiceRoomMemberRoleFilters],
+      description:
+        "The roster view: `speaker` or `listener`. Both list LOOP `joined` members by role intent (voice_room_members); the host is in neither. The view is bound into the cursor.",
+    },
+    cursor: cursorSchema,
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: voiceRoomMemberListLimits.maximum,
+    },
+  },
+} as const;
+
+const voiceRoomMemberDisplaySchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "alias", "publicProfileId", "audience"],
+      properties: {
+        kind: { type: "string", const: "alias" },
+        alias: {
+          type: "string",
+          minLength: 1,
+          maxLength: maximumRawTextLength,
+        },
+        publicProfileId: {
+          type: "string",
+          pattern: publicProfileIdPatternSource,
+        },
+        audience: {
+          type: "string",
+          enum: ["everyone", "self"],
+          description:
+            "`self` only on the viewer's own row while its anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (the Decision 0049 leaderboard rule).",
+        },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "labelKey"],
+      properties: {
+        kind: { type: "string", const: "anonymous" },
+        labelKey: { type: "string", const: voiceRoomMemberAnonymousKey },
+      },
+    },
+  ],
+} as const;
+
+export const voiceRoomMemberListResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["role", "items", "nextCursor", "display", "contractVersion"],
+  properties: {
+    role: { type: "string", enum: [...voiceRoomMemberRoleFilters] },
+    items: {
+      type: "array",
+      maxItems: voiceRoomMemberListLimits.maximum,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "publicProfileId",
+          "display",
+          "role",
+          "joinedAt",
+          "handRaised",
+          "muted",
+          "isSelf",
+          "commands",
+        ],
+        properties: {
+          publicProfileId: {
+            anyOf: [
+              { type: "string", pattern: publicProfileIdPatternSource },
+              { type: "null" },
+            ],
+            description:
+              "The command target. Null when the row is anonymous to this viewer and the viewer is not the host: the host must be able to address anyone in its room; nobody else may address an anonymous member.",
+          },
+          display: voiceRoomMemberDisplaySchema,
+          role: { type: "string", enum: [...voiceRoomMemberRoleFilters] },
+          joinedAt: { type: "string", format: "date-time" },
+          handRaised: {
+            type: "boolean",
+            description:
+              "A pending LOOP hand raise exists for this member. Meaningful on the listener view; always false for a speaker.",
+          },
+          muted: {
+            type: "boolean",
+            description:
+              "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it. Always false for a listener.",
+          },
+          isSelf: { type: "boolean" },
+          commands: {
+            type: "array",
+            uniqueItems: true,
+            maxItems: voiceRoomMemberCommands.length,
+            items: { type: "string", enum: [...voiceRoomMemberCommands] },
+            description:
+              "The commands this viewer may run against this row, computed by the server from the viewer's role and the row's stored state (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command, and a non-host viewer receives an empty array on every row. It is a projection, not an authorization: the write re-checks the same predicate.",
+          },
+        },
+      },
+    },
+    nextCursor: nullableCursorSchema,
+    display: {
+      type: "object",
+      additionalProperties: false,
+      required: ["anonymousMemberKey", "ruleKey"],
+      properties: {
+        anonymousMemberKey: {
+          type: "string",
+          const: voiceRoomMemberAnonymousKey,
+        },
+        ruleKey: { type: "string", const: voiceRoomMemberDisplayRuleKey },
+      },
     },
     contractVersion: { type: "string", const: v2ContractVersion },
   },

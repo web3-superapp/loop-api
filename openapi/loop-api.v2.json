@@ -31561,6 +31561,682 @@
         }
       }
     },
+    "/v2/voice-rooms/{voiceRoomId}/members": {
+      "get": {
+        "operationId": "listV2VoiceRoomMembers",
+        "summary": "List the speaker or listener roster",
+        "tags": ["communication"],
+        "description": "The LOOP `joined` members of one role view in join order (Decision 0052). It is the authorization roster, not presence: Stream session participants are never mixed in, and 'people in the room now' stays `participants.observed.participantCount` on the room resource. Names follow the leaderboard display rule (anonymous mode alone decides what others see). Each row carries `commands`, the host's executable row commands; a non-host viewer gets an empty list on every row. `limit` and `cursor` are mutually exclusive.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "enum": ["speaker", "listener"] },
+            "in": "query",
+            "name": "role",
+            "required": true,
+            "description": "The roster view: `speaker` or `listener`. Both list LOOP `joined` members by role intent (voice_room_members); the host is in neither. The view is bound into the cursor."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1536,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "voiceRoomId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "role",
+                    "items",
+                    "nextCursor",
+                    "display",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": ["speaker", "listener"]
+                    },
+                    "items": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "publicProfileId",
+                          "display",
+                          "role",
+                          "joinedAt",
+                          "handRaised",
+                          "muted",
+                          "isSelf",
+                          "commands"
+                        ],
+                        "properties": {
+                          "publicProfileId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "The command target. Null when the row is anonymous to this viewer and the viewer is not the host: the host must be able to address anyone in its room; nobody else may address an anonymous member."
+                          },
+                          "display": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "kind",
+                                  "alias",
+                                  "publicProfileId",
+                                  "audience"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["alias"]
+                                  },
+                                  "alias": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1024
+                                  },
+                                  "publicProfileId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "audience": {
+                                    "type": "string",
+                                    "enum": ["everyone", "self"],
+                                    "description": "`self` only on the viewer's own row while its anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (the Decision 0049 leaderboard rule)."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "labelKey"],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["anonymous"]
+                                  },
+                                  "labelKey": {
+                                    "type": "string",
+                                    "enum": ["voiceRoom.member.anonymousMember"]
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": ["speaker", "listener"]
+                          },
+                          "joinedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "handRaised": {
+                            "type": "boolean",
+                            "description": "A pending LOOP hand raise exists for this member. Meaningful on the listener view; always false for a speaker."
+                          },
+                          "muted": {
+                            "type": "boolean",
+                            "description": "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it. Always false for a listener."
+                          },
+                          "isSelf": { "type": "boolean" },
+                          "commands": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 3,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "invite_speaker",
+                                "remove_speaker",
+                                "mute"
+                              ]
+                            },
+                            "description": "The commands this viewer may run against this row, computed by the server from the viewer's role and the row's stored state (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command, and a non-host viewer receives an empty array on every row. It is a projection, not an authorization: the write re-checks the same predicate."
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 1536,
+                          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                          "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "display": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["anonymousMemberKey", "ruleKey"],
+                      "properties": {
+                        "anonymousMemberKey": {
+                          "type": "string",
+                          "enum": ["voiceRoom.member.anonymousMember"]
+                        },
+                        "ruleKey": {
+                          "type": "string",
+                          "enum": ["voiceRoom.member.display.anonymousModeOnly"]
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/voice-rooms/{voiceRoomId}/join": {
       "post": {
         "operationId": "joinV2VoiceRoom",
@@ -36970,7 +37646,7 @@
         "operationId": "inviteV2VoiceRoomSpeaker",
         "summary": "Invite a listener to speak",
         "tags": ["communication"],
-        "description": "Host only. The LOOP role commits first, then Stream is granted send-audio for that member in one attempt.",
+        "description": "Host only. The LOOP role commits first, then Stream is granted send-audio for that member in one attempt. The roster's `invite_speaker` command.",
         "parameters": [
           {
             "schema": {
@@ -37878,7 +38554,917 @@
         "operationId": "removeV2VoiceRoomSpeaker",
         "summary": "Move a speaker back to listener",
         "tags": ["communication"],
-        "description": "Host only. Stream's send-audio permission is revoked in the same single attempt.",
+        "description": "Host only. Stream's send-audio permission is revoked in the same single attempt. The roster's `remove_speaker` command; it clears the mute intent.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "voiceRoomId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "publicProfileId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "room",
+                    "viewer",
+                    "participants",
+                    "providerSync",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "room": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "voiceRoomId",
+                        "communityId",
+                        "communityName",
+                        "callCid",
+                        "state",
+                        "provisionState",
+                        "backstage",
+                        "createdAt",
+                        "endedAt"
+                      ],
+                      "properties": {
+                        "voiceRoomId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
+                        },
+                        "callCid": {
+                          "type": "string",
+                          "pattern": "^audio_room:loop_voice_[0-9a-f]{32}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": ["live", "ended"]
+                        },
+                        "provisionState": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "provisioned",
+                            "reconciling",
+                            "failed"
+                          ],
+                          "description": "Whether the Stream call itself is confirmed. Only `provisioned` may be joined."
+                        },
+                        "backstage": { "type": "boolean" },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "endedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "viewer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "role",
+                        "canInviteSpeakers",
+                        "canMuteAll",
+                        "canEndRoom",
+                        "handRaise",
+                        "expiresAt"
+                      ],
+                      "properties": {
+                        "role": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["host", "speaker", "listener"]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "canInviteSpeakers": { "type": "boolean" },
+                        "canMuteAll": { "type": "boolean" },
+                        "canEndRoom": { "type": "boolean" },
+                        "handRaise": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "handRaiseId",
+                                "sequence",
+                                "state",
+                                "createdAt"
+                              ],
+                              "properties": {
+                                "handRaiseId": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "sequence": {
+                                  "type": "string",
+                                  "pattern": "^[1-9][0-9]{0,18}$",
+                                  "description": "Monotonic queue position allocated under the room row lock. It is a decimal string, never a JavaScript number."
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": ["pending", "invited", "cancelled"]
+                                },
+                                "createdAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "expiresAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "When the current join grant lapses. Refresh with POST /v2/video/token and re-join."
+                        }
+                      }
+                    },
+                    "participants": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "speakerCount",
+                        "listenerCount",
+                        "joinedCount",
+                        "observed"
+                      ],
+                      "properties": {
+                        "speakerCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "LOOP-side role intent (voice_room_members with role=speaker). The host is not a speaker. It is not a Stream presence or online count."
+                        },
+                        "listenerCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "LOOP-side role intent (voice_room_members with role=listener). The host is not a listener. It is not a Stream presence or online count."
+                        },
+                        "joinedCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Every LOOP member currently joined, including the host (1 + speakerCount + listenerCount on a live room). It is a LOOP authorization record, not a Stream presence count."
+                        },
+                        "observed": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "participantCount",
+                                "memberCount",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["available"]
+                                },
+                                "participantCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "description": "Devices connected to the live Stream call session right now (the sum of the session's per-role participant counts). 0 when Stream reports no live session. This is the only field that means 'people in the room now'; a LOOP join grant alone does not raise it."
+                                },
+                                "memberCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "description": "Accounts Stream lets into the call (call members). It includes the host and anyone LOOP has joined, whether or not their device is connected. It is authorization, not presence."
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "When both Stream reads completed. The member count is accumulated across a bounded number of Stream member pages; a truncated walk, or any failed read, reports the whole block as unavailable instead."
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["status", "reasonCode"],
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "reasonCode": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "providerSync": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "reasonCode"],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["confirmed", "unconfirmed"]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Set when the single Stream write for this command was not confirmed. The LOOP transition committed; the provider fact did not."
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "PROFILE_ACTIVATION_REQUIRED",
+                        "RESOURCE_CONFLICT",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "VALIDATION_FAILED",
+                        "ALIAS_RESERVED",
+                        "ALIAS_BLOCKED"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute": {
+      "post": {
+        "operationId": "muteV2VoiceRoomSpeaker",
+        "summary": "Mute one speaker",
+        "tags": ["communication"],
+        "description": "Host only; the roster's `mute` command (Decision 0052). The LOOP mute intent commits first (a listener or an already muted speaker is DATA_STALE), then one Stream muteUsers call for that member is attempted. Stream stays authoritative for the live microphone; there is no unmute command, the intent clears on the next role transition.",
         "parameters": [
           {
             "schema": {
