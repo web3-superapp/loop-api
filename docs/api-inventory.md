@@ -187,7 +187,7 @@ capability's `evidence` carries `launchChainId`. `POST /v2/launch/{launchId}/int
 | `GET /v2/launch/{launchId}/history`              | Bearer + headers                                                          | Empty records + `source: unavailable`                                                         | `implemented` | `blocked-provider`                                                        |
 | `POST /v2/launch/{launchId}/intents`             | Write headers; `{walletId, roundId, payAmount}`                           | Always `503 CAPABILITY_UNAVAILABLE`                                                           | `implemented` | `blocked-provider`; `launch_intents` is structure only                    |
 | `GET /v2/launch/stake`                           | Bearer + headers                                                          | `STAKING_CONTRACT_PENDING`, `executable: false`                                               | `implemented` | `blocked-provider`                                                        |
-| `GET /v2/launch/economy`                         | Bearer + headers                                                          | Provable counts + `source: loop_db`; supply/tax `unavailable`                                 | `implemented` | `implemented`                                                             |
+| `GET /v2/launch/economy`                         | Bearer + headers                                                          | Provable counts + `source: loop` (Decision 0049); supply/tax `unavailable`                    | `implemented` | `implemented`                                                             |
 
 ### V2 mining module (Decisions 0036, 0043, and 0046, `V2_MODULES_ENABLED=mining`)
 
@@ -218,10 +218,10 @@ publishes snapshot numbers labelled with that scope. Frontend contract:
 
 ### V2 chain module (Decision 0033, `V2_MODULES_ENABLED=chain`)
 
-| Method and path            | Request                                    | Success projection                                                                                                                   | Interface     | Capability                                                             |
-| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
-| `GET /v2/chain/status`     | Bearer + contract/client headers; no input | Chain constants, RPC verification and head, per-endpoint health behind opaque refs, indexer lane, `launchChain` slot (Decision 0038) | `implemented` | `blocked-provider`; needs a configured, chain-56-verified RPC endpoint |
-| `GET /v2/assets/{assetId}` | Canonical CAIP `assetId` in the path       | Registry identity read from on-chain calls plus a non-swappable capability                                                           | `implemented` | `implemented`; `swappable` stays false until D15                       |
+| Method and path            | Request                                    | Success projection                                                                                                                                                            | Interface     | Capability                                                             |
+| -------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
+| `GET /v2/chain/status`     | Bearer + contract/client headers; no input | Chain constants, RPC verification and head, per-endpoint health behind opaque refs plus a host-name `label` (Decision 0049), indexer lane, `launchChain` slot (Decision 0038) | `implemented` | `blocked-provider`; needs a configured, chain-56-verified RPC endpoint |
+| `GET /v2/assets/{assetId}` | Canonical CAIP `assetId` in the path       | Registry identity read from on-chain calls plus a non-swappable capability                                                                                                    | `implemented` | `implemented`; `swappable` stays false until D15                       |
 
 `symbol`, `name`, and `decimals` are only ever the values an on-chain
 `symbol()`/`name()`/`decimals()` call returned, recorded with the observing
@@ -230,7 +230,7 @@ row additionally requires `BSC_USD1_TOKEN_ADDRESS` and `BSC_USD1_VERIFIED`.
 `pnpm pool:register <address>` registers a PancakeSwap V3 pool only when both
 of its tokens are already readable registry rows. RPC endpoint URLs are never
 published: `GET /v2/chain/status` identifies each endpoint by an opaque,
-non-reversible `endpointRef`. With no configured endpoint the route is
+non-reversible `endpointRef` and shows only its host name as `label`. With no configured endpoint the route is
 `503 CAPABILITY_UNAVAILABLE`, never an all-null healthy document. Since
 Decision 0038 the response carries an optional `launchChain`: absent while the
 `launch` chain slot (`LAUNCH_CHAIN_ID`) equals the primary chain (the document

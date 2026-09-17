@@ -96,7 +96,8 @@ export interface LaunchOverviewResource {
   readonly staking: UnavailableProjection;
   readonly catalog: {
     readonly configVersion: typeof launchConfigVersion;
-    readonly source: "loop_db";
+    /** Where the catalog comes from: LOOP's own registry (Decision 0049). */
+    readonly source: "loop";
     readonly observedAt: string;
   };
   readonly contractVersion: typeof v2ContractVersion;
@@ -239,7 +240,8 @@ export interface LaunchEconomyResource {
   readonly totalSupply: UnavailableProjection;
   readonly distributed: UnavailableProjection;
   readonly ecosystemTax: UnavailableProjection;
-  readonly source: "loop_db";
+  /** Where the counts come from: LOOP's own ledger (Decision 0049). */
+  readonly source: "loop";
   readonly observedAt: string;
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -582,7 +584,7 @@ export function createLaunchService(
           staking: unavailable(launchReasonCodes.stakingContractPending),
           catalog: Object.freeze({
             configVersion: launchConfigVersion,
-            source: "loop_db" as const,
+            source: "loop" as const,
             observedAt: now().toISOString(),
           }),
           contractVersion: v2ContractVersion,
@@ -891,7 +893,7 @@ export function createLaunchService(
           totalSupply: unavailable(launchReasonCodes.economyUnavailable),
           distributed: unavailable(launchReasonCodes.economyUnavailable),
           ecosystemTax: unavailable(launchReasonCodes.economyUnavailable),
-          source: "loop_db" as const,
+          source: "loop" as const,
           observedAt: counts.observedAt,
           contractVersion: v2ContractVersion,
         });

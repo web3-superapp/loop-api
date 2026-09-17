@@ -356,6 +356,7 @@ function readClientFake(
           ? [
               {
                 endpointRef: "rpc-abcdefabcdef",
+                label: "rpc-a.example",
                 status: "healthy" as const,
                 latencyMs: 42,
                 blockNumber: headNumber.toString(10),
@@ -792,7 +793,10 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       readonly rpc: {
         readonly status: string;
         readonly head: { readonly blockNumber: string } | null;
-        readonly endpoints: readonly { readonly endpointRef: string }[];
+        readonly endpoints: readonly {
+          readonly endpointRef: string;
+          readonly label: string;
+        }[];
       };
       readonly indexer: readonly {
         readonly lagBlocks: number | null;
@@ -803,10 +807,14 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(body.rpc.status).toBe("available");
     expect(body.rpc.head?.blockNumber).toBe(headNumber.toString(10));
     expect(body.rpc.endpoints[0]?.endpointRef).toBe("rpc-abcdefabcdef");
+    // The host name is the displayable label (Decision 0049); the URL itself
+    // (scheme, path, any key) is never published.
+    expect(body.rpc.endpoints[0]?.label).toBe("rpc-a.example");
     expect(body.indexer[0]?.lagBlocks).toBe(5);
     expect(body.indexer[0]?.reorgCount).toBe(2);
     expect(body.chain.confirmations).toBe(15);
-    expect(response.body).not.toContain("example");
+    expect(response.body).not.toContain("https://");
+    expect(response.body).not.toContain("example/");
   });
 
   it("keeps chain status, balances, and capabilities byte-identical to the S5 baseline while the launch slot is shared (Decision 0038)", async () => {
@@ -891,7 +899,8 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       },
       reasonCode: null,
     });
-    expect(status.body).not.toContain("example");
+    expect(status.body).not.toContain("https://");
+    expect(status.body).not.toContain("example/");
 
     const balances = await app.inject({
       method: "GET",

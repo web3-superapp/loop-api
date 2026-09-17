@@ -66,6 +66,8 @@ export interface BscChainHead {
 
 export interface BscEndpointHealth {
   readonly endpointRef: string;
+  /** Host name of the endpoint, for display; never scheme, path, or key. */
+  readonly label: string;
   readonly status: EndpointHealthState;
   readonly latencyMs: number | null;
   readonly blockNumber: string | null;
@@ -330,6 +332,21 @@ export function endpointRefFor(url: string): string {
   return `rpc-${createHash("sha256").update(url).digest("hex").slice(0, 12)}`;
 }
 
+/**
+ * Displayable endpoint label (Decision 0049): the URL's host name only, so a
+ * user can tell endpoints apart without the scheme, port, path, query, or
+ * user-info that may carry a provider key. Falls back to the opaque ref when
+ * the URL cannot be parsed.
+ */
+export function endpointLabelFor(url: string): string {
+  try {
+    const { hostname } = new URL(url);
+    return hostname.length === 0 ? endpointRefFor(url) : hostname;
+  } catch {
+    return endpointRefFor(url);
+  }
+}
+
 export interface BscTransportFactory {
   (url: string): Transport;
 }
@@ -448,9 +465,11 @@ export function createBscReadClient(
   const chain = viemChainFor(config.chainReference);
   const endpoints: readonly {
     readonly endpointRef: string;
+    readonly label: string;
     readonly client: ViemClient;
   }[] = config.rpcUrls.map((url) => ({
     endpointRef: endpointRefFor(url),
+    label: endpointLabelFor(url),
     client: createPublicClient({
       chain,
       transport: transportFactory(url),
@@ -1077,6 +1096,7 @@ export function createBscReadClient(
             endpoint,
           ): Promise<{
             readonly endpointRef: string;
+            readonly label: string;
             readonly latencyMs: number | null;
             readonly blockNumber: bigint | null;
             readonly chainVerification: ChainVerificationState;
@@ -1091,6 +1111,7 @@ export function createBscReadClient(
               const matches = chainId === config.chainReference;
               return {
                 endpointRef: endpoint.endpointRef,
+                label: endpoint.label,
                 latencyMs,
                 blockNumber,
                 chainVerification: matches ? "verified" : "mismatched",
@@ -1098,6 +1119,7 @@ export function createBscReadClient(
             } catch {
               return {
                 endpointRef: endpoint.endpointRef,
+                label: endpoint.label,
                 latencyMs: null,
                 blockNumber: null,
                 chainVerification: "unreachable",
@@ -1132,6 +1154,7 @@ export function createBscReadClient(
                 : "healthy";
           return Object.freeze({
             endpointRef: probe.endpointRef,
+            label: probe.label,
             status,
             latencyMs: probe.latencyMs,
             blockNumber:

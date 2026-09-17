@@ -850,7 +850,7 @@ describe("LOOP API V2 launch module", () => {
         status: "unavailable",
         reasonCode: "LAUNCH_ECONOMY_CONTRACT_PENDING",
       },
-      source: "loop_db",
+      source: "loop",
       observedAt: createdAt,
       contractVersion: "2.0",
     });

@@ -90,6 +90,7 @@ X-Loop-Client-Version: 1.0.0
     "endpoints": [
       {
         "endpointRef": "rpc-2bd52ca6d267",
+        "label": "bsc-rpc.publicnode.com",
         "status": "healthy",
         "latencyMs": 515,
         "blockNumber": "120628163",
@@ -120,8 +121,10 @@ X-Loop-Client-Version: 1.0.0
   缺席**（上面的文档即完整响应）；后端 `LAUNCH_CHAIN_ID=97` 时在 `registry` 之后多出
   测试网自己的健康投影，字段与语义见 `docs/frontend-v2-chain-api.md`。
   `chain`/`rpc`/`indexer`/`registry` 永远只描述 `eip155:56`。
-- `endpointRef` 是不可逆的稳定引用（`rpc-<12 位十六进制>`）。**后端永远不下发
-  RPC URL**，前端不要显示或猜测端点地址。
+- `endpointRef` 是不可逆的稳定引用（`rpc-<12 位十六进制>`），**只做列表 key 与运维关联，
+  不上屏**（走查 D-17）。行标题用 `label`（S27c / 决策 0049）：RPC URL 的主机名，例如
+  `bsc-rpc.publicnode.com`，不含协议、端口、路径、query 与任何密钥。**后端永远不下发
+  完整 RPC URL**，前端不要拼接或猜测端点地址。
 - `status`：`healthy` / `degraded`（延迟 > 1500ms、落后 > 3 块，或 chainId 不符）
   / `unreachable`。`degraded` 与 `unreachable` 对应原型的 `异常` badge。
 - 只列 BSC 一条网络。自定义 RPC 与测试网**不显示**（不是 unavailable 占位）。

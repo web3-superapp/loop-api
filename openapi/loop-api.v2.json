@@ -45603,6 +45603,7 @@
                             "additionalProperties": false,
                             "required": [
                               "endpointRef",
+                              "label",
                               "status",
                               "latencyMs",
                               "blockNumber",
@@ -45614,7 +45615,14 @@
                               "endpointRef": {
                                 "type": "string",
                                 "pattern": "^rpc-[0-9a-f]{12}$",
-                                "description": "Opaque, non-reversible endpoint reference. Provider URLs are never published."
+                                "description": "Opaque, non-reversible endpoint reference: the client's key for the row. Provider URLs are never published."
+                              },
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 253,
+                                "pattern": "^[A-Za-z0-9._-]+$",
+                                "description": "Displayable endpoint name: the RPC URL's host name only (e.g. bsc-rpc.publicnode.com), never the scheme, port, path, query, or any key (Decision 0049)."
                               },
                               "status": {
                                 "type": "string",
@@ -75210,7 +75218,11 @@
                           "type": "string",
                           "enum": ["launchCatalogV1"]
                         },
-                        "source": { "type": "string", "enum": ["loop_db"] },
+                        "source": {
+                          "type": "string",
+                          "description": "User-facing source label: LOOP's own registry. A stable enum for the client to map to copy, never a database name (Decision 0049).",
+                          "enum": ["loop"]
+                        },
                         "observedAt": {
                           "type": "string",
                           "format": "date-time"
@@ -84527,7 +84539,7 @@
         "operationId": "getV2LaunchEconomy",
         "summary": "Get the public LOOP economy ledger",
         "tags": ["launch"],
-        "description": "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop_db and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
+        "description": "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
         "parameters": [
           {
             "schema": {
@@ -84646,7 +84658,11 @@
                         }
                       }
                     },
-                    "source": { "type": "string", "enum": ["loop_db"] },
+                    "source": {
+                      "type": "string",
+                      "description": "User-facing source label: LOOP's own ledger. A stable enum for the client to map to copy, never a database name (Decision 0049).",
+                      "enum": ["loop"]
+                    },
                     "observedAt": { "type": "string", "format": "date-time" },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }

@@ -19,6 +19,7 @@ import {
   BscReadUnavailableError,
   createBscReadClient,
   createUnavailableBscReadClient,
+  endpointLabelFor,
   endpointRefFor,
 } from "../src/integrations/bsc/rpc-client.js";
 import { createChainVerificationWatch } from "../src/integrations/bsc/chain-verification-watch.js";
@@ -446,9 +447,16 @@ describe("BSC read client", () => {
     expect(endpoints[0]?.blockNumber).toBe(headNumber.toString(10));
     expect(endpoints[1]?.status).toBe("unreachable");
     expect(endpoints[1]?.blockNumber).toBeNull();
+    // The host name is published on purpose as the row's label (Decision
+    // 0049); the URL itself (scheme, path, any key) still never is.
+    expect(endpoints.map((endpoint) => endpoint.label)).toEqual([
+      "rpc-a.example",
+      "rpc-b.example",
+    ]);
     for (const endpoint of endpoints) {
       expect(endpoint.endpointRef).toMatch(/^rpc-[0-9a-f]{12}$/);
-      expect(JSON.stringify(endpoint)).not.toContain("example");
+      expect(JSON.stringify(endpoint)).not.toContain("https://");
+      expect(JSON.stringify(endpoint)).not.toContain("example/");
     }
   });
 
@@ -627,5 +635,20 @@ describe("BSC read client — cold start self-healing (preflight 2026-09-16)", (
     await expect(client.getHead()).rejects.toBeInstanceOf(
       BscChainMismatchError,
     );
+  });
+});
+
+describe("endpointLabelFor", () => {
+  it("publishes only the host name, never scheme, port, path, query, or user-info", () => {
+    expect(
+      endpointLabelFor(
+        "https://user:key@bsc-rpc.publicnode.com:8545/v1/abc?token=x",
+      ),
+    ).toBe("bsc-rpc.publicnode.com");
+    expect(endpointLabelFor("https://rpc-a.example/")).toBe("rpc-a.example");
+  });
+
+  it("falls back to the opaque ref when the URL cannot be parsed", () => {
+    expect(endpointLabelFor("not a url")).toBe(endpointRefFor("not a url"));
   });
 });

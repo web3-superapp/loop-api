@@ -380,7 +380,12 @@ export const overviewResourceSchema = {
       required: ["configVersion", "source", "observedAt"],
       properties: {
         configVersion: { type: "string", const: launchConfigVersion },
-        source: { type: "string", const: "loop_db" },
+        source: {
+          type: "string",
+          const: "loop",
+          description:
+            "User-facing source label: LOOP's own registry. A stable enum for the client to map to copy, never a database name (Decision 0049).",
+        },
         observedAt: { type: "string", format: "date-time" },
       },
     },
@@ -798,7 +803,12 @@ export const economyResourceSchema = {
     totalSupply: unavailableSchema,
     distributed: unavailableSchema,
     ecosystemTax: unavailableSchema,
-    source: { type: "string", const: "loop_db" },
+    source: {
+      type: "string",
+      const: "loop",
+      description:
+        "User-facing source label: LOOP's own ledger. A stable enum for the client to map to copy, never a database name (Decision 0049).",
+    },
     observedAt: { type: "string", format: "date-time" },
     contractVersion: { type: "string", const: v2ContractVersion },
   },

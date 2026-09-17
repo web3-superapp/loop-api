@@ -222,7 +222,7 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
   "graduated": { "status": "unavailable", "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING" },
   "myEligibility": { "status": "unavailable", "reasonCode": "TIER_MODE_PENDING" },
   "staking": { "status": "unavailable", "reasonCode": "STAKING_CONTRACT_PENDING" },
-  "catalog": { "configVersion": "launchCatalogV1", "source": "loop_db", "observedAt": "…" },
+  "catalog": { "configVersion": "launchCatalogV1", "source": "loop", "observedAt": "…" },
   "contractVersion": "2.0"
 }
 ```
@@ -422,7 +422,7 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
   "confirmedRoundCount": 0,
   "totalSupply": { "status": "unavailable", "reasonCode": "LAUNCH_ECONOMY_CONTRACT_PENDING" },
   "distributed": {…}, "ecosystemTax": {…},
-  "source": "loop_db", "observedAt": "…", "contractVersion": "2.0"
+  "source": "loop", "observedAt": "…", "contractVersion": "2.0"
 }
 ```
 

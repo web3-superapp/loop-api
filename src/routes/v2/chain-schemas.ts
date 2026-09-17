@@ -162,6 +162,7 @@ const endpointHealthSchema = {
   additionalProperties: false,
   required: [
     "endpointRef",
+    "label",
     "status",
     "latencyMs",
     "blockNumber",
@@ -174,7 +175,15 @@ const endpointHealthSchema = {
       type: "string",
       pattern: "^rpc-[0-9a-f]{12}$",
       description:
-        "Opaque, non-reversible endpoint reference. Provider URLs are never published.",
+        "Opaque, non-reversible endpoint reference: the client's key for the row. Provider URLs are never published.",
+    },
+    label: {
+      type: "string",
+      minLength: 1,
+      maxLength: 253,
+      pattern: "^[A-Za-z0-9._-]+$",
+      description:
+        "Displayable endpoint name: the RPC URL's host name only (e.g. bsc-rpc.publicnode.com), never the scheme, port, path, query, or any key (Decision 0049).",
     },
     status: { type: "string", enum: [...endpointHealthStates] },
     latencyMs: {

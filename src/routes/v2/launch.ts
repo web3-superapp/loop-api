@@ -487,7 +487,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchEconomy",
         summary: "Get the public LOOP economy ledger",
         description:
-          "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop_db and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
+          "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
