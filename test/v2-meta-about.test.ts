@@ -111,9 +111,11 @@ describe("GET /v2/meta/about", () => {
       "termsGate",
     ]);
     expect(body.contractVersion).toBe("2.0");
+    // No clientPolicy row: without an operator override it is the product
+    // policy itself. No bscWriteCanary row: BSC writes are off, and an
+    // unreleased mechanism is not discoverable here (Decision 0049).
     expect(body.configVersions.map((entry) => entry.module)).toEqual([
       "productPolicy",
-      "clientPolicy",
       "sessionPolicy",
       "community",
       "marketTrending",
@@ -121,13 +123,17 @@ describe("GET /v2/meta/about", () => {
       "accountSettings",
       "support",
       "swapPolicy",
-      "bscWriteCanary",
     ]);
-    // Every registry entry is published verbatim; the registry itself
-    // references the module constants, so neither can drift alone.
+    // Every published registry entry is published verbatim; the registry
+    // itself references the module constants, so neither can drift alone.
     for (const entry of v2ConfigVersionRegistry) {
-      expect(body.configVersions).toContainEqual(entry);
+      if (entry.module === "bscWriteCanary") {
+        expect(body.configVersions).not.toContainEqual(entry);
+      } else {
+        expect(body.configVersions).toContainEqual(entry);
+      }
     }
+    expect(JSON.stringify(body)).not.toContain("bscWriteCanary");
     expect(
       Object.fromEntries(
         v2ConfigVersionRegistry.map((entry) => [
@@ -188,6 +194,37 @@ describe("GET /v2/meta/about", () => {
       body.configVersions.find((entry) => entry.module === "clientPolicy")
         ?.configVersion,
     ).toBe("productPolicyV2.2026-09-07");
+  });
+
+  it("lists bscWriteCanary only while BSC writes are enabled", async () => {
+    const app = await createApp({
+      BSC_RPC_URLS: "https://rpc-a.example/",
+      BSC_WRITES_ENABLED: "true",
+      BSC_WRITE_CANARY_ASSETS: "eip155:56:native",
+      BSC_WRITE_CANARY_MAX_USD: "20",
+    });
+    const response = await app.inject({ method: "GET", url: "/v2/meta/about" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<AboutView>();
+    expect(body.configVersions.at(-1)).toEqual({
+      module: "bscWriteCanary",
+      configVersion: "bscWriteCanaryV1",
+      effectiveAt: null,
+    });
+    expect(response.body).not.toContain("https://");
+  });
+
+  it("omits clientPolicy while it equals the product policy it is projected from", async () => {
+    const app = await createApp();
+    const body = (
+      await app.inject({ method: "GET", url: "/v2/meta/about" })
+    ).json<AboutView>();
+    expect(
+      body.configVersions.filter((entry) => entry.module === "clientPolicy"),
+    ).toEqual([]);
+    expect(body.configVersions[0]?.configVersion).toBe(
+      "productPolicyV2.2026-09-01",
+    );
   });
 
   it("rejects query input", async () => {

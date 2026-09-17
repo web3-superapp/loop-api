@@ -39,22 +39,45 @@ export interface AboutProjection {
   };
 }
 
+/**
+ * Registry entries that describe a mechanism the deployment has not
+ * enabled. They stay out of the public document (Decision 0049): an
+ * unreleased mechanism must not be discoverable from the about page.
+ */
+function isPublished(entry: ConfigVersionEntry, config: AppConfig): boolean {
+  if (entry.module === "bscWriteCanary") {
+    return config.bscWrites !== null;
+  }
+  return true;
+}
+
 export function createV2AboutProjection(
   config: AppConfig,
   now: Date = new Date(),
 ): AboutProjection {
   const clientPolicy = createV2ClientPolicyProjection(config, now);
   const [productPolicy, ...rest] = v2ConfigVersionRegistry;
+  // `clientPolicy` is listed only when an operator override
+  // (`V2_CLIENT_POLICY_CONFIG_VERSION`) makes it differ from the product
+  // policy it is projected from; otherwise it is the same snapshot and
+  // listing one version twice is noise (Decision 0049).
+  const clientPolicyEntry =
+    productPolicy !== undefined &&
+    productPolicy.configVersion === clientPolicy.configVersion
+      ? []
+      : [
+          Object.freeze({
+            module: "clientPolicy",
+            configVersion: clientPolicy.configVersion,
+            effectiveAt: clientPolicy.effectiveAt,
+          }),
+        ];
   return Object.freeze({
     contractVersion: v2ContractVersion,
     configVersions: Object.freeze([
       ...(productPolicy === undefined ? [] : [productPolicy]),
-      Object.freeze({
-        module: "clientPolicy",
-        configVersion: clientPolicy.configVersion,
-        effectiveAt: clientPolicy.effectiveAt,
-      }),
-      ...rest,
+      ...clientPolicyEntry,
+      ...rest.filter((entry) => isPublished(entry, config)),
     ]),
     termsGate: clientPolicy.termsGate,
     openSource: Object.freeze({

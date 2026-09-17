@@ -277,11 +277,6 @@ POST /v2/devices/{sessionId}/revoke
       "effectiveAt": "2026-09-01T00:00:00.000Z"
     },
     {
-      "module": "clientPolicy",
-      "configVersion": "productPolicyV2.2026-09-01",
-      "effectiveAt": "2026-09-01T00:00:00.000Z"
-    },
-    {
       "module": "sessionPolicy",
       "configVersion": "sessionPolicyV1",
       "effectiveAt": null
@@ -315,11 +310,6 @@ POST /v2/devices/{sessionId}/revoke
       "module": "swapPolicy",
       "configVersion": "swapPolicyV1",
       "effectiveAt": null
-    },
-    {
-      "module": "bscWriteCanary",
-      "configVersion": "bscWriteCanaryV1",
-      "effectiveAt": null
     }
   ],
   "termsGate": {
@@ -350,8 +340,13 @@ POST /v2/devices/{sessionId}/revoke
   风险披露的文档 URL 本步**不下发**，原型的法务四行显示为"版本槽位 + unavailable"。
 - `openSource.entries` 就是开源许可页的列表（只有 name/purpose/license，
   不下发版本号）；`summary` 是摘要。
-- `configVersions` 只展示，不要 pin；上面的样例是当前的 **10** 项（顺序即服务端顺序），
-  但页面必须按"服务端下发多少行就渲染多少行"实现，不能写死行数。
+- `configVersions` 只展示，不要 pin；上面的样例是 Development 写开关关闭时的 **8** 项
+  （顺序即服务端顺序），但页面必须按"服务端下发多少行就渲染多少行"实现，不能写死行数。
+  **每个 `module` 键的中文名与一句话说明见 `docs/frontend-v2-meta-api.md`**（S27c / 决策 0049），
+  原始键名不得直接上屏。两条会按部署条件出现/缺席：`clientPolicy` 只在运营覆盖了客户端
+  策略版本（与 `productPolicy` 不同）时单列；`bscWriteCanary` 只在 `BSC_WRITES_ENABLED=true`
+  时下发——写开关关闭时该行**缺席**，不是 unavailable 占位。未知的 `module` 键按原样显示键名
+  之外的字段即可（不要崩）。
 
 ## 6. 客服工单 → `support` 页
 
