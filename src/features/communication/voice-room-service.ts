@@ -57,12 +57,21 @@ export interface VoiceRoomHandRaiseProjection {
   readonly createdAt: string;
 }
 
+/**
+ * Three counts with three meanings (Decision 0051). `speakerCount` and
+ * `listenerCount` are LOOP role intent and exclude the host; `joinedCount` is
+ * every joined LOOP member including the host; `observed.memberCount` is the
+ * accounts Stream lets into the call; `observed.participantCount` is the
+ * devices connected to the live session right now.
+ */
 export interface VoiceRoomParticipantsProjection {
   readonly speakerCount: number;
   readonly listenerCount: number;
+  readonly joinedCount: number;
   readonly observed:
     | Readonly<{
         status: "available";
+        participantCount: number;
         memberCount: number;
         observedAt: string;
       }>
@@ -287,6 +296,7 @@ export function createVoiceRoomService(
       participants: Object.freeze({
         speakerCount: record.speakerCount,
         listenerCount: record.listenerCount,
+        joinedCount: record.joinedCount,
         observed,
       }),
       providerSync,
@@ -299,28 +309,33 @@ export function createVoiceRoomService(
   );
 
   /**
-   * One Stream read for the observed participant count. It is a projection
-   * with its own `observedAt`; a provider failure reports unavailable instead
-   * of a stale or invented number.
+   * Two Stream reads, taken together: the authorized member count and the
+   * live session participant count. Both carry one `observedAt`. If either
+   * read fails, is truncated, or is aborted, the whole block is unavailable;
+   * half an observation is never published as a number.
    */
   async function observeParticipants(
     callId: string,
     signal: AbortSignal,
   ): Promise<VoiceRoomParticipantsProjection["observed"]> {
     try {
-      const observation = await options.callGateway.queryMembers({
-        callId,
-        signal,
-      });
+      const [members, session] = await Promise.all([
+        options.callGateway.queryMembers({ callId, signal }),
+        options.callGateway.observeSession({ callId, signal }),
+      ]);
       signal.throwIfAborted();
-      if (!observation.complete) {
-        // A truncated page walk is a floor, not the participant count.
+      if (!members.complete) {
+        // A truncated page walk is a floor, not the member count.
         return notObserved;
       }
       return Object.freeze({
         status: "available" as const,
-        memberCount: observation.memberCount,
-        observedAt: observation.observedAt,
+        participantCount: session.participantCount,
+        memberCount: members.memberCount,
+        observedAt:
+          session.observedAt > members.observedAt
+            ? session.observedAt
+            : members.observedAt,
       });
     } catch (error) {
       signal.throwIfAborted();
@@ -329,6 +344,24 @@ export function createVoiceRoomService(
       }
       return notObserved;
     }
+  }
+
+  /**
+   * Command responses observe Stream after their one provider write so the
+   * caller reads the counts that include its own change. Only a provisioned
+   * live room has a call worth observing.
+   */
+  async function observeAfterCommand(
+    record: VoiceRoomViewerRecord,
+    signal: AbortSignal,
+  ): Promise<VoiceRoomParticipantsProjection["observed"]> {
+    if (
+      record.room.provisionState !== "provisioned" ||
+      record.room.state !== "live"
+    ) {
+      return notObserved;
+    }
+    return observeParticipants(record.room.callId, signal);
   }
 
   /** Attempt exactly one Stream write and classify its outcome. */
@@ -480,7 +513,11 @@ export function createVoiceRoomService(
         input.signal,
         "STREAM_CALL_MEMBER_UNCONFIRMED",
       );
-      return resource(record, providerSync, notObserved);
+      return resource(
+        record,
+        providerSync,
+        await observeAfterCommand(record, input.signal),
+      );
     },
 
     async leave(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
@@ -510,7 +547,11 @@ export function createVoiceRoomService(
         input.signal,
         "STREAM_CALL_MEMBER_UNCONFIRMED",
       );
-      return resource(record, providerSync, notObserved);
+      return resource(
+        record,
+        providerSync,
+        await observeAfterCommand(record, input.signal),
+      );
     },
 
     async raiseHand(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
@@ -527,7 +568,11 @@ export function createVoiceRoomService(
         }),
       );
       // Raising a hand is a LOOP queue fact only; it makes no Stream write.
-      return resource(record, confirmedSync, notObserved);
+      return resource(
+        record,
+        confirmedSync,
+        await observeAfterCommand(record, input.signal),
+      );
     },
 
     async cancelHandRaise(
@@ -546,7 +591,11 @@ export function createVoiceRoomService(
           requestId: input.requestId,
         }),
       );
-      return resource(record, confirmedSync, notObserved);
+      return resource(
+        record,
+        confirmedSync,
+        await observeAfterCommand(record, input.signal),
+      );
     },
 
     async listHandRaises(
@@ -617,7 +666,11 @@ export function createVoiceRoomService(
         input.signal,
         "STREAM_CALL_PERMISSION_UNCONFIRMED",
       );
-      return resource(record.room, providerSync, notObserved);
+      return resource(
+        record.room,
+        providerSync,
+        await observeAfterCommand(record.room, input.signal),
+      );
     },
 
     async removeSpeaker(
@@ -660,7 +713,11 @@ export function createVoiceRoomService(
         input.signal,
         "STREAM_CALL_PERMISSION_UNCONFIRMED",
       );
-      return resource(record.room, providerSync, notObserved);
+      return resource(
+        record.room,
+        providerSync,
+        await observeAfterCommand(record.room, input.signal),
+      );
     },
 
     async muteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
@@ -686,7 +743,11 @@ export function createVoiceRoomService(
         input.signal,
         "STREAM_CALL_MUTE_UNCONFIRMED",
       );
-      return resource(record, providerSync, notObserved);
+      return resource(
+        record,
+        providerSync,
+        await observeAfterCommand(record, input.signal),
+      );
     },
 
     async endRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {

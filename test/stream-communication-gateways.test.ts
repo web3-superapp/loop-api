@@ -4,6 +4,7 @@ import {
   createStreamCallGateway,
   createUnavailableStreamCallGateway,
   StreamCallGatewayUnavailableError,
+  StreamCallProjectionMismatchError,
 } from "../src/integrations/stream/call-gateway.js";
 import {
   createStreamCommunityChannelGateway,
@@ -487,6 +488,9 @@ describe("Stream audio_room call gateway", () => {
     await expect(
       gateway.queryMembers({ callId, signal: signal() }),
     ).rejects.toEqual(unavailable);
+    await expect(
+      gateway.observeSession({ callId, signal: signal() }),
+    ).rejects.toEqual(unavailable);
   });
 
   it("creates a backstage audio_room with the host as its only member", async () => {
@@ -784,6 +788,147 @@ describe("Stream audio_room call gateway", () => {
     await expect(
       gateway.endCall({ callId: "default", signal: signal() }),
     ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    await expect(
+      gateway.observeSession({ callId: "default", signal: signal() }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("observeSession", () => {
+    const callBody = (session?: Record<string, unknown>) => ({
+      duration: "1ms",
+      members: [{ user_id: hostUserId }, { user_id: memberUserId }],
+      own_capabilities: [],
+      call: {
+        id: callId,
+        type: "audio_room",
+        cid: `audio_room:${callId}`,
+        backstage: true,
+        ...(session === undefined ? {} : { session }),
+      },
+    });
+
+    it("reports zero participants and no session when Stream has no live session", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(callBody()));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      const observation = await gateway.observeSession({
+        callId,
+        signal: signal(),
+      });
+
+      expect(observation).toMatchObject({
+        participantCount: 0,
+        sessionActive: false,
+      });
+      expect(Date.parse(observation.observedAt)).not.toBeNaN();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(request[1].method ?? "GET").toBe("GET");
+      expect(request[0]).toContain(`/video/call/audio_room/${callId}`);
+    });
+
+    it("sums the per-role participant counts of the live session, not the member list", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            started_at: "2026-09-17T09:00:00.000Z",
+            participants: [{ user_session_id: "a" }],
+            participants_count_by_role: { admin: 1, user: 2 },
+            accepted_by: {},
+            missed_by: {},
+            rejected_by: {},
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 3, sessionActive: true });
+    });
+
+    it("falls back to the participant list when the per-role map is absent", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            participants: [{ user_session_id: "a" }, { user_session_id: "b" }],
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 2, sessionActive: true });
+    });
+
+    it("reports zero participants once the session has ended", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            ended_at: "2026-09-17T09:30:00.000Z",
+            participants: [],
+            participants_count_by_role: { user: 4 },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 0, sessionActive: false });
+    });
+
+    it("rejects a session whose counts are not non-negative integers", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            participants_count_by_role: { user: "many" },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("rejects a call projection for a different call", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          ...callBody(),
+          call: { id: "other", type: "audio_room" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("sanitizes a provider failure into the unavailable error", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ message: "boom" }, 500));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    });
   });
 });

@@ -48,6 +48,7 @@ function resource(
     }),
     participants: Object.freeze({
       speakerCount: 1,
+      joinedCount: 1,
       listenerCount: 0,
       observed: Object.freeze({
         status: "unavailable",

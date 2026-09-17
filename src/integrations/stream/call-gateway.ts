@@ -126,6 +126,20 @@ export interface StreamCallMemberObservation {
   readonly complete: boolean;
 }
 
+/**
+ * The live call session as Stream reports it (Decision 0051). A call member
+ * is an account Stream lets into the call; a session participant is a device
+ * connected to it right now. The two are different facts and carry different
+ * field names on purpose.
+ */
+export interface StreamCallSessionObservation {
+  /** Devices connected to the current session; 0 when no session is live. */
+  readonly participantCount: number;
+  /** Whether Stream reported a session that has started and not ended. */
+  readonly sessionActive: boolean;
+  readonly observedAt: string;
+}
+
 export interface StreamCallGateway {
   createAudioRoom(
     input: CreateStreamAudioRoomInput,
@@ -135,6 +149,9 @@ export interface StreamCallGateway {
   muteUsers(input: StreamCallMuteAllInput): Promise<void>;
   endCall(input: StreamCallEndInput): Promise<void>;
   queryMembers(input: StreamCallEndInput): Promise<StreamCallMemberObservation>;
+  observeSession(
+    input: StreamCallEndInput,
+  ): Promise<StreamCallSessionObservation>;
 }
 
 export class StreamCallGatewayUnavailableError extends Error {
@@ -260,6 +277,72 @@ function validateCallResponse(
   });
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Project `GetCallResponse.call.session` into a participant count. No
+ * session, or a session with `ended_at`, means nobody is connected. A session
+ * reports `participants_count_by_role`; the `participants` list is the
+ * fallback when the per-role map is absent. Anything else is a mismatch.
+ */
+function projectSessionObservation(
+  value: unknown,
+  callId: string,
+): StreamCallSessionObservation {
+  if (!isRecord(value) || !isRecord(value["call"])) {
+    return projectionMismatch();
+  }
+  const call = value["call"];
+  if (call["id"] !== callId || call["type"] !== streamCallType) {
+    return projectionMismatch();
+  }
+  const observedAt = new Date().toISOString();
+  const session = call["session"];
+  if (session === undefined || session === null) {
+    return Object.freeze({
+      participantCount: 0,
+      sessionActive: false,
+      observedAt,
+    });
+  }
+  if (!isRecord(session)) {
+    return projectionMismatch();
+  }
+  if (session["ended_at"] !== undefined && session["ended_at"] !== null) {
+    return Object.freeze({
+      participantCount: 0,
+      sessionActive: false,
+      observedAt,
+    });
+  }
+  const byRole = session["participants_count_by_role"];
+  if (isRecord(byRole)) {
+    let participantCount = 0;
+    for (const count of Object.values(byRole)) {
+      if (!isNonNegativeInteger(count)) {
+        return projectionMismatch();
+      }
+      participantCount += count;
+    }
+    return Object.freeze({
+      participantCount,
+      sessionActive: true,
+      observedAt,
+    });
+  }
+  const participants = session["participants"];
+  if (!Array.isArray(participants)) {
+    return projectionMismatch();
+  }
+  return Object.freeze({
+    participantCount: participants.length,
+    sessionActive: true,
+    observedAt,
+  });
+}
+
 function isValidConfig(value: StreamConfig): boolean {
   return (
     isRecord(value) &&
@@ -282,6 +365,7 @@ export function createUnavailableStreamCallGateway(): StreamCallGateway {
     muteUsers: unavailablePromise,
     endCall: unavailablePromise,
     queryMembers: unavailablePromise,
+    observeSession: unavailablePromise,
   });
 }
 
@@ -560,6 +644,33 @@ export function createStreamCallGateway(
           observedAt: new Date().toISOString(),
           complete,
         });
+      } catch (error) {
+        if (error instanceof StreamCallProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeProviderFailure(error, signal);
+      }
+    },
+
+    async observeSession(
+      rawInput: StreamCallEndInput,
+    ): Promise<StreamCallSessionObservation> {
+      if (
+        !isRecord(rawInput) ||
+        !hasExactKeys(rawInput, ["callId", "signal"]) ||
+        !isCallId(rawInput["callId"])
+      ) {
+        return unavailable();
+      }
+      const callId = rawInput["callId"];
+      const signal = parseSignal(rawInput["signal"]);
+      try {
+        signal.throwIfAborted();
+        // One `GetCall` read. The session block is the only live-presence fact
+        // Stream exposes server-side; members are authorization, not presence.
+        const response = await client.video.call(streamCallType, callId).get();
+        signal.throwIfAborted();
+        return projectSessionObservation(response, callId);
       } catch (error) {
         if (error instanceof StreamCallProjectionMismatchError) {
           throw error;

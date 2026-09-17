@@ -56,8 +56,12 @@ export interface VoiceRoomViewerRecord {
   readonly viewerRole: VoiceRoomRole | null;
   readonly viewerHandRaise: HandRaiseProjectionRecord | null;
   readonly hostStreamUserId: string;
+  /** LOOP role intent: joined members with role=speaker (never the host). */
   readonly speakerCount: number;
+  /** LOOP role intent: joined members with role=listener (never the host). */
   readonly listenerCount: number;
+  /** Every joined LOOP member including the host (Decision 0051). */
+  readonly joinedCount: number;
 }
 
 export interface HandRaiseProjectionRecord {

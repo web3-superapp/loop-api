@@ -82,6 +82,7 @@ function room(
     hostStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
     speakerCount: 1,
     listenerCount: 4,
+    joinedCount: 6,
     ...overrides,
   });
 }
@@ -263,6 +264,13 @@ function callGatewayFake(overrides: Partial<StreamCallGateway> = {}): {
         memberCount: 5,
         observedAt: createdAt,
         complete: true,
+      }),
+    ),
+    observeSession: vi.fn(() =>
+      Promise.resolve({
+        participantCount: 3,
+        sessionActive: true,
+        observedAt: createdAt,
       }),
     ),
   };
@@ -860,8 +868,10 @@ describe("LOOP API V2 communication module", () => {
         participants: {
           speakerCount: 1,
           listenerCount: 4,
+          joinedCount: 6,
           observed: {
             status: "available",
+            participantCount: 3,
             memberCount: 5,
             observedAt: createdAt,
           },
@@ -869,6 +879,189 @@ describe("LOOP API V2 communication module", () => {
       },
       reasonCode: null,
     });
+  });
+
+  it("reports an unavailable participant count when the Stream session read fails", async () => {
+    const callGateway = callGatewayFake({
+      observeSession: vi.fn(() => Promise.reject(new Error("provider"))),
+    });
+    const { app } = await createApp(fakes({ callGateway }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/voice-rooms/${voiceRoomId}`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      participants: {
+        speakerCount: 1,
+        listenerCount: 4,
+        joinedCount: 6,
+        observed: {
+          status: "unavailable",
+          reasonCode: "STREAM_PARTICIPANT_COUNT_NOT_OBSERVED",
+        },
+      },
+    });
+  });
+
+  it("reports zero live participants when Stream has no session for the call", async () => {
+    const callGateway = callGatewayFake({
+      observeSession: vi.fn(() =>
+        Promise.resolve({
+          participantCount: 0,
+          sessionActive: false,
+          observedAt: createdAt,
+        }),
+      ),
+    });
+    const { app } = await createApp(fakes({ callGateway }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/voice-rooms/${voiceRoomId}`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      participants: {
+        observed: {
+          status: "available",
+          participantCount: 0,
+          memberCount: 5,
+        },
+      },
+    });
+  });
+
+  it("observes Stream after the join write so the response includes the caller", async () => {
+    const order: string[] = [];
+    const callGateway = callGatewayFake({
+      updateCallMembers: vi.fn(() => {
+        order.push("updateCallMembers");
+        return Promise.resolve();
+      }),
+      queryMembers: vi.fn(() => {
+        order.push("queryMembers");
+        return Promise.resolve({
+          memberCount: 6,
+          observedAt: createdAt,
+          complete: true,
+        });
+      }),
+      observeSession: vi.fn(() => {
+        order.push("observeSession");
+        return Promise.resolve({
+          participantCount: 2,
+          sessionActive: true,
+          observedAt: createdAt,
+        });
+      }),
+    });
+    const communication = communicationRepositoryFake({
+      joinVoiceRoom: vi.fn(() =>
+        Promise.resolve(
+          room({ viewerRole: "listener", listenerCount: 5, joinedCount: 7 }),
+        ),
+      ),
+    });
+    const { app } = await createApp(fakes({ callGateway, communication }));
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/voice-rooms/${voiceRoomId}/join`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      viewer: { role: "listener" },
+      participants: {
+        speakerCount: 1,
+        listenerCount: 5,
+        joinedCount: 7,
+        observed: {
+          status: "available",
+          participantCount: 2,
+          memberCount: 6,
+          observedAt: createdAt,
+        },
+      },
+      providerSync: { status: "confirmed", reasonCode: null },
+    });
+    expect(order[0]).toBe("updateCallMembers");
+    expect(order.slice(1).sort()).toEqual(["observeSession", "queryMembers"]);
+  });
+
+  it("observes Stream after the leave write so the caller is gone from the counts", async () => {
+    const callGateway = callGatewayFake({
+      queryMembers: vi.fn(() =>
+        Promise.resolve({
+          memberCount: 4,
+          observedAt: createdAt,
+          complete: true,
+        }),
+      ),
+    });
+    const communication = communicationRepositoryFake({
+      leaveVoiceRoom: vi.fn(() =>
+        Promise.resolve(
+          room({ viewerRole: null, listenerCount: 3, joinedCount: 5 }),
+        ),
+      ),
+    });
+    const { app } = await createApp(fakes({ callGateway, communication }));
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/voice-rooms/${voiceRoomId}/leave`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      viewer: { role: null },
+      participants: {
+        listenerCount: 3,
+        joinedCount: 5,
+        observed: { status: "available", participantCount: 3, memberCount: 4 },
+      },
+    });
+  });
+
+  it("keeps the ended room unobserved after the end command", async () => {
+    const callGateway = callGatewayFake();
+    const communication = communicationRepositoryFake({
+      endVoiceRoom: vi.fn(() =>
+        Promise.resolve(
+          room({
+            room: {
+              voiceRoomId,
+              communityId,
+              callId,
+              state: "ended",
+              provisionState: "provisioned",
+              backstage: true,
+              createdAt,
+              endedAt: createdAt,
+            },
+          }),
+        ),
+      ),
+    });
+    const { app } = await createApp(fakes({ callGateway, communication }));
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/voice-rooms/${voiceRoomId}/end`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      room: { state: "ended" },
+      participants: {
+        observed: {
+          status: "unavailable",
+          reasonCode: "STREAM_PARTICIPANT_COUNT_NOT_OBSERVED",
+        },
+      },
+    });
+    expect(callGateway.mocks["queryMembers"]).not.toHaveBeenCalled();
+    expect(callGateway.mocks["observeSession"]).not.toHaveBeenCalled();
   });
 
   it("reports an unavailable participant count when Stream cannot be read", async () => {

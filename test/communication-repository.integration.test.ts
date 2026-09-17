@@ -27,6 +27,7 @@ import {
 import {
   CommunicationDataStaleError,
   CommunicationPermissionDeniedError,
+  type VoiceRoomViewerRecord,
   CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
   type CommunityChannelSyncRepository,
@@ -743,6 +744,70 @@ describe("PostgreSQL V2 communication repository", () => {
     await expect(
       createVoiceRoom(member.userId, communityId),
     ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+  });
+
+  it("counts the host in joinedCount but in neither role count, and drops a leaver (Decision 0051)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+
+    const hostOnly = await communication.getVoiceRoom({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+    });
+    expect(hostOnly).toMatchObject({
+      viewerRole: "host",
+      speakerCount: 0,
+      listenerCount: 0,
+      joinedCount: 1,
+    });
+
+    const listener = await createAccount();
+    await join(listener.userId, communityId);
+    const joined = (await joinRoom(
+      listener.userId,
+      voiceRoomId,
+    )) as VoiceRoomViewerRecord;
+    expect(joined).toMatchObject({
+      viewerRole: "listener",
+      speakerCount: 0,
+      listenerCount: 1,
+      joinedCount: 2,
+    });
+
+    const left = await communication.leaveVoiceRoom({
+      actorUserId: listener.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomLeave", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(left).toMatchObject({
+      viewerRole: null,
+      listenerCount: 0,
+      joinedCount: 1,
+    });
+
+    await expect(
+      communication.leaveVoiceRoom({
+        actorUserId: owner.userId,
+        voiceRoomId,
+        idempotencyKey: randomUUID(),
+        requestSha256: communicationCommandDigest("voiceRoomLeave", [
+          voiceRoomId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+    const stillLive = await communication.getVoiceRoom({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+    });
+    expect(stillLive.room.state).toBe("live");
+    expect(stillLive.joinedCount).toBe(1);
   });
 
   it("leaves no row behind when joining a room whose Stream call is unconfirmed", async () => {

@@ -325,15 +325,26 @@ const unavailableProjectionSchema = {
 const observedParticipantsSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "memberCount", "observedAt"],
+  required: ["status", "participantCount", "memberCount", "observedAt"],
   properties: {
     status: { type: "string", const: "available" },
-    memberCount: { type: "integer", minimum: 0 },
+    participantCount: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Devices connected to the live Stream call session right now (the sum of the session's per-role participant counts). 0 when Stream reports no live session. This is the only field that means 'people in the room now'; a LOOP join grant alone does not raise it.",
+    },
+    memberCount: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Accounts Stream lets into the call (call members). It includes the host and anyone LOOP has joined, whether or not their device is connected. It is authorization, not presence.",
+    },
     observedAt: {
       type: "string",
       format: "date-time",
       description:
-        "When Stream reported this member count. It is a read-only projection accumulated across a bounded number of Stream member pages; a truncated walk reports unavailable instead.",
+        "When both Stream reads completed. The member count is accumulated across a bounded number of Stream member pages; a truncated walk, or any failed read, reports the whole block as unavailable instead.",
     },
   },
 } as const;
@@ -412,19 +423,25 @@ const voiceRoomBodySchema = {
     participants: {
       type: "object",
       additionalProperties: false,
-      required: ["speakerCount", "listenerCount", "observed"],
+      required: ["speakerCount", "listenerCount", "joinedCount", "observed"],
       properties: {
         speakerCount: {
           type: "integer",
           minimum: 0,
           description:
-            "LOOP-side role intent (voice_room_members with role=speaker). It is not a Stream presence or online count.",
+            "LOOP-side role intent (voice_room_members with role=speaker). The host is not a speaker. It is not a Stream presence or online count.",
         },
         listenerCount: {
           type: "integer",
           minimum: 0,
           description:
-            "LOOP-side role intent (voice_room_members with role=listener). It is not a Stream presence or online count.",
+            "LOOP-side role intent (voice_room_members with role=listener). The host is not a listener. It is not a Stream presence or online count.",
+        },
+        joinedCount: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Every LOOP member currently joined, including the host (1 + speakerCount + listenerCount on a live room). It is a LOOP authorization record, not a Stream presence count.",
         },
         observed: {
           oneOf: [observedParticipantsSchema, unavailableProjectionSchema],

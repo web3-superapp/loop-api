@@ -240,7 +240,13 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   "participants": {
     "speakerCount": 3,
     "listenerCount": 42,
-    "observed": { "status": "available", "memberCount": 45, "observedAt": "…" }
+    "joinedCount": 46,
+    "observed": {
+      "status": "available",
+      "participantCount": 31,
+      "memberCount": 46,
+      "observedAt": "…"
+    }
   },
   "providerSync": { "status": "confirmed", "reasonCode": null },
   "contractVersion": "2.0"
@@ -260,12 +266,28 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   （绝不是 JS number），全序无重复。每人同一时刻只能有一个 `pending` 举手；
   重复举手返回 `409 DATA_STALE`。host 邀请发言会把该用户的 pending 举手置为
   `invited`。
-- **人数**：`speakerCount` / `listenerCount` 是 LOOP 的**角色意图**投影（来自
-  `voice_room_members`），**不是 Stream 在线人数**；
-  `participants.observed` 是只读 Stream 投影，必须带 `observedAt` 展示。读不到
-  时是 `{status:"unavailable", reasonCode:"STREAM_PARTICIPANT_COUNT_NOT_OBSERVED"}`，
-  不要显示 0。后端最多翻 10 页（每页 100）累加；仍未翻完时同样返回 unavailable，
-  绝不发布被截断的总数。
+- **人数（决策 0051，三个口径三个字段，不要混）**：
+  - `speakerCount` / `listenerCount`：LOOP 的**角色意图**（`voice_room_members`
+    中 `joined` 的 speaker / listener）。**都不含 host**，所以只有主持人的房间是
+    `0 / 0`，这不是 bug。
+  - `joinedCount`：LOOP 已加入总数，**含 host**（live 房 = 1 + speaker +
+    listener）。要显示「LOOP 记录了几个人」用它。
+  - `observed.memberCount`：Stream call **被授权成员**数（含从未连上音频的
+    host）。它是「能进来的人」，不是在线人数。
+  - `observed.participantCount`：Stream 当前 session **在线参与者**数（设备真的
+    连着 call）。页面「当前在线人数」**必须**读这个字段；Stream 没有 live
+    session 时它是 0，这是真实的 0。
+  - `join` 响应里 `listenerCount` / `joinedCount` 一定含本人；`memberCount` 在
+    `providerSync.confirmed` 时含本人；`participantCount` 要等设备用 token 真正
+    `join` 了 Stream call 之后才会含本人——LOOP `join` 是授权，不是音频连接。
+  - `observed` 读不到时整块是
+    `{status:"unavailable", reasonCode:"STREAM_PARTICIPANT_COUNT_NOT_OBSERVED"}`，
+    不要显示 0。成员分页最多翻 10 页（每页 100）；翻不完、任一 Stream 读失败都
+    返回 unavailable，绝不发布半个观测。`join` / `leave` / 举手 / 邀请发言 /
+    移出发言 / 全体静音的响应都会在那一次 Stream 写之后再观测一次；
+    `POST …/voice-rooms`（刚建）与 `POST …/end`（已结束）固定 unavailable。
+  - **客户端 codec 用 `strictMap` 精确键集合的，必须把 `joinedCount` 与
+    `observed.participantCount` 加进键集合，否则整个语音房快照会被判为 invalid。**
 - **`providerSync`**：`confirmed` 表示这次命令的那一次 Stream 写入被确认；
   `unconfirmed` 表示 LOOP 侧已提交但 Provider 事实未确认（`reasonCode` 形如
   `STREAM_CALL_MUTE_UNCONFIRMED`）。**不要把 LOOP 提交当成 Provider 事实。**

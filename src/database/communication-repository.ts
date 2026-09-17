@@ -401,8 +401,12 @@ async function readViewerRecord(
   });
   let speakerCount = 0;
   let listenerCount = 0;
+  let joinedCount = 0;
   for (const row of counts.rows) {
     const total = Number.parseInt(row.total, 10);
+    // The host is neither a speaker nor a listener; it only counts toward the
+    // joined total (Decision 0051).
+    joinedCount += total;
     if (row.role === "speaker") {
       speakerCount = total;
     } else if (row.role === "listener") {
@@ -425,6 +429,7 @@ async function readViewerRecord(
     hostStreamUserId: deriveStreamUserId(userIdSchema.parse(hostUserId)),
     speakerCount,
     listenerCount,
+    joinedCount,
   });
 }
 
