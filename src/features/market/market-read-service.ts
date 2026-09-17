@@ -21,7 +21,10 @@ import {
 } from "../../database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../../database/watchlist-v2-repository.js";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
-import { bscWrappedNativeAddress } from "./market-contract.js";
+import {
+  bscWrappedNativeAddress,
+  bscWrappedNativeAssetId,
+} from "./market-contract.js";
 import type { BscReadClient } from "../../integrations/bsc/rpc-client.js";
 import type {
   TokenPairSnapshot,
@@ -189,10 +192,13 @@ export interface MarketCandlesResource {
   readonly candles:
     | {
         readonly status: "available";
-        readonly quality: "fresh" | "stale" | "derived";
+        /** `proxied`: the native asset charted through `proxyAsset` (WBNB). */
+        readonly quality: "fresh" | "stale" | "derived" | "proxied";
         readonly source: MarketSource;
         readonly fetchedAt: string;
         readonly labelKey: string | null;
+        /** The asset whose pool actually produced the candles; null unless proxied. */
+        readonly proxyAsset: string | null;
         readonly pool: {
           readonly address: string;
           readonly protocol: string;
@@ -780,12 +786,30 @@ export function createMarketReadService(
       if (asset.status === "blocked") {
         return unavailable("ASSET_BLOCKED");
       }
+      // The native asset has no pool of its own. Its candles are the wrapped
+      // native token's, published as `proxied` with the proxy named, the same
+      // one-to-one proxy the price facts and the wallet valuation use
+      // (Decision 0050). Nothing else is ever substituted.
+      let proxy: AssetRecord | null = null;
       if (asset.address === null) {
+        proxy = await input.registry.getAsset(bscWrappedNativeAssetId);
+        if (
+          proxy === null ||
+          proxy.address === null ||
+          proxy.status === "blocked"
+        ) {
+          return unavailable(marketReasonCodes.nativeAssetUnsupported);
+        }
+      }
+      const priced = proxy ?? asset;
+      const pricedAddress = priced.address;
+      if (pricedAddress === null) {
         return unavailable(marketReasonCodes.nativeAssetUnsupported);
       }
+      const proxyAssetId = proxy === null ? null : proxy.assetId;
       const pools = poolsForAsset(
         await input.registry.listPools(input.chainId),
-        asset.assetId,
+        priced.assetId,
       );
       if (pools.length === 0) {
         return unavailable(marketReasonCodes.poolNotRegistered);
@@ -801,7 +825,7 @@ export function createMarketReadService(
               poolAddress: pool.address,
               timeframe: interval,
               limit: pageSize,
-              tokenAddress: asset.address,
+              tokenAddress: pricedAddress,
             },
             signal === undefined ? {} : { signal },
           );
@@ -812,19 +836,22 @@ export function createMarketReadService(
               candles: Object.freeze({
                 status: "available" as const,
                 quality:
-                  fact.quality === "stale"
-                    ? ("stale" as const)
-                    : ("fresh" as const),
+                  proxy !== null
+                    ? ("proxied" as const)
+                    : fact.quality === "stale"
+                      ? ("stale" as const)
+                      : ("fresh" as const),
                 source: fact.source,
                 fetchedAt: fact.fetchedAt,
                 labelKey: null,
+                proxyAsset: proxyAssetId,
                 pool: Object.freeze({
                   address: pool.address,
                   protocol: pool.protocol,
                   quoteAssetId: null,
                   quoteSymbol: "USD",
                 }),
-                priceUnit: `USD per ${asset.symbol}`,
+                priceUnit: `USD per ${priced.symbol}`,
                 items: Object.freeze(
                   fact.value.candles.slice(-pageSize).map((candle) =>
                     Object.freeze({
@@ -870,7 +897,7 @@ export function createMarketReadService(
       ).toISOString();
 
       for (const pool of pools) {
-        const assetIsToken0 = pool.token0AssetId === asset.assetId;
+        const assetIsToken0 = pool.token0AssetId === priced.assetId;
         const quoteAssetId = assetIsToken0
           ? pool.token1AssetId
           : pool.token0AssetId;
@@ -878,8 +905,8 @@ export function createMarketReadService(
         if (quote === null) {
           continue;
         }
-        const decimals0 = assetIsToken0 ? asset.decimals : quote.decimals;
-        const decimals1 = assetIsToken0 ? quote.decimals : asset.decimals;
+        const decimals0 = assetIsToken0 ? priced.decimals : quote.decimals;
+        const decimals1 = assetIsToken0 ? quote.decimals : priced.decimals;
         const buckets = await input.indexerRepository.aggregateSwapCandles({
           poolId: pool.poolId,
           intervalSeconds,
@@ -929,7 +956,7 @@ export function createMarketReadService(
               close,
               volume: formatDecimalAmount(
                 BigInt(bucket.volumeRaw),
-                asset.decimals,
+                priced.decimals,
               ),
               swapCount: bucket.swapCount,
               isOpen:
@@ -943,17 +970,19 @@ export function createMarketReadService(
           interval,
           candles: Object.freeze({
             status: "available" as const,
-            quality: "derived" as const,
+            quality:
+              proxy !== null ? ("proxied" as const) : ("derived" as const),
             source: "loop_indexer" as const,
             fetchedAt: checkpoint.updatedAt,
             labelKey: derivedCandleLabelKey,
+            proxyAsset: proxyAssetId,
             pool: Object.freeze({
               address: pool.address,
               protocol: pool.protocol,
               quoteAssetId: quote.assetId,
               quoteSymbol: quote.symbol,
             }),
-            priceUnit: `${quote.symbol} per ${asset.symbol}`,
+            priceUnit: `${quote.symbol} per ${priced.symbol}`,
             items: Object.freeze(items),
           }),
           contractVersion: v2ContractVersion,

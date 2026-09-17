@@ -363,19 +363,33 @@ export const marketCandlesResourceSchema = {
             "source",
             "fetchedAt",
             "labelKey",
+            "proxyAsset",
             "pool",
             "priceUnit",
             "items",
           ],
           properties: {
             status: { type: "string", const: "available" },
-            quality: { type: "string", enum: ["fresh", "stale", "derived"] },
+            quality: {
+              type: "string",
+              enum: ["fresh", "stale", "derived", "proxied"],
+              description:
+                "`proxied`: the native asset (BNB) charted through the wrapped native token named in `proxyAsset`; `source` and `labelKey` still say whether those candles are Provider OHLCV or an on-chain swap aggregate.",
+            },
             source: { type: "string", enum: [...marketSources] },
             fetchedAt: dateTimeSchema,
             labelKey: {
               anyOf: [{ type: "string", maxLength: 64 }, { type: "null" }],
               description:
                 "Localization key the client must show next to derived candles (on-chain swap aggregate); null for Provider OHLCV.",
+            },
+            proxyAsset: {
+              anyOf: [
+                { type: "string", pattern: assetIdPatternSource },
+                { type: "null" },
+              ],
+              description:
+                "Asset whose pool produced the candles when `quality` is `proxied` (WBNB for native BNB); null otherwise.",
             },
             pool: {
               type: "object",

@@ -44,7 +44,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `quality`     | 含义                                                                           | UI                                |
 | ------------- | ------------------------------------------------------------------------------ | --------------------------------- |
 | `fresh`       | 在 TTL 内由 Provider 报告                                                      | 正常显示，附来源与 `fetchedAt`    |
-| `proxied`     | 原生 BNB 通过 WBNB 价格代理（只此一种代理）                                    | 显示并标注"以 WBNB 计价"          |
+| `proxied`     | 原生 BNB 通过 WBNB 代理（价格事实与 K 线，只此一种代理）                       | 显示并标注"以 WBNB 计价"          |
 | `stale`       | 已过 TTL，但 Provider 暂时不可达/被限速，仍在宽限期内（`reasonCode` 给出原因） | 显示数值 + "数据可能过期"标记     |
 | `derived`     | LOOP 由链上事件聚合（只用于 K 线）                                             | 显示并标注"链上成交聚合"          |
 | `unavailable` | `value` 为 `null`，`reasonCode` 说明原因                                       | 该块 unavailable，不要显示 0 或 — |
@@ -54,21 +54,21 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 常见 `reasonCode`：
 
-| reasonCode                               | 含义                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                                                 |
-| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）                               |
-| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）                               |
-| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                                                |
-| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                                                 |
-| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失）                        |
-| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                               |
-| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                    |
-| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交/K 线不可用（价格走 `proxied`） |
-| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                   |
-| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                             |
-| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                       |
-| `ASSET_BLOCKED`                          | registry 标记为 blocked                                                |
+| reasonCode                               | 含义                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                                                                                 |
+| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）                                                               |
+| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）；Development 栈已启用（决策 0050），仓库默认与生产仍关闭      |
+| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                                                                                |
+| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                                                                                 |
+| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失）                                                        |
+| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                                                               |
+| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                                                    |
+| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交不可用（价格与 K 线走 `proxied`；WBNB 未登记时 K 线也是这个码） |
+| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                                                   |
+| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                                                             |
+| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                                                       |
+| `ASSET_BLOCKED`                          | registry 标记为 blocked                                                                                |
 
 ## 3. `GET /v2/market/overview` → `market` 页
 
@@ -159,6 +159,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "source": "loop_indexer",
     "fetchedAt": "2026-09-08T07:30:41.000Z",
     "labelKey": "market.candles.onChainSwapAggregate",
+    "proxyAsset": null,
     "pool": {
       "address": "0x3669…",
       "protocol": "pancakeswap_v3",
@@ -191,6 +192,13 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     （`priceUnit`），不是 USD；`volume` 是该资产一侧的成交量（资产自身单位）。
   - 都没有 → `candles.status: unavailable`（`MARKET_POOL_NOT_REGISTERED` /
     `BSC_POOL_INDEXER_NOT_STARTED` / `MARKET_NO_SWAPS_IN_RANGE` / `MARKET_PROVIDER_GECKOTERMINAL_DISABLED`）。
+- **原生 BNB（`eip155:56:native`）走 WBNB 代理（决策 0050）**：K 线取 WBNB 的池，
+  `quality: "proxied"`，`proxyAsset: "eip155:56:0xbb4c…"`；`source` 与 `labelKey`
+  照旧说明是 GeckoTerminal OHLCV 还是链上聚合（派生时 `labelKey` 仍非空，两个标注都要显示）。
+  `priceUnit` 写的是**实际被定价的资产**（`USD per WBNB` / `USDT per WBNB`），顶层
+  `assetId` 仍是 native。页面标注"以 WBNB 计价"，与钱包页 `valuation.quality: proxied`
+  同一套文案。非代理资产 `proxyAsset` 恒为 `null`。WBNB 未登记时 native 的 K 线是
+  `MARKET_NATIVE_ASSET_NOT_SUPPORTED`。成交（trades）、安全事实、持有人**不代理**。
 - `items` 按 `openTime` 升序，只包含有成交的桶（空桶不补 0）。`1w` 按 epoch 周
   （周四 00:00 UTC）对齐。`limit` 默认 120，最大 300。
 - 每根带 `isOpen`：`true` 表示该桶尚未收盘（close/high/low 还会变），前端把它画成

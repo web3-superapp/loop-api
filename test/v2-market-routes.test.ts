@@ -31,6 +31,7 @@ import type { InternalUserRepository } from "../src/features/identity/internal-u
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { BscReadClient } from "../src/integrations/bsc/rpc-client.js";
 import type {
+  CandlesProvider,
   MarketPairsProvider,
   SecurityFactsProvider,
   TokenPairsSnapshot,
@@ -408,11 +409,48 @@ function securityProviderFake(): SecurityFactsProvider {
   };
 }
 
+function candlesProviderFake(): {
+  readonly provider: CandlesProvider;
+  readonly readPoolOhlcv: Mock<CandlesProvider["readPoolOhlcv"]>;
+} {
+  const readPoolOhlcv = vi.fn<CandlesProvider["readPoolOhlcv"]>((poolAddress) =>
+    Promise.resolve({
+      value: {
+        poolAddress,
+        candles: [
+          {
+            openTime: "2026-09-08T00:00:00.000Z",
+            open: "747.12",
+            high: "748.9",
+            low: "746.5",
+            close: "747.48",
+            volume: "1234.5",
+          },
+        ],
+      },
+      source: "geckoterminal" as const,
+      fetchedAt,
+      rawDigest: "c".repeat(64),
+    }),
+  );
+  return {
+    provider: {
+      source: "geckoterminal",
+      readPoolOhlcv,
+      readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+      readPoolTrades: vi.fn(() => Promise.reject(new Error("not used"))),
+    },
+    readPoolOhlcv,
+  };
+}
+
 function fakes(
   options: {
     readonly providers?: boolean;
     readonly pools?: readonly PoolRecord[];
     readonly indexer?: BscIndexerRepository;
+    readonly assets?: readonly AssetRecord[];
+    readonly candlesProvider?: CandlesProvider;
   } = {},
 ) {
   const database = {
@@ -425,7 +463,7 @@ function fakes(
     profiles: createUnavailableProfileRepository(),
     watchlists: createUnavailableWatchlistRepository(),
     watchlistsV2: watchlistFake(),
-    chainRegistry: registryFake(undefined, options.pools ?? []),
+    chainRegistry: registryFake(options.assets, options.pools ?? []),
     bscIndexer: options.indexer ?? indexerFake(),
     marketFacts: cacheFake(),
     internalUsers: {
@@ -453,6 +491,7 @@ function fakes(
     privyAccessTokenVerifier,
     pairsProvider,
     securityProvider,
+    candlesProvider: options.candlesProvider ?? null,
   };
 }
 
@@ -475,7 +514,7 @@ describe("LOOP API V2 market module", () => {
       bscReadClient: readClientFake(),
       marketPairsProvider: dependencies.pairsProvider,
       securityFactsProvider: dependencies.securityProvider,
-      candlesProvider: null,
+      candlesProvider: dependencies.candlesProvider,
       logger: false,
     });
     apps.push(app);
@@ -765,6 +804,123 @@ describe("LOOP API V2 market module", () => {
     expect(body.trending.items.map((item) => item.assetId)).toEqual([
       wbnbAssetId,
     ]);
+  });
+
+  it("charts native BNB through the WBNB pool and labels the candles proxied", async () => {
+    const bucket: SwapCandleBucket = {
+      bucketStart: "2026-09-08T00:00:00.000Z",
+      openSqrtPriceX96: (q96 * 2n).toString(10),
+      closeSqrtPriceX96: q96.toString(10),
+      highSqrtPriceX96: (q96 * 4n).toString(10),
+      lowSqrtPriceX96: q96.toString(10),
+      volumeRaw: "2500000000000000000",
+      swapCount: 7,
+    };
+    const { app, database } = await createApp(
+      fakes({ pools: [pool], indexer: indexerFake({ buckets: [bucket] }) }),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/market/assets/eip155:56:native/candles?interval=1h&limit=48",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assetId: "eip155:56:native",
+      interval: "1h",
+      candles: {
+        status: "available",
+        quality: "proxied",
+        source: "loop_indexer",
+        labelKey: "market.candles.onChainSwapAggregate",
+        proxyAsset: wbnbAssetId,
+        pool: {
+          address: poolAddress,
+          protocol: "pancakeswap_v3",
+          quoteAssetId: usdtAssetId,
+          quoteSymbol: "USDT",
+        },
+        // The price unit names the asset that was actually priced.
+        priceUnit: "USDT per WBNB",
+        items: [
+          {
+            openTime: "2026-09-08T00:00:00.000Z",
+            open: "0.25",
+            close: "1",
+            volume: "2.5",
+            swapCount: 7,
+          },
+        ],
+      },
+    });
+    // The WBNB pool is the one aggregated, with WBNB's token position.
+    expect(aggregateSpy(database.bscIndexer)).toHaveBeenCalledWith(
+      expect.objectContaining({ poolId, assetIsToken0: false }),
+    );
+  });
+
+  it("publishes Provider OHLCV for native BNB as proxied through WBNB", async () => {
+    const { provider, readPoolOhlcv } = candlesProviderFake();
+    const { app } = await createApp(
+      fakes({ pools: [pool], candlesProvider: provider }),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/market/assets/eip155:56:native/candles?interval=1h",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assetId: "eip155:56:native",
+      candles: {
+        status: "available",
+        quality: "proxied",
+        source: "geckoterminal",
+        labelKey: null,
+        proxyAsset: wbnbAssetId,
+        pool: { address: poolAddress, quoteAssetId: null, quoteSymbol: "USD" },
+        priceUnit: "USD per WBNB",
+        items: [{ open: "747.12", close: "747.48", swapCount: null }],
+      },
+    });
+    // The Provider is asked about WBNB's address, never a native placeholder.
+    expect(readPoolOhlcv).toHaveBeenCalledWith(
+      poolAddress,
+      "1h",
+      120,
+      expect.objectContaining({ tokenAddress: wbnb }),
+    );
+    // A non-native asset keeps its own quality and no proxy.
+    const direct = await app.inject({
+      method: "GET",
+      url: `/v2/market/assets/${wbnbAssetId}/candles?interval=1h`,
+      headers: commonHeaders(),
+    });
+    expect(direct.json()).toMatchObject({
+      candles: {
+        quality: "fresh",
+        proxyAsset: null,
+        priceUnit: "USD per WBNB",
+      },
+    });
+  });
+
+  it("keeps native candles unavailable when the wrapped native token is not registered", async () => {
+    const { app } = await createApp(
+      fakes({ pools: [pool], assets: [nativeAsset, usdtAsset] }),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/market/assets/eip155:56:native/candles?interval=1h",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      candles: {
+        status: "unavailable",
+        reasonCode: "MARKET_NATIVE_ASSET_NOT_SUPPORTED",
+      },
+    });
   });
 
   it("derives candles from indexed swaps when no OHLCV Provider is enabled", async () => {
