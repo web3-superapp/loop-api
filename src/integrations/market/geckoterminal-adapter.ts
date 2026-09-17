@@ -210,6 +210,9 @@ export function normalizeGeckoterminalOhlcv(
   return Object.freeze({ poolAddress, candles: Object.freeze(candles) });
 }
 
+/** Uniswap V4 pools have no contract of their own; GeckoTerminal keys them by pool id. */
+const poolIdPattern = /^0x[0-9a-fA-F]{64}$/;
+
 export function normalizeGeckoterminalNewPools(
   json: unknown,
 ): NewPoolsSnapshot {
@@ -217,7 +220,15 @@ export function normalizeGeckoterminalNewPools(
   if (!parsed.success) {
     return malformed();
   }
-  const pools: NewPoolSnapshot[] = parsed.data.data.map((pool) =>
+  // A 32-byte pool id is a real Provider fact, not a malformed response, but
+  // it is not an address and the contract publishes pool addresses only: the
+  // row is omitted and counted. Anything else that is not an address is still
+  // malformed.
+  const listed = parsed.data.data.filter(
+    (pool) => !poolIdPattern.test(pool.attributes.address),
+  );
+  const omittedPoolCount = parsed.data.data.length - listed.length;
+  const pools: NewPoolSnapshot[] = listed.map((pool) =>
     Object.freeze({
       poolAddress: address(pool.attributes.address),
       dexId: pool.relationships?.dex?.data.id ?? "unknown",
@@ -237,7 +248,7 @@ export function normalizeGeckoterminalNewPools(
       volumeH24Usd: decimal(pool.attributes.volume_usd?.h24),
     }),
   );
-  return Object.freeze({ pools: Object.freeze(pools) });
+  return Object.freeze({ pools: Object.freeze(pools), omittedPoolCount });
 }
 
 export function normalizeGeckoterminalTrades(

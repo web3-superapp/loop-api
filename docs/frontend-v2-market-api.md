@@ -292,6 +292,7 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
     "ttlSeconds": 60,
     "quality": "fresh",
     "reasonCode": null,
+    "omittedCount": 6,
     "items": [
       {
         "poolAddress": "0x…",
@@ -316,6 +317,14 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
 
 原型的"已过预筛 / 风险特征折叠"依赖 `riskScreening`，本步恒 unavailable，
 不要按其它字段自行判定风险。
+
+- **Development 栈已启用 GeckoTerminal（决策 0050）**；仓库默认与生产仍关闭。
+- `omittedCount`（必填整数）：GeckoTerminal 把 BSC 上的 Uniswap V4 池按 **32 字节
+  pool id** 列出（没有合约地址）。`poolAddress` 只发布地址，所以这些行不进
+  `items`，但会计数——2026-09-17 实测一页 20 条里有 6 条。页面要把它显示出来
+  （例如"另有 6 个 Uniswap V4 池未列出"），不要当成没有。
+- `registryAssetId` 只在 base token 已登记时非空；`dexId` 是 GeckoTerminal 的
+  字符串标识（`pancakeswap_v2`、`four-meme`、`uniswap-v4-bsc`……），不要当枚举解析。
 
 ## 9. `GET /v2/market/smart-money` → `smart-money` 页
 

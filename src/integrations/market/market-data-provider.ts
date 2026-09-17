@@ -138,6 +138,12 @@ export interface NewPoolSnapshot {
 
 export interface NewPoolsSnapshot {
   readonly pools: readonly NewPoolSnapshot[];
+  /**
+   * Pools the Provider listed under an identifier that is not an EVM address
+   * (Uniswap V4 pools on BSC are keyed by a 32-byte pool id). They are
+   * counted, never re-labelled as addresses and never silently dropped.
+   */
+  readonly omittedPoolCount: number;
 }
 
 export interface PoolTradeSnapshot {

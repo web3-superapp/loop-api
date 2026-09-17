@@ -437,7 +437,28 @@ function candlesProviderFake(): {
     provider: {
       source: "geckoterminal",
       readPoolOhlcv,
-      readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+      readNewPools: vi.fn(() =>
+        Promise.resolve({
+          value: {
+            pools: [
+              {
+                poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+                dexId: "pancakeswap_v2",
+                name: "WBNB / USDT",
+                baseTokenAddress: wbnb,
+                quoteTokenAddress: usdt,
+                createdAt: "2026-09-17T06:44:36.000Z",
+                reserveUsd: "13659.417",
+                volumeH24Usd: "8957.0388621769",
+              },
+            ],
+            omittedPoolCount: 6,
+          },
+          source: "geckoterminal" as const,
+          fetchedAt,
+          rawDigest: "d".repeat(64),
+        }),
+      ),
       readPoolTrades: vi.fn(() => Promise.reject(new Error("not used"))),
     },
     readPoolOhlcv,
@@ -901,6 +922,38 @@ describe("LOOP API V2 market module", () => {
         quality: "fresh",
         proxyAsset: null,
         priceUnit: "USD per WBNB",
+      },
+    });
+  });
+
+  it("lists new pairs with the registry match and the omitted pool-id count", async () => {
+    const { provider } = candlesProviderFake();
+    const { app } = await createApp(fakes({ candlesProvider: provider }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/market/new-pairs",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      newPairs: {
+        status: "available",
+        source: "geckoterminal",
+        quality: "fresh",
+        omittedCount: 6,
+        items: [
+          {
+            poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+            dexId: "pancakeswap_v2",
+            baseTokenAddress: wbnb,
+            registryAssetId: wbnbAssetId,
+            reserveUsd: "13659.417",
+          },
+        ],
+      },
+      riskScreening: {
+        status: "unavailable",
+        reasonCode: "MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED",
       },
     });
   });

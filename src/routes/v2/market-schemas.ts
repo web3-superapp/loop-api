@@ -611,6 +611,7 @@ export const marketNewPairsResourceSchema = {
             "quality",
             "reasonCode",
             "items",
+            "omittedCount",
           ],
           properties: {
             status: { type: "string", const: "available" },
@@ -619,6 +620,12 @@ export const marketNewPairsResourceSchema = {
             ttlSeconds: { type: "integer", minimum: 1 },
             quality: { type: "string", enum: ["fresh", "stale"] },
             reasonCode: nullableReasonCodeSchema,
+            omittedCount: {
+              type: "integer",
+              minimum: 0,
+              description:
+                "Provider rows keyed by a 32-byte pool id instead of a contract address (Uniswap V4 on BSC); they are not listed because `poolAddress` is an address, and they are counted here so the page can say so.",
+            },
             items: {
               type: "array",
               maxItems: 100,

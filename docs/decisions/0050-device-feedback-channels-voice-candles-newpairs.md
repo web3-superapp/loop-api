@@ -72,6 +72,16 @@
 | 能力清单 | `GET /v2/meta/capabilities` 没有对应 GeckoTerminal 的 capability（Provider 可用性不在 capability 里，见 `docs/frontend-v2-market-api.md`），所以 `23/31` **不会因此变化**；可用性看 `overview.newPairs.status` 与 `new-pairs` 本身。 |
 | 副作用   | 开关一开，所有已登记池的 K 线优先走 GeckoTerminal OHLCV（USD 计价、`quality: fresh                                                                                                                                                   | stale`），indexer 派生成为回退。 |
 
+### 开关打开后发现的一条
+
+第一次 `GET /v2/market/new-pairs` 返回 `MARKET_PROVIDER_RESPONSE_MALFORMED`：实测那一页 20 个池里有 6 个 `uniswap-v4-bsc` 池，GeckoTerminal 用 **32 字节 pool id**（`0x` + 64 hex）而不是合约地址标识它们，适配器把"不是 EVM 地址"一律判成 malformed，整页作废。
+
+| 项目 | 裁决                                                                                                                                                                                       |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 归类 | pool id 是 Provider 的真实事实，不是坏响应；其它任何既不是地址也不是 pool id 的值仍是 malformed。                                                                                          |
+| 契约 | `poolAddress` 继续只发布地址；pool id 行**不列出但计数**：`NewPoolsSnapshot.omittedPoolCount` → `newPairs.omittedCount`（必填整数，OpenAPI 已更新）。不把 pool id 伪装成地址，也不静默丢。 |
+| 不做 | 不扩 `poolAddress` 的模式去装 pool id（客户端按地址解析），不为 V4 池另开字段——等有页面要展示 V4 池再议。                                                                                  |
+
 ## 涉及文件
 
 - `scripts/community-provision-channels.ts`、`test/community-provision-channels.test.ts`、`src/database/community-repository.ts`（`listVerifiedCommunitiesWithoutChannel`）、`test/community-repository.integration.test.ts`

@@ -279,6 +279,8 @@ export interface MarketNewPairsResource {
         readonly quality: "fresh" | "stale";
         readonly reasonCode: string | null;
         readonly items: readonly NewPairRow[];
+        /** Provider rows keyed by a non-address pool id (Uniswap V4) and therefore not listed. */
+        readonly omittedCount: number;
       }
     | UnavailableBlock;
   readonly riskScreening: UnavailableBlock;
@@ -1313,6 +1315,7 @@ export function createMarketReadService(
               }),
             ),
           ),
+          omittedCount: fact.value.omittedPoolCount,
         }),
         riskScreening: unavailableBlock(marketReasonCodes.goplusNotConfigured),
         contractVersion: v2ContractVersion,

@@ -9,6 +9,7 @@ import {
 import {
   createGeckoterminalAdapter,
   foldDailyCandlesIntoWeeks,
+  normalizeGeckoterminalNewPools,
   normalizeGeckoterminalOhlcv,
 } from "../src/integrations/market/geckoterminal-adapter.js";
 import {
@@ -345,6 +346,52 @@ describe("GeckoTerminal adapter", () => {
       close: "1.00083094804025",
       volume: "1334331.5237575937",
     });
+  });
+
+  it("lists new pools by address and counts pool-id rows instead of calling them malformed", () => {
+    const pool = (address: string, dex: string) => ({
+      attributes: {
+        address,
+        name: "X / WBNB",
+        pool_created_at: "2026-09-17T06:44:36Z",
+        reserve_in_usd: "0.572352096797398",
+        volume_usd: { h24: "366.0165360544" },
+      },
+      relationships: {
+        base_token: { data: { id: `bsc_${usdt}` } },
+        quote_token: { data: { id: `bsc_${wbnb}` } },
+        dex: { data: { id: dex } },
+      },
+    });
+    // The live 2026-09-17 page: Uniswap V4 pools on BSC are keyed by a
+    // 32-byte pool id, which is a Provider fact rather than a broken body.
+    const v4PoolId = `0x${"a".repeat(64)}`;
+    const snapshot = normalizeGeckoterminalNewPools({
+      data: [
+        pool(v4PoolId, "uniswap-v4-bsc"),
+        pool("0x16B9a82891338f9bA80E2D6970FdDA79D1eb0daE", "pancakeswap_v2"),
+        pool(v4PoolId, "uniswap-v4-bsc"),
+      ],
+    });
+    expect(snapshot.omittedPoolCount).toBe(2);
+    expect(snapshot.pools).toEqual([
+      {
+        poolAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+        dexId: "pancakeswap_v2",
+        name: "X / WBNB",
+        baseTokenAddress: usdt,
+        quoteTokenAddress: wbnb,
+        createdAt: "2026-09-17T06:44:36.000Z",
+        reserveUsd: "0.572352096797398",
+        volumeH24Usd: "366.0165360544",
+      },
+    ]);
+    // Anything that is neither an address nor a pool id is still malformed.
+    expect(() =>
+      normalizeGeckoterminalNewPools({
+        data: [pool("0x1234", "pancakeswap_v2")],
+      }),
+    ).toThrow(MarketProviderError);
   });
 
   it("folds daily candles into epoch-aligned weeks", () => {

@@ -44211,7 +44211,8 @@
                             "ttlSeconds",
                             "quality",
                             "reasonCode",
-                            "items"
+                            "items",
+                            "omittedCount"
                           ],
                           "properties": {
                             "status": {
@@ -44244,6 +44245,11 @@
                                 },
                                 { "type": "null" }
                               ]
+                            },
+                            "omittedCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Provider rows keyed by a 32-byte pool id instead of a contract address (Uniswap V4 on BSC); they are not listed because `poolAddress` is an address, and they are counted here so the page can say so."
                             },
                             "items": {
                               "type": "array",
