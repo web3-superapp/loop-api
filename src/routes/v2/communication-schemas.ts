@@ -366,6 +366,7 @@ const voiceRoomBodySchema = {
       required: [
         "voiceRoomId",
         "communityId",
+        "communityName",
         "callCid",
         "state",
         "provisionState",
@@ -376,6 +377,13 @@ const voiceRoomBodySchema = {
       properties: {
         voiceRoomId: { type: "string", pattern: opaqueIdPatternSource },
         communityId: { type: "string", pattern: opaqueIdPatternSource },
+        communityName: {
+          type: "string",
+          minLength: 1,
+          maxLength: maximumRawTextLength,
+          description:
+            "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier.",
+        },
         callCid: { type: "string", pattern: streamCallCidPatternSource },
         state: { type: "string", enum: [...voiceRoomStates] },
         provisionState: {

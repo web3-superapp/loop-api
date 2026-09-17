@@ -82,6 +82,8 @@ export interface VoiceRoomResource {
   readonly room: {
     readonly voiceRoomId: string;
     readonly communityId: string;
+    /** The community's current name, so a room banner never needs a second read. */
+    readonly communityName: string;
     readonly callCid: string;
     readonly state: VoiceRoomState;
     readonly provisionState: VoiceRoomProvisionState;
@@ -268,6 +270,7 @@ export function createVoiceRoomService(
       room: Object.freeze({
         voiceRoomId: record.room.voiceRoomId,
         communityId: record.room.communityId,
+        communityName: record.room.communityName,
         callCid: voiceCallCid(record.room.callId),
         state: record.room.state,
         provisionState: record.room.provisionState,

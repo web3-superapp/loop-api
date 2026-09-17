@@ -65,6 +65,11 @@ const limitSchema = z.number().int().min(1).max(100);
 const voiceRoomColumns = `
   room.voice_room_id,
   room.community_id,
+  (
+    select community.name
+    from public.communities as community
+    where community.community_id = room.community_id
+  ) as community_name,
   room.call_id,
   room.state,
   room.provision_state,
@@ -288,6 +293,7 @@ function toVoiceRoomRecord(value: Record<string, unknown>): VoiceRoomRecord {
   return Object.freeze({
     voiceRoomId: opaqueIdSchema.parse(value["voice_room_id"]),
     communityId: opaqueIdSchema.parse(value["community_id"]),
+    communityName: z.string().min(1).parse(value["community_name"]),
     callId: z
       .string()
       .regex(/^loop_voice_[0-9a-f]{32}$/)
@@ -727,6 +733,11 @@ export function createPostgresCommunicationRepository(
               returning
                 voice_room_id,
                 community_id,
+                (
+                  select community.name
+                  from public.communities as community
+                  where community.community_id = voice_rooms.community_id
+                ) as community_name,
                 call_id,
                 state,
                 provision_state,

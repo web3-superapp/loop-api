@@ -734,8 +734,19 @@ describe("PostgreSQL V2 communication repository", () => {
       provisionState: "pending",
       backstage: true,
       callId: deriveVoiceCallId(voiceRoomId),
+      // The banner name is the community row's name at read time (0052).
+      communityName: "Frog Holders",
     });
     expect(record.viewerRole).toBe("host");
+    await pool.query({
+      text: `update public.communities set name = 'Frog Holders Renamed' where community_id = $1`,
+      values: [communityId],
+    });
+    const renamed = await communication.getVoiceRoom({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+    });
+    expect(renamed.room.communityName).toBe("Frog Holders Renamed");
 
     await expect(createVoiceRoom(owner.userId, communityId)).rejects.toThrow();
 

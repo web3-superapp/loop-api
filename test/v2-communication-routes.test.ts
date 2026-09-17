@@ -70,6 +70,7 @@ function room(
     room: Object.freeze({
       voiceRoomId,
       communityId,
+      communityName: "Builders Guild",
       callId,
       state: "live" as const,
       provisionState: "provisioned" as const,
@@ -210,6 +211,7 @@ function communicationRepositoryFake(
           room: {
             voiceRoomId,
             communityId,
+            communityName: "Builders Guild",
             callId,
             state: "ended",
             provisionState: "provisioned",
@@ -632,6 +634,7 @@ describe("LOOP API V2 communication module", () => {
       room: {
         voiceRoomId,
         communityId,
+        communityName: "Builders Guild",
         callCid: `audio_room:${callId}`,
         state: "live",
         provisionState: "provisioned",
@@ -1033,6 +1036,7 @@ describe("LOOP API V2 communication module", () => {
             room: {
               voiceRoomId,
               communityId,
+              communityName: "Builders Guild",
               callId,
               state: "ended",
               provisionState: "provisioned",

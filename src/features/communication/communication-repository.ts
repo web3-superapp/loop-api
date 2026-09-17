@@ -43,6 +43,8 @@ export interface VoiceRoomIdentity {
 export interface VoiceRoomRecord {
   readonly voiceRoomId: string;
   readonly communityId: string;
+  /** `communities.name` at read time; the same value `GET /v2/communities/{id}` publishes (Decision 0052). */
+  readonly communityName: string;
   readonly callId: string;
   readonly state: VoiceRoomState;
   readonly provisionState: VoiceRoomProvisionState;

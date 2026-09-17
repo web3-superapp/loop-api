@@ -217,6 +217,7 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   "room": {
     "voiceRoomId": "<uuid>",
     "communityId": "<uuid>",
+    "communityName": "Builders Guild",
     "callCid": "audio_room:loop_voice_<32 hex>",
     "state": "live",
     "provisionState": "provisioned",
@@ -255,6 +256,11 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
 
 规则：
 
+- **`room.communityName`（决策 0052，必填）**：与 `GET /v2/communities/{id}` 的
+  `community.name` 同源同值，每次响应从社区行现读。顶部 banner「正在语音房 ·
+  <社区名> · N 人在线」直接用它 + `participants.observed.participantCount`，不用再
+  读一次社区。它是展示值，关联仍用 `communityId`。**codec 用 `strictMap` 的必须
+  把 `communityName` 加进 `room` 的键集合。**
 - **权限**：只有 `viewer.role === "host"` 才渲染邀请/移出发言、全体静音、结束
   房间。后端同样只接受 host；非 host 一律 `403 PERMISSION_DENIED`。owner 或
   admin 才能开房。

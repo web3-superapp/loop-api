@@ -28661,6 +28661,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -28676,6 +28677,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -29553,6 +29560,7 @@
                               "required": [
                                 "voiceRoomId",
                                 "communityId",
+                                "communityName",
                                 "callCid",
                                 "state",
                                 "provisionState",
@@ -29568,6 +29576,12 @@
                                 "communityId": {
                                   "type": "string",
                                   "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "communityName": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                                 },
                                 "callCid": {
                                   "type": "string",
@@ -30302,6 +30316,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -30317,6 +30332,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -31616,6 +31637,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -31631,6 +31653,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -32510,6 +32538,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -32525,6 +32554,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -33404,6 +33439,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -33419,6 +33455,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -34296,6 +34338,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -34311,6 +34354,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -35190,6 +35239,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -35205,6 +35255,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -36084,6 +36140,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -36099,6 +36156,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -36987,6 +37050,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -37002,6 +37066,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",
@@ -37888,6 +37958,7 @@
                       "required": [
                         "voiceRoomId",
                         "communityId",
+                        "communityName",
                         "callCid",
                         "state",
                         "provisionState",
@@ -37903,6 +37974,12 @@
                         "communityId": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "communityName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "description": "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier."
                         },
                         "callCid": {
                           "type": "string",

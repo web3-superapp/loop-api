@@ -31,6 +31,7 @@ function resource(
     room: Object.freeze({
       voiceRoomId,
       communityId,
+      communityName: "Builders Guild",
       callCid: "audio_room:loop_voice_3fa85f6457174562b3fc2c963f66afa6",
       state: "live",
       provisionState,
