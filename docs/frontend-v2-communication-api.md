@@ -275,6 +275,36 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
 - `GET .../voice-rooms/current` 在没有直播时返回
   `{current: null, reasonCode: "COMMUNITY_VOICE_ROOM_NOT_LIVE", contractVersion}`。
 
+### Development 上怎么试（决策 0050）
+
+App 目前**没有开房入口**（`loop_v2_communication_api.dart` 只封装了 `current`、
+房间读取、举手队列与房内命令，没有调用 `POST …/voice-rooms`），所以
+`voice_rooms` 一直是 0 行、语音房页永远"当前没有进行中的语音房"。开房走
+dev-only 运维脚本，它以社区 owner 的身份调用与路由完全相同的
+`VoiceRoomService.createRoom`（LOOP 侧先提交 `voice_rooms` + host 成员 + 审计，
+再用 server key 创建一次 Stream `audio_room` call；不改 Stream 角色权限）：
+
+```sh
+pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
+```
+
+社区已有 `live` 房时脚本报 `RESOURCE_CONFLICT`；Stream 未确认时房间是
+`reconciling`、脚本退出 1，如实打印 `providerSync`。
+
+用户在 App 里的步骤（以 `builders-guild` 为例，走查账号 `cy` 是它的成员）：
+
+1. 社区 Tab → 打开 `builders-guild` 社区主页（`GET /v2/communities/{id}` 的
+   `voice.status` 变成 `available`，`currentRoomId` 非空；社区资料页的"语音房"
+   行显示"当前有进行中的语音房"）。
+2. 点社区主页的「语音房」入口 → 进入语音房页（`GET …/voice-rooms/current`
+   返回 `current` 非空）。
+3. 点「加入」（`POST /v2/voice-rooms/{id}/join`，需要
+   `provisionState: provisioned`）→ `viewer.role: listener`；然后可「举手」。
+   host（脚本用的社区 owner，不是 `cy`）才有邀请发言 / 全体静音 / 结束控制。
+4. 前端跟进项：给 owner/admin 加"开房"按钮调用
+   `POST /v2/communities/{id}/voice-rooms`（`cy` 是 `mock-defi-morning` 的
+   owner，可以直接在 App 内开房；后端路由与权限已就绪）。
+
 ## 6. 错误码对照
 
 | HTTP | code                             | 场景                                                            |

@@ -413,6 +413,13 @@ backoff, and the channel member cap
 (`V2_COMMUNITY_CHANNEL_MEMBER_CAP`, default 3000) parks a member as
 `capacityPending` without touching its LOOP membership.
 
+`POST /v2/communities/{communityId}/voice-rooms` is the only product path
+that opens a room; the mobile app carries no control for it yet, so on the
+Development stack `pnpm voice-room:open <communityId> --confirm` (Decision 0050) runs the same `VoiceRoomService.createRoom` as the community owner. It
+refuses `NODE_ENV=production`, reports the route's own error codes
+(`RESOURCE_CONFLICT` while a live room exists), and never reports an
+unconfirmed Stream call as provisioned.
+
 Chat search, message forwarding, long-image merging, and Community AI add no
 LOOP endpoint: the first two are client-side Stream SDK calls and the last is
 `unavailable` (`COMMUNITY_AI_RUNTIME_DEFERRED`). Chat content never enters

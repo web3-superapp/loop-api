@@ -44,6 +44,7 @@
     "start:local": "node --env-file-if-exists=.env.local dist/src/server.js",
     "stream:verify": "node --env-file-if-exists=.env.local --import tsx scripts/verify-stream-credentials.ts",
     "support:answer": "node --env-file-if-exists=.env.local --import tsx scripts/support-answer.ts",
+    "voice-room:open": "node --env-file-if-exists=.env.local --import tsx scripts/voice-room-open.ts",
     "test": "vitest run --exclude 'test/**/*.integration.test.ts'",
     "test:contract": "vitest run test/*contract.test.ts test/*routes.test.ts test/app.test.ts test/bootstrap.test.ts test/database-schema.test.ts test/openapi.test.ts",
     "test:integration": "node --env-file-if-exists=.env.local --import tsx scripts/run-integration-tests.ts",
