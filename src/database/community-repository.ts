@@ -909,6 +909,54 @@ async function provisionCommunityChannel(
   }
 }
 
+/**
+ * Verified communities whose official channel was never allocated. Only the
+ * operator repair path (`pnpm community:provision-channels`) reads this: a
+ * community reaches this state when its rows were written outside the
+ * product write path (a seed), because `verifyCommunity` is the one place
+ * that allocates the channel. The repair itself goes back through
+ * `verifyCommunity`, never through a direct write to `community_channels`.
+ */
+export interface CommunityMissingChannelRecord {
+  readonly communityId: string;
+  readonly slug: string;
+  readonly name: string;
+  readonly memberCount: number;
+}
+
+export async function listVerifiedCommunitiesWithoutChannel(
+  pool: Pool,
+): Promise<readonly CommunityMissingChannelRecord[]> {
+  const result = await pool.query<{
+    community_id: string;
+    slug: string;
+    name: string;
+    member_count: number;
+  }>({
+    text: `
+      select community.community_id, community.slug, community.name,
+        community.member_count
+      from public.communities as community
+      where community.verification_status = 'verified'
+        and not exists (
+          select 1 from public.community_channels as channel
+          where channel.community_id = community.community_id
+        )
+      order by community.member_count desc, community.community_id asc
+    `,
+  });
+  return Object.freeze(
+    result.rows.map((row) =>
+      Object.freeze({
+        communityId: opaqueIdSchema.parse(row.community_id),
+        slug: row.slug,
+        name: row.name,
+        memberCount: Number(row.member_count),
+      }),
+    ),
+  );
+}
+
 export interface PostgresCommunityRepositoryOptions {
   /** Stream channel member ceiling recorded on a newly provisioned channel. */
   readonly communityChannelMemberCap?: number;

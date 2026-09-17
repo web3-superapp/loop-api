@@ -158,7 +158,12 @@ An unverified community is visible only to its creator and its own non-banned
 members, on every read surface. `pnpm community:verify <communityId>` is the
 only path that sets
 `verificationStatus: verified`; it refuses to run with `NODE_ENV=production`
-and writes an operator audit row.
+and writes an operator audit row. `pnpm community:provision-channels --confirm`
+(Decision 0050) re-drives the same `verifyCommunity` repair branch for every
+verified community that has no `community_channels` row (rows written by a
+seed), so the official channel and the per-member sync jobs come from the
+product path; it never writes the channel table directly and is a no-op once
+every verified community has a channel.
 
 ### V2 launch module (Decision 0036, `V2_MODULES_ENABLED=launch`)
 
@@ -274,15 +279,15 @@ served from a stored balance snapshot when the chain is unreadable.
 
 ### V2 market module (Decision 0034, `V2_MODULES_ENABLED=market`)
 
-| Method and path                           | Request                                       | Success projection                                                                                          | Interface     | Capability                                                                 |
-| ----------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
-| `GET /v2/market/overview`                 | Bearer + contract/client headers; no input    | Watchlist rows with price facts; trending registry assets by DexScreener 24h volume with `recommendationId` | `implemented` | `blocked-provider`; each fact carries its own source/quality               |
-| `GET /v2/market/assets/{assetId}`         | Canonical `assetId`                           | Registry identity, DexScreener facts from the deepest base pair, bound verified community, GoPlus fact list | `implemented` | `blocked-provider`; GoPlus needs credentials                               |
-| `GET /v2/market/assets/{assetId}/candles` | `interval=15m\|1h\|4h\|1d\|1w`, `limit` 1–300 | GeckoTerminal OHLCV, else candles derived from indexed V3 swaps (`quality: derived`, labelled)              | `implemented` | `blocked-provider`; derived path needs a registered pool and the pool lane |
-| `GET /v2/market/assets/{assetId}/trades`  | `cursor` or `limit` (1–50)                    | Indexed swaps with tx/log/block/timestamp/confirmations and direction relative to the asset                 | `implemented` | `blocked-provider`; unregistered pool or idle lane is `unavailable`        |
-| `GET /v2/market/assets/{assetId}/holders` | Canonical `assetId`                           | GoPlus holder count; distribution `unavailable`                                                             | `implemented` | `blocked-provider`                                                         |
-| `GET /v2/market/new-pairs`                | no input                                      | GeckoTerminal new pools when enabled; risk screening `unavailable`                                          | `implemented` | `explicitly-disabled` until GeckoTerminal terms are verified               |
-| `GET /v2/market/smart-money`              | no input                                      | Always `unavailable` (`SMART_MONEY_RUNTIME_DEFERRED`)                                                       | `implemented` | `explicitly-disabled` (D21)                                                |
+| Method and path                           | Request                                       | Success projection                                                                                                                                                  | Interface     | Capability                                                                                                                     |
+| ----------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /v2/market/overview`                 | Bearer + contract/client headers; no input    | Watchlist rows with price facts; trending registry assets by DexScreener 24h volume with `recommendationId`                                                         | `implemented` | `blocked-provider`; each fact carries its own source/quality                                                                   |
+| `GET /v2/market/assets/{assetId}`         | Canonical `assetId`                           | Registry identity, DexScreener facts from the deepest base pair, bound verified community, GoPlus fact list                                                         | `implemented` | `blocked-provider`; GoPlus needs credentials                                                                                   |
+| `GET /v2/market/assets/{assetId}/candles` | `interval=15m\|1h\|4h\|1d\|1w`, `limit` 1–300 | GeckoTerminal OHLCV, else candles derived from indexed V3 swaps (`quality: derived`, labelled); native BNB through the WBNB pool (`quality: proxied`, `proxyAsset`) | `implemented` | `blocked-provider`; derived path needs a registered pool and the pool lane                                                     |
+| `GET /v2/market/assets/{assetId}/trades`  | `cursor` or `limit` (1–50)                    | Indexed swaps with tx/log/block/timestamp/confirmations and direction relative to the asset                                                                         | `implemented` | `blocked-provider`; unregistered pool or idle lane is `unavailable`                                                            |
+| `GET /v2/market/assets/{assetId}/holders` | Canonical `assetId`                           | GoPlus holder count; distribution `unavailable`                                                                                                                     | `implemented` | `blocked-provider`                                                                                                             |
+| `GET /v2/market/new-pairs`                | no input                                      | GeckoTerminal new pools when enabled; risk screening `unavailable`                                                                                                  | `implemented` | `explicitly-disabled` until GeckoTerminal terms are verified               |
+| `GET /v2/market/smart-money`              | no input                                      | Always `unavailable` (`SMART_MONEY_RUNTIME_DEFERRED`)                                                                                                               | `implemented` | `explicitly-disabled` (D21)                                                                                                    |
 
 Every market number is a canonical decimal string inside a fact object
 `{value, source, fetchedAt, ttlSeconds, quality, reasonCode}`. Provider

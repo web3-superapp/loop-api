@@ -772,7 +772,11 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
    搜不到、关注不了）。
 3. 账号 A `POST /v2/communities` 申请社区（得到 `pending`）。
 4. 运维执行 `pnpm community:verify <communityId>`（`NODE_ENV=production` 会被
-   拒绝），社区变 `verified`。
+   拒绝），社区变 `verified`，同时分配官方群并给每个成员入队 Stream 同步。
+   直接写库造出来的 `verified` 社区没有官方群（决策 0050）：运维执行
+   `pnpm community:provision-channels --confirm` 补齐，之后 `chat` 块先是
+   `syncing`（`COMMUNITY_CHANNEL_NOT_PROVISIONED` → `COMMUNITY_CHANNEL_MEMBER_SYNCING`），
+   worker 跑完本人那条 job 后变 `available`。
 5. 账号 B `GET /v2/search?domain=communities&q=<前缀>` → `POST …/join`。
 6. A 任命 B 为 admin → B 禁言第三个成员 → 成员越权 403 → 封禁后取关与 DM 请求
    被拒 → cursor 跨账号失效 → 关闭模块后 404。

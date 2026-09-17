@@ -7,7 +7,10 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../src/config.js";
-import { createPostgresCommunityRepository } from "../src/database/community-repository.js";
+import {
+  createPostgresCommunityRepository,
+  listVerifiedCommunitiesWithoutChannel,
+} from "../src/database/community-repository.js";
 import {
   createPostgresDatabase,
   type PostgresDatabase,
@@ -1782,6 +1785,67 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     const ids = joinedOnly.map((item) => item.communityId);
     expect(ids).toContain(mine);
     expect(ids).not.toContain(theirs);
+  });
+
+  it("lists a verified community without a channel and repairs it through verifyCommunity", async () => {
+    const owner = await createAccount("seeded-owner");
+    const member = await createAccount("seeded-member");
+    const communityId = await createCommunity(owner.userId, "seeded-verified");
+    await join(member.userId, communityId);
+    // A seed writes the verified state directly, so `verifyCommunity` never
+    // ran and no channel row exists: exactly the state the operator script
+    // repairs.
+    await pool.query({
+      text: `
+        update public.communities
+        set verification_status = 'verified', verified_at = clock_timestamp()
+        where community_id = $1
+      `,
+      values: [communityId],
+    });
+    const before = await listVerifiedCommunitiesWithoutChannel(pool);
+    expect(before).toContainEqual({
+      communityId,
+      slug: "seeded-verified",
+      name: "Frog Holders",
+      memberCount: 2,
+    });
+
+    const record = await repository.verifyCommunity({
+      communityId,
+      requestId: randomUUID(),
+      reasonCode: "operator_channel_provision",
+    });
+    expect(record.verificationStatus).toBe("verified");
+
+    const channel = await pool.query<{ stream_channel_id: string }>({
+      text: `select stream_channel_id from public.community_channels where community_id = $1`,
+      values: [communityId],
+    });
+    expect(channel.rows).toHaveLength(1);
+    const jobs = await pool.query<{ owner_user_id: string; kind: string }>({
+      text: `
+        select owner_user_id, kind from public.community_channel_sync_jobs
+        where community_id = $1 order by owner_user_id
+      `,
+      values: [communityId],
+    });
+    expect(jobs.rows.map((row) => row.kind)).toEqual(["add", "add"]);
+    expect(new Set(jobs.rows.map((row) => row.owner_user_id))).toEqual(
+      new Set([owner.userId, member.userId]),
+    );
+    // The repair never writes a second verification audit row.
+    const audits = await pool.query<{ count: string }>({
+      text: `
+        select count(*)::text as count from public.community_role_events
+        where community_id = $1 and event_type = 'community_verified'
+      `,
+      values: [communityId],
+    });
+    expect(audits.rows[0]?.count).toBe("0");
+
+    const after = await listVerifiedCommunitiesWithoutChannel(pool);
+    expect(after.map((row) => row.communityId)).not.toContain(communityId);
   });
 
   it("raises NOT_FOUND semantics for an unknown community", async () => {
