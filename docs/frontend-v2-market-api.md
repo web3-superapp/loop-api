@@ -105,7 +105,15 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
   `recommendationId` 每次响应新生成，UI 上报"看到了哪一份排序"时带上它。
   原型里的"成员数 / 算力倍数"没有后端，不要渲染或必须标 unavailable。
 - `priceChange24h.value` 可能为负数字符串（`"-3.2"`）。
-- `newPairs.status === "available"` 只表示 `GET /v2/market/new-pairs` 有 Provider。
+- **`newPairs`（决策 0053）**：可用变体是 `{ "status": "available", "omittedCount": 0 }`，
+  `omittedCount` **必填**、与 `GET /v2/market/new-pairs` 的 `newPairs.omittedCount`
+  **同源同值**（同一份 GeckoTerminal 缓存 fact）。`available` 现在意味着新币页此刻
+  确实读得到数据，不再只是"有 Provider"：Provider 关闭是
+  `MARKET_PROVIDER_GECKOTERMINAL_DISABLED`；Provider 开着但 fact 读不到（不可达 /
+  畸形 / 缓存不可用）是 `{status:"unavailable", reasonCode}`，reasonCode 与新币页
+  报的一致。行情 Tab 卡片可以印 `omittedCount`（正常为 0，表示"有 N 条池子因标识
+  畸形没列出"）；`items` 不在总览里，进页再读。**严格 codec 必须把 `omittedCount`
+  加进可用变体的键集合。**
 
 ## 4. `GET /v2/market/assets/{assetId}` → `token` 页
 

@@ -30,11 +30,12 @@ import { bscChainId } from "../src/features/chain/chain-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { BscReadClient } from "../src/integrations/bsc/rpc-client.js";
-import type {
-  CandlesProvider,
-  MarketPairsProvider,
-  SecurityFactsProvider,
-  TokenPairsSnapshot,
+import {
+  MarketProviderError,
+  type CandlesProvider,
+  type MarketPairsProvider,
+  type SecurityFactsProvider,
+  type TokenPairsSnapshot,
 } from "../src/integrations/market/market-data-provider.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
 
@@ -939,6 +940,75 @@ describe("LOOP API V2 market module", () => {
         quality: "fresh",
         proxyAsset: null,
         priceUnit: "USD per WBNB",
+      },
+    });
+  });
+
+  it("publishes the new-pairs omittedCount on the overview from the same fact as the new-pairs page (Decision 0053)", async () => {
+    const { provider } = candlesProviderFake();
+    const { app } = await createApp(fakes({ candlesProvider: provider }));
+    const overview = await app.inject({
+      method: "GET",
+      url: "/v2/market/overview",
+      headers: commonHeaders(),
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json()).toMatchObject({
+      newPairs: { status: "available", omittedCount: 0 },
+    });
+    const page = await app.inject({
+      method: "GET",
+      url: "/v2/market/new-pairs",
+      headers: commonHeaders(),
+    });
+    expect(page.statusCode).toBe(200);
+    expect(
+      page.json<{ newPairs: { omittedCount: number } }>().newPairs.omittedCount,
+    ).toBe(
+      overview.json<{ newPairs: { omittedCount: number } }>().newPairs
+        .omittedCount,
+    );
+  });
+
+  it("marks the overview's new-pairs card unavailable with the page's reason when the fact cannot be read", async () => {
+    const { provider } = candlesProviderFake();
+    const failing: CandlesProvider = {
+      ...provider,
+      readNewPools: vi.fn(() =>
+        Promise.reject(
+          new MarketProviderError(
+            "market_provider_unreachable",
+            "MARKET_PROVIDER_UNREACHABLE",
+          ),
+        ),
+      ),
+    };
+    const { app } = await createApp(fakes({ candlesProvider: failing }));
+    const overview = await app.inject({
+      method: "GET",
+      url: "/v2/market/overview",
+      headers: commonHeaders(),
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json()).toMatchObject({
+      newPairs: {
+        status: "unavailable",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      },
+      smartMoney: { status: "unavailable" },
+    });
+    expect(
+      overview.json<{ newPairs: Record<string, unknown> }>().newPairs,
+    ).not.toHaveProperty("omittedCount");
+    const page = await app.inject({
+      method: "GET",
+      url: "/v2/market/new-pairs",
+      headers: commonHeaders(),
+    });
+    expect(page.json()).toMatchObject({
+      newPairs: {
+        status: "unavailable",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
       },
     });
   });

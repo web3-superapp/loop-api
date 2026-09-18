@@ -118,7 +118,14 @@ export interface MarketOverviewResource {
         readonly items: readonly TrendingRow[];
       }
     | UnavailableBlock;
-  readonly newPairs: { readonly status: "available" } | UnavailableBlock;
+  /**
+   * The new-pairs card (Decision 0053 §3): the same `readNewPools` fact the
+   * new-pairs page reads, so `omittedCount` is that page's value. Available
+   * means the page has data right now, not merely that a Provider exists.
+   */
+  readonly newPairs:
+    | { readonly status: "available"; readonly omittedCount: number }
+    | UnavailableBlock;
   readonly smartMoney: UnavailableBlock;
   readonly observedAt: string;
   readonly contractVersion: typeof v2ContractVersion;
@@ -659,12 +666,28 @@ export function createMarketReadService(
               ),
             });
 
+      let newPairs: MarketOverviewResource["newPairs"];
+      if (!input.facts.candlesProviderEnabled) {
+        newPairs = unavailableBlock(marketReasonCodes.geckoterminalDisabled);
+      } else {
+        const fact = await input.facts.readNewPools(
+          signal === undefined ? {} : { signal },
+        );
+        newPairs =
+          fact.value === null || fact.fetchedAt === null
+            ? unavailableBlock(
+                fact.reasonCode ?? marketReasonCodes.providerUnreachable,
+              )
+            : Object.freeze({
+                status: "available" as const,
+                omittedCount: fact.value.omittedPoolCount,
+              });
+      }
+
       return Object.freeze({
         watchlist,
         trending,
-        newPairs: input.facts.candlesProviderEnabled
-          ? Object.freeze({ status: "available" as const })
-          : unavailableBlock(marketReasonCodes.geckoterminalDisabled),
+        newPairs,
         smartMoney: unavailableBlock(marketReasonCodes.smartMoneyDeferred),
         observedAt,
         contractVersion: v2ContractVersion,

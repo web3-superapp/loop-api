@@ -204,12 +204,22 @@ export const marketOverviewResourceSchema = {
       ],
     },
     newPairs: {
+      description:
+        "The new-pairs card. `available` means `GET /v2/market/new-pairs` has data right now: it is read from the same cached GeckoTerminal fact, so `omittedCount` equals that page's value (Decision 0053). When the Provider is disabled or the fact cannot be read, the block is unavailable with the same reason code the new-pairs page reports.",
       anyOf: [
         {
           type: "object",
           additionalProperties: false,
-          required: ["status"],
-          properties: { status: { type: "string", const: "available" } },
+          required: ["status", "omittedCount"],
+          properties: {
+            status: { type: "string", const: "available" },
+            omittedCount: {
+              type: "integer",
+              minimum: 0,
+              description:
+                "Provider rows the new-pairs page could not list because their pool identifier is neither a contract address nor a 32-byte pool id; normally 0. Same source and value as `newPairs.omittedCount` on `GET /v2/market/new-pairs`.",
+            },
+          },
         },
         unavailableSchema,
       ],
