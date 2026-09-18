@@ -24,6 +24,7 @@ import {
   voiceRoomMemberListLimits,
   voiceRoomMemberRoleFilters,
   voiceRoomMembersFilter,
+  voiceRoomProviderSyncReasonCodes,
   type CommunicationUnavailableProjection,
   type HandRaiseState,
   type VoiceRoomMemberCommand,
@@ -43,6 +44,7 @@ import {
   CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
   type VoiceRoomMemberRecord,
+  type VoiceRoomRecord,
   type VoiceRoomViewerRecord,
 } from "./communication-repository.js";
 
@@ -484,6 +486,74 @@ export function createVoiceRoomService(
     return observeParticipants(record.room.callId, signal);
   }
 
+  /**
+   * Exactly one `GoLive` attempt. `"live"` only when Stream answered and
+   * reported `backstage: false`; a rejection, a timeout, an abort, a
+   * projection mismatch, or an answer that still says backstage all count as
+   * not confirmed. Never retried within a request.
+   */
+  async function attemptGoLive(
+    callId: string,
+    signal: AbortSignal,
+  ): Promise<"live" | "unconfirmed"> {
+    try {
+      const projection = await options.callGateway.goLive({ callId, signal });
+      signal.throwIfAborted();
+      return projection.backstage ? "unconfirmed" : "live";
+    } catch (error) {
+      signal.throwIfAborted();
+      void error;
+      return "unconfirmed";
+    }
+  }
+
+  /** A live, provisioned room whose call Stream still holds in backstage. */
+  function needsGoLive(room: VoiceRoomRecord): boolean {
+    return (
+      room.state === "live" &&
+      room.provisionState === "provisioned" &&
+      room.backstage
+    );
+  }
+
+  /**
+   * Self-heal for rooms created before Decision 0054, whose call was never
+   * taken out of backstage. At most one go-live attempt per request; on
+   * confirmation the flag is written back so later requests skip the
+   * provider. A failed attempt leaves the record as read and reports it in
+   * `providerSync` so a reader can see the call is still not joinable.
+   */
+  async function ensureLive(
+    record: VoiceRoomViewerRecord,
+    signal: AbortSignal,
+  ): Promise<{
+    readonly record: VoiceRoomViewerRecord;
+    readonly providerSync: VoiceRoomProviderSync;
+  }> {
+    if (!needsGoLive(record.room)) {
+      return { record, providerSync: confirmedSync };
+    }
+    const live = await attemptGoLive(record.room.callId, signal);
+    if (live !== "live") {
+      return {
+        record,
+        providerSync: unconfirmedSync(voiceRoomProviderSyncReasonCodes.goLive),
+      };
+    }
+    const room = await repositoryCall(() =>
+      options.repository.recordVoiceRoomProvisioning({
+        voiceRoomId: record.room.voiceRoomId,
+        provisionState: "provisioned",
+        errorCode: null,
+        backstage: false,
+      }),
+    );
+    return {
+      record: Object.freeze({ ...record, room }),
+      providerSync: confirmedSync,
+    };
+  }
+
   /** Attempt exactly one Stream write and classify its outcome. */
   async function attemptProviderWrite(
     operation: () => Promise<void>,
@@ -662,8 +732,15 @@ export function createVoiceRoomService(
         return resource(record, confirmedSync, notObserved);
       }
       const hostStreamUserId = record.hostStreamUserId;
+      // Two provider writes with two outcomes (Decision 0054): the call is
+      // created in backstage, then taken live. Only a confirmed go-live with
+      // `backstage: false` makes the room `provisioned`; anything else keeps
+      // it `reconciling`, which no one can join, and names the write that
+      // was not confirmed.
       let providerSync: VoiceRoomProviderSync;
       let provisionState: VoiceRoomProvisionState;
+      let backstage = record.room.backstage;
+      let errorCode: string | null;
       try {
         await options.callGateway.createAudioRoom({
           callId: record.room.callId,
@@ -671,22 +748,40 @@ export function createVoiceRoomService(
           signal: input.signal,
         });
         input.signal.throwIfAborted();
-        providerSync = confirmedSync;
-        provisionState = "provisioned";
       } catch (error) {
         input.signal.throwIfAborted();
         void error;
-        providerSync = unconfirmedSync("STREAM_CALL_CREATE_UNCONFIRMED");
+        const updated = await repositoryCall(() =>
+          options.repository.recordVoiceRoomProvisioning({
+            voiceRoomId: record.room.voiceRoomId,
+            provisionState: "reconciling",
+            errorCode: "stream_call_create_unconfirmed",
+            backstage,
+          }),
+        );
+        return resource(
+          Object.freeze({ ...record, room: updated }),
+          unconfirmedSync(voiceRoomProviderSyncReasonCodes.create),
+          notObserved,
+        );
+      }
+      const live = await attemptGoLive(record.room.callId, input.signal);
+      if (live === "live") {
+        providerSync = confirmedSync;
+        provisionState = "provisioned";
+        backstage = false;
+        errorCode = null;
+      } else {
+        providerSync = unconfirmedSync(voiceRoomProviderSyncReasonCodes.goLive);
         provisionState = "reconciling";
+        errorCode = "stream_call_go_live_unconfirmed";
       }
       const updated = await repositoryCall(() =>
         options.repository.recordVoiceRoomProvisioning({
           voiceRoomId: record.room.voiceRoomId,
           provisionState,
-          errorCode:
-            provisionState === "provisioned"
-              ? null
-              : "stream_call_create_unconfirmed",
+          errorCode,
+          backstage,
         }),
       );
       return resource(
@@ -713,12 +808,13 @@ export function createVoiceRoomService(
           contractVersion: v2ContractVersion,
         });
       }
+      const healed = await ensureLive(record, input.signal);
       const observed =
-        record.room.provisionState === "provisioned"
-          ? await observeParticipants(record.room.callId, input.signal)
+        healed.record.room.provisionState === "provisioned"
+          ? await observeParticipants(healed.record.room.callId, input.signal)
           : notObserved;
       return Object.freeze({
-        current: resource(record, confirmedSync, observed),
+        current: resource(healed.record, healed.providerSync, observed),
         reasonCode: null,
         contractVersion: v2ContractVersion,
       });
@@ -732,15 +828,34 @@ export function createVoiceRoomService(
           viewerUserId: input.principal.userId,
         }),
       );
+      const healed = await ensureLive(record, input.signal);
       const observed =
-        record.room.provisionState === "provisioned"
-          ? await observeParticipants(record.room.callId, input.signal)
+        healed.record.room.provisionState === "provisioned"
+          ? await observeParticipants(healed.record.room.callId, input.signal)
           : notObserved;
-      return resource(record, confirmedSync, observed);
+      return resource(healed.record, healed.providerSync, observed);
     },
 
     async join(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
       const voiceRoomId = parseCommunicationOpaqueId(input.voiceRoomId);
+      // A join is an authorization to enter the Stream call. While the call
+      // is in backstage that authorization is worthless for anyone but the
+      // host, so the room is read first, healed once if needed, and the join
+      // is refused before any LOOP row is written when the call is still in
+      // backstage (Decision 0054 §2). Rooms that are not live or not
+      // provisioned fall through to the repository's own refusal.
+      const preview = await repositoryCall(() =>
+        options.repository.getVoiceRoom({
+          voiceRoomId,
+          viewerUserId: input.principal.userId,
+        }),
+      );
+      const healed = await ensureLive(preview, input.signal);
+      if (needsGoLive(healed.record.room)) {
+        throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+          reasonCode: communicationUnavailableReasonCodes.voiceBackstage,
+        });
+      }
       const record = await repositoryCall(() =>
         options.repository.joinVoiceRoom({
           ...commandInputs(input),
@@ -764,7 +879,7 @@ export function createVoiceRoomService(
             signal: input.signal,
           }),
         input.signal,
-        "STREAM_CALL_MEMBER_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.member,
       );
       return resource(
         record,
@@ -798,7 +913,7 @@ export function createVoiceRoomService(
             signal: input.signal,
           }),
         input.signal,
-        "STREAM_CALL_MEMBER_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.member,
       );
       return resource(
         record,
@@ -984,7 +1099,7 @@ export function createVoiceRoomService(
             signal: input.signal,
           }),
         input.signal,
-        "STREAM_CALL_MUTE_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.mute,
       );
       return resource(
         record.room,
@@ -1061,7 +1176,7 @@ export function createVoiceRoomService(
           });
         },
         input.signal,
-        "STREAM_CALL_PERMISSION_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.permission,
       );
       return resource(
         record.room,
@@ -1108,7 +1223,7 @@ export function createVoiceRoomService(
           });
         },
         input.signal,
-        "STREAM_CALL_PERMISSION_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.permission,
       );
       return resource(
         record.room,
@@ -1138,7 +1253,7 @@ export function createVoiceRoomService(
             signal: input.signal,
           }),
         input.signal,
-        "STREAM_CALL_MUTE_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.mute,
       );
       return resource(
         record,
@@ -1167,7 +1282,7 @@ export function createVoiceRoomService(
             signal: input.signal,
           }),
         input.signal,
-        "STREAM_CALL_END_UNCONFIRMED",
+        voiceRoomProviderSyncReasonCodes.end,
       );
       return resource(record, providerSync, notObserved);
     },

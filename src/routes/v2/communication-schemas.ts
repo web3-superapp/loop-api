@@ -378,7 +378,11 @@ const voiceRoomBodySchema = {
           description:
             "Whether the Stream call itself is confirmed. Only `provisioned` may be joined.",
         },
-        backstage: { type: "boolean" },
+        backstage: {
+          type: "boolean",
+          description:
+            "Whether Stream still holds the call in backstage, where only the host may join. Always false for a provisioned room (the call is taken live at creation, Decision 0054); a room created before that decision is taken live once on the next read or join. True on a provisioned live room means that one go-live attempt was not confirmed and the room cannot be joined yet.",
+        },
         createdAt: { type: "string", format: "date-time" },
         endedAt: {
           anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],

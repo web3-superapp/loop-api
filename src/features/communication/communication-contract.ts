@@ -137,6 +137,23 @@ export const communicationUnavailableReasonCodes = Object.freeze({
   voiceNotProvisioned: "COMMUNITY_VOICE_ROOM_NOT_PROVISIONED",
   voiceRuntime: "VOICE_ROOM_RUNTIME_UNAVAILABLE",
   participantCount: "STREAM_PARTICIPANT_COUNT_NOT_OBSERVED",
+  /**
+   * The Stream call is still in backstage, where only the host may join
+   * (Decision 0054). Carried in `detailsSafe.reasonCode` of the
+   * CAPABILITY_UNAVAILABLE a `join` answers after its one go-live attempt
+   * did not confirm; never a generic runtime outage.
+   */
+  voiceBackstage: "VOICE_ROOM_BACKSTAGE_NOT_LIVE",
+} as const);
+
+/** `providerSync.reasonCode` values a voice-room response can carry. */
+export const voiceRoomProviderSyncReasonCodes = Object.freeze({
+  create: "STREAM_CALL_CREATE_UNCONFIRMED",
+  goLive: "STREAM_CALL_GO_LIVE_UNCONFIRMED",
+  member: "STREAM_CALL_MEMBER_UNCONFIRMED",
+  permission: "STREAM_CALL_PERMISSION_UNCONFIRMED",
+  mute: "STREAM_CALL_MUTE_UNCONFIRMED",
+  end: "STREAM_CALL_END_UNCONFIRMED",
 } as const);
 
 /**

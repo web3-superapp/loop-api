@@ -485,6 +485,9 @@ describe("Stream audio_room call gateway", () => {
     await expect(gateway.endCall({ callId, signal: signal() })).rejects.toEqual(
       unavailable,
     );
+    await expect(gateway.goLive({ callId, signal: signal() })).rejects.toEqual(
+      unavailable,
+    );
     await expect(
       gateway.queryMembers({ callId, signal: signal() }),
     ).rejects.toEqual(unavailable);
@@ -822,6 +825,117 @@ describe("Stream audio_room call gateway", () => {
       gateway.observeSession({ callId: "default", signal: signal() }),
     ).rejects.toEqual(new StreamCallGatewayUnavailableError());
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("goLive (Decision 0054)", () => {
+    it("takes the call out of backstage with one empty go_live write and projects the answer", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(callResponse({ backstage: false })),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).resolves.toEqual({
+        callId,
+        callCid: `audio_room:${callId}`,
+        backstage: false,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(request[1].method).toBe("POST");
+      expect(
+        requestedUrl(fetchMock).pathname.endsWith(
+          `/video/call/audio_room/${callId}/go_live`,
+        ),
+      ).toBe(true);
+      expect(requestBody(fetchMock, 0)).toEqual({});
+    });
+
+    it("reports backstage truthfully when Stream answers but the call is still in backstage", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(callResponse({ backstage: true })));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ backstage: true });
+    });
+
+    it("sanitizes a deterministic rejection into the unavailable error without a retry", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 17, message: "not allowed to go live", StatusCode: 403 },
+            403,
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallGatewayUnavailableError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("sanitizes the SDK timeout into the unavailable error", async () => {
+      const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+        // The SDK passes `AbortSignal.timeout(3000)`; behave as fetch does
+        // once that signal fires.
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+        const error = new Error("The operation was aborted due to timeout");
+        error.name = "TimeoutError";
+        return Promise.reject(error);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallGatewayUnavailableError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a go_live answer for a different call as a projection mismatch", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callResponse({
+            id: "loop_voice_ffffffffffffffffffffffffffffffff",
+            cid: "audio_room:loop_voice_ffffffffffffffffffffffffffffffff",
+            backstage: false,
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("refuses a foreign call ID and an aborted signal before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      const aborted = new AbortController();
+      aborted.abort();
+
+      await expect(
+        gateway.goLive({ callId: "default", signal: signal() }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+      await expect(
+        gateway.goLive({ callId, signal: aborted.signal }),
+      ).rejects.toThrow();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("observeSession", () => {

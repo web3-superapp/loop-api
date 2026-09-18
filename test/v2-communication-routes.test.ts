@@ -75,7 +75,8 @@ function room(
       callId,
       state: "live" as const,
       provisionState: "provisioned" as const,
-      backstage: true,
+      // A provisioned room is a live call (Decision 0054).
+      backstage: false,
       createdAt,
       endedAt: null,
     }),
@@ -199,7 +200,11 @@ function communicationRepositoryFake(
     ),
     createVoiceRoom: vi.fn(() =>
       Promise.resolve(
-        room({ room: { ...room().room, provisionState: "pending" } }),
+        room({
+          // Freshly inserted: not provisioned, and the call type starts in
+          // backstage until the service takes it live.
+          room: { ...room().room, provisionState: "pending", backstage: true },
+        }),
       ),
     ),
     recordVoiceRoomProvisioning: vi.fn(() => Promise.resolve(room().room)),
@@ -274,7 +279,7 @@ function communicationRepositoryFake(
             callId,
             state: "ended",
             provisionState: "provisioned",
-            backstage: true,
+            backstage: false,
             createdAt,
             endedAt: "2026-09-08T02:00:00.000Z",
           },
@@ -314,6 +319,13 @@ function callGatewayFake(overrides: Partial<StreamCallGateway> = {}): {
         callId,
         callCid: `audio_room:${callId}`,
         backstage: true,
+      }),
+    ),
+    goLive: vi.fn(() =>
+      Promise.resolve({
+        callId,
+        callCid: `audio_room:${callId}`,
+        backstage: false,
       }),
     ),
     updateCallMembers: vi.fn(() => Promise.resolve()),
@@ -681,7 +693,7 @@ describe("LOOP API V2 communication module", () => {
     });
   });
 
-  it("creates a voice room and confirms the single Stream call", async () => {
+  it("creates a voice room, takes the call live, and records backstage false (Decision 0054)", async () => {
     const { app, callMocks, communicationMocks } = await createApp();
     const response = await app.inject({
       method: "POST",
@@ -698,19 +710,324 @@ describe("LOOP API V2 communication module", () => {
         callCid: `audio_room:${callId}`,
         state: "live",
         provisionState: "provisioned",
-        backstage: true,
+        backstage: false,
       },
       viewer: { role: "host", canInviteSpeakers: true, canEndRoom: true },
       providerSync: { status: "confirmed", reasonCode: null },
       contractVersion: "2.0",
     });
     expect(callMocks["createAudioRoom"]).toHaveBeenCalledTimes(1);
+    expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+    expect(callMocks["goLive"]).toHaveBeenCalledWith({
+      callId,
+      signal: expect.any(AbortSignal) as AbortSignal,
+    });
     expect(
       communicationMocks["recordVoiceRoomProvisioning"],
     ).toHaveBeenCalledWith({
       voiceRoomId,
       provisionState: "provisioned",
       errorCode: null,
+      backstage: false,
+    });
+  });
+
+  it("keeps a room reconciling and unconfirmed when go-live is rejected", async () => {
+    const callGateway = callGatewayFake({
+      goLive: vi.fn(() => Promise.reject(new Error("provider"))),
+    });
+    const communication = communicationRepositoryFake({
+      recordVoiceRoomProvisioning: vi.fn(() =>
+        Promise.resolve({
+          ...room().room,
+          provisionState: "reconciling" as const,
+          backstage: true,
+        }),
+      ),
+    });
+    const { app, callMocks, communicationMocks } = await createApp(
+      fakes({ callGateway, communication }),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/communities/${communityId}/voice-rooms`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      room: { provisionState: "reconciling", backstage: true },
+      providerSync: {
+        status: "unconfirmed",
+        reasonCode: "STREAM_CALL_GO_LIVE_UNCONFIRMED",
+      },
+    });
+    expect(callMocks["createAudioRoom"]).toHaveBeenCalledTimes(1);
+    expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+    expect(
+      communicationMocks["recordVoiceRoomProvisioning"],
+    ).toHaveBeenCalledWith({
+      voiceRoomId,
+      provisionState: "reconciling",
+      errorCode: "stream_call_go_live_unconfirmed",
+      backstage: true,
+    });
+  });
+
+  it("does not claim the room provisioned when Stream answers go-live but still reports backstage", async () => {
+    const callGateway = callGatewayFake({
+      goLive: vi.fn(() =>
+        Promise.resolve({
+          callId,
+          callCid: `audio_room:${callId}`,
+          backstage: true,
+        }),
+      ),
+    });
+    const communication = communicationRepositoryFake({
+      recordVoiceRoomProvisioning: vi.fn(() =>
+        Promise.resolve({
+          ...room().room,
+          provisionState: "reconciling" as const,
+          backstage: true,
+        }),
+      ),
+    });
+    const { app, communicationMocks } = await createApp(
+      fakes({ callGateway, communication }),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/communities/${communityId}/voice-rooms`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      room: { provisionState: "reconciling", backstage: true },
+      providerSync: {
+        status: "unconfirmed",
+        reasonCode: "STREAM_CALL_GO_LIVE_UNCONFIRMED",
+      },
+    });
+    expect(
+      communicationMocks["recordVoiceRoomProvisioning"],
+    ).toHaveBeenCalledWith({
+      voiceRoomId,
+      provisionState: "reconciling",
+      errorCode: "stream_call_go_live_unconfirmed",
+      backstage: true,
+    });
+  });
+
+  describe("existing backstage rooms self-heal (Decision 0054 §2)", () => {
+    const backstageRoom = () =>
+      room({ room: { ...room().room, backstage: true } });
+
+    it("takes a backstage room live once on read and writes the flag back", async () => {
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+        recordVoiceRoomProvisioning: vi.fn(() =>
+          Promise.resolve({ ...room().room, backstage: false }),
+        ),
+      });
+      const { app, callMocks, communicationMocks } = await createApp(
+        fakes({ communication }),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        room: { provisionState: "provisioned", backstage: false },
+        providerSync: { status: "confirmed", reasonCode: null },
+        participants: { observed: { status: "available" } },
+      });
+      expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+      expect(
+        communicationMocks["recordVoiceRoomProvisioning"],
+      ).toHaveBeenCalledWith({
+        voiceRoomId,
+        provisionState: "provisioned",
+        errorCode: null,
+        backstage: false,
+      });
+    });
+
+    it("heals through the community current-room read as well", async () => {
+      const communication = communicationRepositoryFake({
+        getCurrentVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+        recordVoiceRoomProvisioning: vi.fn(() =>
+          Promise.resolve({ ...room().room, backstage: false }),
+        ),
+      });
+      const { app, callMocks } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/voice-rooms/current`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        current: {
+          room: { backstage: false },
+          providerSync: { status: "confirmed", reasonCode: null },
+        },
+      });
+      expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+    });
+
+    it("still answers the read when go-live fails, reporting the call as not live", async () => {
+      const callGateway = callGatewayFake({
+        goLive: vi.fn(() => Promise.reject(new Error("provider"))),
+      });
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+      });
+      const { app, callMocks, communicationMocks } = await createApp(
+        fakes({ callGateway, communication }),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        room: { provisionState: "provisioned", backstage: true },
+        providerSync: {
+          status: "unconfirmed",
+          reasonCode: "STREAM_CALL_GO_LIVE_UNCONFIRMED",
+        },
+      });
+      expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+      expect(
+        communicationMocks["recordVoiceRoomProvisioning"],
+      ).not.toHaveBeenCalled();
+    });
+
+    it("never calls go-live for a room that is already live", async () => {
+      const { app, callMocks } = await createApp();
+      const read = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}`,
+        headers: commonHeaders(),
+      });
+      expect(read.statusCode).toBe(200);
+      const joined = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(joined.statusCode).toBe(200);
+      expect(callMocks["goLive"]).not.toHaveBeenCalled();
+    });
+
+    it("heals a backstage room before committing a join", async () => {
+      const order: string[] = [];
+      const callGateway = callGatewayFake({
+        goLive: vi.fn(() => {
+          order.push("goLive");
+          return Promise.resolve({
+            callId,
+            callCid: `audio_room:${callId}`,
+            backstage: false,
+          });
+        }),
+        updateCallMembers: vi.fn(() => {
+          order.push("updateCallMembers");
+          return Promise.resolve();
+        }),
+      });
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+        recordVoiceRoomProvisioning: vi.fn(() => {
+          order.push("recordVoiceRoomProvisioning");
+          return Promise.resolve({ ...room().room, backstage: false });
+        }),
+        joinVoiceRoom: vi.fn(() => {
+          order.push("joinVoiceRoom");
+          return Promise.resolve(room({ viewerRole: "listener" }));
+        }),
+      });
+      const { app } = await createApp(fakes({ callGateway, communication }));
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        room: { backstage: false },
+        viewer: { role: "listener" },
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(order).toEqual([
+        "goLive",
+        "recordVoiceRoomProvisioning",
+        "joinVoiceRoom",
+        "updateCallMembers",
+      ]);
+    });
+
+    it("refuses the join with a named reason, and writes nothing, while the call stays in backstage", async () => {
+      const callGateway = callGatewayFake({
+        goLive: vi.fn(() => Promise.reject(new Error("provider"))),
+      });
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+      });
+      const { app, callMocks, communicationMocks } = await createApp(
+        fakes({ callGateway, communication }),
+      );
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        category: "availability",
+        retryable: true,
+        detailsSafe: { reasonCode: "VOICE_ROOM_BACKSTAGE_NOT_LIVE" },
+        providerReferenceSafe: null,
+      });
+      expect(callMocks["goLive"]).toHaveBeenCalledTimes(1);
+      expect(communicationMocks["joinVoiceRoom"]).not.toHaveBeenCalled();
+      expect(callMocks["updateCallMembers"]).not.toHaveBeenCalled();
+    });
+
+    it("refuses the join when Stream answers go-live but still reports backstage", async () => {
+      const callGateway = callGatewayFake({
+        goLive: vi.fn(() =>
+          Promise.resolve({
+            callId,
+            callCid: `audio_room:${callId}`,
+            backstage: true,
+          }),
+        ),
+      });
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() => Promise.resolve(backstageRoom())),
+      });
+      const { app, communicationMocks } = await createApp(
+        fakes({ callGateway, communication }),
+      );
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        detailsSafe: { reasonCode: "VOICE_ROOM_BACKSTAGE_NOT_LIVE" },
+      });
+      expect(
+        communicationMocks["recordVoiceRoomProvisioning"],
+      ).not.toHaveBeenCalled();
+      expect(communicationMocks["joinVoiceRoom"]).not.toHaveBeenCalled();
     });
   });
 
@@ -743,12 +1060,14 @@ describe("LOOP API V2 communication module", () => {
       },
     });
     expect(callMocks["createAudioRoom"]).toHaveBeenCalledTimes(1);
+    expect(callMocks["goLive"]).not.toHaveBeenCalled();
     expect(
       communicationMocks["recordVoiceRoomProvisioning"],
     ).toHaveBeenCalledWith({
       voiceRoomId,
       provisionState: "reconciling",
       errorCode: "stream_call_create_unconfirmed",
+      backstage: true,
     });
   });
 
@@ -1631,7 +1950,7 @@ describe("LOOP API V2 communication module", () => {
               callId,
               state: "ended",
               provisionState: "provisioned",
-              backstage: true,
+              backstage: false,
               createdAt,
               endedAt: createdAt,
             },

@@ -156,6 +156,15 @@ export interface StreamCallGateway {
   muteUsers(input: StreamCallMuteAllInput): Promise<void>;
   /** Mute one member's audio (Decision 0052 §2); the same official endpoint with `user_ids`. */
   muteUser(input: StreamCallMuteUserInput): Promise<void>;
+  /**
+   * Take the call out of backstage (Decision 0054). The `audio_room` call
+   * type grants `join-backstage` to `host`/`admin` only, so a backstage call
+   * rejects every listener (`user`) and speaker at `call.join()`. The returned
+   * projection carries the `backstage` flag Stream reports after the request;
+   * callers must read it and never assume the flag flipped. Idempotent on the
+   * provider side: a call that is already live answers `backstage: false`.
+   */
+  goLive(input: StreamCallEndInput): Promise<StreamCallProjection>;
   endCall(input: StreamCallEndInput): Promise<void>;
   queryMembers(input: StreamCallEndInput): Promise<StreamCallMemberObservation>;
   observeSession(
@@ -373,6 +382,7 @@ export function createUnavailableStreamCallGateway(): StreamCallGateway {
     updateUserPermissions: unavailablePromise,
     muteUsers: unavailablePromise,
     muteUser: unavailablePromise,
+    goLive: unavailablePromise,
     endCall: unavailablePromise,
     queryMembers: unavailablePromise,
     observeSession: unavailablePromise,
@@ -417,6 +427,10 @@ export function createStreamCallGateway(
               loop_call_kind: "communityVoiceRoom",
               loop_call_schema_version: streamCallSchemaVersion,
             },
+            // The `audio_room` type creates the call in backstage. Creation
+            // and going live are two provider writes with two outcomes, so
+            // `goLive` is a separate method and the service records which
+            // one was not confirmed (Decision 0054).
             settings_override: { backstage: { enabled: true } },
           },
         });
@@ -619,6 +633,33 @@ export function createStreamCallGateway(
         });
         signal.throwIfAborted();
       } catch (error) {
+        return sanitizeProviderFailure(error, signal);
+      }
+    },
+
+    async goLive(rawInput: StreamCallEndInput): Promise<StreamCallProjection> {
+      if (
+        !isRecord(rawInput) ||
+        !hasExactKeys(rawInput, ["callId", "signal"]) ||
+        !isCallId(rawInput["callId"])
+      ) {
+        return unavailable();
+      }
+      const callId = rawInput["callId"];
+      const signal = parseSignal(rawInput["signal"]);
+      try {
+        signal.throwIfAborted();
+        // One `GoLive` write. No recording, HLS, or transcription is started;
+        // the request body stays empty so the call only leaves backstage.
+        const response = await client.video
+          .call(streamCallType, callId)
+          .goLive({});
+        signal.throwIfAborted();
+        return validateCallResponse(response, callId);
+      } catch (error) {
+        if (error instanceof StreamCallProjectionMismatchError) {
+          throw error;
+        }
         return sanitizeProviderFailure(error, signal);
       }
     },

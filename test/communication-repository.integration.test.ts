@@ -27,10 +27,11 @@ import {
 import {
   CommunicationDataStaleError,
   CommunicationPermissionDeniedError,
-  type VoiceRoomViewerRecord,
-  CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
+  CommunicationRepositoryUnavailableError,
+  CommunicationUnprovisionedRoomError,
   type CommunityChannelSyncRepository,
+  type VoiceRoomViewerRecord,
 } from "../src/features/communication/communication-repository.js";
 import { profileActivationDigest } from "../src/features/profile/profile-v2-contract.js";
 import type { ProfileV2Repository } from "../src/features/profile/profile-v2-repository.js";
@@ -704,7 +705,41 @@ describe("PostgreSQL V2 communication repository", () => {
       voiceRoomId,
       provisionState: "provisioned",
       errorCode: null,
+      backstage: false,
     });
+  }
+
+  async function leaveRoom(
+    actorUserId: string,
+    voiceRoomId: string,
+  ): Promise<VoiceRoomViewerRecord> {
+    return communication.leaveVoiceRoom({
+      actorUserId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomLeave", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+  }
+
+  async function memberJoinedAt(
+    voiceRoomId: string,
+    ownerUserId: string,
+  ): Promise<{ readonly joinedAt: Date; readonly state: string }> {
+    const result = await pool.query<{ joined_at: Date; state: string }>({
+      text: `
+        select joined_at, state from public.voice_room_members
+        where voice_room_id = $1 and owner_user_id = $2
+      `,
+      values: [voiceRoomId, ownerUserId],
+    });
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new Error("expected a member row");
+    }
+    return { joinedAt: row.joined_at, state: row.state };
   }
 
   function joinRoom(
@@ -819,6 +854,118 @@ describe("PostgreSQL V2 communication repository", () => {
     });
     expect(stillLive.room.state).toBe("live");
     expect(stillLive.joinedCount).toBe(1);
+  });
+
+  it("records the backstage flag with the provisioning outcome and never a provisioned room in backstage (Decision 0054)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+
+    const reconciling = await communication.recordVoiceRoomProvisioning({
+      voiceRoomId,
+      provisionState: "reconciling",
+      errorCode: "stream_call_go_live_unconfirmed",
+      backstage: true,
+    });
+    expect(reconciling).toMatchObject({
+      provisionState: "reconciling",
+      backstage: true,
+    });
+    const listener = await createAccount();
+    await join(listener.userId, communityId);
+    await expect(joinRoom(listener.userId, voiceRoomId)).rejects.toBeInstanceOf(
+      CommunicationUnprovisionedRoomError,
+    );
+
+    await expect(
+      communication.recordVoiceRoomProvisioning({
+        voiceRoomId,
+        provisionState: "provisioned",
+        errorCode: null,
+        backstage: true,
+      }),
+    ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
+    const untouched = await communication.getVoiceRoom({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+    });
+    expect(untouched.room).toMatchObject({
+      provisionState: "reconciling",
+      backstage: true,
+    });
+
+    const live = await communication.recordVoiceRoomProvisioning({
+      voiceRoomId,
+      provisionState: "provisioned",
+      errorCode: null,
+      backstage: false,
+    });
+    expect(live).toMatchObject({
+      provisionState: "provisioned",
+      backstage: false,
+    });
+    const errorRow = await pool.query<{ last_error_code: string | null }>({
+      text: `select last_error_code from public.voice_rooms where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    expect(errorRow.rows[0]?.last_error_code).toBeNull();
+    const joined = (await joinRoom(
+      listener.userId,
+      voiceRoomId,
+    )) as VoiceRoomViewerRecord;
+    expect(joined.room.backstage).toBe(false);
+    expect(joined.viewerRole).toBe("listener");
+  });
+
+  it("refreshes joined_at when a member re-joins after leaving, and keeps it on an idempotent re-join (R4-6)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const listener = await createAccount();
+    await join(listener.userId, communityId);
+
+    await joinRoom(listener.userId, voiceRoomId);
+    const first = await memberJoinedAt(voiceRoomId, listener.userId);
+    expect(first.state).toBe("joined");
+
+    // A second join while still joined is idempotent: same joined_at.
+    await joinRoom(listener.userId, voiceRoomId);
+    const again = await memberJoinedAt(voiceRoomId, listener.userId);
+    expect(again.joinedAt.getTime()).toBe(first.joinedAt.getTime());
+
+    await leaveRoom(listener.userId, voiceRoomId);
+    expect((await memberJoinedAt(voiceRoomId, listener.userId)).state).toBe(
+      "left",
+    );
+    // Make the clock tick past the first join's millisecond.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await joinRoom(listener.userId, voiceRoomId);
+    const rejoined = await memberJoinedAt(voiceRoomId, listener.userId);
+    expect(rejoined.state).toBe("joined");
+    expect(rejoined.joinedAt.getTime()).toBeGreaterThan(
+      first.joinedAt.getTime(),
+    );
+
+    // The roster orders by joined_at, so the re-joined member sorts after a
+    // member that joined between its two memberships.
+    const other = await createAccount();
+    await join(other.userId, communityId);
+    await leaveRoom(listener.userId, voiceRoomId);
+    await joinRoom(other.userId, voiceRoomId);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await joinRoom(listener.userId, voiceRoomId);
+    const roster = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+    });
+    expect(roster.items.map((row) => row.ownerUserId)).toEqual([
+      other.userId,
+      listener.userId,
+    ]);
   });
 
   it("leaves no row behind when joining a room whose Stream call is unconfirmed", async () => {

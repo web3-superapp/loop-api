@@ -881,12 +881,19 @@ export function createPostgresCommunicationRepository(
       readonly voiceRoomId: string;
       readonly provisionState: VoiceRoomProvisionState;
       readonly errorCode: string | null;
+      readonly backstage: boolean;
     }): Promise<VoiceRoomRecord> {
       try {
         const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
         const provisionState = z
           .enum(voiceRoomProvisionStates)
           .parse(rawInput.provisionState);
+        const backstage = z.boolean().parse(rawInput.backstage);
+        // A provisioned room is a live call by definition (Decision 0054):
+        // the flag can only be written false together with that state.
+        if (provisionState === "provisioned" && backstage) {
+          throw new CommunicationRepositoryUnavailableError();
+        }
         const errorCode =
           rawInput.errorCode === null
             ? null
@@ -900,12 +907,13 @@ export function createPostgresCommunicationRepository(
             set
               provision_state = $2,
               last_error_code = $3,
+              backstage = $4,
               record_version = record_version + 1,
               updated_at = clock_timestamp()
             where room.voice_room_id = $1
             returning ${voiceRoomColumns}
           `,
-          values: [voiceRoomId, provisionState, errorCode],
+          values: [voiceRoomId, provisionState, errorCode, backstage],
         });
         const row = result.rows[0];
         if (row === undefined) {
@@ -995,7 +1003,11 @@ export function createPostgresCommunicationRepository(
           await requireActiveProfile(client, actorUserId);
           await requireCommunityStanding(client, room.communityId, actorUserId);
           // Join is idempotent: an existing member keeps its current role and
-          // the command reports that role instead of failing.
+          // the command reports that role instead of failing. A member that
+          // had left re-enters with a fresh `joined_at` (Decision 0054 §3):
+          // the roster is ordered by join time, so the row must sort as the
+          // newest arrival, not keep the timestamp of a membership that ended.
+          // A still-joined member keeps its original `joined_at`.
           const inserted = await client.query<{ role: string }>({
             text: `
               insert into public.voice_room_members (
@@ -1003,7 +1015,14 @@ export function createPostgresCommunicationRepository(
               )
               values ($1, $2, 'listener', 'joined')
               on conflict (voice_room_id, owner_user_id) do update
-              set state = 'joined', updated_at = clock_timestamp()
+              set
+                state = 'joined',
+                joined_at = case
+                  when voice_room_members.state = 'joined'
+                    then voice_room_members.joined_at
+                  else clock_timestamp()
+                end,
+                updated_at = clock_timestamp()
               returning role
             `,
             values: [voiceRoomId, actorUserId],

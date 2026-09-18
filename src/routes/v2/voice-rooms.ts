@@ -72,7 +72,7 @@ export function registerV2VoiceRoomRoutes(
         operationId: "createV2CommunityVoiceRoom",
         summary: "Open a community voice room",
         description:
-          "Owner or admin only. The room record and its host are committed first; the Stream `audio_room` call is then created once with backstage enabled. An unconfirmed provider result leaves the room `reconciling` and it cannot be joined.",
+          "Owner or admin only. The room record and its host are committed first; the Stream `audio_room` call is then created (the call type starts in backstage) and immediately taken live with one `go_live` request, so `room.backstage` is `false` for a provisioned room and listeners and speakers can join the call (Decision 0054). An unconfirmed create (`providerSync.reasonCode` STREAM_CALL_CREATE_UNCONFIRMED) or an unconfirmed go-live (STREAM_CALL_GO_LIVE_UNCONFIRMED) leaves the room `reconciling` and it cannot be joined.",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -107,7 +107,7 @@ export function registerV2VoiceRoomRoutes(
         operationId: "getV2CommunityCurrentVoiceRoom",
         summary: "Get the community's live voice room",
         description:
-          "Returns null with a machine reason code when no room is live. The observed participant count is a read-only Stream projection carrying its own observedAt; it is never a LOOP-maintained counter.",
+          "Returns null with a machine reason code when no room is live. The observed participant count is a read-only Stream projection carrying its own observedAt; it is never a LOOP-maintained counter. A provisioned room whose call is still in backstage (created before Decision 0054) is taken live once during this read; the read still answers when that fails, with `room.backstage: true` and `providerSync` unconfirmed (STREAM_CALL_GO_LIVE_UNCONFIRMED).",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -140,6 +140,8 @@ export function registerV2VoiceRoomRoutes(
       schema: {
         operationId: "getV2VoiceRoom",
         summary: "Get one voice room",
+        description:
+          "The room, the viewer's role and hand raise, and the counts (Decision 0051). A provisioned room whose call is still in backstage (created before Decision 0054) is taken live once during this read and the flag written back; the read still answers when that fails, with `room.backstage: true` and `providerSync` unconfirmed (STREAM_CALL_GO_LIVE_UNCONFIRMED).",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -248,7 +250,7 @@ export function registerV2VoiceRoomRoutes(
       "join",
       "joinV2VoiceRoom",
       "Join a voice room as a listener",
-      "Idempotent: an account that is already a member keeps its current role and the response reports that role. Only a provisioned, live room can be joined.",
+      "Idempotent: an account that is already a member keeps its current role and the response reports that role; a member that had left re-enters with a fresh `joinedAt`. Only a provisioned, live room can be joined. A room created before Decision 0054 whose call is still in backstage is taken live once before the join is committed; if that go-live is not confirmed the join is refused with CAPABILITY_UNAVAILABLE and `detailsSafe.reasonCode` VOICE_ROOM_BACKSTAGE_NOT_LIVE, and no membership is written.",
       "join",
     ],
     [

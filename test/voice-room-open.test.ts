@@ -35,7 +35,7 @@ function resource(
       callCid: "audio_room:loop_voice_3fa85f6457174562b3fc2c963f66afa6",
       state: "live",
       provisionState,
-      backstage: true,
+      backstage: provisionState !== "provisioned",
       createdAt: "2026-09-17T07:00:00.000Z",
       endedAt: null,
     }),

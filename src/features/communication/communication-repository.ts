@@ -164,10 +164,19 @@ export interface CommunicationRepository {
     readonly viewerUserId: string;
   }): Promise<CommunityChannelViewerRecord>;
   createVoiceRoom(input: CreateVoiceRoomInput): Promise<VoiceRoomViewerRecord>;
+  /**
+   * Write back the provider outcome of provisioning (Decision 0032) and the
+   * `backstage` flag Stream reported (Decision 0054). `provisioned` means the
+   * call exists and went live, so it is always written with `backstage:
+   * false`; an unconfirmed create or go-live keeps `reconciling` and the flag
+   * as last observed. The self-heal of a room created before 0054 uses the
+   * same write once its go-live is confirmed.
+   */
   recordVoiceRoomProvisioning(input: {
     readonly voiceRoomId: string;
     readonly provisionState: VoiceRoomProvisionState;
     readonly errorCode: string | null;
+    readonly backstage: boolean;
   }): Promise<VoiceRoomRecord>;
   getCurrentVoiceRoom(input: {
     readonly communityId: string;

@@ -224,7 +224,7 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
     "callCid": "audio_room:loop_voice_<32 hex>",
     "state": "live",
     "provisionState": "provisioned",
-    "backstage": true,
+    "backstage": false,
     "createdAt": "…",
     "endedAt": null
   },
@@ -270,8 +270,22 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   可以对**自己**调用（决策 0053），见名单一节。
 - **`provisionState`**：只有 `provisioned` 才能 `join`；`pending` /
   `reconciling` / `failed` 时 `join` 返回 `503 CAPABILITY_UNAVAILABLE`。
-- **`join` 幂等**：已在房间内会返回当前角色，不会报错。`expiresAt` 是本次入场
-  授权到期时间；到期前用 `POST /v2/video/token` 换新 token 并重新 `join`。
+- **`backstage`（决策 0054）**：建房时后端先 `create` 再 `go_live`，所以
+  provisioned 的房 `backstage` 恒为 `false`，听众和发言人才能在设备上
+  `call.join()`（Stream `audio_room` 的 `join-backstage` 只给 host/admin）。
+  0054 之前建的房 DB 里是 `true`：下一次 `GET …/voice-rooms/{id}`、
+  `GET …/current` 或 `join` 会自动做**一次** `go_live` 并回写；读路径失败不
+  阻断（照常 200，`backstage: true`、`providerSync.unconfirmed`
+  `STREAM_CALL_GO_LIVE_UNCONFIRMED`）；`join` 失败则 `503 CAPABILITY_UNAVAILABLE`
+  且 `detailsSafe.reasonCode = "VOICE_ROOM_BACKSTAGE_NOT_LIVE"`，不写任何
+  成员行。页面看到 `backstage: true` 就显示「语音房尚未开播，请刷新重试」，
+  不要显示「连接失败」。建房响应本身若是 `reconciling` +
+  `STREAM_CALL_GO_LIVE_UNCONFIRMED`，房间存在但不可加入，host 重试即再走一次
+  两步写。
+- **`join` 幂等**：已在房间内会返回当前角色，不会报错，`joinedAt` 不变；
+  `leave` 之后再 `join`，名单里的 `joinedAt` 刷新为这次加入的时间（决策
+  0054 §2.3，R4-6）。`expiresAt` 是本次入场授权到期时间；到期前用
+  `POST /v2/video/token` 换新 token 并重新 `join`。
 - **举手队列**：`sequence` 是 PostgreSQL 在房间行锁内分配的**十进制字符串**
   （绝不是 JS number），全序无重复。每人同一时刻只能有一个 `pending` 举手；
   重复举手返回 `409 DATA_STALE`。host 邀请发言会把该用户的 pending 举手置为
@@ -300,8 +314,12 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   - **客户端 codec 用 `strictMap` 精确键集合的，必须把 `joinedCount` 与
     `observed.participantCount` 加进键集合，否则整个语音房快照会被判为 invalid。**
 - **`providerSync`**：`confirmed` 表示这次命令的那一次 Stream 写入被确认；
-  `unconfirmed` 表示 LOOP 侧已提交但 Provider 事实未确认（`reasonCode` 形如
-  `STREAM_CALL_MUTE_UNCONFIRMED`）。**不要把 LOOP 提交当成 Provider 事实。**
+  `unconfirmed` 表示 LOOP 侧已提交但 Provider 事实未确认（`reasonCode` 取值：
+  `STREAM_CALL_CREATE_UNCONFIRMED`、`STREAM_CALL_GO_LIVE_UNCONFIRMED`、
+  `STREAM_CALL_MEMBER_UNCONFIRMED`、`STREAM_CALL_PERMISSION_UNCONFIRMED`、
+  `STREAM_CALL_MUTE_UNCONFIRMED`、`STREAM_CALL_END_UNCONFIRMED`）。读路径
+  只会出现 `STREAM_CALL_GO_LIVE_UNCONFIRMED`（自愈失败）。**不要把 LOOP 提交
+  当成 Provider 事实。**
   用同一个 `Idempotency-Key` 重放会跳过本地变更、只重试那一次 Provider 调用。
 - **房间结束后所有写操作返回 `409 DATA_STALE`。** 一个社区同时只能有一个
   `live` 房间；重复开房返回 `409 RESOURCE_CONFLICT`。
@@ -545,7 +563,8 @@ App 目前**没有开房入口**（`loop_v2_communication_api.dart` 只封装了
 `voice_rooms` 一直是 0 行、语音房页永远"当前没有进行中的语音房"。开房走
 dev-only 运维脚本，它以社区 owner 的身份调用与路由完全相同的
 `VoiceRoomService.createRoom`（LOOP 侧先提交 `voice_rooms` + host 成员 + 审计，
-再用 server key 创建一次 Stream `audio_room` call；不改 Stream 角色权限）：
+再用 server key 创建一次 Stream `audio_room` call 并 `go_live`；不改 Stream
+角色权限）：
 
 ```sh
 pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
@@ -570,23 +589,24 @@ pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
 
 ## 6. 错误码对照
 
-| HTTP | code                             | 场景                                                            |
-| ---- | -------------------------------- | --------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | header/query/body 违规，`Idempotency-Key` 不是规范 UUIDv4       |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺少或无效 Privy Bearer                                         |
-| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、非成员读房、创建者退群、非 owner/admin 开房 |
-| 404  | `NOT_FOUND`                      | 模块未启用、房间/群/操作不存在或不属于调用者、非好友目标        |
-| 409  | `DATA_STALE`                     | 已结束房间的写操作、重复举手、取消不存在的举手、非法角色迁移    |
-| 409  | `IDEMPOTENCY_CONFLICT`           | 同一 key 配不同请求内容                                         |
-| 409  | `PROFILE_ACTIVATION_REQUIRED`    | 账号没有激活的 V2 profile                                       |
-| 409  | `RESOURCE_CONFLICT`              | 社区已有 `live` 语音房                                          |
-| 429  | `RATE_LIMITED`                   | Stream token 配额                                               |
-| 503  | `CAPABILITY_UNAVAILABLE`         | 模块/仓储/Stream 凭据缺失，或房间未 provisioned                 |
-| 503  | `PROVIDER_DISCONNECTED`          | 退群时 Stream 移除结果未知（未提交，可安全重试）                |
+| HTTP | code                             | 场景                                                                                                                                                  |
+| ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | header/query/body 违规，`Idempotency-Key` 不是规范 UUIDv4                                                                                             |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺少或无效 Privy Bearer                                                                                                                               |
+| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、非成员读房、创建者退群、非 owner/admin 开房                                                                                       |
+| 404  | `NOT_FOUND`                      | 模块未启用、房间/群/操作不存在或不属于调用者、非好友目标                                                                                              |
+| 409  | `DATA_STALE`                     | 已结束房间的写操作、重复举手、取消不存在的举手、非法角色迁移                                                                                          |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同一 key 配不同请求内容                                                                                                                               |
+| 409  | `PROFILE_ACTIVATION_REQUIRED`    | 账号没有激活的 V2 profile                                                                                                                             |
+| 409  | `RESOURCE_CONFLICT`              | 社区已有 `live` 语音房                                                                                                                                |
+| 429  | `RATE_LIMITED`                   | Stream token 配额                                                                                                                                     |
+| 503  | `CAPABILITY_UNAVAILABLE`         | 模块/仓储/Stream 凭据缺失，或房间未 provisioned；`join` 时 call 仍在 backstage（`detailsSafe.reasonCode = VOICE_ROOM_BACKSTAGE_NOT_LIVE`，决策 0054） |
+| 503  | `PROVIDER_DISCONNECTED`          | 退群时 Stream 移除结果未知（未提交，可安全重试）                                                                                                      |
 
 错误体固定七字段：`code`、`category`、`retryable`、`userMessageKey`、
-`correlationId`、`detailsSafe`、`providerReferenceSafe`。`detailsSafe` 与
-`providerReferenceSafe` 恒为 `null`。
+`correlationId`、`detailsSafe`、`providerReferenceSafe`。`providerReferenceSafe`
+恒为 `null`；`detailsSafe` 除 `join` 的 backstage 拒绝（`{reasonCode}`）外为
+`null`。
 
 ## 7. 本步不提供的能力
 
