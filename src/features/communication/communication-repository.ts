@@ -74,8 +74,20 @@ export interface HandRaiseProjectionRecord {
   readonly createdAt: string;
 }
 
+/**
+ * One pending hand raise with the same identity columns as a roster row
+ * (Decision 0053 §2), so the service applies the one display rule to both.
+ */
 export interface HandRaiseQueueEntryRecord extends HandRaiseProjectionRecord {
-  readonly profile: VoiceRoomIdentity;
+  readonly ownerUserId: string;
+  readonly publicProfileId: string;
+  readonly alias: string | null;
+  readonly anonymousMode: boolean;
+}
+
+export interface HandRaiseQueuePageRecord {
+  readonly room: VoiceRoomViewerRecord;
+  readonly items: readonly HandRaiseQueueEntryRecord[];
 }
 
 export interface VoiceRoomTargetRecord {
@@ -169,11 +181,12 @@ export interface CommunicationRepository {
   leaveVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   raiseHand(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   cancelHandRaise(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  /** The pending queue in sequence order, with the viewer's room record. */
   listHandRaises(input: {
     readonly voiceRoomId: string;
     readonly viewerUserId: string;
     readonly limit: number;
-  }): Promise<readonly HandRaiseQueueEntryRecord[]>;
+  }): Promise<HandRaiseQueuePageRecord>;
   /**
    * The roster: LOOP `joined` members of one role view in join order, keyed
    * by (millisecond joined_at, publicProfileId). It reads no Stream state.

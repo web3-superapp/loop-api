@@ -894,8 +894,9 @@ describe("PostgreSQL V2 communication repository", () => {
       viewerUserId: owner.userId,
       limit: 50,
     });
-    expect(queue).toHaveLength(8);
-    expect(queue.map((entry) => entry.sequence)).toEqual([
+    expect(queue.room.viewerRole).toBe("host");
+    expect(queue.items).toHaveLength(8);
+    expect(queue.items.map((entry) => entry.sequence)).toEqual([
       "1",
       "2",
       "3",
@@ -906,8 +907,10 @@ describe("PostgreSQL V2 communication repository", () => {
       "8",
     ]);
     expect(
-      new Set(queue.map((entry) => entry.profile.publicProfileId)).size,
+      new Set(queue.items.map((entry) => entry.publicProfileId)).size,
     ).toBe(8);
+    expect(queue.items.every((entry) => entry.alias !== null)).toBe(true);
+    expect(queue.items.every((entry) => !entry.anonymousMode)).toBe(true);
 
     const first = listeners[0];
     if (first === undefined) {
@@ -978,7 +981,7 @@ describe("PostgreSQL V2 communication repository", () => {
       viewerUserId: owner.userId,
       limit: 50,
     });
-    expect(queue).toHaveLength(0);
+    expect(queue.items).toHaveLength(0);
   });
 
   function targetCommand(
@@ -1070,6 +1073,32 @@ describe("PostgreSQL V2 communication repository", () => {
       false,
     ]);
     expect(listeners.items.every((item) => !item.muted)).toBe(true);
+    // The queue carries the same identity columns as the roster (0053 §2).
+    await communication.raiseHand({
+      actorUserId: third.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomHandRaise", [
+        voiceRoomId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const queue = await communication.listHandRaises({
+      voiceRoomId,
+      viewerUserId: fourth.userId,
+      limit: 50,
+    });
+    expect(queue.room.viewerRole).toBe("listener");
+    expect(
+      queue.items.map((entry) => [
+        entry.publicProfileId,
+        entry.ownerUserId,
+        entry.anonymousMode,
+      ]),
+    ).toEqual([
+      [second.publicProfileId, second.userId, false],
+      [third.publicProfileId, third.userId, true],
+    ]);
     // The host is in neither view; the invited member moved to the speakers.
     const speakers = await communication.listVoiceRoomMembers({
       voiceRoomId,

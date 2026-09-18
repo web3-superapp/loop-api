@@ -7,7 +7,6 @@ import {
   maximumRawTextLength,
   opaqueIdPatternSource,
   publicProfileIdPatternSource,
-  storedAvatarRefPatternSource,
 } from "../../features/community/community-contract.js";
 import {
   handRaiseStates,
@@ -21,7 +20,6 @@ import {
   voiceRoomRoles,
   voiceRoomStates,
 } from "../../features/communication/communication-contract.js";
-import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
   commandErrors,
@@ -280,28 +278,6 @@ export const chatGroupMembershipResourceSchema = {
       description: "The caller is no longer a member of this group.",
     },
     contractVersion: { type: "string", const: v2ContractVersion },
-  },
-} as const;
-
-const identitySchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["publicProfileId", "loopId", "alias", "avatarRef"],
-  properties: {
-    publicProfileId: { type: "string", pattern: publicProfileIdPatternSource },
-    loopId: { type: "string", pattern: loopIdPatternSource },
-    alias: {
-      anyOf: [
-        { type: "string", minLength: 1, maxLength: maximumRawTextLength },
-        { type: "null" },
-      ],
-    },
-    avatarRef: {
-      anyOf: [
-        { type: "string", pattern: storedAvatarRefPatternSource },
-        { type: "null" },
-      ],
-    },
   },
 } as const;
 
@@ -567,6 +543,45 @@ const voiceRoomMemberDisplaySchema = {
   ],
 } as const;
 
+/**
+ * The identity part of a member row, shared by the roster and the hand-raise
+ * queue (Decision 0053 §2): the same display rule, the same addressability
+ * rule, and the same server-computed commands.
+ */
+const voiceRoomMemberIdentityProperties = {
+  publicProfileId: {
+    anyOf: [
+      { type: "string", pattern: publicProfileIdPatternSource },
+      { type: "null" },
+    ],
+    description:
+      "The command target. Null when the row is anonymous to this viewer and the viewer is not the host: the host must be able to address anyone in its room; nobody else may address an anonymous member.",
+  },
+  display: voiceRoomMemberDisplaySchema,
+  isSelf: { type: "boolean" },
+  commands: {
+    type: "array",
+    uniqueItems: true,
+    maxItems: voiceRoomMemberCommands.length,
+    items: { type: "string", enum: [...voiceRoomMemberCommands] },
+    description:
+      "The commands this viewer may run against this row, computed by the server from the viewer's role, the row's stored state, and whether the row is the viewer (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command. The host gets `invite_speaker` on a listener, `remove_speaker` plus `mute` or `unmute` on a speaker; a non-host viewer receives an empty array on every row except its own muted speaker row, which carries `unmute_self` (Decision 0053), the only non-host row command. `unmute` and `unmute_self` both map to DELETE .../speakers/{pid}/mute. It is a projection, not an authorization: the write re-checks the same predicate.",
+  },
+} as const;
+
+const voiceRoomDisplayRulesSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["anonymousMemberKey", "ruleKey"],
+  properties: {
+    anonymousMemberKey: {
+      type: "string",
+      const: voiceRoomMemberAnonymousKey,
+    },
+    ruleKey: { type: "string", const: voiceRoomMemberDisplayRuleKey },
+  },
+} as const;
+
 export const voiceRoomMemberListResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -591,15 +606,7 @@ export const voiceRoomMemberListResourceSchema = {
           "commands",
         ],
         properties: {
-          publicProfileId: {
-            anyOf: [
-              { type: "string", pattern: publicProfileIdPatternSource },
-              { type: "null" },
-            ],
-            description:
-              "The command target. Null when the row is anonymous to this viewer and the viewer is not the host: the host must be able to address anyone in its room; nobody else may address an anonymous member.",
-          },
-          display: voiceRoomMemberDisplaySchema,
+          ...voiceRoomMemberIdentityProperties,
           role: { type: "string", enum: [...voiceRoomMemberRoleFilters] },
           joinedAt: { type: "string", format: "date-time" },
           handRaised: {
@@ -612,31 +619,11 @@ export const voiceRoomMemberListResourceSchema = {
             description:
               "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it, and so does DELETE .../speakers/{pid}/mute by the speaker itself or the host (Decision 0053). Always false for a listener.",
           },
-          isSelf: { type: "boolean" },
-          commands: {
-            type: "array",
-            uniqueItems: true,
-            maxItems: voiceRoomMemberCommands.length,
-            items: { type: "string", enum: [...voiceRoomMemberCommands] },
-            description:
-              "The commands this viewer may run against this row, computed by the server from the viewer's role, the row's stored state, and whether the row is the viewer (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command. The host gets `invite_speaker` on a listener, `remove_speaker` plus `mute` or `unmute` on a speaker; a non-host viewer receives an empty array on every row except its own muted speaker row, which carries `unmute_self` (Decision 0053), the only non-host row command. `unmute` and `unmute_self` both map to DELETE .../speakers/{pid}/mute. It is a projection, not an authorization: the write re-checks the same predicate.",
-          },
         },
       },
     },
     nextCursor: nullableCursorSchema,
-    display: {
-      type: "object",
-      additionalProperties: false,
-      required: ["anonymousMemberKey", "ruleKey"],
-      properties: {
-        anonymousMemberKey: {
-          type: "string",
-          const: voiceRoomMemberAnonymousKey,
-        },
-        ruleKey: { type: "string", const: voiceRoomMemberDisplayRuleKey },
-      },
-    },
+    display: voiceRoomDisplayRulesSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -645,7 +632,7 @@ export const handRaiseQueueResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["items", "contractVersion"],
+  required: ["items", "display", "contractVersion"],
   properties: {
     items: {
       type: "array",
@@ -653,13 +640,23 @@ export const handRaiseQueueResourceSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["handRaiseId", "sequence", "state", "createdAt", "profile"],
+        required: [
+          "handRaiseId",
+          "sequence",
+          "state",
+          "createdAt",
+          "publicProfileId",
+          "display",
+          "isSelf",
+          "commands",
+        ],
         properties: {
           ...handRaiseSchema.properties,
-          profile: identitySchema,
+          ...voiceRoomMemberIdentityProperties,
         },
       },
     },
+    display: voiceRoomDisplayRulesSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

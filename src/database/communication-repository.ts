@@ -33,6 +33,7 @@ import {
   type CommunityChannelViewerRecord,
   type CreateVoiceRoomInput,
   type HandRaiseQueueEntryRecord,
+  type HandRaiseQueuePageRecord,
   type ListVoiceRoomMembersInput,
   type VoiceRoomCommandInput,
   type VoiceRoomIdentity,
@@ -1239,7 +1240,7 @@ export function createPostgresCommunicationRepository(
       readonly voiceRoomId: string;
       readonly viewerUserId: string;
       readonly limit: number;
-    }): Promise<readonly HandRaiseQueueEntryRecord[]> {
+    }): Promise<HandRaiseQueuePageRecord> {
       try {
         const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
         const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
@@ -1251,6 +1252,10 @@ export function createPostgresCommunicationRepository(
             room.communityId,
             viewerUserId,
           );
+          const viewer = await readViewerRecord(client, room, viewerUserId);
+          // The same identity columns as the roster (Decision 0053 §2): the
+          // queue publishes no loopId or avatar, only what the display rule
+          // needs.
           const result = await client.query<Record<string, unknown>>({
             text: `
               select
@@ -1258,29 +1263,37 @@ export function createPostgresCommunicationRepository(
                 raise.sequence::text as sequence,
                 raise.state,
                 raise.created_at,
-                ${identityColumns}
+                raise.owner_user_id,
+                profile.public_profile_id,
+                profile.alias,
+                coalesce(privacy.anonymous_mode, false) as anonymous_mode
               from public.voice_room_hand_raises as raise
               join public.user_profiles as profile
                 on profile.owner_user_id = raise.owner_user_id
-              join public.loop_users as account
-                on account.id = raise.owner_user_id
+              left join public.privacy_preferences_v2 as privacy
+                on privacy.owner_user_id = raise.owner_user_id
               where raise.voice_room_id = $1 and raise.state = 'pending'
               order by raise.sequence asc
               limit $2
             `,
             values: [voiceRoomId, limit],
           });
-          return Object.freeze(
-            result.rows.map((row) =>
-              Object.freeze({
-                handRaiseId: opaqueIdSchema.parse(row["hand_raise_id"]),
-                sequence: z.string().parse(row["sequence"]),
-                state: z.enum(handRaiseStates).parse(row["state"]),
-                createdAt: dateSchema.parse(row["created_at"]).toISOString(),
-                profile: toIdentity(row),
-              }),
-            ),
+          const items: HandRaiseQueueEntryRecord[] = result.rows.map((row) =>
+            Object.freeze({
+              handRaiseId: opaqueIdSchema.parse(row["hand_raise_id"]),
+              sequence: z.string().parse(row["sequence"]),
+              state: z.enum(handRaiseStates).parse(row["state"]),
+              createdAt: dateSchema.parse(row["created_at"]).toISOString(),
+              ownerUserId: userIdSchema.parse(row["owner_user_id"]),
+              publicProfileId: publicProfileIdSchema.parse(
+                row["public_profile_id"],
+              ),
+              alias:
+                row["alias"] === null ? null : z.string().parse(row["alias"]),
+              anonymousMode: z.boolean().parse(row["anonymous_mode"]),
+            }),
           );
+          return Object.freeze({ room: viewer, items: Object.freeze(items) });
         });
       } catch (error) {
         return translateRepositoryError(error);

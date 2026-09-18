@@ -173,7 +173,7 @@ export function registerV2VoiceRoomRoutes(
         operationId: "listV2VoiceRoomHandRaises",
         summary: "List the pending hand-raise queue in order",
         description:
-          "The queue order is a PostgreSQL sequence allocated under the room row lock, so concurrent raises keep a stable total order.",
+          "The queue order is a PostgreSQL sequence allocated under the room row lock, so concurrent raises keep a stable total order. Each entry identifies its member exactly like a roster row (Decision 0053): the leaderboard display rule, a `publicProfileId` that is null for an anonymous member unless the viewer is the host, `isSelf`, and `commands` (the host's `invite_speaker` on a live room, otherwise empty). No loopId or avatar is published here.",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

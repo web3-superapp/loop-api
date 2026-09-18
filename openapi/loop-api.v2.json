@@ -30989,7 +30989,7 @@
         "operationId": "listV2VoiceRoomHandRaises",
         "summary": "List the pending hand-raise queue in order",
         "tags": ["communication"],
-        "description": "The queue order is a PostgreSQL sequence allocated under the room row lock, so concurrent raises keep a stable total order.",
+        "description": "The queue order is a PostgreSQL sequence allocated under the room row lock, so concurrent raises keep a stable total order. Each entry identifies its member exactly like a roster row (Decision 0053): the leaderboard display rule, a `publicProfileId` that is null for an anonymous member unless the viewer is the host, `isSelf`, and `commands` (the host's `invite_speaker` on a live room, otherwise empty). No loopId or avatar is published here.",
         "parameters": [
           {
             "schema": {
@@ -31037,7 +31037,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["items", "contractVersion"],
+                  "required": ["items", "display", "contractVersion"],
                   "properties": {
                     "items": {
                       "type": "array",
@@ -31050,7 +31050,10 @@
                           "sequence",
                           "state",
                           "createdAt",
-                          "profile"
+                          "publicProfileId",
+                          "display",
+                          "isSelf",
+                          "commands"
                         ],
                         "properties": {
                           "handRaiseId": {
@@ -31070,45 +31073,97 @@
                             "type": "string",
                             "format": "date-time"
                           },
-                          "profile": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": [
-                              "publicProfileId",
-                              "loopId",
-                              "alias",
-                              "avatarRef"
-                            ],
-                            "properties": {
-                              "publicProfileId": {
+                          "publicProfileId": {
+                            "anyOf": [
+                              {
                                 "type": "string",
                                 "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                               },
-                              "loopId": {
-                                "type": "string",
-                                "pattern": "^LOOP-[0-9A-HJKMNP-TV-Z]{8}$"
-                              },
-                              "alias": {
-                                "anyOf": [
-                                  {
+                              { "type": "null" }
+                            ],
+                            "description": "The command target. Null when the row is anonymous to this viewer and the viewer is not the host: the host must be able to address anyone in its room; nobody else may address an anonymous member."
+                          },
+                          "display": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "kind",
+                                  "alias",
+                                  "publicProfileId",
+                                  "audience"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["alias"]
+                                  },
+                                  "alias": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 1024
                                   },
-                                  { "type": "null" }
-                                ]
-                              },
-                              "avatarRef": {
-                                "anyOf": [
-                                  {
+                                  "publicProfileId": {
                                     "type": "string",
-                                    "pattern": "^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$"
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                                   },
-                                  { "type": "null" }
-                                ]
+                                  "audience": {
+                                    "type": "string",
+                                    "enum": ["everyone", "self"],
+                                    "description": "`self` only on the viewer's own row while its anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (the Decision 0049 leaderboard rule)."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "labelKey"],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["anonymous"]
+                                  },
+                                  "labelKey": {
+                                    "type": "string",
+                                    "enum": ["voiceRoom.member.anonymousMember"]
+                                  }
+                                }
                               }
-                            }
+                            ]
+                          },
+                          "isSelf": { "type": "boolean" },
+                          "commands": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 5,
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "invite_speaker",
+                                "remove_speaker",
+                                "mute",
+                                "unmute",
+                                "unmute_self"
+                              ]
+                            },
+                            "description": "The commands this viewer may run against this row, computed by the server from the viewer's role, the row's stored state, and whether the row is the viewer (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command. The host gets `invite_speaker` on a listener, `remove_speaker` plus `mute` or `unmute` on a speaker; a non-host viewer receives an empty array on every row except its own muted speaker row, which carries `unmute_self` (Decision 0053), the only non-host row command. `unmute` and `unmute_self` both map to DELETE .../speakers/{pid}/mute. It is a projection, not an authorization: the write re-checks the same predicate."
                           }
+                        }
+                      }
+                    },
+                    "display": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["anonymousMemberKey", "ruleKey"],
+                      "properties": {
+                        "anonymousMemberKey": {
+                          "type": "string",
+                          "enum": ["voiceRoom.member.anonymousMember"]
+                        },
+                        "ruleKey": {
+                          "type": "string",
+                          "enum": ["voiceRoom.member.display.anonymousModeOnly"]
                         }
                       }
                     },
@@ -31727,22 +31782,6 @@
                               }
                             ]
                           },
-                          "role": {
-                            "type": "string",
-                            "enum": ["speaker", "listener"]
-                          },
-                          "joinedAt": {
-                            "type": "string",
-                            "format": "date-time"
-                          },
-                          "handRaised": {
-                            "type": "boolean",
-                            "description": "A pending LOOP hand raise exists for this member. Meaningful on the listener view; always false for a speaker."
-                          },
-                          "muted": {
-                            "type": "boolean",
-                            "description": "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it, and so does DELETE .../speakers/{pid}/mute by the speaker itself or the host (Decision 0053). Always false for a listener."
-                          },
                           "isSelf": { "type": "boolean" },
                           "commands": {
                             "type": "array",
@@ -31759,6 +31798,22 @@
                               ]
                             },
                             "description": "The commands this viewer may run against this row, computed by the server from the viewer's role, the row's stored state, and whether the row is the viewer (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command. The host gets `invite_speaker` on a listener, `remove_speaker` plus `mute` or `unmute` on a speaker; a non-host viewer receives an empty array on every row except its own muted speaker row, which carries `unmute_self` (Decision 0053), the only non-host row command. `unmute` and `unmute_self` both map to DELETE .../speakers/{pid}/mute. It is a projection, not an authorization: the write re-checks the same predicate."
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": ["speaker", "listener"]
+                          },
+                          "joinedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "handRaised": {
+                            "type": "boolean",
+                            "description": "A pending LOOP hand raise exists for this member. Meaningful on the listener view; always false for a speaker."
+                          },
+                          "muted": {
+                            "type": "boolean",
+                            "description": "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it, and so does DELETE .../speakers/{pid}/mute by the speaker itself or the host (Decision 0053). Always false for a listener."
                           }
                         }
                       }

@@ -275,7 +275,8 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
 - **举手队列**：`sequence` 是 PostgreSQL 在房间行锁内分配的**十进制字符串**
   （绝不是 JS number），全序无重复。每人同一时刻只能有一个 `pending` 举手；
   重复举手返回 `409 DATA_STALE`。host 邀请发言会把该用户的 pending 举手置为
-  `invited`。
+  `invited`。队列条目的身份投影与名单同一套（决策 0053，见下一节末尾）；
+  **`profile` 已删除**。
 - **人数（决策 0051，三个口径三个字段，不要混）**：
   - `speakerCount` / `listenerCount`：LOOP 的**角色意图**（`voice_room_members`
     中 `joined` 的 speaker / listener）。**都不含 host**，所以只有主持人的房间是
@@ -473,6 +474,69 @@ host 邀请 `Voyager_344` 发言并静音后读 `role=speaker`：
   归零；调用本身不会打开麦克风。响应是房间资源，`viewer.role` 是调用者的角色。
 - 分页：`nextCursor` 非空才有下一页；`limit` 与 `cursor` 同时传是 `400`。没有
   cursor 密钥时需要续页的响应 `503 CAPABILITY_UNAVAILABLE`。
+
+### 举手队列与名单同一投影（决策 0053）
+
+`GET /v2/voice-rooms/{id}/hand-raises` 的条目不再带 `profile`（0032 的
+`{publicProfileId, loopId, alias, avatarRef}` 对所有成员可见）；改为与名单行
+**同一**身份投影：`publicProfileId`（可 null）、`display`、`isSelf`、`commands[]`，
+顶层多一个 `display: {anonymousMemberKey, ruleKey}`。**这是破坏性变化**：codec 里
+`profile` 的 `strictMap` 要删掉，`loopId` / `avatarRef` 从这个端点消失（要头像走
+资料页）。
+
+host 视角：
+
+```json
+{
+  "items": [
+    {
+      "handRaiseId": "<uuid>",
+      "sequence": "1",
+      "state": "pending",
+      "createdAt": "…",
+      "publicProfileId": "2323c2b1-0e71-4e25-8c92-d94bcfec0ef7",
+      "display": {
+        "kind": "alias",
+        "alias": "DeFiMaxi_349",
+        "publicProfileId": "2323c2b1-0e71-4e25-8c92-d94bcfec0ef7",
+        "audience": "everyone"
+      },
+      "isSelf": false,
+      "commands": ["invite_speaker"]
+    },
+    {
+      "handRaiseId": "<uuid>",
+      "sequence": "2",
+      "state": "pending",
+      "createdAt": "…",
+      "publicProfileId": "4678e354-1e9f-4f6a-8c80-ab9aecbcfe3c",
+      "display": {
+        "kind": "anonymous",
+        "labelKey": "voiceRoom.member.anonymousMember"
+      },
+      "isSelf": false,
+      "commands": ["invite_speaker"]
+    }
+  ],
+  "display": {
+    "anonymousMemberKey": "voiceRoom.member.anonymousMember",
+    "ruleKey": "voiceRoom.member.display.anonymousModeOnly"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+非 host 视角的第二条：`publicProfileId: null`、`commands: []`（`display` 照旧匿名）。
+本人自己的举手行永远显示自己的别名（匿名时 `audience:"self"`）、`isSelf: true`。
+
+规则：
+
+- `display` / 行顶层 `publicProfileId` 的规则与名单完全相同：匿名成员对非 host
+  不可寻址；host 恒能看到目标并直接从队列邀请（`invite_speaker` →
+  `POST …/speakers/{pid}`）。
+- `commands[]`：host 且房间 live 时每条都是 `["invite_speaker"]`（队列里的人都是
+  pending 举手的 listener）；其他情况 `[]`。
+- 与 0032 的差异：完整身份不再发布；别名只在对方未开匿名或本人时可见。
 
 ### Development 上怎么试（决策 0050）
 

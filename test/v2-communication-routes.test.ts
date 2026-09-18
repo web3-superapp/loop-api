@@ -128,6 +128,21 @@ function rosterRows() {
   ];
 }
 
+/** The pending queue: the alias listener, then the anonymous one, then the viewer. */
+function handRaiseRows() {
+  const rows = rosterRows();
+  return rows.map((row, index) => ({
+    handRaiseId: [voiceRoomId, communityId, groupId][index]!,
+    sequence: String(index + 1),
+    state: "pending" as const,
+    createdAt,
+    ownerUserId: row.ownerUserId,
+    publicProfileId: row.publicProfileId,
+    alias: row.alias,
+    anonymousMode: row.anonymousMode,
+  }));
+}
+
 function testConfig(overrides: Readonly<Record<string, string>> = {}) {
   return loadConfig({
     NODE_ENV: "test",
@@ -211,22 +226,7 @@ function communicationRepositoryFake(
       Promise.resolve(room({ viewerRole: "listener" })),
     ),
     listHandRaises: vi.fn(() =>
-      Promise.resolve([
-        {
-          handRaiseId: voiceRoomId,
-          sequence: "1",
-          state: "pending" as const,
-          createdAt,
-          profile,
-        },
-        {
-          handRaiseId: communityId,
-          sequence: "2",
-          state: "pending" as const,
-          createdAt,
-          profile,
-        },
-      ]),
+      Promise.resolve({ room: room(), items: handRaiseRows() }),
     ),
     inviteSpeaker: vi.fn(() =>
       Promise.resolve({
@@ -1336,8 +1336,85 @@ describe("LOOP API V2 communication module", () => {
     }
   });
 
-  it("publishes the hand-raise queue in sequence order as decimal strings", async () => {
-    const { app } = await createApp();
+  it("publishes the hand-raise queue in sequence order with the roster's identity projection (Decision 0053)", async () => {
+    const { app, communicationMocks } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/voice-rooms/${voiceRoomId}/hand-raises`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    // The host sees every target and may invite from the queue.
+    expect(response.json()).toEqual({
+      items: [
+        {
+          handRaiseId: voiceRoomId,
+          sequence: "1",
+          state: "pending",
+          createdAt,
+          publicProfileId: targetProfileId,
+          display: {
+            kind: "alias",
+            alias: "frog_maxi",
+            publicProfileId: targetProfileId,
+            audience: "everyone",
+          },
+          isSelf: false,
+          commands: ["invite_speaker"],
+        },
+        {
+          handRaiseId: communityId,
+          sequence: "2",
+          state: "pending",
+          createdAt,
+          publicProfileId: anonymousProfileId,
+          display: {
+            kind: "anonymous",
+            labelKey: "voiceRoom.member.anonymousMember",
+          },
+          isSelf: false,
+          commands: ["invite_speaker"],
+        },
+        {
+          handRaiseId: groupId,
+          sequence: "3",
+          state: "pending",
+          createdAt,
+          publicProfileId: selfProfileId,
+          display: {
+            kind: "alias",
+            alias: "cy",
+            publicProfileId: selfProfileId,
+            audience: "self",
+          },
+          isSelf: true,
+          commands: ["invite_speaker"],
+        },
+      ],
+      display: {
+        anonymousMemberKey: "voiceRoom.member.anonymousMember",
+        ruleKey: "voiceRoom.member.display.anonymousModeOnly",
+      },
+      contractVersion: "2.0",
+    });
+    expect(communicationMocks["listHandRaises"]).toHaveBeenCalledWith({
+      voiceRoomId,
+      viewerUserId: accountId,
+      limit: 50,
+    });
+  });
+
+  it("hides the anonymous hand raiser's target from a non-host and hands out no command", async () => {
+    const communication = communicationRepositoryFake({
+      listHandRaises: vi.fn(() =>
+        Promise.resolve({
+          room: room({ viewerRole: "listener" }),
+          items: handRaiseRows(),
+        }),
+      ),
+    });
+    const { app } = await createApp(fakes({ communication }));
     const response = await app.inject({
       method: "GET",
       url: `/v2/voice-rooms/${voiceRoomId}/hand-raises`,
@@ -1345,10 +1422,31 @@ describe("LOOP API V2 communication module", () => {
     });
     expect(response.statusCode).toBe(200);
     const body = jsonOf<{
-      items: readonly { sequence: string; state: string }[];
+      items: readonly {
+        publicProfileId: string | null;
+        display: { kind: string };
+        isSelf: boolean;
+        commands: readonly string[];
+      }[];
     }>(response);
-    expect(body.items.map((entry) => entry.sequence)).toEqual(["1", "2"]);
-    expect(body.items.every((entry) => entry.state === "pending")).toBe(true);
+    expect(body.items.map((entry) => entry.publicProfileId)).toEqual([
+      targetProfileId,
+      null,
+      selfProfileId,
+    ]);
+    expect(body.items.map((entry) => entry.display.kind)).toEqual([
+      "alias",
+      "anonymous",
+      "alias",
+    ]);
+    expect(body.items.map((entry) => entry.isSelf)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(body.items.map((entry) => entry.commands)).toEqual([[], [], []]);
+    expect(JSON.stringify(body)).not.toContain("loopId");
+    expect(JSON.stringify(body)).not.toContain("avatarRef");
   });
 
   it("projects the observed participant count with observedAt on a read", async () => {

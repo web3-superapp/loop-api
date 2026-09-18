@@ -42,8 +42,6 @@ import {
   CommunicationResourceConflictError,
   CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
-  type HandRaiseQueueEntryRecord,
-  type VoiceRoomIdentity,
   type VoiceRoomMemberRecord,
   type VoiceRoomViewerRecord,
 } from "./communication-repository.js";
@@ -125,19 +123,6 @@ export interface VoiceRoomCurrentResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
-export interface VoiceRoomHandRaiseQueueEntry {
-  readonly handRaiseId: string;
-  readonly sequence: string;
-  readonly state: HandRaiseState;
-  readonly createdAt: string;
-  readonly profile: VoiceRoomIdentity;
-}
-
-export interface VoiceRoomHandRaiseQueueResource {
-  readonly items: readonly VoiceRoomHandRaiseQueueEntry[];
-  readonly contractVersion: typeof v2ContractVersion;
-}
-
 /**
  * The leaderboard display rule reused (Decision 0049 → 0052 §2): anonymous
  * mode alone decides the name others see; the viewer always sees its own
@@ -155,7 +140,11 @@ export type VoiceRoomMemberDisplayProjection =
       labelKey: typeof voiceRoomMemberAnonymousKey;
     }>;
 
-export interface VoiceRoomMemberRowProjection {
+/**
+ * The part of a row that identifies a member to this viewer; shared by the
+ * roster and the hand-raise queue (Decision 0053 §2).
+ */
+export interface VoiceRoomMemberIdentityProjection {
   /**
    * The command target. Null when the row is anonymous to this viewer and
    * the viewer is not the host: an anonymous member is addressable by the
@@ -163,22 +152,40 @@ export interface VoiceRoomMemberRowProjection {
    */
   readonly publicProfileId: string | null;
   readonly display: VoiceRoomMemberDisplayProjection;
+  readonly isSelf: boolean;
+  readonly commands: readonly VoiceRoomMemberCommand[];
+}
+
+export interface VoiceRoomMemberRowProjection extends VoiceRoomMemberIdentityProjection {
   readonly role: VoiceRoomMemberRoleFilter;
   readonly joinedAt: string;
   readonly handRaised: boolean;
   readonly muted: boolean;
-  readonly isSelf: boolean;
-  readonly commands: readonly VoiceRoomMemberCommand[];
+}
+
+export interface VoiceRoomDisplayRules {
+  readonly anonymousMemberKey: typeof voiceRoomMemberAnonymousKey;
+  readonly ruleKey: typeof voiceRoomMemberDisplayRuleKey;
 }
 
 export interface VoiceRoomMemberListResource {
   readonly role: VoiceRoomMemberRoleFilter;
   readonly items: readonly VoiceRoomMemberRowProjection[];
   readonly nextCursor: string | null;
-  readonly display: {
-    readonly anonymousMemberKey: typeof voiceRoomMemberAnonymousKey;
-    readonly ruleKey: typeof voiceRoomMemberDisplayRuleKey;
-  };
+  readonly display: VoiceRoomDisplayRules;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+export interface VoiceRoomHandRaiseQueueEntry extends VoiceRoomMemberIdentityProjection {
+  readonly handRaiseId: string;
+  readonly sequence: string;
+  readonly state: HandRaiseState;
+  readonly createdAt: string;
+}
+
+export interface VoiceRoomHandRaiseQueueResource {
+  readonly items: readonly VoiceRoomHandRaiseQueueEntry[];
+  readonly display: VoiceRoomDisplayRules;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -573,11 +580,25 @@ export function createVoiceRoomService(
     return value;
   }
 
-  function memberRow(
-    row: VoiceRoomMemberRecord,
+  const displayRules: VoiceRoomDisplayRules = Object.freeze({
+    anonymousMemberKey: voiceRoomMemberAnonymousKey,
+    ruleKey: voiceRoomMemberDisplayRuleKey,
+  });
+
+  /**
+   * The one identity projection for a member row, whether it comes from the
+   * roster or the hand-raise queue (0053 §2): the display rule, whether the
+   * row is addressable by this viewer, and the row commands.
+   */
+  function memberIdentity(
+    row: Pick<
+      VoiceRoomMemberRecord,
+      "ownerUserId" | "publicProfileId" | "alias" | "anonymousMode"
+    > &
+      Pick<VoiceRoomMemberRecord, "role" | "muted">,
     viewer: { readonly userId: string; readonly isHost: boolean },
     roomLive: boolean,
-  ): VoiceRoomMemberRowProjection {
+  ): VoiceRoomMemberIdentityProjection {
     const isSelf = row.ownerUserId === viewer.userId;
     const display: VoiceRoomMemberDisplayProjection =
       row.alias !== null && (isSelf || !row.anonymousMode)
@@ -597,10 +618,6 @@ export function createVoiceRoomService(
     return Object.freeze({
       publicProfileId: addressable ? row.publicProfileId : null,
       display,
-      role: row.role,
-      joinedAt: row.joinedAt,
-      handRaised: row.handRaised,
-      muted: row.muted,
       isSelf,
       commands: voiceRoomMemberRowCommands({
         viewerIsHost: viewer.isHost,
@@ -608,6 +625,20 @@ export function createVoiceRoomService(
         isSelf,
         row,
       }),
+    });
+  }
+
+  function memberRow(
+    row: VoiceRoomMemberRecord,
+    viewer: { readonly userId: string; readonly isHost: boolean },
+    roomLive: boolean,
+  ): VoiceRoomMemberRowProjection {
+    return Object.freeze({
+      ...memberIdentity(row, viewer, roomLive),
+      role: row.role,
+      joinedAt: row.joinedAt,
+      handRaised: row.handRaised,
+      muted: row.muted,
     });
   }
 
@@ -824,26 +855,37 @@ export function createVoiceRoomService(
       input: VoiceRoomRoomReadInput,
     ): Promise<VoiceRoomHandRaiseQueueResource> {
       const voiceRoomId = parseCommunicationOpaqueId(input.voiceRoomId);
-      const items: readonly HandRaiseQueueEntryRecord[] = await repositoryCall(
-        () =>
-          options.repository.listHandRaises({
-            voiceRoomId,
-            viewerUserId: input.principal.userId,
-            limit: 50,
-          }),
+      const record = await repositoryCall(() =>
+        options.repository.listHandRaises({
+          voiceRoomId,
+          viewerUserId: input.principal.userId,
+          limit: 50,
+        }),
       );
+      const viewer = Object.freeze({
+        userId: input.principal.userId,
+        isHost: record.room.viewerRole === "host",
+      });
+      const roomLive = record.room.room.state === "live";
       return Object.freeze({
         items: Object.freeze(
-          items.map((entry) =>
+          record.items.map((entry) =>
             Object.freeze({
+              // Everyone in the pending queue is an unmuted listener, so the
+              // host's row command is invite_speaker and nobody else has one.
+              ...memberIdentity(
+                { ...entry, role: "listener", muted: false },
+                viewer,
+                roomLive,
+              ),
               handRaiseId: entry.handRaiseId,
               sequence: entry.sequence,
               state: entry.state,
               createdAt: entry.createdAt,
-              profile: entry.profile,
             }),
           ),
         ),
+        display: displayRules,
         contractVersion: v2ContractVersion,
       });
     },
@@ -908,10 +950,7 @@ export function createVoiceRoomService(
                   publicProfileId: last.publicProfileId,
                 }),
               }),
-        display: Object.freeze({
-          anonymousMemberKey: voiceRoomMemberAnonymousKey,
-          ruleKey: voiceRoomMemberDisplayRuleKey,
-        }),
+        display: displayRules,
         contractVersion: v2ContractVersion,
       });
     },
