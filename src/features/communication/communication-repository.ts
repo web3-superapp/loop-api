@@ -178,6 +178,16 @@ export interface CommunicationRepository {
     readonly errorCode: string | null;
     readonly backstage: boolean;
   }): Promise<VoiceRoomRecord>;
+  /**
+   * The self-heal write-back (Decision 0054 §2.2): flips `backstage` to
+   * false only while the room is still `live`, `provisioned`, and in
+   * backstage. Zero matched rows means another request already healed it
+   * or the room ended meanwhile; that is not an error, and the room as it
+   * now stands is returned.
+   */
+  recordVoiceRoomLive(input: {
+    readonly voiceRoomId: string;
+  }): Promise<VoiceRoomRecord>;
   getCurrentVoiceRoom(input: {
     readonly communityId: string;
     readonly viewerUserId: string;
@@ -377,6 +387,7 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     readCommunityChannel: unavailable,
     createVoiceRoom: unavailable,
     recordVoiceRoomProvisioning: unavailable,
+    recordVoiceRoomLive: unavailable,
     getCurrentVoiceRoom: unavailable,
     getVoiceRoom: unavailable,
     joinVoiceRoom: unavailable,

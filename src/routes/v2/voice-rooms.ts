@@ -127,6 +127,7 @@ export function registerV2VoiceRoomRoutes(
       const resource = await service.getCurrentRoom({
         principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
+        requestId: request.id,
         signal: request.signal,
       });
       reply.header("cache-control", "no-store");
@@ -161,6 +162,7 @@ export function registerV2VoiceRoomRoutes(
       const resource = await service.getRoom({
         principal: requireAuthenticatedLoopPrincipal(request),
         voiceRoomId: params.voiceRoomId,
+        requestId: request.id,
         signal: request.signal,
       });
       reply.header("cache-control", "no-store");
@@ -195,6 +197,7 @@ export function registerV2VoiceRoomRoutes(
       const resource = await service.listHandRaises({
         principal: requireAuthenticatedLoopPrincipal(request),
         voiceRoomId: params.voiceRoomId,
+        requestId: request.id,
         signal: request.signal,
       });
       reply.header("cache-control", "no-store");
@@ -237,6 +240,7 @@ export function registerV2VoiceRoomRoutes(
         role: query.role,
         cursor: query.cursor,
         limit: query.limit,
+        requestId: request.id,
         signal: request.signal,
       });
       reply.header("cache-control", "no-store");

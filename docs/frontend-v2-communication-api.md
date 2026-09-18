@@ -601,7 +601,12 @@ pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
 | 409  | `RESOURCE_CONFLICT`              | 社区已有 `live` 语音房                                                                                                                                |
 | 429  | `RATE_LIMITED`                   | Stream token 配额                                                                                                                                     |
 | 503  | `CAPABILITY_UNAVAILABLE`         | 模块/仓储/Stream 凭据缺失，或房间未 provisioned；`join` 时 call 仍在 backstage（`detailsSafe.reasonCode = VOICE_ROOM_BACKSTAGE_NOT_LIVE`，决策 0054） |
-| 503  | `PROVIDER_DISCONNECTED`          | 退群时 Stream 移除结果未知（未提交，可安全重试）                                                                                                      |
+
+`POST …/join` 的拒绝优先级固定（决策 0054）：`404 NOT_FOUND`（房不存在）→
+`403 PERMISSION_DENIED`（被 ban / 非社区成员，不看房间状态）→ `409 DATA_STALE`
+（成员对已结束房）→ `503 CAPABILITY_UNAVAILABLE`（成员对未 provisioned 房，或
+backstage 自愈失败）。
+| 503 | `PROVIDER_DISCONNECTED` | 退群时 Stream 移除结果未知（未提交，可安全重试） |
 
 错误体固定七字段：`code`、`category`、`retryable`、`userMessageKey`、
 `correlationId`、`detailsSafe`、`providerReferenceSafe`。`providerReferenceSafe`

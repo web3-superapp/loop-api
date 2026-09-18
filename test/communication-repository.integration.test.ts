@@ -26,6 +26,7 @@ import {
 } from "../src/features/communication/communication-contract.js";
 import {
   CommunicationDataStaleError,
+  CommunicationNotFoundError,
   CommunicationPermissionDeniedError,
   type CommunicationRepository,
   CommunicationRepositoryUnavailableError,
@@ -915,6 +916,68 @@ describe("PostgreSQL V2 communication repository", () => {
     )) as VoiceRoomViewerRecord;
     expect(joined.room.backstage).toBe(false);
     expect(joined.viewerRole).toBe("listener");
+  });
+
+  it("flips backstage to false only while the room is live, provisioned, and in backstage (self-heal write-back)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+
+    // Pending room: nothing to heal, no error, the row is untouched.
+    const pending = await communication.recordVoiceRoomLive({ voiceRoomId });
+    expect(pending).toMatchObject({
+      provisionState: "pending",
+      backstage: true,
+    });
+
+    // A pre-0054 shape: provisioned but still in backstage.
+    await pool.query({
+      text: `update public.voice_rooms set provision_state = 'provisioned', last_error_code = 'stream_call_go_live_unconfirmed' where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    const before = await pool.query<{ record_version: number }>({
+      text: `select record_version from public.voice_rooms where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    const healed = await communication.recordVoiceRoomLive({ voiceRoomId });
+    expect(healed).toMatchObject({
+      provisionState: "provisioned",
+      backstage: false,
+    });
+    const after = await pool.query<{
+      record_version: number;
+      last_error_code: string | null;
+    }>({
+      text: `select record_version, last_error_code from public.voice_rooms where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    expect(after.rows[0]?.record_version).toBe(
+      before.rows[0]!.record_version + 1,
+    );
+    expect(after.rows[0]?.last_error_code).toBeNull();
+
+    // Already healed: zero rows matched, no error, no version bump.
+    const again = await communication.recordVoiceRoomLive({ voiceRoomId });
+    expect(again.backstage).toBe(false);
+    const unchanged = await pool.query<{ record_version: number }>({
+      text: `select record_version from public.voice_rooms where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    expect(unchanged.rows[0]?.record_version).toBe(
+      after.rows[0]!.record_version,
+    );
+
+    // An ended room in backstage stays as it is.
+    await pool.query({
+      text: `update public.voice_rooms set backstage = true, state = 'ended', ended_at = clock_timestamp() where voice_room_id = $1`,
+      values: [voiceRoomId],
+    });
+    const ended = await communication.recordVoiceRoomLive({ voiceRoomId });
+    expect(ended).toMatchObject({ state: "ended", backstage: true });
+
+    await expect(
+      communication.recordVoiceRoomLive({ voiceRoomId: randomUUID() }),
+    ).rejects.toBeInstanceOf(CommunicationNotFoundError);
   });
 
   it("refreshes joined_at when a member re-joins after leaving, and keeps it on an idempotent re-join (R4-6)", async () => {

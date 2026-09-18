@@ -925,6 +925,41 @@ export function createPostgresCommunicationRepository(
       }
     },
 
+    async recordVoiceRoomLive(rawInput: {
+      readonly voiceRoomId: string;
+    }): Promise<VoiceRoomRecord> {
+      try {
+        const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            update public.voice_rooms as room
+            set
+              backstage = false,
+              last_error_code = null,
+              record_version = record_version + 1,
+              updated_at = clock_timestamp()
+            where room.voice_room_id = $1
+              and room.state = 'live'
+              and room.provision_state = 'provisioned'
+              and room.backstage = true
+            returning ${voiceRoomColumns}
+          `,
+          values: [voiceRoomId],
+        });
+        const row = result.rows[0];
+        if (row !== undefined) {
+          return toVoiceRoomRecord(row);
+        }
+        // Nothing matched: already healed by a concurrent request, or no
+        // longer live. Report the room as it stands rather than failing.
+        return await withTransaction(pool, (client) =>
+          readVoiceRoom(client, voiceRoomId),
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
     async getCurrentVoiceRoom(rawInput: {
       readonly communityId: string;
       readonly viewerUserId: string;

@@ -193,6 +193,8 @@ export interface VoiceRoomHandRaiseQueueResource {
 
 export interface VoiceRoomReadInput {
   readonly principal: AuthenticatedLoopPrincipal;
+  /** The request ID; it is the `correlationId` of any error this request answers. */
+  readonly requestId: string;
   readonly signal: AbortSignal;
 }
 
@@ -311,9 +313,16 @@ async function repositoryCall<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+/** The one log line this service writes: a go-live that was not confirmed. */
+export interface VoiceRoomServiceLogger {
+  warn(context: Record<string, unknown>, message: string): void;
+}
+
 export interface VoiceRoomServiceOptions {
   readonly repository: CommunicationRepository;
   readonly callGateway: StreamCallGateway;
+  /** Absent means the unconfirmed go-live is not logged (tests, scripts). */
+  readonly logger?: VoiceRoomServiceLogger;
   /** Null keeps the roster closed (CAPABILITY_UNAVAILABLE); no cursor secret, no page. */
   readonly cursorCodec?: V2CursorCodec | null;
   readonly now?: () => Date;
@@ -493,18 +502,36 @@ export function createVoiceRoomService(
    * not confirmed. Never retried within a request.
    */
   async function attemptGoLive(
-    callId: string,
+    context: {
+      readonly voiceRoomId: string;
+      readonly callId: string;
+      readonly requestId: string;
+    },
     signal: AbortSignal,
   ): Promise<"live" | "unconfirmed"> {
+    const { voiceRoomId, callId, requestId } = context;
+    let outcome: "rejected" | "still_backstage";
+    let errorName: string | null;
     try {
       const projection = await options.callGateway.goLive({ callId, signal });
       signal.throwIfAborted();
-      return projection.backstage ? "unconfirmed" : "live";
+      if (!projection.backstage) {
+        return "live";
+      }
+      outcome = "still_backstage";
+      errorName = null;
     } catch (error) {
       signal.throwIfAborted();
-      void error;
-      return "unconfirmed";
+      outcome = "rejected";
+      errorName = error instanceof Error ? error.name : "unknown";
     }
+    // Sanitized on purpose: identifiers, the request ID (the error
+    // correlationId), and the error class. Never the Stream response body.
+    options.logger?.warn(
+      { voiceRoomId, callId, requestId, outcome, errorName },
+      "Voice room go_live was not confirmed",
+    );
+    return "unconfirmed";
   }
 
   /** A live, provisioned room whose call Stream still holds in backstage. */
@@ -525,6 +552,7 @@ export function createVoiceRoomService(
    */
   async function ensureLive(
     record: VoiceRoomViewerRecord,
+    requestId: string,
     signal: AbortSignal,
   ): Promise<{
     readonly record: VoiceRoomViewerRecord;
@@ -533,7 +561,14 @@ export function createVoiceRoomService(
     if (!needsGoLive(record.room)) {
       return { record, providerSync: confirmedSync };
     }
-    const live = await attemptGoLive(record.room.callId, signal);
+    const live = await attemptGoLive(
+      {
+        voiceRoomId: record.room.voiceRoomId,
+        callId: record.room.callId,
+        requestId,
+      },
+      signal,
+    );
     if (live !== "live") {
       return {
         record,
@@ -541,11 +576,8 @@ export function createVoiceRoomService(
       };
     }
     const room = await repositoryCall(() =>
-      options.repository.recordVoiceRoomProvisioning({
+      options.repository.recordVoiceRoomLive({
         voiceRoomId: record.room.voiceRoomId,
-        provisionState: "provisioned",
-        errorCode: null,
-        backstage: false,
       }),
     );
     return {
@@ -765,7 +797,14 @@ export function createVoiceRoomService(
           notObserved,
         );
       }
-      const live = await attemptGoLive(record.room.callId, input.signal);
+      const live = await attemptGoLive(
+        {
+          voiceRoomId: record.room.voiceRoomId,
+          callId: record.room.callId,
+          requestId: input.requestId,
+        },
+        input.signal,
+      );
       if (live === "live") {
         providerSync = confirmedSync;
         provisionState = "provisioned";
@@ -808,7 +847,7 @@ export function createVoiceRoomService(
           contractVersion: v2ContractVersion,
         });
       }
-      const healed = await ensureLive(record, input.signal);
+      const healed = await ensureLive(record, input.requestId, input.signal);
       const observed =
         healed.record.room.provisionState === "provisioned"
           ? await observeParticipants(healed.record.room.callId, input.signal)
@@ -828,7 +867,7 @@ export function createVoiceRoomService(
           viewerUserId: input.principal.userId,
         }),
       );
-      const healed = await ensureLive(record, input.signal);
+      const healed = await ensureLive(record, input.requestId, input.signal);
       const observed =
         healed.record.room.provisionState === "provisioned"
           ? await observeParticipants(healed.record.room.callId, input.signal)
@@ -850,7 +889,7 @@ export function createVoiceRoomService(
           viewerUserId: input.principal.userId,
         }),
       );
-      const healed = await ensureLive(preview, input.signal);
+      const healed = await ensureLive(preview, input.requestId, input.signal);
       if (needsGoLive(healed.record.room)) {
         throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
           reasonCode: communicationUnavailableReasonCodes.voiceBackstage,
