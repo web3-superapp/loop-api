@@ -191,6 +191,14 @@ export interface CommunicationRepository {
   muteSpeaker(
     input: VoiceRoomTargetCommandInput,
   ): Promise<VoiceRoomTargetRecord>;
+  /**
+   * The target itself or the host (Decision 0053 §1); the target must be a
+   * joined, muted speaker. Clears the LOOP mute intent only: it makes no
+   * Stream write, the device opens its own microphone.
+   */
+  unmuteSpeaker(
+    input: VoiceRoomTargetCommandInput,
+  ): Promise<VoiceRoomTargetRecord>;
   recordMuteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   endVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   /**
@@ -358,6 +366,7 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     inviteSpeaker: unavailable,
     removeSpeaker: unavailable,
     muteSpeaker: unavailable,
+    unmuteSpeaker: unavailable,
     recordMuteAll: unavailable,
     endVoiceRoom: unavailable,
     prepareChatGroupLeave: unavailable,

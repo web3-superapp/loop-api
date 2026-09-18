@@ -252,6 +252,14 @@ function communicationRepositoryFake(
         profile,
       }),
     ),
+    unmuteSpeaker: vi.fn(() =>
+      Promise.resolve({
+        room: room({ viewerRole: "speaker" }),
+        targetStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+        targetRole: "speaker" as const,
+        profile,
+      }),
+    ),
     listVoiceRoomMembers: vi.fn(() =>
       Promise.resolve({ room: room(), items: rosterRows() }),
     ),
@@ -933,7 +941,7 @@ describe("LOOP API V2 communication module", () => {
       expect(body.items[1]?.display.kind).toBe("anonymous");
     });
 
-    it("offers remove and mute on an unmuted speaker and only remove once muted", async () => {
+    it("offers remove and mute on an unmuted speaker, remove and unmute once muted", async () => {
       const communication = communicationRepositoryFake({
         listVoiceRoomMembers: vi.fn(() =>
           Promise.resolve({
@@ -956,7 +964,66 @@ describe("LOOP API V2 communication module", () => {
         jsonOf<{ items: readonly { commands: readonly string[] }[] }>(
           response,
         ).items.map((item) => item.commands),
-      ).toEqual([["remove_speaker", "mute"], ["remove_speaker"]]);
+      ).toEqual([
+        ["remove_speaker", "mute"],
+        ["remove_speaker", "unmute"],
+      ]);
+    });
+
+    it("offers a non-host exactly unmute_self on its own muted speaker row (Decision 0053)", async () => {
+      const rows = rosterRows();
+      const communication = communicationRepositoryFake({
+        listVoiceRoomMembers: vi.fn(() =>
+          Promise.resolve({
+            room: room({ viewerRole: "speaker" }),
+            items: [
+              { ...rows[0]!, role: "speaker" as const, muted: true },
+              { ...rows[2]!, role: "speaker" as const, muted: true },
+            ],
+          }),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=speaker`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = jsonOf<{
+        items: readonly { isSelf: boolean; commands: readonly string[] }[];
+      }>(response);
+      expect(body.items.map((item) => [item.isSelf, item.commands])).toEqual([
+        [false, []],
+        [true, ["unmute_self"]],
+      ]);
+    });
+
+    it("hands nothing out once the room has ended, not even unmute_self", async () => {
+      const rows = rosterRows();
+      const communication = communicationRepositoryFake({
+        listVoiceRoomMembers: vi.fn(() =>
+          Promise.resolve({
+            room: room({
+              viewerRole: "speaker",
+              room: { ...room().room, state: "ended" as const },
+            }),
+            items: [{ ...rows[2]!, role: "speaker" as const, muted: true }],
+          }),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=speaker`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(
+        jsonOf<{ items: readonly { commands: readonly string[] }[] }>(
+          response,
+        ).items.map((item) => item.commands),
+      ).toEqual([[]]);
     });
 
     it("pages with an owner-bound cursor that carries the page size", async () => {
@@ -1100,6 +1167,81 @@ describe("LOOP API V2 communication module", () => {
           reasonCode: "STREAM_CALL_MUTE_UNCONFIRMED",
         },
       });
+    });
+
+    it("lets a muted speaker clear its own mute intent without any Stream write (Decision 0053)", async () => {
+      const { app, callMocks, communicationMocks } = await createApp();
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${selfProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({
+        viewer: { role: "speaker" },
+        providerSync: { status: "confirmed", reasonCode: null },
+        participants: { observed: { status: "available" } },
+      });
+      expect(communicationMocks["unmuteSpeaker"]).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: accountId,
+          voiceRoomId,
+          targetPublicProfileId: selfProfileId,
+        }),
+      );
+      expect(callMocks["muteUser"]).not.toHaveBeenCalled();
+      expect(callMocks["muteUsers"]).not.toHaveBeenCalled();
+      expect(callMocks["updateUserPermissions"]).not.toHaveBeenCalled();
+      expect(callMocks["updateCallMembers"]).not.toHaveBeenCalled();
+    });
+
+    it("keeps unmute closed to anyone but the target and the host", async () => {
+      const communication = communicationRepositoryFake({
+        unmuteSpeaker: vi.fn(() =>
+          Promise.reject(new CommunicationPermissionDeniedError()),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({
+        code: "PERMISSION_DENIED",
+        category: "authorization",
+        retryable: false,
+      });
+    });
+
+    it("rejects unmuting a speaker that is not muted as DATA_STALE", async () => {
+      const communication = communicationRepositoryFake({
+        unmuteSpeaker: vi.fn(() =>
+          Promise.reject(new CommunicationDataStaleError()),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${selfProfileId}/mute`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: "DATA_STALE" });
+    });
+
+    it("requires the write headers on unmute like every other command", async () => {
+      const { app, communicationMocks } = await createApp();
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${selfProfileId}/mute`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      expect(communicationMocks["unmuteSpeaker"]).not.toHaveBeenCalled();
     });
 
     it("rejects muting a listener or an already muted speaker as DATA_STALE", async () => {

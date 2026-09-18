@@ -985,7 +985,8 @@ describe("PostgreSQL V2 communication repository", () => {
     operation:
       | "voiceRoomSpeakerInvite"
       | "voiceRoomSpeakerRemove"
-      | "voiceRoomSpeakerMute",
+      | "voiceRoomSpeakerMute"
+      | "voiceRoomSpeakerUnmute",
     actorUserId: string,
     voiceRoomId: string,
     targetPublicProfileId: string,
@@ -1277,6 +1278,136 @@ describe("PostgreSQL V2 communication repository", () => {
         values: [voiceRoomId, listener.userId],
       }),
     ).rejects.toThrow(/voice_room_members_muted_role_check/);
+  });
+
+  it("lets the muted speaker or the host clear the mute intent, nobody else (Decision 0053)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const speaker = await createAccount();
+    const other = await createAccount();
+    const listener = await createAccount();
+    for (const account of [speaker, other, listener]) {
+      await join(account.userId, communityId);
+      await joinRoom(account.userId, voiceRoomId);
+    }
+    await communication.inviteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerInvite",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    const unmute = (actorUserId: string, targetPublicProfileId: string) =>
+      communication.unmuteSpeaker(
+        targetCommand(
+          "voiceRoomSpeakerUnmute",
+          actorUserId,
+          voiceRoomId,
+          targetPublicProfileId,
+        ),
+      );
+
+    // Nothing to clear yet: stale for the speaker itself and for the host.
+    await expect(
+      unmute(speaker.userId, speaker.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+    await expect(
+      unmute(owner.userId, speaker.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+
+    await communication.muteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerMute",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    // A third member may not clear someone else's mute.
+    await expect(
+      unmute(other.userId, speaker.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+    // A listener has no mute to clear, whoever asks.
+    await expect(
+      unmute(owner.userId, listener.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+    await expect(
+      unmute(listener.userId, listener.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+    // The host row can never carry a mute; targeting it is a permission error.
+    await expect(
+      unmute(owner.userId, owner.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+
+    // The speaker clears its own intent.
+    const selfCleared = await unmute(speaker.userId, speaker.publicProfileId);
+    expect(selfCleared.targetRole).toBe("speaker");
+    expect(selfCleared.room.viewerRole).toBe("speaker");
+    let roster = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: speaker.userId,
+      role: "speaker",
+      limit: 10,
+    });
+    expect(roster.items.map((item) => item.muted)).toEqual([false]);
+    await expect(
+      unmute(speaker.userId, speaker.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunicationDataStaleError);
+
+    // The host clears it after a second mute.
+    await communication.muteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerMute",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    const hostCleared = await unmute(owner.userId, speaker.publicProfileId);
+    expect(hostCleared.room.viewerRole).toBe("host");
+    roster = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "speaker",
+      limit: 10,
+    });
+    expect(roster.items.map((item) => item.muted)).toEqual([false]);
+
+    const audit = await pool.query<{ reason_code: string; actor: string }>({
+      text: `
+        select reason_code, actor_user_id::text as actor
+        from public.voice_room_events
+        where voice_room_id = $1 and event_type = 'speaker_unmuted' and target_user_id = $2
+        order by occurred_at asc, event_id asc
+      `,
+      values: [voiceRoomId, speaker.userId],
+    });
+    expect(audit.rows).toEqual([
+      { reason_code: "self_unmute", actor: speaker.userId },
+      { reason_code: "host_unmute", actor: owner.userId },
+    ]);
+
+    // An exact replay returns the committed result instead of going stale.
+    const replay = targetCommand(
+      "voiceRoomSpeakerUnmute",
+      owner.userId,
+      voiceRoomId,
+      speaker.publicProfileId,
+    );
+    await communication.muteSpeaker(
+      targetCommand(
+        "voiceRoomSpeakerMute",
+        owner.userId,
+        voiceRoomId,
+        speaker.publicProfileId,
+      ),
+    );
+    await communication.unmuteSpeaker(replay);
+    const replayed = await communication.unmuteSpeaker(replay);
+    expect(replayed.targetRole).toBe("speaker");
   });
 
   it("ends the room and makes every later write stale", async () => {

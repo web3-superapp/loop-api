@@ -505,7 +505,7 @@ export function createPostgresCommunicationRepository(
 ): CommunicationRepository {
   async function targetCommand(
     rawInput: VoiceRoomTargetCommandInput,
-    action: "invite" | "remove" | "mute",
+    action: "invite" | "remove" | "mute" | "unmute",
   ): Promise<VoiceRoomTargetRecord> {
     const actorUserId = userIdSchema.parse(rawInput.actorUserId);
     const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
@@ -542,9 +542,19 @@ export function createPostgresCommunicationRepository(
         });
       }
       const room = await requireLiveRoom(client, voiceRoomId);
-      await requireHost(client, voiceRoomId, actorUserId);
-      if (target.userId === actorUserId) {
-        throw new CommunicationPermissionDeniedError();
+      // Unmute is the one row command open to a non-host: the muted speaker
+      // itself (Decision 0053 §1). Everything else is host only, and the
+      // host never targets itself.
+      const selfTarget = target.userId === actorUserId;
+      if (action === "unmute") {
+        if (!selfTarget) {
+          await requireHost(client, voiceRoomId, actorUserId);
+        }
+      } else {
+        await requireHost(client, voiceRoomId, actorUserId);
+        if (selfTarget) {
+          throw new CommunicationPermissionDeniedError();
+        }
       }
       const currentRow = await client.query<{ role: string; state: string }>({
         text: `
@@ -591,6 +601,45 @@ export function createPostgresCommunicationRepository(
           eventType: "speaker_muted",
           fromRole,
           toRole: fromRole,
+          idempotencyRecordId: recordId,
+          requestId,
+        });
+        return Object.freeze({
+          room: await readViewerRecord(client, room, actorUserId),
+          targetStreamUserId: deriveStreamUserId(target.userId),
+          targetRole: fromRole,
+          profile: target.profile,
+        });
+      }
+      if (action === "unmute") {
+        // Clearing the intent needs a muted, joined speaker; a listener or an
+        // unmuted speaker is stale, the same way a repeat mute is.
+        if (fromRole !== "speaker") {
+          throw new CommunicationDataStaleError();
+        }
+        const unmuted = await client.query({
+          text: `
+            update public.voice_room_members
+            set muted_at = null, updated_at = clock_timestamp()
+            where voice_room_id = $1
+              and owner_user_id = $2
+              and state = 'joined'
+              and role = 'speaker'
+              and muted_at is not null
+          `,
+          values: [voiceRoomId, target.userId],
+        });
+        if (unmuted.rowCount === 0) {
+          throw new CommunicationDataStaleError();
+        }
+        await appendVoiceRoomAudit(client, {
+          voiceRoomId,
+          actorUserId,
+          targetUserId: target.userId,
+          eventType: "speaker_unmuted",
+          fromRole,
+          toRole: fromRole,
+          reasonCode: selfTarget ? "self_unmute" : "host_unmute",
           idempotencyRecordId: recordId,
           requestId,
         });
@@ -1254,6 +1303,12 @@ export function createPostgresCommunicationRepository(
       rawInput: VoiceRoomTargetCommandInput,
     ): Promise<VoiceRoomTargetRecord> {
       return targetCommand(rawInput, "mute").catch(translateRepositoryError);
+    },
+
+    unmuteSpeaker(
+      rawInput: VoiceRoomTargetCommandInput,
+    ): Promise<VoiceRoomTargetRecord> {
+      return targetCommand(rawInput, "unmute").catch(translateRepositoryError);
     },
 
     async listVoiceRoomMembers(

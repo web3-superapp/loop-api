@@ -76,14 +76,19 @@ export type VoiceRoomMemberRoleFilter =
   (typeof voiceRoomMemberRoleFilters)[number];
 
 /**
- * Row commands the server hands the host (the S17 pattern): computed from the
- * viewer's role and the row's stored state, re-checked by the same predicate
- * on the write. A non-host viewer always receives an empty list.
+ * Row commands the server hands the viewer (the S17 pattern): computed from
+ * the viewer's role, the row's stored state, and whether the row is the
+ * viewer itself, re-checked by the same predicate on the write. A non-host
+ * viewer receives an empty list on every row except its own muted speaker
+ * row, which carries `unmute_self` (Decision 0053 §1): the only command a
+ * non-host may run. `unmute` is the host's form of the same route.
  */
 export const voiceRoomMemberCommands = [
   "invite_speaker",
   "remove_speaker",
   "mute",
+  "unmute",
+  "unmute_self",
 ] as const;
 export type VoiceRoomMemberCommand = (typeof voiceRoomMemberCommands)[number];
 

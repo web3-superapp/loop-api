@@ -610,7 +610,7 @@ export const voiceRoomMemberListResourceSchema = {
           muted: {
             type: "boolean",
             description:
-              "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it. Always false for a listener.",
+              "The host's LOOP-side mute intent (per-member mute or mute-all). It is not Stream media state and does not say whether the microphone is open now; every role transition clears it, and so does DELETE .../speakers/{pid}/mute by the speaker itself or the host (Decision 0053). Always false for a listener.",
           },
           isSelf: { type: "boolean" },
           commands: {
@@ -619,7 +619,7 @@ export const voiceRoomMemberListResourceSchema = {
             maxItems: voiceRoomMemberCommands.length,
             items: { type: "string", enum: [...voiceRoomMemberCommands] },
             description:
-              "The commands this viewer may run against this row, computed by the server from the viewer's role and the row's stored state (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command, and a non-host viewer receives an empty array on every row. It is a projection, not an authorization: the write re-checks the same predicate.",
+              "The commands this viewer may run against this row, computed by the server from the viewer's role, the row's stored state, and whether the row is the viewer (the S17 member-directory pattern). Exhaustive and authoritative: an empty array means no command. The host gets `invite_speaker` on a listener, `remove_speaker` plus `mute` or `unmute` on a speaker; a non-host viewer receives an empty array on every row except its own muted speaker row, which carries `unmute_self` (Decision 0053), the only non-host row command. `unmute` and `unmute_self` both map to DELETE .../speakers/{pid}/mute. It is a projection, not an authorization: the write re-checks the same predicate.",
           },
         },
       },

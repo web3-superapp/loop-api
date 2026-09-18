@@ -208,6 +208,7 @@ DELETE /v2/voice-rooms/{voiceRoomId}/hand-raise
 POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 邀请发言
 DELETE /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 移出发言
 POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute  # host 逐人静音（决策 0052）
+DELETE /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute  # 本人或 host 取消静音意图（决策 0053）
 POST   /v2/voice-rooms/{voiceRoomId}/mute-all                     # host
 POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
 ```
@@ -265,7 +266,8 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   把 `communityName` 加进 `room` 的键集合。**
 - **权限**：只有 `viewer.role === "host"` 才渲染邀请/移出发言、全体静音、结束
   房间。后端同样只接受 host；非 host 一律 `403 PERMISSION_DENIED`。owner 或
-  admin 才能开房。
+  admin 才能开房。唯一例外是 `DELETE …/speakers/{pid}/mute`：被静音的发言人
+  可以对**自己**调用（决策 0053），见名单一节。
 - **`provisionState`**：只有 `provisioned` 才能 `join`；`pending` /
   `reconciling` / `failed` 时 `join` 返回 `503 CAPABILITY_UNAVAILABLE`。
 - **`join` 幂等**：已在房间内会返回当前角色，不会报错。`expiresAt` 是本次入场
@@ -410,7 +412,28 @@ host 邀请 `Voyager_344` 发言并静音后读 `role=speaker`：
   "handRaised": false,
   "muted": true,
   "isSelf": false,
-  "commands": ["remove_speaker"]
+  "commands": ["remove_speaker", "unmute"]
+}
+```
+
+同一行由 `Voyager_344` 自己读（非 host，本人 speaker 行已静音）——这是名单里
+**唯一**发给非 host 的命令：
+
+```json
+{
+  "publicProfileId": "8fcb7ade-c1dd-44ee-a6e0-5f80abbdc55e",
+  "display": {
+    "kind": "alias",
+    "alias": "Voyager_344",
+    "publicProfileId": "8fcb7ade-…",
+    "audience": "everyone"
+  },
+  "role": "speaker",
+  "joinedAt": "2026-09-17T13:45:10.600Z",
+  "handRaised": false,
+  "muted": true,
+  "isSelf": true,
+  "commands": ["unmute_self"]
 }
 ```
 
@@ -424,16 +447,30 @@ host 邀请 `Voyager_344` 发言并静音后读 `role=speaker`：
   视角匿名行为 null——不要试图解析、不要跳资料页。
 - **`commands[]` 是唯一的行命令来源**（S17 做法）：渲染恰好这些按钮，不要自己
   按 `viewer.role` 推。`invite_speaker` → `POST …/speakers/{pid}`；`remove_speaker`
-  → `DELETE …/speakers/{pid}`；`mute` → `POST …/speakers/{pid}/mute`。非 host
-  视角所有行都是 `[]`。写路径按同一谓词复核，不是授权。
+  → `DELETE …/speakers/{pid}`；`mute` → `POST …/speakers/{pid}/mute`；`unmute`
+  与 `unmute_self` → `DELETE …/speakers/{pid}/mute`（决策 0053）。host 视角：
+  listener 行 `["invite_speaker"]`，speaker 行未静音 `["remove_speaker","mute"]`、
+  已静音 `["remove_speaker","unmute"]`。非 host 视角所有行都是 `[]`，**只有本人
+  的 speaker 行且已静音时是 `["unmute_self"]`**。房间非 live 一律 `[]`。
+  **枚举集合变大了**：严格 codec 必须加 `unmute` / `unmute_self`。写路径按同一
+  谓词复核，不是授权。
 - **`handRaised`**：该成员有 pending 举手（listener 视图有意义；speaker 恒 false）。
   举手顺序仍看 `GET …/hand-raises`。
 - **`muted` 只是 host 的 LOOP 侧意图**（逐人静音或全体静音后为 true），**不是**
   麦克风状态——Stream 才是媒体状态的真相，被静音者在设备上可以自己开麦。每次角色
-  变化（邀请 / 移出 / 离开）清零。没有 unmute 命令。
+  变化（邀请 / 移出 / 离开）清零，或由下面的取消静音清零。
 - 逐人静音：`POST /v2/voice-rooms/{id}/speakers/{pid}/mute`，host only；目标是
   listener 或已静音 → `409 DATA_STALE`；对自己 → `403`。响应是房间资源，
   `providerSync` 说明那一次 Stream `muteUsers(user_ids)` 是否确认。
+- **取消静音意图（决策 0053）**：`DELETE /v2/voice-rooms/{id}/speakers/{pid}/mute`，
+  写头齐全（`Idempotency-Key` 等），无 body。**本人**（`pid` 是自己的档案）或
+  **host** 可调，其他人 `403 PERMISSION_DENIED`。目标必须是已静音的 speaker：
+  未静音 / listener / 已离开 → `409 DATA_STALE`；目标是 host 行 → `403`；房间已
+  结束 → `409 DATA_STALE`。它**只清 LOOP 意图并写审计 `speaker_unmuted`**，
+  **不做任何 Stream 调用**（Stream 不允许替别人开麦；开麦由本机 SDK 完成，
+  发言人的 `send-audio` 权限在邀请时已授予），所以 `providerSync` 固定
+  `confirmed`。推荐做法：用户在设备上开麦成功后再调它，让名单的 `muted`
+  归零；调用本身不会打开麦克风。响应是房间资源，`viewer.role` 是调用者的角色。
 - 分页：`nextCursor` 非空才有下一页；`limit` 与 `cursor` 同时传是 `400`。没有
   cursor 密钥时需要续页的响应 `503 CAPABILITY_UNAVAILABLE`。
 

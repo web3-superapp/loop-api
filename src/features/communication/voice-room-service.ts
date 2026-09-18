@@ -244,6 +244,9 @@ export interface VoiceRoomService {
     input: VoiceRoomSpeakerCommandInput,
   ): Promise<VoiceRoomResource>;
   muteSpeaker(input: VoiceRoomSpeakerCommandInput): Promise<VoiceRoomResource>;
+  unmuteSpeaker(
+    input: VoiceRoomSpeakerCommandInput,
+  ): Promise<VoiceRoomResource>;
   muteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
   endRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
 }
@@ -308,24 +311,34 @@ export interface VoiceRoomServiceOptions {
 }
 
 /**
- * The host's row commands (0052 §2), computed from the viewer's role and the
- * row's stored state; the write path re-checks the same predicate. A
- * listener can be invited; a speaker can be removed and, until muted, muted.
- * A non-host viewer receives no command on any row.
+ * The row commands (0052 §2, 0053 §1), computed from the viewer's role, the
+ * row's stored state, and whether the row is the viewer; the write path
+ * re-checks the same predicate. For the host: a listener can be invited; a
+ * speaker can be removed and, until muted, muted; once muted, unmuted. For
+ * anyone else the only command is `unmute_self` on its own muted speaker
+ * row. Nothing is offered once the room is no longer live.
  */
 export function voiceRoomMemberRowCommands(input: {
   readonly viewerIsHost: boolean;
   readonly roomLive: boolean;
+  readonly isSelf: boolean;
   readonly row: Pick<VoiceRoomMemberRecord, "role" | "muted">;
 }): readonly VoiceRoomMemberCommand[] {
-  if (!input.viewerIsHost || !input.roomLive) {
+  if (!input.roomLive) {
     return Object.freeze([]);
+  }
+  if (!input.viewerIsHost) {
+    return Object.freeze(
+      input.isSelf && input.row.role === "speaker" && input.row.muted
+        ? ["unmute_self"]
+        : [],
+    );
   }
   if (input.row.role === "listener") {
     return Object.freeze(["invite_speaker"]);
   }
   return Object.freeze(
-    input.row.muted ? ["remove_speaker"] : ["remove_speaker", "mute"],
+    input.row.muted ? ["remove_speaker", "unmute"] : ["remove_speaker", "mute"],
   );
 }
 
@@ -345,6 +358,7 @@ export function createUnavailableVoiceRoomService(): VoiceRoomService {
     inviteSpeaker: unavailable,
     removeSpeaker: unavailable,
     muteSpeaker: unavailable,
+    unmuteSpeaker: unavailable,
     muteAll: unavailable,
     endRoom: unavailable,
   });
@@ -591,6 +605,7 @@ export function createVoiceRoomService(
       commands: voiceRoomMemberRowCommands({
         viewerIsHost: viewer.isHost,
         roomLive,
+        isSelf,
         row,
       }),
     });
@@ -935,6 +950,36 @@ export function createVoiceRoomService(
       return resource(
         record.room,
         providerSync,
+        await observeAfterCommand(record.room, input.signal),
+      );
+    },
+
+    async unmuteSpeaker(
+      input: VoiceRoomSpeakerCommandInput,
+    ): Promise<VoiceRoomResource> {
+      const voiceRoomId = parseCommunicationOpaqueId(input.voiceRoomId);
+      const targetPublicProfileId = parseCommunicationPublicProfileId(
+        input.targetPublicProfileId,
+      );
+      const record = await repositoryCall(() =>
+        options.repository.unmuteSpeaker({
+          ...commandInputs(input),
+          voiceRoomId,
+          targetPublicProfileId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: communicationCommandDigest("voiceRoomSpeakerUnmute", [
+            voiceRoomId,
+            targetPublicProfileId,
+          ]),
+          requestId: input.requestId,
+        }),
+      );
+      // Clearing the mute intent is a LOOP fact only (0053 §1): Stream does
+      // not let anyone open another member's microphone, and the speaker's
+      // own device opens its microphone through the SDK. No provider write.
+      return resource(
+        record.room,
+        confirmedSync,
         await observeAfterCommand(record.room, input.signal),
       );
     },

@@ -31,9 +31,10 @@ import {
 
 /**
  * V2 community voice rooms (Decision 0032). Only the host may invite or
- * remove speakers, mute everyone, or end a room. A listener joins the queue by
- * raising a hand; the queue order lives in PostgreSQL. Every write on an
- * `ended` room is DATA_STALE.
+ * remove speakers, mute everyone, or end a room; a muted speaker may clear
+ * its own mute intent (Decision 0053). A listener joins the queue by raising
+ * a hand; the queue order lives in PostgreSQL. Every write on an `ended`
+ * room is DATA_STALE.
  */
 
 interface CommunityParams {
@@ -206,7 +207,7 @@ export function registerV2VoiceRoomRoutes(
         operationId: "listV2VoiceRoomMembers",
         summary: "List the speaker or listener roster",
         description:
-          "The LOOP `joined` members of one role view in join order (Decision 0052). It is the authorization roster, not presence: Stream session participants are never mixed in, and 'people in the room now' stays `participants.observed.participantCount` on the room resource. Names follow the leaderboard display rule (anonymous mode alone decides what others see). Each row carries `commands`, the host's executable row commands; a non-host viewer gets an empty list on every row. `limit` and `cursor` are mutually exclusive.",
+          "The LOOP `joined` members of one role view in join order (Decision 0052). It is the authorization roster, not presence: Stream session participants are never mixed in, and 'people in the room now' stays `participants.observed.participantCount` on the room resource. Names follow the leaderboard display rule (anonymous mode alone decides what others see). Each row carries `commands`, the viewer's executable row commands: the host's invite/remove/mute/unmute, and for a non-host only `unmute_self` on its own muted speaker row (Decision 0053). `limit` and `cursor` are mutually exclusive.",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -359,8 +360,16 @@ export function registerV2VoiceRoomRoutes(
       "/mute",
       "muteV2VoiceRoomSpeaker",
       "Mute one speaker",
-      "Host only; the roster's `mute` command (Decision 0052). The LOOP mute intent commits first (a listener or an already muted speaker is DATA_STALE), then one Stream muteUsers call for that member is attempted. Stream stays authoritative for the live microphone; there is no unmute command, the intent clears on the next role transition.",
+      "Host only; the roster's `mute` command (Decision 0052). The LOOP mute intent commits first (a listener or an already muted speaker is DATA_STALE), then one Stream muteUsers call for that member is attempted. Stream stays authoritative for the live microphone; the intent clears on the next role transition or through DELETE .../mute.",
       "muteSpeaker",
+    ],
+    [
+      "delete",
+      "/mute",
+      "unmuteV2VoiceRoomSpeaker",
+      "Clear one speaker's mute intent",
+      "The muted speaker itself or the host (Decision 0053); the roster's `unmute_self` / `unmute` command and the only row command open to a non-host. Anyone else is PERMISSION_DENIED. The target must be a joined, muted speaker (otherwise DATA_STALE). It clears the LOOP mute intent and writes the audit only: no Stream call is made, because Stream does not let anyone open another member's microphone; the speaker's own device opens it. `providerSync` is therefore always confirmed.",
+      "unmuteSpeaker",
     ],
   ] as const;
 
