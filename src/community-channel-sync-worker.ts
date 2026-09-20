@@ -4,6 +4,7 @@ import type {
   CommunityChannelSyncJobRecord,
   CommunityChannelSyncRepository,
 } from "./features/communication/communication-repository.js";
+import type { CommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
   StreamChannelProjectionMismatchError,
   StreamChannelRequestRejectedError,
@@ -31,6 +32,10 @@ export type CommunityChannelSyncRunResult = Readonly<{
   succeededCount: number;
   retriedCount: number;
   failedCount: number;
+  /** Decision 0055 persona lane: pending personas claimed this tick. */
+  personaClaimedCount: number;
+  personaConfirmedCount: number;
+  personaDeferredCount: number;
 }>;
 
 export interface CommunityChannelSyncWorker {
@@ -44,6 +49,8 @@ export interface CommunityChannelSyncWorker {
 export interface CreateCommunityChannelSyncWorkerOptions {
   readonly repository: CommunityChannelSyncRepository;
   readonly gateway: StreamCommunityChannelGateway;
+  /** Decision 0055: generates and projects the member's community persona. */
+  readonly personas: CommunityPersonaService;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
     event: CommunityChannelSyncInfrastructureBackoff,
@@ -105,6 +112,12 @@ function jobRetryDelaySeconds(attempts: number): number {
  * inside the same attempt and never reported as success. `addMembers` and
  * `removeMembers` are idempotent by contract, so a member that is already in
  * (or already out of) the channel completes the job.
+ *
+ * Decision 0055: an `add` carries the member's community persona as channel
+ * member custom data in that same single call. Whether Stream echoed it only
+ * decides the persona's projection state; the membership fact is recorded
+ * either way, and a separate persona lane re-projects pending personas of
+ * `synced` members with `updateMemberPartial` under its own claim.
  */
 export function createCommunityChannelSyncWorker(
   options: CreateCommunityChannelSyncWorkerOptions,
@@ -130,6 +143,20 @@ export function createCommunityChannelSyncWorker(
     });
   }
 
+  /**
+   * Persona bookkeeping after the membership fact is already recorded. A
+   * failure here must not turn a completed job into a retry: the persona
+   * simply keeps (or regains) its `pending` state and the persona lane
+   * repairs it.
+   */
+  async function recordPersonaOutcome(run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch {
+      // Bookkeeping only; see above.
+    }
+  }
+
   async function applyJob(
     job: CommunityChannelSyncJobRecord,
     signal: AbortSignal,
@@ -151,6 +178,14 @@ export function createCommunityChannelSyncWorker(
           memberState: "removed",
           channelState: "created",
         });
+        // Stream drops member custom data with the membership; the persona
+        // row stays and is re-projected on the next add.
+        await recordPersonaOutcome(() =>
+          options.personas.resetProjectionForMember({
+            communityId: job.communityId,
+            ownerUserId: job.ownerUserId,
+          }),
+        );
         return "succeeded";
       }
 
@@ -172,10 +207,24 @@ export function createCommunityChannelSyncWorker(
         return "succeeded";
       }
 
-      await options.gateway.addMembers({
+      // The persona is generated (or resumed) before the single provider
+      // call so the add carries it; a generation failure retries the job
+      // without having touched Stream.
+      const persona = await options.personas.ensurePersona({
+        communityId: job.communityId,
+        ownerUserId: job.ownerUserId,
+      });
+      const projection = await options.gateway.addMembers({
         channelId: job.streamChannelId,
         actingStreamUserId: job.channelCreatedByStreamUserId,
         memberStreamUserIds: [job.memberStreamUserId],
+        memberPersonas: [
+          {
+            streamUserId: job.memberStreamUserId,
+            personaId: persona.personaId,
+            alias: persona.alias,
+          },
+        ],
         signal,
       });
       await options.repository.completeJob({
@@ -185,6 +234,17 @@ export function createCommunityChannelSyncWorker(
         memberState: "synced",
         channelState: "created",
       });
+      await recordPersonaOutcome(() =>
+        projection.confirmedPersonaStreamUserIds.includes(
+          job.memberStreamUserId,
+        )
+          ? options.personas.confirmProjection({
+              personaId: persona.personaId,
+            })
+          : options.personas.requestProjection({
+              personaId: persona.personaId,
+            }),
+      );
       return "succeeded";
     } catch (error) {
       if (isAborted(signal)) {
@@ -241,6 +301,9 @@ export function createCommunityChannelSyncWorker(
         succeededCount: 0,
         retriedCount: 0,
         failedCount: 0,
+        personaClaimedCount: 0,
+        personaConfirmedCount: 0,
+        personaDeferredCount: 0,
       });
     }
     const abortSignal = signal ?? new AbortController().signal;
@@ -266,6 +329,9 @@ export function createCommunityChannelSyncWorker(
           succeededCount,
           retriedCount,
           failedCount,
+          personaClaimedCount: 0,
+          personaConfirmedCount: 0,
+          personaDeferredCount: 0,
         });
       }
       let outcome: "succeeded" | "retried" | "failed";
@@ -282,12 +348,54 @@ export function createCommunityChannelSyncWorker(
         failedCount += 1;
       }
     }
+    if (isAborted(abortSignal)) {
+      return Object.freeze({
+        kind: "aborted" as const,
+        claimedCount: jobs.length,
+        succeededCount,
+        retriedCount,
+        failedCount,
+        personaClaimedCount: 0,
+        personaConfirmedCount: 0,
+        personaDeferredCount: 0,
+      });
+    }
+    // Persona lane (Decision 0055): re-project pending personas of members
+    // that are already `synced`. Its claim is fenced in the database, and a
+    // claim failure is infrastructure, like a job claim failure.
+    let personaResult: {
+      readonly claimedCount: number;
+      readonly confirmedCount: number;
+      readonly deferredCount: number;
+    };
+    try {
+      personaResult = await options.personas.syncPendingProjections({
+        signal: abortSignal,
+      });
+    } catch {
+      if (isAborted(abortSignal)) {
+        return Object.freeze({
+          kind: "aborted" as const,
+          claimedCount: jobs.length,
+          succeededCount,
+          retriedCount,
+          failedCount,
+          personaClaimedCount: 0,
+          personaConfirmedCount: 0,
+          personaDeferredCount: 0,
+        });
+      }
+      throw new CommunityChannelSyncUnavailableError();
+    }
     return Object.freeze({
       kind: "completed" as const,
       claimedCount: jobs.length,
       succeededCount,
       retriedCount,
       failedCount,
+      personaClaimedCount: personaResult.claimedCount,
+      personaConfirmedCount: personaResult.confirmedCount,
+      personaDeferredCount: personaResult.deferredCount,
     });
   }
 

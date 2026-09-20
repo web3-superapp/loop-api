@@ -594,12 +594,23 @@ function chatProjection(
       communicationUnavailableReasonCodes.chatRuntime,
     );
   }
+  // The viewer's own persona (Decision 0055) is shown only to a current
+  // community member; a banned or departed account keeps its row but is not
+  // told a name for a channel it cannot open.
+  const viewerPersona =
+    channel.viewerIsCommunityMember && channel.viewerPersona !== null
+      ? Object.freeze({
+          alias: channel.viewerPersona.alias,
+          projectionState: channel.viewerPersona.projectionState,
+        })
+      : null;
   if (channel.channel === null) {
     // Nothing is in flight: the community is not verified, so no channel row
     // and no sync job exist yet.
     return unavailableCommunityChat(
       communicationUnavailableReasonCodes.channelNotProvisioned,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   if (!channel.channel.provisioned) {
@@ -608,24 +619,28 @@ function chatProjection(
     return syncingCommunityChat(
       communicationUnavailableReasonCodes.channelNotProvisioned,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   if (channel.channel.state === "failed") {
     return unavailableCommunityChat(
       communicationUnavailableReasonCodes.channelFailed,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   if (!channel.viewerIsCommunityMember) {
     return unavailableCommunityChat(
       communicationUnavailableReasonCodes.notMember,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   if (channel.viewerMemberState === "capacityPending") {
     return unavailableCommunityChat(
       communicationUnavailableReasonCodes.channelCapacity,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   if (channel.viewerMemberState !== "synced") {
@@ -633,6 +648,7 @@ function chatProjection(
     return syncingCommunityChat(
       communicationUnavailableReasonCodes.channelSyncing,
       channel.viewerMemberState,
+      viewerPersona,
     );
   }
   return Object.freeze({
@@ -640,6 +656,7 @@ function chatProjection(
     channelCid: communityChannelCid(channel.channel.streamChannelId),
     memberState: "synced",
     reasonCode: null,
+    viewerPersona,
   });
 }
 

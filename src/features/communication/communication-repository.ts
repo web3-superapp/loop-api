@@ -29,9 +29,105 @@ export interface CommunityChannelViewerRecord {
   readonly channel: CommunityChannelRecord | null;
   readonly viewerMemberState: CommunityChannelMemberState | null;
   readonly viewerIsCommunityMember: boolean;
+  /**
+   * The viewer's own community persona (Decision 0055), or null before the
+   * first `add` sync job generated one.
+   */
+  readonly viewerPersona: CommunityChannelViewerPersonaRecord | null;
   /** The community's live room, or null when nothing is broadcasting. */
   readonly currentVoiceRoomId: string | null;
   readonly currentVoiceRoomProvisioned: boolean;
+}
+
+export type CommunityChannelPersonaProjectionState = "pending" | "confirmed";
+
+export interface CommunityChannelViewerPersonaRecord {
+  readonly alias: string;
+  readonly projectionState: CommunityChannelPersonaProjectionState;
+}
+
+/**
+ * Decision 0055 persona: one immutable, community-unique, server-generated
+ * name per (community, account). `personaId` is the opaque value projected to
+ * Stream as `loop_group_alias_id`.
+ */
+export interface CommunityChannelPersonaRecord {
+  readonly personaId: string;
+  readonly communityId: string;
+  readonly ownerUserId: string;
+  readonly alias: string;
+  readonly aliasVersion: 1;
+  readonly projectionState: CommunityChannelPersonaProjectionState;
+  readonly projectionAttempts: number;
+}
+
+/** A persona together with the Stream coordinates its projection needs. */
+export interface CommunityChannelPersonaProjectionTarget {
+  readonly persona: CommunityChannelPersonaRecord;
+  readonly streamChannelId: string;
+  readonly memberStreamUserId: string;
+}
+
+/** One `synced` official-channel member as the backfill script sees it. */
+export interface CommunityChannelPersonaBackfillTarget {
+  readonly communityId: string;
+  readonly ownerUserId: string;
+  readonly streamChannelId: string;
+  readonly memberStreamUserId: string;
+  readonly persona: CommunityChannelPersonaRecord | null;
+}
+
+export interface CommunityChannelPersonaRepository {
+  /**
+   * Returns the existing persona or generates one. `generateAlias` is called
+   * once per attempt; a community-local alias collision is retried with a
+   * fresh draw, and a concurrent insert for the same pair yields that row.
+   */
+  ensurePersona(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly generateAlias: () => string;
+  }): Promise<CommunityChannelPersonaRecord>;
+  findPersona(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+  }): Promise<CommunityChannelPersonaRecord | null>;
+  confirmProjection(input: { readonly personaId: string }): Promise<void>;
+  /**
+   * Marks the projection `pending` again (or keeps it pending) and schedules
+   * the next projection attempt. `retryDelaySeconds: 0` makes it due now.
+   */
+  resetProjection(input: {
+    readonly personaId: string;
+    readonly retryDelaySeconds: number;
+  }): Promise<void>;
+  /** Same as `resetProjection` for the member's persona when one exists. */
+  resetProjectionForMember(input: {
+    readonly communityId: string;
+    readonly ownerUserId: string;
+    readonly retryDelaySeconds: number;
+  }): Promise<void>;
+  /**
+   * Claims due `pending` personas whose LOOP member is `synced` on a
+   * provisioned, non-failed channel. Each claim advances `next_projection_at`
+   * by `leaseSeconds` and increments `projection_attempts`, so replicas do
+   * not project the same persona concurrently.
+   */
+  claimPendingProjections(input: {
+    readonly limit: number;
+    readonly leaseSeconds: number;
+  }): Promise<readonly CommunityChannelPersonaProjectionTarget[]>;
+  /**
+   * Keyset page of `synced` members on provisioned channels, ordered by
+   * `(community_id, owner_user_id)`, with their persona when one exists.
+   */
+  listBackfillTargets(input: {
+    readonly limit: number;
+    readonly after: {
+      readonly communityId: string;
+      readonly ownerUserId: string;
+    } | null;
+  }): Promise<readonly CommunityChannelPersonaBackfillTarget[]>;
 }
 
 export interface VoiceRoomIdentity {
@@ -404,5 +500,19 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     endVoiceRoom: unavailable,
     prepareChatGroupLeave: unavailable,
     commitChatGroupLeave: unavailable,
+  });
+}
+
+export function createUnavailableCommunityChannelPersonaRepository(): CommunityChannelPersonaRepository {
+  const unavailable = (): Promise<never> =>
+    Promise.reject(new CommunicationRepositoryUnavailableError());
+  return Object.freeze({
+    ensurePersona: unavailable,
+    findPersona: unavailable,
+    confirmProjection: unavailable,
+    resetProjection: unavailable,
+    resetProjectionForMember: unavailable,
+    claimPendingProjections: unavailable,
+    listBackfillTargets: unavailable,
   });
 }

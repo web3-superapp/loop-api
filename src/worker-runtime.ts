@@ -51,6 +51,7 @@ import {
   type CreateCommunityChannelSyncWorkerOptions,
 } from "./community-channel-sync-worker.js";
 import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
+import { createCommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
   createPostgresDatabase,
   type PostgresDatabaseConfig,
@@ -60,7 +61,10 @@ import type { ControlPlaneRepository } from "./database/control-plane-repository
 import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
-import type { CommunityChannelSyncRepository } from "./features/communication/communication-repository.js";
+import type {
+  CommunityChannelPersonaRepository,
+  CommunityChannelSyncRepository,
+} from "./features/communication/communication-repository.js";
 import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
 import {
   createIssuanceQuotaRetentionWorker,
@@ -111,6 +115,7 @@ export interface ReconciliationWorkerDatabase {
   readonly walletIntents?: WalletIntentRepository;
   readonly mining?: MiningRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
+  readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -450,14 +455,22 @@ export async function runReconciliationWorker(
           });
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).
-    const communityChannelSyncWorker =
+    const communityChannelGateway =
       options.config.communityChannelSync === null
+        ? null
+        : createStreamCommunityChannelGateway(
+            options.config.communityChannelSync,
+          );
+    const communityChannelSyncWorker =
+      communityChannelGateway === null
         ? null
         : communityChannelSyncWorkerFactory({
             repository: database.communityChannelSync,
-            gateway: createStreamCommunityChannelGateway(
-              options.config.communityChannelSync,
-            ),
+            gateway: communityChannelGateway,
+            personas: createCommunityPersonaService({
+              personas: database.communityChannelPersonas,
+              gateway: communityChannelGateway,
+            }),
             onInfrastructureBackoff: (event) => {
               options.logger.warn(
                 { ...logFields(), ...event },

@@ -35,6 +35,7 @@ function channel(
     viewerMemberState: "synced",
     viewerIsCommunityMember: true,
     currentVoiceRoomId: null,
+    viewerPersona: null,
     currentVoiceRoomProvisioned: false,
   };
 }

@@ -82,6 +82,7 @@ const truncateControlPlane = `
     public.voice_room_members,
     public.voice_rooms,
     public.community_channel_sync_jobs,
+    public.community_channel_personas,
     public.community_channel_members,
     public.community_channels,
     public.social_graph_events,

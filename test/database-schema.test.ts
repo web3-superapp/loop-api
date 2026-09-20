@@ -39,6 +39,7 @@ describe("database schema readiness contract", () => {
       "public.community_channels",
       "public.community_channel_members",
       "public.community_channel_sync_jobs",
+      "public.community_channel_personas",
       "public.voice_rooms",
       "public.voice_room_members",
       "public.voice_room_hand_raises",

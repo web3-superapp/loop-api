@@ -5,6 +5,10 @@ import type {
   CommunityChannelSyncJobRecord,
   CommunityChannelSyncRepository,
 } from "../src/features/communication/communication-repository.js";
+import type {
+  CommunityPersonaService,
+  CommunityPersonaSyncResult,
+} from "../src/features/communication/community-persona-service.js";
 import {
   StreamChannelGatewayUnavailableError,
   StreamChannelProjectionMismatchError,
@@ -74,11 +78,60 @@ function repositoryFake(jobs: readonly CommunityChannelSyncJobRecord[]): {
 
 type ChannelMock = ReturnType<typeof vi.fn>;
 
-function projection() {
+const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+const personaAlias = "Harbor-4821";
+
+function personaRecord() {
+  return Object.freeze({
+    personaId,
+    communityId,
+    ownerUserId,
+    alias: personaAlias,
+    aliasVersion: 1 as const,
+    projectionState: "pending" as const,
+    projectionAttempts: 0,
+  });
+}
+
+function personasFake(
+  overrides: Partial<CommunityPersonaService> = {},
+  syncResult: CommunityPersonaSyncResult = {
+    claimedCount: 0,
+    confirmedCount: 0,
+    deferredCount: 0,
+  },
+) {
+  const ensurePersona = vi.fn(() => Promise.resolve(personaRecord()));
+  const confirmProjection = vi.fn(() => Promise.resolve());
+  const requestProjection = vi.fn(() => Promise.resolve());
+  const resetProjectionForMember = vi.fn(() => Promise.resolve());
+  const projectPersona = vi.fn(() => Promise.resolve("confirmed" as const));
+  const syncPendingProjections = vi.fn(() => Promise.resolve(syncResult));
+  const personas: CommunityPersonaService = {
+    ensurePersona,
+    confirmProjection,
+    requestProjection,
+    resetProjectionForMember,
+    projectPersona,
+    syncPendingProjections,
+    ...overrides,
+  };
+  return {
+    personas,
+    ensurePersona,
+    confirmProjection,
+    requestProjection,
+    resetProjectionForMember,
+    syncPendingProjections,
+  };
+}
+
+function projection(confirmedPersonaStreamUserIds: readonly string[] = []) {
   return {
     channelId: streamChannelId,
     streamCid: `messaging:${streamChannelId}`,
     memberCount: 11,
+    confirmedPersonaStreamUserIds,
   };
 }
 
@@ -117,7 +170,11 @@ describe("community channel sync worker lane", () => {
   it("adds one member with exactly one provider call", async () => {
     const { repository, completeJob, retryJob } = repositoryFake([job()]);
     const { gateway, addMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     const result = await worker.runOnce();
 
@@ -150,7 +207,11 @@ describe("community channel sync worker lane", () => {
       job({ channelProvisioned: false }),
     ]);
     const { gateway, upsertCommunityChannel, addMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -175,7 +236,11 @@ describe("community channel sync worker lane", () => {
         }),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -189,7 +254,11 @@ describe("community channel sync worker lane", () => {
       job({ kind: "remove" }),
     ]);
     const { gateway, removeMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -207,7 +276,11 @@ describe("community channel sync worker lane", () => {
       job({ kind: "remove", channelProvisioned: false }),
     ]);
     const { gateway, upsertCommunityChannel, removeMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -223,7 +296,11 @@ describe("community channel sync worker lane", () => {
       job({ memberCap: 10, syncedMemberCount: 10 }),
     ]);
     const { gateway, addMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -245,7 +322,11 @@ describe("community channel sync worker lane", () => {
         Promise.reject(new StreamChannelGatewayUnavailableError()),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     const result = await worker.runOnce();
 
@@ -268,7 +349,11 @@ describe("community channel sync worker lane", () => {
         Promise.reject(new StreamChannelGatewayUnavailableError()),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -286,7 +371,11 @@ describe("community channel sync worker lane", () => {
         Promise.reject(new StreamChannelGatewayUnavailableError()),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     const result = await worker.runOnce();
 
@@ -304,7 +393,11 @@ describe("community channel sync worker lane", () => {
         Promise.reject(new StreamChannelProjectionMismatchError()),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     await worker.runOnce();
 
@@ -324,7 +417,11 @@ describe("community channel sync worker lane", () => {
         Promise.reject(new StreamChannelRequestRejectedError()),
       ),
     });
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
 
     const result = await worker.runOnce();
 
@@ -338,7 +435,11 @@ describe("community channel sync worker lane", () => {
   it("performs no work and no provider call once aborted", async () => {
     const { repository, claimDueJobs } = repositoryFake([job()]);
     const { gateway, addMembers } = gatewayMocks();
-    const worker = createCommunityChannelSyncWorker({ repository, gateway });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
     const controller = new AbortController();
     controller.abort();
 
@@ -354,9 +455,201 @@ describe("community channel sync worker lane", () => {
     const worker = createCommunityChannelSyncWorker({
       repository,
       gateway: gatewayMocks().gateway,
+      personas: personasFake().personas,
     });
     expect(worker.workerId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
+  });
+
+  it("generates the persona before the add and attaches it as member custom", async () => {
+    const { repository, completeJob } = repositoryFake([job()]);
+    const { gateway, addMembers } = gatewayMocks({
+      addMembers: vi.fn(() =>
+        Promise.resolve(projection([creatorStreamUserId])),
+      ),
+    });
+    const personas = personasFake();
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ succeededCount: 1 });
+    expect(personas.ensurePersona).toHaveBeenCalledWith({
+      communityId,
+      ownerUserId,
+    });
+    expect(personas.ensurePersona.mock.invocationCallOrder[0]).toBeLessThan(
+      addMembers.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(addMembers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memberPersonas: [
+          {
+            streamUserId: creatorStreamUserId,
+            personaId,
+            alias: personaAlias,
+          },
+        ],
+      }),
+    );
+    expect(completeJob).toHaveBeenCalledWith(
+      expect.objectContaining({ memberState: "synced" }),
+    );
+    expect(personas.confirmProjection).toHaveBeenCalledWith({ personaId });
+    expect(personas.requestProjection).not.toHaveBeenCalled();
+  });
+
+  it("leaves the persona pending when the add response did not echo it", async () => {
+    const { repository, completeJob } = repositoryFake([job()]);
+    const { gateway } = gatewayMocks({
+      addMembers: vi.fn(() => Promise.resolve(projection([]))),
+    });
+    const personas = personasFake();
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ succeededCount: 1 });
+    expect(completeJob).toHaveBeenCalledWith(
+      expect.objectContaining({ memberState: "synced" }),
+    );
+    expect(personas.confirmProjection).not.toHaveBeenCalled();
+    expect(personas.requestProjection).toHaveBeenCalledWith({ personaId });
+  });
+
+  it("retries the job without touching Stream when persona generation fails", async () => {
+    const { repository, retryJob, completeJob } = repositoryFake([job()]);
+    const { gateway, addMembers } = gatewayMocks();
+    const personas = personasFake({
+      ensurePersona: vi.fn(() => Promise.reject(new Error("db down"))),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ retriedCount: 1, succeededCount: 0 });
+    expect(addMembers).not.toHaveBeenCalled();
+    expect(completeJob).not.toHaveBeenCalled();
+    expect(retryJob).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "stream_channel_sync_unavailable" }),
+    );
+  });
+
+  it("keeps a completed add as succeeded when persona bookkeeping fails", async () => {
+    const { repository, completeJob, retryJob } = repositoryFake([job()]);
+    const { gateway } = gatewayMocks({
+      addMembers: vi.fn(() =>
+        Promise.resolve(projection([creatorStreamUserId])),
+      ),
+    });
+    const personas = personasFake({
+      confirmProjection: vi.fn(() => Promise.reject(new Error("db down"))),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ succeededCount: 1, retriedCount: 0 });
+    expect(completeJob).toHaveBeenCalledTimes(1);
+    expect(retryJob).not.toHaveBeenCalled();
+  });
+
+  it("resets the member's persona projection after a remove", async () => {
+    const { repository } = repositoryFake([job({ kind: "remove" })]);
+    const { gateway } = gatewayMocks();
+    const personas = personasFake();
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    await worker.runOnce();
+
+    expect(personas.ensurePersona).not.toHaveBeenCalled();
+    expect(personas.resetProjectionForMember).toHaveBeenCalledWith({
+      communityId,
+      ownerUserId,
+    });
+  });
+
+  it("does not generate a persona for a member parked at the cap", async () => {
+    const { repository } = repositoryFake([
+      job({ memberCap: 10, syncedMemberCount: 10 }),
+    ]);
+    const { gateway } = gatewayMocks();
+    const personas = personasFake();
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    await worker.runOnce();
+
+    expect(personas.ensurePersona).not.toHaveBeenCalled();
+  });
+
+  it("runs the persona lane after the jobs and reports its counts", async () => {
+    const { repository } = repositoryFake([]);
+    const { gateway } = gatewayMocks();
+    const personas = personasFake(
+      {},
+      { claimedCount: 3, confirmedCount: 2, deferredCount: 1 },
+    );
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      claimedCount: 0,
+      personaClaimedCount: 3,
+      personaConfirmedCount: 2,
+      personaDeferredCount: 1,
+    });
+    expect(personas.syncPendingProjections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: expect.any(AbortSignal) as AbortSignal,
+      }),
+    );
+  });
+
+  it("treats a persona lane claim failure as infrastructure backoff", async () => {
+    const { repository } = repositoryFake([]);
+    const { gateway } = gatewayMocks();
+    const personas = personasFake({
+      syncPendingProjections: vi.fn(() => Promise.reject(new Error("db down"))),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+    });
+
+    await expect(worker.runOnce()).rejects.toMatchObject({
+      code: "community_channel_sync_unavailable",
+    });
   });
 });

@@ -270,24 +270,37 @@ export function communicationUnavailable(
  * runtime, no channel at all, a terminal failure, no membership, or the member
  * cap. Only `available` ever carries a CID.
  */
+/**
+ * The viewer's own persona in the official channel (Decision 0055): the name
+ * every other member sees for them. `projectionState` says whether Stream has
+ * echoed it yet; the client never derives a display name from it for others.
+ */
+export type CommunityChatViewerPersona = Readonly<{
+  alias: string;
+  projectionState: "pending" | "confirmed";
+}>;
+
 export type CommunityChatProjection =
   | Readonly<{
       status: "available";
       channelCid: string;
       memberState: "synced";
       reasonCode: null;
+      viewerPersona: CommunityChatViewerPersona | null;
     }>
   | Readonly<{
       status: "syncing";
       channelCid: null;
       memberState: CommunityChannelMemberState | null;
       reasonCode: string;
+      viewerPersona: CommunityChatViewerPersona | null;
     }>
   | Readonly<{
       status: "unavailable";
       channelCid: null;
       memberState: CommunityChannelMemberState | null;
       reasonCode: string;
+      viewerPersona: CommunityChatViewerPersona | null;
     }>;
 
 export type CommunityVoiceProjection =
@@ -305,24 +318,28 @@ export type CommunityVoiceProjection =
 export function unavailableCommunityChat(
   reasonCode: string,
   memberState: CommunityChannelMemberState | null = null,
+  viewerPersona: CommunityChatViewerPersona | null = null,
 ): CommunityChatProjection {
   return Object.freeze({
     status: "unavailable",
     channelCid: null,
     memberState,
     reasonCode,
+    viewerPersona,
   });
 }
 
 export function syncingCommunityChat(
   reasonCode: string,
   memberState: CommunityChannelMemberState | null = null,
+  viewerPersona: CommunityChatViewerPersona | null = null,
 ): CommunityChatProjection {
   return Object.freeze({
     status: "syncing",
     channelCid: null,
     memberState,
     reasonCode,
+    viewerPersona,
   });
 }
 

@@ -1965,6 +1965,10 @@ describe("LOOP API V2 community, social, and search modules", () => {
         readonly provisioned: boolean;
         readonly state: "created" | "failed" | "capacityPending";
       } | null,
+      viewerPersona: {
+        readonly alias: string;
+        readonly projectionState: "pending" | "confirmed";
+      } | null = null,
     ) {
       return {
         ...createUnavailableCommunicationRepository(),
@@ -1982,6 +1986,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
                   },
             viewerMemberState: "synced" as const,
             viewerIsCommunityMember: true,
+            viewerPersona,
             currentVoiceRoomId: null,
             currentVoiceRoomProvisioned: false,
           }),
@@ -2002,6 +2007,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
       channel: Parameters<typeof communicationFake>[0],
       gateway: StreamCommunityChannelGateway,
       overrides: Readonly<Record<string, string>> = {},
+      viewerPersona: Parameters<typeof communicationFake>[1] = null,
     ) {
       const dependencies = fakes();
       return createApp(
@@ -2009,13 +2015,61 @@ describe("LOOP API V2 community, social, and search modules", () => {
           ...dependencies,
           database: {
             ...dependencies.database,
-            communication: communicationFake(channel),
+            communication: communicationFake(channel, viewerPersona),
           },
           streamCommunityChannelGateway: gateway,
         },
         { V2_MODULES_ENABLED: "community,search,communication", ...overrides },
       );
     }
+
+    it("carries the viewer's own community persona in the chat block (Decision 0055)", async () => {
+      const gateway = presenceGateway(
+        vi.fn(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 1,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const cases: readonly (readonly [
+        Parameters<typeof communicationFake>[1],
+        unknown,
+      ])[] = [
+        [null, null],
+        [
+          { alias: "Harbor-4821", projectionState: "confirmed" },
+          { alias: "Harbor-4821", projectionState: "confirmed" },
+        ],
+        [
+          { alias: "Owl-0007", projectionState: "pending" },
+          { alias: "Owl-0007", projectionState: "pending" },
+        ],
+      ];
+      for (const [stored, expected] of cases) {
+        const { app } = await presenceApp(
+          { provisioned: true, state: "created" },
+          gateway,
+          {},
+          stored,
+        );
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json<{ chat: unknown }>().chat).toEqual({
+          status: "available",
+          channelCid: `messaging:${streamChannelId}`,
+          memberState: "synced",
+          reasonCode: null,
+          viewerPersona: expected,
+        });
+      }
+    });
 
     it("publishes the observed count with its timestamp and source on the detail read only", async () => {
       const read = vi.fn<

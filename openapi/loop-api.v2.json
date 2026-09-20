@@ -4865,9 +4865,31 @@
                         "status",
                         "channelCid",
                         "memberState",
-                        "reasonCode"
+                        "reasonCode",
+                        "viewerPersona"
                       ],
                       "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": ["available", "syncing", "unavailable"]
@@ -6017,9 +6039,31 @@
                         "status",
                         "channelCid",
                         "memberState",
-                        "reasonCode"
+                        "reasonCode",
+                        "viewerPersona"
                       ],
                       "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": ["available", "syncing", "unavailable"]
@@ -7070,9 +7114,31 @@
                         "status",
                         "channelCid",
                         "memberState",
-                        "reasonCode"
+                        "reasonCode",
+                        "viewerPersona"
                       ],
                       "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": ["available", "syncing", "unavailable"]
@@ -8231,9 +8297,31 @@
                         "status",
                         "channelCid",
                         "memberState",
-                        "reasonCode"
+                        "reasonCode",
+                        "viewerPersona"
                       ],
                       "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": ["available", "syncing", "unavailable"]
@@ -9392,9 +9480,31 @@
                         "status",
                         "channelCid",
                         "memberState",
-                        "reasonCode"
+                        "reasonCode",
+                        "viewerPersona"
                       ],
                       "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": ["available", "syncing", "unavailable"]

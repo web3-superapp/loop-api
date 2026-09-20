@@ -13,6 +13,7 @@
     "asset:register": "node --env-file-if-exists=.env.local --import tsx scripts/asset-register.ts",
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm openapi:check && pnpm test && pnpm build",
+    "community:persona-backfill": "node --env-file-if-exists=.env.local --import tsx scripts/community-persona-backfill.ts",
     "community:provision-channels": "node --env-file-if-exists=.env.local --import tsx scripts/community-provision-channels.ts",
     "community:verify": "node --env-file-if-exists=.env.local --import tsx scripts/community-verify.ts",
     "db:create-migration": "node-pg-migrate create --migration-file-language ts --migration-filename-format index",

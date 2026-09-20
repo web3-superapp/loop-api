@@ -1,4 +1,4 @@
-export const latestMigrationName = "000030_v2_voice_room_speaker_unmute";
+export const latestMigrationName = "000031_v2_community_channel_personas";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -15,6 +15,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.community_channels",
   "public.community_channel_members",
   "public.community_channel_sync_jobs",
+  "public.community_channel_personas",
   "public.voice_rooms",
   "public.voice_room_members",
   "public.voice_room_hand_raises",

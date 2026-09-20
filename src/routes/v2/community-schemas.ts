@@ -38,6 +38,7 @@ import {
   communityChannelMemberStates,
   streamChannelCidPatternSource,
 } from "../../features/communication/communication-contract.js";
+import { communityPersonaAliasPatternSource } from "../../features/communication/community-persona-generator.js";
 import { memberSearchLimits } from "../../features/identity/alias-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
@@ -367,11 +368,32 @@ export const recommendationSchema = {
  * state carries a machine reason code so the client can say "syncing" instead
  * of showing a CID it cannot open.
  */
+const communityChatViewerPersonaSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["alias", "projectionState"],
+  properties: {
+    alias: { type: "string", pattern: communityPersonaAliasPatternSource },
+    projectionState: { type: "string", enum: ["pending", "confirmed"] },
+  },
+} as const;
+
 const communityChatSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "channelCid", "memberState", "reasonCode"],
+  required: [
+    "status",
+    "channelCid",
+    "memberState",
+    "reasonCode",
+    "viewerPersona",
+  ],
   properties: {
+    viewerPersona: {
+      description:
+        "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+      anyOf: [communityChatViewerPersonaSchema, { type: "null" }],
+    },
     status: { type: "string", enum: ["available", "syncing", "unavailable"] },
     channelCid: {
       anyOf: [

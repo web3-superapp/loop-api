@@ -178,6 +178,7 @@ describe("Stream community channel gateway", () => {
       channelId: communityChannelId,
       streamCid: `messaging:${communityChannelId}`,
       memberCount: 2_500,
+      confirmedPersonaStreamUserIds: [],
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requestedUrl(fetchMock, 0).pathname).toBe("/api/v2/users");
@@ -193,6 +194,269 @@ describe("Stream community channel gateway", () => {
       user_id: hostUserId,
       add_members: [{ user_id: memberUserId }],
     });
+  });
+
+  it("attaches the persona as member custom on add and confirms it from the echo", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...channelResponse(communityChannelId, "community", 3),
+          members: [
+            {
+              user_id: memberUserId,
+              user: { id: memberUserId },
+              custom: {
+                loop_group_alias_id: personaId,
+                loop_group_alias: "Harbor-4821",
+                loop_group_alias_version: 1,
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    const projection = await gateway.addMembers({
+      channelId: communityChannelId,
+      actingStreamUserId: hostUserId,
+      memberStreamUserIds: [memberUserId],
+      memberPersonas: [
+        { streamUserId: memberUserId, personaId, alias: "Harbor-4821" },
+      ],
+      signal: signal(),
+    });
+
+    // The Stream user is still upserted `{id}`-only: the persona lives on
+    // the channel member, never on the user object.
+    expect(requestBody(fetchMock, 0)).toEqual({
+      users: { [memberUserId]: { id: memberUserId } },
+    });
+    expect(requestBody(fetchMock, 1)).toEqual({
+      user_id: hostUserId,
+      add_members: [
+        {
+          user_id: memberUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+    });
+    expect(projection.confirmedPersonaStreamUserIds).toEqual([memberUserId]);
+  });
+
+  it("leaves the persona unconfirmed when the echo is missing or differs", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const echoes: readonly unknown[] = [
+      [],
+      [{ user_id: memberUserId, custom: {} }],
+      [
+        {
+          user_id: memberUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Owl-0001",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+      [
+        {
+          user_id: hostUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+    ];
+    for (const members of echoes) {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({
+            duration: "1ms",
+            users: { [memberUserId]: { id: memberUserId } },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members,
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      const projection = await gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        memberPersonas: [
+          { streamUserId: memberUserId, personaId, alias: "Harbor-4821" },
+        ],
+        signal: signal(),
+      });
+
+      expect(projection.confirmedPersonaStreamUserIds).toEqual([]);
+      expect(projection.memberCount).toBe(3);
+    }
+  });
+
+  it("rejects a persona that names a member outside the batch or a malformed alias", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+
+    for (const memberPersonas of [
+      [{ streamUserId: hostUserId, personaId, alias: "Harbor-4821" }],
+      [{ streamUserId: memberUserId, personaId, alias: "loop_abc" }],
+      [
+        {
+          streamUserId: memberUserId,
+          personaId: "not-a-uuid",
+          alias: "Owl-0001",
+        },
+      ],
+      [
+        { streamUserId: memberUserId, personaId, alias: "Owl-0001" },
+        { streamUserId: memberUserId, personaId, alias: "Owl-0002" },
+      ],
+    ]) {
+      await expect(
+        gateway.addMembers({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          memberPersonas,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("projects a persona onto an existing member and requires the exact echo", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        duration: "1ms",
+        channel_member: {
+          user_id: memberUserId,
+          user: { id: memberUserId },
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.projectMemberPersona({
+        channelId: communityChannelId,
+        streamUserId: memberUserId,
+        personaId,
+        alias: "Harbor-4821",
+        signal: signal(),
+      }),
+    ).resolves.toBeUndefined();
+
+    const url = requestedUrl(fetchMock, 0);
+    expect(url.pathname).toBe(
+      `/api/v2/chat/channels/messaging/${communityChannelId}/member`,
+    );
+    expect(url.searchParams.get("user_id")).toBe(memberUserId);
+    expect(requestBody(fetchMock, 0)).toEqual({
+      set: {
+        loop_group_alias_id: personaId,
+        loop_group_alias: "Harbor-4821",
+        loop_group_alias_version: 1,
+      },
+    });
+  });
+
+  it("does not confirm a persona projection whose echo differs, and classifies provider answers", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    const input = () => ({
+      channelId: communityChannelId,
+      streamUserId: memberUserId,
+      personaId,
+      alias: "Harbor-4821",
+      signal: signal(),
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          channel_member: {
+            user_id: memberUserId,
+            custom: { loop_group_alias: "Owl-0001" },
+          },
+        }),
+      ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelGatewayUnavailableError(),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 16, message: "member not found", StatusCode: 404 },
+            404,
+          ),
+        ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelRequestRejectedError(),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 9, message: "rate limited", StatusCode: 429 },
+            429,
+          ),
+        ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelGatewayUnavailableError(),
+    );
+
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().projectMemberPersona(
+        input(),
+      ),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
   });
 
   it("reports a deterministic client rejection as terminal", async () => {

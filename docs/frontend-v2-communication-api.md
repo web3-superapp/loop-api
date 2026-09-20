@@ -158,7 +158,8 @@ DELETE /v2/chat/groups/{groupId}/membership
     "status": "available",
     "channelCid": "messaging:loop_community_<32 hex>",
     "memberState": "synced",
-    "reasonCode": null
+    "reasonCode": null,
+    "viewerPersona": { "alias": "Harbor-4821", "projectionState": "confirmed" }
   },
   "voice": {
     "status": "available",
@@ -192,6 +193,45 @@ DELETE /v2/chat/groups/{groupId}/membership
   重新加入社区）。同步由独立 worker lane 在事务提交后执行。
 - 拿到 `channelCid` 后用官方 `StreamChannel` 连接；LOOP 不提供消息、历史、
   已读、在线数接口。置顶公告、在线数在本步一律 unavailable。
+
+### 成员显示名：社区人格（决策 0055，2026-09-20）
+
+每个 `(社区, 账号)` 有一个**服务端生成、不可变、社区内唯一**的人格
+（persona），形如 `Harbor-4821`（中性英文单词 + 4 位数字，不含任何 id 片段、
+不含用户别名）。同一个人在不同社区是不同的名字，在同一社区永远是同一个名字，
+退出/被封禁/重新加入都不变。
+
+**它投影在 Stream channel member 的 `custom` 上**（与 `POST /v2/chat/groups`
+小群的 0024 机制同一 shape，一套渲染代码即可）：
+
+```json
+{
+  "loop_group_alias": "Harbor-4821",
+  "loop_group_alias_id": "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a",
+  "loop_group_alias_version": 1
+}
+```
+
+客户端渲染规则（**硬规则**，真机验收按此对账）：
+
+| 位置                                   | 画什么                                                                                                         |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 群聊气泡上方的发送者名                 | `channel.state.members` 里该 `user.id` 对应 member 的 `custom["loop_group_alias"]`                             |
+| 成员名册 / @ 提及 / 系统消息里的成员名 | 同上                                                                                                           |
+| member custom 缺 `loop_group_alias` 时 | 固定文案「成员」                                                                                               |
+| **永远不画**                           | `user.name`、`user.id`、`message.user.name`、`message.user.id`（它们要么为空、要么是内部主键，两者都不可展示） |
+
+- `loop_group_alias_id` 只用于本地去重/稳定 key，不展示，也不要拿去关联别的接口。
+- `GET /v2/communities/{id}` 的 `chat.viewerPersona` 是**当前用户自己**在这个社区
+  的名字，用来在输入框附近提示「你在本群显示为 Harbor-4821」；
+  `projectionState: "pending"` 表示 LOOP 已生成但 Stream 还没确认，可提示
+  「名字同步中」；`null` 表示还没生成（成员同步尚未跑过）或当前用户不是成员。
+- 别人的名字只从 member custom 读，不从任何 LOOP 接口读；LOOP 没有「查别人
+  persona」的接口，`GET /v2/communities/{id}/members` 里的 `alias` / `loopId`
+  是社区公开身份，**不是**群聊显示名，不要把两者拼在一起显示。
+- 私聊（`dm`）不受影响，仍显示对方 `alias ?? loopId`。
+- Stream member custom 是投影：若某个成员的 custom 还没到（旧成员待回填、或
+  投影暂时失败），按「成员」显示即可，不要回退到 `user.id`。
 
 ## 5. 语音房（`voiceroom` / `voiceroom-full`）
 

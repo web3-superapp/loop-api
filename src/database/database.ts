@@ -56,12 +56,14 @@ import type { MiningRepository } from "../features/mining/mining-repository.js";
 import type { ReferralRepository } from "../features/referral/referral-repository.js";
 import type {
   CommunicationRepository,
+  CommunityChannelPersonaRepository,
   CommunityChannelSyncRepository,
 } from "../features/communication/communication-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
 import { createPostgresCommunityRepository } from "./community-repository.js";
 import {
   createPostgresCommunicationRepository,
+  createPostgresCommunityChannelPersonaRepository,
   createPostgresCommunityChannelSyncRepository,
 } from "./communication-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
@@ -175,6 +177,8 @@ export interface PostgresDatabase extends Database {
   readonly spotIntents: PostgresSpotIntentRepository;
   readonly spotReconciliation: SpotReconciliationRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
+  /** Decision 0055 community chat personas. */
+  readonly communityChannelPersonas: CommunityChannelPersonaRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -318,6 +322,8 @@ export function createPostgresDatabase(
   const communication = createPostgresCommunicationRepository(pool);
   const communityChannelSync =
     createPostgresCommunityChannelSyncRepository(pool);
+  const communityChannelPersonas =
+    createPostgresCommunityChannelPersonaRepository(pool);
 
   return {
     internalUsers,
@@ -338,6 +344,7 @@ export function createPostgresDatabase(
     community,
     communication,
     communityChannelSync,
+    communityChannelPersonas,
     watchlists,
     watchlistsV2,
     chainRegistry,

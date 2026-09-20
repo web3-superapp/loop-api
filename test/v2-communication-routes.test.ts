@@ -196,6 +196,7 @@ function communicationRepositoryFake(
         viewerMemberState: null,
         viewerIsCommunityMember: false,
         currentVoiceRoomId: null,
+        viewerPersona: null,
         currentVoiceRoomProvisioned: false,
       }),
     ),
@@ -379,6 +380,7 @@ function channelGatewayFake(
         channelId: `loop_community_${communityId.replaceAll("-", "")}`,
         streamCid: `messaging:loop_community_${communityId.replaceAll("-", "")}`,
         memberCount: 2,
+        confirmedPersonaStreamUserIds: [],
       }),
     ),
     removeMembers: vi.fn(() =>

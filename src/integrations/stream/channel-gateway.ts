@@ -523,10 +523,26 @@ export interface UpsertStreamCommunityChannelInput {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Decision 0055 persona carried on `add_members` as server-reserved member
+ * custom data. The three keys are exactly the Decision 0024 group-alias
+ * shape so one client renderer serves both channel kinds.
+ */
+export interface StreamCommunityMemberPersona {
+  readonly streamUserId: string;
+  readonly personaId: string;
+  readonly alias: string;
+}
+
 export interface StreamCommunityChannelMemberInput {
   readonly channelId: string;
   readonly actingStreamUserId: string;
   readonly memberStreamUserIds: readonly string[];
+  /**
+   * Personas to attach on add. Every entry must name one of
+   * `memberStreamUserIds`; ignored on remove.
+   */
+  readonly memberPersonas?: readonly StreamCommunityMemberPersona[];
   readonly signal: AbortSignal;
 }
 
@@ -535,6 +551,23 @@ export interface StreamCommunityChannelProjection {
   readonly streamCid: string;
   /** Stream's own member count when it publishes one; otherwise null. */
   readonly memberCount: number | null;
+}
+
+export interface StreamCommunityChannelMemberProjection extends StreamCommunityChannelProjection {
+  /**
+   * Members whose echoed `custom` carried exactly the requested persona.
+   * Anything else (no echo, different values) is simply absent here: the
+   * caller keeps the persona `pending` and re-projects it later.
+   */
+  readonly confirmedPersonaStreamUserIds: readonly string[];
+}
+
+export interface ProjectStreamCommunityMemberPersonaInput {
+  readonly channelId: string;
+  readonly streamUserId: string;
+  readonly personaId: string;
+  readonly alias: string;
+  readonly signal: AbortSignal;
 }
 
 export interface ReadStreamCommunityChannelPresenceInput {
@@ -572,10 +605,19 @@ export interface StreamCommunityChannelGateway {
   ): Promise<StreamCommunityChannelProjection>;
   addMembers(
     input: StreamCommunityChannelMemberInput,
-  ): Promise<StreamCommunityChannelProjection>;
+  ): Promise<StreamCommunityChannelMemberProjection>;
   removeMembers(
     input: StreamCommunityChannelMemberInput,
   ): Promise<StreamCommunityChannelProjection>;
+  /**
+   * Writes the Decision 0055 persona onto an existing channel member with
+   * `updateMemberPartial` and resolves only when Stream echoes the exact
+   * three fields. A member Stream does not know is a deterministic
+   * rejection; a different echo is `unavailable`.
+   */
+  projectMemberPersona(
+    input: ProjectStreamCommunityMemberPersonaInput,
+  ): Promise<void>;
   readCommunityChannelPresence(
     input: ReadStreamCommunityChannelPresenceInput,
   ): Promise<StreamCommunityChannelPresenceResult>;
@@ -664,15 +706,118 @@ function parseUpsertCommunityInput(
   });
 }
 
+const personaAliasPattern = /^[A-Z][a-z]{2,15}-[0-9]{4}$/;
+const canonicalUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const personaCustomKeys = Object.freeze({
+  id: "loop_group_alias_id",
+  alias: "loop_group_alias",
+  version: "loop_group_alias_version",
+});
+const personaCustomVersion = 1;
+
+function isPersonaAlias(value: unknown): value is string {
+  return typeof value === "string" && personaAliasPattern.test(value);
+}
+
+function isCanonicalUuid(value: unknown): value is string {
+  return typeof value === "string" && canonicalUuidPattern.test(value);
+}
+
+function parseMemberPersona(value: unknown): StreamCommunityMemberPersona {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["streamUserId", "personaId", "alias"]) ||
+    !isStreamUserId(value["streamUserId"]) ||
+    !isCanonicalUuid(value["personaId"]) ||
+    !isPersonaAlias(value["alias"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    streamUserId: value["streamUserId"],
+    personaId: value["personaId"],
+    alias: value["alias"],
+  });
+}
+
+function personaCustom(
+  persona: StreamCommunityMemberPersona,
+): Record<string, unknown> {
+  return {
+    [personaCustomKeys.id]: persona.personaId,
+    [personaCustomKeys.alias]: persona.alias,
+    [personaCustomKeys.version]: personaCustomVersion,
+  };
+}
+
+function customMatchesPersona(
+  custom: unknown,
+  persona: StreamCommunityMemberPersona,
+): boolean {
+  return (
+    isRecord(custom) &&
+    custom[personaCustomKeys.id] === persona.personaId &&
+    custom[personaCustomKeys.alias] === persona.alias &&
+    custom[personaCustomKeys.version] === personaCustomVersion
+  );
+}
+
+function readEchoedMemberUserId(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const direct = value["user_id"];
+  if (isStreamUserId(direct)) {
+    return direct;
+  }
+  const nested = isRecord(value["user"]) ? value["user"]["id"] : undefined;
+  return isStreamUserId(nested) ? nested : undefined;
+}
+
+/**
+ * Which requested personas the `add_members` response proves. Stream echoes
+ * the affected members in `members[]`; a member entry whose `custom` carries
+ * exactly the requested three fields is confirmed. Everything else is left
+ * unconfirmed rather than guessed.
+ */
+function confirmedPersonas(
+  response: unknown,
+  personas: readonly StreamCommunityMemberPersona[],
+): readonly string[] {
+  if (personas.length === 0 || !isRecord(response)) {
+    return Object.freeze([]);
+  }
+  const members = response["members"];
+  if (!Array.isArray(members)) {
+    return Object.freeze([]);
+  }
+  const echoed = new Map<string, unknown>();
+  for (const member of members as unknown[]) {
+    const userId = readEchoedMemberUserId(member);
+    if (userId !== undefined && isRecord(member)) {
+      echoed.set(userId, member["custom"]);
+    }
+  }
+  return Object.freeze(
+    personas
+      .filter((persona) =>
+        customMatchesPersona(echoed.get(persona.streamUserId), persona),
+      )
+      .map((persona) => persona.streamUserId),
+  );
+}
+
 function parseCommunityMemberInput(
   value: unknown,
 ): StreamCommunityChannelMemberInput {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
+    !hasOnlyKeys(value, [
       "channelId",
       "actingStreamUserId",
       "memberStreamUserIds",
+      "memberPersonas",
       "signal",
     ]) ||
     !isMembershipChannelId(value["channelId"]) ||
@@ -686,12 +831,91 @@ function parseCommunityMemberInput(
   ) {
     return unavailable();
   }
+  const memberStreamUserIds = Object.freeze([...value["memberStreamUserIds"]]);
+  const rawPersonas = value["memberPersonas"];
+  if (rawPersonas === undefined) {
+    return Object.freeze({
+      channelId: value["channelId"],
+      actingStreamUserId: value["actingStreamUserId"],
+      memberStreamUserIds,
+      signal: parseSignal(value["signal"]),
+    });
+  }
+  if (!Array.isArray(rawPersonas)) {
+    return unavailable();
+  }
+  const memberPersonas = Object.freeze(
+    (rawPersonas as unknown[]).map(parseMemberPersona),
+  );
+  const allowed = new Set(memberStreamUserIds);
+  const seen = new Set<string>();
+  for (const persona of memberPersonas) {
+    if (!allowed.has(persona.streamUserId) || seen.has(persona.streamUserId)) {
+      return unavailable();
+    }
+    seen.add(persona.streamUserId);
+  }
   return Object.freeze({
     channelId: value["channelId"],
     actingStreamUserId: value["actingStreamUserId"],
-    memberStreamUserIds: Object.freeze([...value["memberStreamUserIds"]]),
+    memberStreamUserIds,
+    memberPersonas,
     signal: parseSignal(value["signal"]),
   });
+}
+
+function parseProjectPersonaInput(
+  value: unknown,
+): ProjectStreamCommunityMemberPersonaInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "channelId",
+      "streamUserId",
+      "personaId",
+      "alias",
+      "signal",
+    ]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !isStreamUserId(value["streamUserId"]) ||
+    !isCanonicalUuid(value["personaId"]) ||
+    !isPersonaAlias(value["alias"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    streamUserId: value["streamUserId"],
+    personaId: value["personaId"],
+    alias: value["alias"],
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+/**
+ * `updateMemberPartial` must echo the member with the exact persona fields.
+ * A differing echo is not a confirmation, so it stays `unavailable` and the
+ * persona stays pending.
+ */
+function validatePersonaProjectionResponse(
+  value: unknown,
+  input: ProjectStreamCommunityMemberPersonaInput,
+): void {
+  if (!isRecord(value) || !isRecord(value["channel_member"])) {
+    return unavailable();
+  }
+  const member = value["channel_member"];
+  const persona: StreamCommunityMemberPersona = {
+    streamUserId: input.streamUserId,
+    personaId: input.personaId,
+    alias: input.alias,
+  };
+  if (
+    readEchoedMemberUserId(member) !== input.streamUserId ||
+    !customMatchesPersona(member["custom"], persona)
+  ) {
+    return unavailable();
+  }
 }
 
 /**
@@ -815,6 +1039,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     upsertCommunityChannel: unavailablePromise,
     addMembers: unavailablePromise,
     removeMembers: unavailablePromise,
+    projectMemberPersona: unavailablePromise,
     readCommunityChannelPresence: unavailablePromise,
   });
 }
@@ -832,8 +1057,13 @@ export function createStreamCommunityChannelGateway(
   async function mutateMembers(
     rawInput: StreamCommunityChannelMemberInput,
     direction: "add" | "remove",
-  ): Promise<StreamCommunityChannelProjection> {
+  ): Promise<StreamCommunityChannelMemberProjection> {
     const input = parseCommunityMemberInput(rawInput);
+    const personas = new Map(
+      (direction === "add" ? (input.memberPersonas ?? []) : []).map(
+        (persona) => [persona.streamUserId, persona] as const,
+      ),
+    );
     try {
       input.signal.throwIfAborted();
       if (direction === "add") {
@@ -855,9 +1085,12 @@ export function createStreamCommunityChannelGateway(
           direction === "add"
             ? {
                 user_id: input.actingStreamUserId,
-                add_members: input.memberStreamUserIds.map((userId) => ({
-                  user_id: userId,
-                })),
+                add_members: input.memberStreamUserIds.map((userId) => {
+                  const persona = personas.get(userId);
+                  return persona === undefined
+                    ? { user_id: userId }
+                    : { user_id: userId, custom: personaCustom(persona) };
+                }),
               }
             : {
                 user_id: input.actingStreamUserId,
@@ -865,7 +1098,16 @@ export function createStreamCommunityChannelGateway(
               },
         );
       input.signal.throwIfAborted();
-      return validateMembershipChannelResponse(response, input.channelId);
+      const projection = validateMembershipChannelResponse(
+        response,
+        input.channelId,
+      );
+      return Object.freeze({
+        ...projection,
+        confirmedPersonaStreamUserIds: confirmedPersonas(response, [
+          ...personas.values(),
+        ]),
+      });
     } catch (error) {
       if (error instanceof StreamChannelProjectionMismatchError) {
         throw error;
@@ -917,14 +1159,45 @@ export function createStreamCommunityChannelGateway(
 
     addMembers(
       rawInput: StreamCommunityChannelMemberInput,
-    ): Promise<StreamCommunityChannelProjection> {
+    ): Promise<StreamCommunityChannelMemberProjection> {
       return mutateMembers(rawInput, "add");
     },
 
-    removeMembers(
+    async removeMembers(
       rawInput: StreamCommunityChannelMemberInput,
     ): Promise<StreamCommunityChannelProjection> {
-      return mutateMembers(rawInput, "remove");
+      const projection = await mutateMembers(rawInput, "remove");
+      return Object.freeze({
+        channelId: projection.channelId,
+        streamCid: projection.streamCid,
+        memberCount: projection.memberCount,
+      });
+    },
+
+    async projectMemberPersona(
+      rawInput: ProjectStreamCommunityMemberPersonaInput,
+    ): Promise<void> {
+      const input = parseProjectPersonaInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        const response = await client.chat
+          .channel(streamChannelType, input.channelId)
+          .updateMemberPartial({
+            user_id: input.streamUserId,
+            set: personaCustom({
+              streamUserId: input.streamUserId,
+              personaId: input.personaId,
+              alias: input.alias,
+            }),
+          });
+        input.signal.throwIfAborted();
+        validatePersonaProjectionResponse(response, input);
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
     },
 
     async readCommunityChannelPresence(
