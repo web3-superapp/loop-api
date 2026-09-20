@@ -217,7 +217,12 @@ published; every read keeps the last complete snapshot with `snapshot.stale`
   published as `referencePriceQuality: "derived"` with
   `referencePricePairAddress`, and a derived price outside the declared band
   keeps the holding unread (`MINING_PRICE_PAIR_NOT_FOUND`) instead of falling
-  back to the peg.
+  back to the peg. Decision 0060: a pair DexScreener identifies by something
+  other than an address (four.meme `{address}:4meme`, Uniswap V4 pool ids) is
+  dropped from the token's pair fact and counted
+  (`unrepresentablePairCount`) instead of making the whole token's price
+  `MARKET_PROVIDER_RESPONSE_MALFORMED`; a lossy JSON number still refuses the
+  whole response.
 
 | Method and path                            | Request                    | Success projection                                                                                                                                                                                                                                                                                                                                 | Interface     | Capability                                                                                              |
 | ------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |

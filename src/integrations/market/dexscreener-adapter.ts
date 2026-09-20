@@ -148,55 +148,124 @@ function optionalEpochMillis(
   return new Date(Number.parseInt(text, 10)).toISOString();
 }
 
-function address(value: string): string {
+/**
+ * A pool or token identifier this Provider reports that is not an EVM
+ * address: four.meme pools are `{address}:4meme`, Uniswap V4 pools are a
+ * 32-byte pool id. Decision 0052 refuses to put such an identifier into an
+ * address field, and Decision 0060 refuses to let one such pool take down
+ * the whole token's fact — the pair is dropped and counted instead.
+ */
+class UnrepresentablePairError extends Error {
+  constructor() {
+    super(
+      "The Provider identifies this pair by something other than an address",
+    );
+    this.name = "UnrepresentablePairError";
+  }
+}
+
+function pairIdentifier(value: string): string {
   try {
     return normalizeEvmAddress(value);
   } catch (error) {
     if (error instanceof InvalidChainIdentityError) {
-      return malformed();
+      throw new UnrepresentablePairError();
     }
     throw error;
   }
 }
 
-function normalizePairList(json: unknown): readonly TokenPairSnapshot[] {
+type ParsedPair = z.infer<typeof pairSchema>;
+
+/**
+ * One pair. Throws `UnrepresentablePairError` when the Provider identifies
+ * the pool or one of its tokens by something that is not an EVM address
+ * (that pair alone is dropped), and `malformed()` for anything else — a JSON
+ * number that proves the transport lost precision, an unparseable timestamp
+ * — because those say the response as a whole cannot be trusted.
+ */
+function normalizePair(pair: ParsedPair): TokenPairSnapshot {
+  return Object.freeze({
+    pairAddress: pairIdentifier(pair.pairAddress),
+    dexId: pair.dexId,
+    labels: Object.freeze([...(pair.labels ?? [])]),
+    baseTokenAddress: pairIdentifier(pair.baseToken.address),
+    baseTokenSymbol: (pair.baseToken.symbol ?? "").slice(0, 32),
+    baseTokenName:
+      pair.baseToken.name === undefined ||
+      pair.baseToken.name.trim().length === 0
+        ? null
+        : pair.baseToken.name.trim().slice(0, 128),
+    quoteTokenAddress: pairIdentifier(pair.quoteToken.address),
+    quoteTokenSymbol: (pair.quoteToken.symbol ?? "").slice(0, 32),
+    priceUsd: optionalDecimal(pair.priceUsd),
+    priceNative: optionalDecimal(pair.priceNative),
+    liquidityUsd: optionalDecimal(pair.liquidity?.usd),
+    volumeH24: optionalDecimal(pair.volume?.h24),
+    priceChangeH24: optionalDecimal(pair.priceChange?.h24),
+    fdv: optionalDecimal(pair.fdv),
+    marketCap: optionalDecimal(pair.marketCap),
+    buysH24: optionalCount(pair.txns?.h24?.buys),
+    sellsH24: optionalCount(pair.txns?.h24?.sells),
+    pairCreatedAt: optionalEpochMillis(pair.pairCreatedAt),
+  });
+}
+
+/** A pair the adapter could not represent, kept only for attribution. */
+interface UnrepresentablePair {
+  readonly baseTokenAddress: string;
+  readonly quoteTokenAddress: string;
+}
+
+interface NormalizedPairList {
+  readonly pairs: readonly TokenPairSnapshot[];
+  readonly unrepresentable: readonly UnrepresentablePair[];
+}
+
+/**
+ * The response shape itself must parse and every number in it must have
+ * survived the transport losslessly; a single pair the Provider identifies
+ * by something other than an address is dropped and counted rather than
+ * refused together with the whole list (Decision 0060).
+ *
+ * The list endpoint mixes venues: four.meme pools are identified as
+ * `{address}:4meme` and Uniswap V4 pools by a 32-byte pool id, neither of
+ * which is a pair address. Decision 0052 already refuses to put such an
+ * identifier into an address field. Before this change one such pool in a
+ * token's list made the token's entire price fact `unavailable`
+ * (`MARKET_PROVIDER_RESPONSE_MALFORMED`) — on 2026-09-21 exactly that
+ * happened to BSC USDT and kept the Mining lane incomplete. Nothing is
+ * invented for the dropped pool: it is simply not published.
+ */
+function normalizePairList(json: unknown): NormalizedPairList {
   const parsed = responseSchema.safeParse(json);
   if (!parsed.success) {
     return malformed();
   }
   const pairs: TokenPairSnapshot[] = [];
+  const unrepresentable: UnrepresentablePair[] = [];
   for (const pair of parsed.data) {
     if (pair.chainId !== dexscreenerChainSlug) {
       continue;
     }
-    pairs.push(
-      Object.freeze({
-        pairAddress: address(pair.pairAddress),
-        dexId: pair.dexId,
-        labels: Object.freeze([...(pair.labels ?? [])]),
-        baseTokenAddress: address(pair.baseToken.address),
-        baseTokenSymbol: (pair.baseToken.symbol ?? "").slice(0, 32),
-        baseTokenName:
-          pair.baseToken.name === undefined ||
-          pair.baseToken.name.trim().length === 0
-            ? null
-            : pair.baseToken.name.trim().slice(0, 128),
-        quoteTokenAddress: address(pair.quoteToken.address),
-        quoteTokenSymbol: (pair.quoteToken.symbol ?? "").slice(0, 32),
-        priceUsd: optionalDecimal(pair.priceUsd),
-        priceNative: optionalDecimal(pair.priceNative),
-        liquidityUsd: optionalDecimal(pair.liquidity?.usd),
-        volumeH24: optionalDecimal(pair.volume?.h24),
-        priceChangeH24: optionalDecimal(pair.priceChange?.h24),
-        fdv: optionalDecimal(pair.fdv),
-        marketCap: optionalDecimal(pair.marketCap),
-        buysH24: optionalCount(pair.txns?.h24?.buys),
-        sellsH24: optionalCount(pair.txns?.h24?.sells),
-        pairCreatedAt: optionalEpochMillis(pair.pairCreatedAt),
-      }),
-    );
+    try {
+      pairs.push(normalizePair(pair));
+    } catch (error) {
+      if (!(error instanceof UnrepresentablePairError)) {
+        throw error;
+      }
+      unrepresentable.push(
+        Object.freeze({
+          baseTokenAddress: pair.baseToken.address.toLowerCase(),
+          quoteTokenAddress: pair.quoteToken.address.toLowerCase(),
+        }),
+      );
+    }
   }
-  return Object.freeze(pairs);
+  return Object.freeze({
+    pairs: Object.freeze(pairs),
+    unrepresentable: Object.freeze(unrepresentable),
+  });
 }
 
 /**
@@ -218,9 +287,11 @@ export function normalizeDexscreenerPair(
       ? []
       : [parsed.data.pair]),
   ];
-  const pairs = normalizePairList(candidates);
+  const { pairs } = normalizePairList(candidates);
   const pair =
     pairs.find((candidate) => candidate.pairAddress === pairAddress) ?? null;
+  // A declared pair the adapter cannot represent answers `pair: null`: the
+  // caller fails closed on it rather than on the Provider as a whole.
   return Object.freeze({ pairAddress, pair });
 }
 
@@ -228,7 +299,13 @@ export function normalizeDexscreenerPairs(
   json: unknown,
   tokenAddress: string,
 ): TokenPairsSnapshot {
-  return Object.freeze({ tokenAddress, pairs: normalizePairList(json) });
+  const { pairs, unrepresentable } = normalizePairList(json);
+  return Object.freeze({
+    tokenAddress,
+    pairs,
+    // Every pair this endpoint returns belongs to the requested token.
+    unrepresentablePairCount: unrepresentable.length,
+  });
 }
 
 /**
@@ -239,7 +316,7 @@ export function normalizeDexscreenerBatch(
   json: unknown,
   tokenAddresses: readonly string[],
 ): readonly TokenPairsSnapshot[] {
-  const pairs = normalizePairList(json);
+  const { pairs, unrepresentable } = normalizePairList(json);
   return Object.freeze(
     tokenAddresses.map((tokenAddress) =>
       Object.freeze({
@@ -251,6 +328,13 @@ export function normalizeDexscreenerBatch(
               pair.quoteTokenAddress === tokenAddress,
           ),
         ),
+        // A dropped pair is attributed by its raw token addresses, so a
+        // token is never told about a pool that is not its own.
+        unrepresentablePairCount: unrepresentable.filter(
+          (pair) =>
+            pair.baseTokenAddress === tokenAddress ||
+            pair.quoteTokenAddress === tokenAddress,
+        ).length,
       }),
     ),
   );

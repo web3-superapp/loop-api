@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { MarketConfig } from "../src/config.js";
+import type {
+  MarketFactCacheRecord,
+  MarketFactCacheRepository,
+} from "../src/database/market-fact-cache-repository.js";
+import { createMarketFactService } from "../src/features/market/market-fact-service.js";
+import type {
+  MarketPairsProvider,
+  TokenPairsSnapshot,
+} from "../src/integrations/market/market-data-provider.js";
 import type { AssetRecord } from "../src/database/chain-registry-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import {
@@ -618,6 +628,122 @@ describe("mining-snapshot lane", () => {
           }),
         ],
       }),
+    );
+  });
+
+  it("refetches an expired price fact and takes the freshly observed derived price (Decisions 0059 and 0060)", async () => {
+    // The lane asks for a fresh fact; the cache row is older than its TTL,
+    // so the fact service must reach the Provider again. The cached value
+    // would derive 0.9 — outside the declared ±2 % band — so a snapshot can
+    // only complete if the *refetched* observation is the one used.
+    const marketConfig: MarketConfig = Object.freeze({
+      dexscreener: {
+        enabled: true,
+        budgetApiPerMinute: 120,
+        budgetWorkerPerMinute: 120,
+      },
+      geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
+      goplus: null,
+      priceTtlSeconds: 30,
+      securityTtlSeconds: 600,
+      candlesTtlSeconds: 60,
+      staleGraceSeconds: 900,
+      unlistedPriceTtlSeconds: 60,
+      unlistedMetadataTtlSeconds: 3_600,
+    });
+    const tokenAddress = loopAsset.address as string;
+    const pairsFor = (priceUsd: string): TokenPairsSnapshot => ({
+      tokenAddress,
+      pairs: [{ ...quotePair(priceUsd, "1000") }],
+    });
+    const rows = new Map<string, MarketFactCacheRecord>();
+    rows.set(`token:${tokenAddress}`, {
+      subjectKey: `token:${tokenAddress}`,
+      factKind: "token_pairs",
+      source: "dexscreener",
+      // Observed ten minutes ago: past the 30 s TTL, inside the grace window.
+      fetchedAt: "2026-09-21T00:00:00.000Z",
+      ttlSeconds: 30,
+      rawDigest: "a".repeat(64),
+      value: pairsFor("0.9") as unknown as Record<string, unknown>,
+    });
+    const cache: MarketFactCacheRepository = {
+      get: vi.fn((subjectKey: string) =>
+        Promise.resolve(rows.get(subjectKey) ?? null),
+      ),
+      put: vi.fn((record: MarketFactCacheRecord) => {
+        rows.set(record.subjectKey, record);
+        return Promise.resolve(record);
+      }),
+      findVerifiedCommunityByAssetId: vi.fn(() => Promise.resolve(null)),
+    };
+    const readTokenPairs = vi.fn(() =>
+      Promise.resolve({
+        value: pairsFor("1"),
+        source: "dexscreener" as const,
+        fetchedAt: "2026-09-21T00:10:00.000Z",
+        rawDigest: "b".repeat(64),
+      }),
+    );
+    const provider: MarketPairsProvider = {
+      source: "dexscreener",
+      readTokenPairs,
+      readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+      readPair: vi.fn(() => Promise.reject(new Error("not used"))),
+    };
+    const prices = createMarketFactService({
+      config: marketConfig,
+      cache,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+      tokenLookupProvider: null,
+      now: () => new Date("2026-09-21T00:10:00.000Z"),
+    });
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          ...approvedTestFormula,
+          formula: {
+            ...approvedTestFormula.formula,
+            referencePricing: {
+              [loopAssetId]: {
+                kind: "stable" as const,
+                pegUsd: "1",
+                guardBps: 200,
+              },
+            },
+          },
+        }),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices,
+    });
+    const result = await worker.runOnce();
+    expect(result.kind).toBe("snapshotted");
+    // The expired row was not served: the Provider was asked again.
+    expect(readTokenPairs).toHaveBeenCalledTimes(1);
+    expect(calls(repository, "writeSnapshot")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // Freshness and the price version are the observation just made.
+        priceVersion: "dexscreener:2026-09-21T00:10:00.000Z",
+        powers: [
+          expect.objectContaining({
+            assetId: loopAssetId,
+            referencePriceUsd: "1",
+            referencePriceQuality: "derived",
+            referencePricePairAddress: deepPairAddress,
+            power: "4",
+          }),
+        ],
+      }),
+    );
+    // The refetched fact replaced the expired row in the cache.
+    expect(rows.get(`token:${tokenAddress}`)?.fetchedAt).toBe(
+      "2026-09-21T00:10:00.000Z",
     );
   });
 

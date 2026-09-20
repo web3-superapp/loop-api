@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createDexscreenerAdapter,
+  normalizeDexscreenerBatch,
   normalizeDexscreenerPairs,
 } from "../src/integrations/market/dexscreener-adapter.js";
 import {
@@ -588,6 +589,73 @@ describe("GeckoTerminal adapter", () => {
     await expect(adapter.readTokenPairsBatch([])).rejects.toBeInstanceOf(
       MarketProviderError,
     );
+  });
+
+  it("drops a pool whose identifier is not a pair address and keeps every other pair of the token (Decision 0060)", () => {
+    // The 2026-09-21 fact: DexScreener's USDT list carries a four.meme pool
+    // identified as `{address}:4meme`. Before this decision that one entry
+    // made the whole token unpriceable.
+    const fourMeme = `{
+      "chainId": "bsc",
+      "dexId": "fourmeme",
+      "pairAddress": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444:4meme",
+      "baseToken": { "address": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444", "symbol": "NLRS" },
+      "quoteToken": { "address": "${usdt}", "symbol": "USDT" },
+      "priceNative": "0.00003693",
+      "priceUsd": "0.00003693"
+    }`;
+    const body = `[${fourMeme},${dexscreenerBody.slice(1)}`;
+    const snapshot = normalizeDexscreenerPairs(parseJsonLossless(body), usdt);
+    expect(snapshot.pairs).toHaveLength(2);
+    expect(snapshot.pairs.map((pair) => pair.pairAddress)).toEqual([
+      "0x172fcd41e0913e95784454622d1c3724f546f849",
+      "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+    ]);
+    // The drop is counted, never silent.
+    expect(snapshot.unrepresentablePairCount).toBe(1);
+  });
+
+  it("still refuses a response whose shape it cannot trust", () => {
+    for (const body of ['{"pairs": 1}', '[{"chainId": "bsc"}]', '"nope"']) {
+      expect(() =>
+        normalizeDexscreenerPairs(parseJsonLossless(body), usdt),
+      ).toThrowError(MarketProviderError);
+    }
+  });
+
+  it("attributes a dropped pool to the token it belongs to in a batch read", () => {
+    const fourMeme = `{
+      "chainId": "bsc",
+      "dexId": "fourmeme",
+      "pairAddress": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444:4meme",
+      "baseToken": { "address": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444", "symbol": "NLRS" },
+      "quoteToken": { "address": "${usdt}", "symbol": "USDT" },
+      "priceUsd": "0.00003693"
+    }`;
+    const body = `[${fourMeme},${dexscreenerBody.slice(1)}`;
+    const [wbnbSnapshot, usdtSnapshot] = normalizeDexscreenerBatch(
+      parseJsonLossless(body),
+      [wbnb, usdt],
+    );
+    expect(wbnbSnapshot?.unrepresentablePairCount).toBe(0);
+    expect(usdtSnapshot?.unrepresentablePairCount).toBe(1);
+  });
+
+  it("answers no pair when the declared pool itself cannot be represented", async () => {
+    const stub = fetchStub(() => ({
+      body: `{"pairs":[{
+        "chainId": "bsc",
+        "dexId": "fourmeme",
+        "pairAddress": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444:4meme",
+        "baseToken": { "address": "0x0410389360bA5d7609Ba8BA437FCb33376Bc4444", "symbol": "NLRS" },
+        "quoteToken": { "address": "${usdt}", "symbol": "USDT" },
+        "priceUsd": "0.00003693"
+      }]}`,
+    }));
+    const adapter = createDexscreenerAdapter({ fetch: stub.fetch });
+    await expect(
+      adapter.readPair("0x0410389360ba5d7609ba8ba437fcb33376bc4444"),
+    ).resolves.toMatchObject({ value: { pair: null } });
   });
 
   it("reads one declared pair by its own address and keeps only that pair on this chain (Decision 0059)", async () => {

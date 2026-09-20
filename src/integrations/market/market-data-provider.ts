@@ -75,6 +75,15 @@ export interface TokenPairSnapshot {
 export interface TokenPairsSnapshot {
   readonly tokenAddress: string;
   readonly pairs: readonly TokenPairSnapshot[];
+  /**
+   * How many pairs the Provider reported for this token that the adapter
+   * could not represent exactly and therefore did not publish — a four.meme
+   * or Uniswap V4 pool whose identifier is not a pair address, or a number
+   * the transport could not keep losslessly (Decision 0060). `undefined` on
+   * a cache row written before that decision; it is never a claim that the
+   * count was zero.
+   */
+  readonly unrepresentablePairCount?: number | undefined;
 }
 
 /**
