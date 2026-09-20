@@ -63,7 +63,7 @@ describe("development baseline documents", () => {
   it("names itself, weighs every registered asset at 1, and carries the placeholder budget inside the version", () => {
     assertMiningDevBaselineConstants();
     expect(miningDevBaselineConfigVersion).toBe(
-      "miningFormula-devBaseline-2026-09-15-r2",
+      "miningFormula-devBaseline-2026-09-15-r3",
     );
     expect(miningDevBaselineConfigVersion).toMatch(/devBaseline/);
     expect(miningDevBaselineConfigVersion).not.toMatch(/V1\b/);
@@ -85,6 +85,8 @@ describe("development baseline documents", () => {
       },
       // WBNB is not in this registry, so no proxy is declared for BNB.
       priceProxies: {},
+      // USDT is not in this registry, so no stable rule is declared either.
+      referencePricing: {},
     });
     expect(miningDevBaselineDailyOutputBudget).toBe("1000000");
     expect(documents.weightRange.community).toEqual({
@@ -282,7 +284,7 @@ describe("baseline resolution", () => {
   const incompleteAttempt: MiningSnapshotAttemptRecord = {
     snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
     status: "incomplete",
-    formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+    formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
     blockNumber: "123000110",
     computedAt: "2026-09-20T13:51:26.116Z",
     unreadInputs: [
@@ -439,7 +441,7 @@ describe("baseline resolution", () => {
       )(),
     ).toEqual({
       status: "approved",
-      configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+      configVersion: "miningFormula-devBaseline-2026-09-15-r3",
       effectiveAt: approvedAt,
       scope: "development_baseline",
     });

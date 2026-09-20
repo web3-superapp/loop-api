@@ -24,8 +24,9 @@ import {
  *
  * It reads the registered, non-blocked BSC assets, writes
  * `miningFormula-devBaseline-…` as `pending_approval` with every asset at
- * weight 1, the documented community range, and the placeholder daily
- * budget, and stops there. Approval is a second explicit step
+ * weight 1, the documented community range, the placeholder daily budget,
+ * the declared price proxies, and the declared reference pricing rules
+ * (Decision 0059), and stops there. Approval is a second explicit step
  * (`pnpm mining:approve-formula <configVersion> --confirm`). The script
  * requires `--confirm`, refuses `NODE_ENV=production` before opening a
  * connection, and refuses to overwrite an existing version.
@@ -151,6 +152,23 @@ export async function createMiningDevBaseline(
   }
 }
 
+/** One operator-readable line per declared reference pricing rule. */
+function describeReferencePricing(
+  formula: MiningFormulaRecord["formula"],
+): string {
+  const entries = Object.entries(formula.referencePricing ?? {});
+  if (entries.length === 0) {
+    return "none";
+  }
+  return entries
+    .map(([assetId, rule]) =>
+      rule.kind === "stable"
+        ? `${assetId} stable peg ${rule.pegUsd} +/-${String(rule.guardBps)}bps`
+        : `${assetId} pair ${rule.pairAddress}`,
+    )
+    .join("; ");
+}
+
 export async function runMiningDevBaseline(
   options: RunMiningDevBaselineOptions,
 ): Promise<0 | 1> {
@@ -176,6 +194,7 @@ export async function runMiningDevBaseline(
         `(scope ${record.formula.scope ?? "product"}, ${assetIds.length} asset(s) at weight 1, ` +
         `community range ${record.weightRange.community.range?.min ?? "?"}-${record.weightRange.community.range?.max ?? "?"}, ` +
         `daily output ${dailyOutput?.budget ?? "?"} ${dailyOutput?.status ?? ""})\n` +
+        `Reference pricing rules: ${describeReferencePricing(record.formula)}\n` +
         `Approve it with: pnpm mining:approve-formula ${miningDevBaselineConfigVersion} --confirm\n`,
     );
     return 0;

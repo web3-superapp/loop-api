@@ -217,6 +217,28 @@ export function addDecimalStrings(left: string, right: string): string {
 }
 
 /**
+ * Exact quotient of two canonical decimal strings, truncated to
+ * `fractionDigits` places. `null` when the divisor is zero: a price is never
+ * invented from a division that has no value.
+ */
+export function divideDecimalStrings(
+  left: string,
+  right: string,
+  fractionDigits: number,
+): string | null {
+  const a = scaledParts(left);
+  const b = scaledParts(right);
+  if (b.digits === 0n) {
+    return null;
+  }
+  return formatRational(
+    a.digits * 10n ** BigInt(b.fractionDigits),
+    b.digits * 10n ** BigInt(a.fractionDigits),
+    fractionDigits,
+  );
+}
+
+/**
  * Formats `numerator / denominator` as an exact decimal string truncated to
  * `fractionDigits` places, with trailing zeros removed. Pure integer
  * arithmetic.

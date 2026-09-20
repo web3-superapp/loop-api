@@ -12,6 +12,7 @@ import {
   marketPairsBatchLimit,
   MarketProviderError,
   type MarketPairsProvider,
+  type PairSnapshot,
   type ProviderObservation,
   type ProviderReadOptions,
   type TokenPairSnapshot,
@@ -30,8 +31,10 @@ import {
  * DexScreener adapter (Decision 0034; provider-lock `dexscreener_service`,
  * VERIFIED, no credential).
  *
- * One endpoint is used: `GET /token-pairs/v1/{chainId}/{tokenAddress}`,
- * documented at 300 requests per minute. The client-side throttle defaults to
+ * Three endpoints are used: `GET /token-pairs/v1/{chainId}/{tokenAddress}`,
+ * `GET /tokens/v1/{chainId}/{addresses}`, and — for a reference pricing rule
+ * that names one pool (Decision 0059) — `GET /latest/dex/pairs/{chainId}/
+ * {pairAddress}`. All are documented at 300 requests per minute. The client-side throttle defaults to
  * that limit and can only be lowered. Every numeric field is kept as the exact
  * digit string DexScreener sent; nothing is rounded or summed here.
  */
@@ -90,6 +93,14 @@ const pairSchema = z
   .passthrough();
 
 const responseSchema = z.array(pairSchema);
+
+/** `/latest/dex/pairs/{chain}/{pairId}` answers with a (possibly null) list. */
+const pairResponseSchema = z
+  .object({
+    pairs: z.array(pairSchema).nullable().optional(),
+    pair: pairSchema.nullable().optional(),
+  })
+  .passthrough();
 
 function optionalDecimal(
   value: string | number | null | undefined,
@@ -182,6 +193,31 @@ function normalizePairList(json: unknown): readonly TokenPairSnapshot[] {
   return Object.freeze(pairs);
 }
 
+/**
+ * The single pair the Provider returned for a pool address, or null when it
+ * knows none. A pair on another chain, or under another address than the one
+ * asked for, is not the requested pair and is dropped.
+ */
+export function normalizeDexscreenerPair(
+  json: unknown,
+  pairAddress: string,
+): PairSnapshot {
+  const parsed = pairResponseSchema.safeParse(json);
+  if (!parsed.success) {
+    return malformed();
+  }
+  const candidates = [
+    ...(parsed.data.pairs ?? []),
+    ...(parsed.data.pair === null || parsed.data.pair === undefined
+      ? []
+      : [parsed.data.pair]),
+  ];
+  const pairs = normalizePairList(candidates);
+  const pair =
+    pairs.find((candidate) => candidate.pairAddress === pairAddress) ?? null;
+  return Object.freeze({ pairAddress, pair });
+}
+
 export function normalizeDexscreenerPairs(
   json: unknown,
   tokenAddress: string,
@@ -251,6 +287,23 @@ export function createDexscreenerAdapter(
       });
       return Object.freeze({
         value: normalizeDexscreenerPairs(result.json, tokenAddress),
+        source: "dexscreener" as const,
+        fetchedAt: now().toISOString(),
+        rawDigest: result.rawDigest,
+      });
+    },
+
+    async readPair(
+      rawPairAddress: string,
+      options: ProviderReadOptions = {},
+    ): Promise<ProviderObservation<PairSnapshot>> {
+      const pairAddress = normalizeEvmAddress(rawPairAddress);
+      const result = await kernel.requestJson({
+        url: `${baseUrl}/latest/dex/pairs/${dexscreenerChainSlug}/${pairAddress}`,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      return Object.freeze({
+        value: normalizeDexscreenerPair(result.json, pairAddress),
         source: "dexscreener" as const,
         fetchedAt: now().toISOString(),
         rawDigest: result.rawDigest,

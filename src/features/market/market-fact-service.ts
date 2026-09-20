@@ -10,6 +10,7 @@ import {
   type CandlesProvider,
   type MarketPairsProvider,
   type NewPoolsSnapshot,
+  type PairSnapshot,
   type OhlcvTimeframe,
   type PoolOhlcvSnapshot,
   type ProviderObservation,
@@ -72,6 +73,14 @@ export interface MarketFactService {
     options?: ReadFactOptions,
   ): Promise<CachedFact<TokenPairsSnapshot>>;
   /**
+   * One pair by its own pool address, for a Mining reference pricing rule
+   * that declares it (Decision 0059).
+   */
+  readPair(
+    pairAddress: string,
+    options?: ReadFactOptions,
+  ): Promise<CachedFact<PairSnapshot>>;
+  /**
    * Pair snapshots for many tokens through the Provider's batch endpoint.
    * Cache hits are served without a request; misses are fetched in chunks.
    */
@@ -113,6 +122,7 @@ export interface CreateMarketFactServiceInput {
 
 export const marketFactKinds = Object.freeze({
   tokenPairs: "token_pairs",
+  pair: "pair",
   tokenSecurity: "token_security",
   poolOhlcv: "pool_ohlcv",
   newPools: "new_pools",
@@ -325,6 +335,31 @@ export function createMarketFactService(
               : () =>
                   provider.readTokenPairs(
                     tokenAddress,
+                    options.signal === undefined
+                      ? {}
+                      : { signal: options.signal },
+                  ),
+          options,
+        }),
+      );
+    },
+
+    readPair(pairAddress: string, options: ReadFactOptions = {}) {
+      const provider = input.pairsProvider;
+      const key = `pair:${pairAddress}|${marketFactKinds.pair}|${String(options.requireFresh === true)}`;
+      return dedupe(key, () =>
+        read<PairSnapshot>({
+          subjectKey: `pair:${pairAddress}`,
+          factKind: marketFactKinds.pair,
+          source: "dexscreener",
+          ttlSeconds: input.config.priceTtlSeconds,
+          disabledReasonCode: marketReasonCodes.dexscreenerDisabled,
+          fetch:
+            provider === null
+              ? null
+              : () =>
+                  provider.readPair(
+                    pairAddress,
                     options.signal === undefined
                       ? {}
                       : { signal: options.signal },

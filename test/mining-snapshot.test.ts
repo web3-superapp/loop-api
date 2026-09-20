@@ -113,6 +113,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "0.25",
         referencePriceQuality: "fresh",
         referencePriceProxyAssetId: null,
+        referencePricePairAddress: null,
         weight: "1",
         power: "0.125",
         blockNumber: "118",
@@ -124,6 +125,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "0.25",
         referencePriceQuality: "fresh",
         referencePriceProxyAssetId: null,
+        referencePricePairAddress: null,
         weight: "1",
         power: "0.5",
         blockNumber: "120",
@@ -208,6 +210,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "4",
         referencePriceQuality: "fresh",
         referencePriceProxyAssetId: null,
+        referencePricePairAddress: null,
         weight: "1",
         power: "12",
         blockNumber: "100",
@@ -219,6 +222,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "2",
         referencePriceQuality: "fresh",
         referencePriceProxyAssetId: null,
+        referencePricePairAddress: null,
         weight: "0.5",
         power: "10",
         blockNumber: "100",
@@ -297,7 +301,7 @@ describe("computeMiningSnapshot (pure)", () => {
       return;
     }
     expect(result.formulaVersion).toBe(
-      "miningFormula-devBaseline-2026-09-15-r2",
+      "miningFormula-devBaseline-2026-09-15-r3",
     );
     expect(
       result.powers.map((row) => [row.ownerUserId, row.assetId, row.power]),
@@ -389,6 +393,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "720.78",
         referencePriceQuality: "proxied",
         referencePriceProxyAssetId: wbnbAsset,
+        referencePricePairAddress: null,
         weight: "1",
         power: "180.195",
         blockNumber: "100",
@@ -576,6 +581,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceUsd: "1.5",
         referencePriceQuality: "fresh",
         referencePriceProxyAssetId: null,
+        referencePricePairAddress: null,
         weight: "1",
         power: "6",
         blockNumber: "12",

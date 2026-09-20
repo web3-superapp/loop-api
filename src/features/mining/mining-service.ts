@@ -169,9 +169,15 @@ export interface MiningIncludedAssetProjection {
   readonly symbol: string | null;
   readonly holding: string;
   readonly referencePriceUsd: string;
-  /** `proxied` = the declared proxy asset's price (Decision 0044). */
+  /**
+   * `proxied` = the declared proxy asset's price (Decision 0044);
+   * `derived` = the inverted quote side of `referencePricePairAddress`,
+   * inside the guard band the version declares (Decision 0059).
+   */
   readonly referencePriceQuality: MiningReferencePriceQuality;
   readonly referencePriceProxyAssetId: string | null;
+  /** The pair the price was read from; never null when `derived`. */
+  readonly referencePricePairAddress: string | null;
   readonly weight: string;
   readonly power: string;
   readonly blockNumber: string;
@@ -726,6 +732,7 @@ export function createMiningService(dependencies: {
                 referencePriceUsd: row.referencePriceUsd,
                 referencePriceQuality: row.referencePriceQuality,
                 referencePriceProxyAssetId: row.referencePriceProxyAssetId,
+                referencePricePairAddress: row.referencePricePairAddress,
                 weight: row.weight,
                 power: row.power,
                 blockNumber: row.blockNumber,

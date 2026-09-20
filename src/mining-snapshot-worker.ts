@@ -4,8 +4,19 @@ import type {
   AssetRecord,
   ChainRegistryRepository,
 } from "./database/chain-registry-repository.js";
-import type { AssetPriceFact } from "./features/market/market-fact-service.js";
-import { miningReasonCodes } from "./features/mining/mining-contract.js";
+import type {
+  AssetPriceFact,
+  CachedFact,
+} from "./features/market/market-fact-service.js";
+import type { PairSnapshot } from "./integrations/market/market-data-provider.js";
+import {
+  miningReasonCodes,
+  type MiningFormulaDocument,
+} from "./features/mining/mining-contract.js";
+import {
+  deriveDeclaredPairReferencePrice,
+  deriveStableReferencePrice,
+} from "./features/mining/mining-reference-pricing.js";
 import type { MiningRepository } from "./features/mining/mining-repository.js";
 import {
   computeMiningSnapshot,
@@ -25,6 +36,12 @@ import {
  * bound community under that version, computes the snapshot through the
  * pure `computeMiningSnapshot`, and writes it. It never settles a reward,
  * never claims, and never estimates a price.
+ *
+ * A formula version may declare a reference pricing rule per asset
+ * (Decision 0059): a pegged stable may be priced from the inverted quote
+ * side of its deepest pair, and a declared pair is read by its own address.
+ * The lane only observes and reports; whether a derived price may enter a
+ * snapshot is decided by the pure computation against the version.
  *
  * A run that cannot value a positive weighted holding is `incomplete`
  * (Decision 0057): it is recorded with its unread holdings and no number,
@@ -66,12 +83,17 @@ export interface MiningSnapshotWorker {
   run(signal: AbortSignal): Promise<void>;
 }
 
-/** The only price read the lane performs: a fresh reference price per asset. */
+/** The only price reads the lane performs, both required to be fresh. */
 export interface MiningPriceReader {
   readAssetPrice(
     asset: Pick<AssetRecord, "address" | "status">,
     options: { readonly requireFresh: true },
   ): Promise<AssetPriceFact>;
+  /** One declared pair, for a `kind: "pair"` reference pricing rule. */
+  readPair(
+    pairAddress: string,
+    options: { readonly requireFresh: true },
+  ): Promise<CachedFact<PairSnapshot>>;
 }
 
 export interface CreateMiningSnapshotWorkerOptions {
@@ -133,6 +155,104 @@ export function createMiningSnapshotWorker(
   let inFlight: Promise<MiningSnapshotRunResult> | null = null;
   let loopRunning = false;
 
+  /**
+   * One asset's reference price, exactly as observed. A version-declared
+   * pair (Decision 0059) is read by its own address and is authoritative for
+   * that asset; otherwise the asset's own pair list is read and, when it
+   * yields no base pair, a declared `stable` rule may invert the deepest
+   * pair in which the asset is the quote token. Nothing here decides
+   * whether a derived price is acceptable — the pure computation does.
+   */
+  async function readPrice(
+    asset: AssetRecord,
+    formula: MiningFormulaDocument,
+  ): Promise<MiningPriceInput> {
+    const rule = formula.referencePricing?.[asset.assetId];
+    const tokenAddress = asset.address;
+    if (rule?.kind === "pair" && tokenAddress !== null) {
+      const fact = await options.prices.readPair(rule.pairAddress, {
+        requireFresh: true,
+      });
+      const derivation =
+        fact.quality === "fresh"
+          ? deriveDeclaredPairReferencePrice({
+              rule,
+              tokenAddress,
+              pair: fact.value?.pair ?? null,
+            })
+          : ({ kind: "skip" } as const);
+      return Object.freeze({
+        assetId: asset.assetId,
+        priceUsd:
+          derivation.kind === "price" ? derivation.price.priceUsd : null,
+        quality:
+          derivation.kind === "price"
+            ? derivation.price.inverted
+              ? "derived"
+              : "fresh"
+            : fact.quality === "fresh"
+              ? "fresh"
+              : fact.quality,
+        fetchedAt: fact.fetchedAt,
+        source: fact.source,
+        proxyAssetId: null,
+        pairAddress:
+          derivation.kind === "price" ? derivation.price.pairAddress : null,
+        derivedInverted:
+          derivation.kind === "price" ? derivation.price.inverted : false,
+      });
+    }
+    const { fact, pair, proxyAsset } = await options.prices.readAssetPrice(
+      asset,
+      { requireFresh: true },
+    );
+    // Freshness is the Provider fact's own (for the native asset: WBNB's
+    // observation time). Whether a proxied price may be used is decided
+    // by the pure computation against the version's declared proxies
+    // (Decision 0044); the lane only reports what it observed.
+    const usable = fact.quality === "fresh";
+    if (
+      usable &&
+      pair === null &&
+      proxyAsset === null &&
+      rule?.kind === "stable" &&
+      tokenAddress !== null &&
+      fact.value !== null
+    ) {
+      const derivation = deriveStableReferencePrice({
+        rule,
+        tokenAddress: fact.value.tokenAddress,
+        pairs: fact.value.pairs,
+      });
+      if (derivation.kind === "price") {
+        return Object.freeze({
+          assetId: asset.assetId,
+          priceUsd: derivation.price.priceUsd,
+          quality: "derived" as const,
+          fetchedAt: fact.fetchedAt,
+          source: fact.source,
+          proxyAssetId: null,
+          pairAddress: derivation.price.pairAddress,
+          derivedInverted: derivation.price.inverted,
+        });
+      }
+    }
+    return Object.freeze({
+      assetId: asset.assetId,
+      priceUsd: usable ? (pair?.priceUsd ?? null) : null,
+      quality: usable
+        ? proxyAsset === null
+          ? "fresh"
+          : "proxied"
+        : fact.quality,
+      fetchedAt: fact.fetchedAt,
+      source: fact.source,
+      proxyAssetId: proxyAsset,
+      pairAddress: usable ? (pair?.pairAddress ?? null) : null,
+      derivedInverted: false,
+    });
+  }
+
   async function execute(
     signal?: AbortSignal,
   ): Promise<MiningSnapshotRunResult> {
@@ -172,27 +292,7 @@ export function createMiningSnapshotWorker(
       if (isAborted(signal)) {
         break;
       }
-      const { fact, pair, proxyAsset } = await options.prices.readAssetPrice(
-        asset,
-        { requireFresh: true },
-      );
-      // Freshness is the Provider fact's own (for the native asset: WBNB's
-      // observation time). Whether a proxied price may be used is decided
-      // by the pure computation against the version's declared proxies
-      // (Decision 0044); the lane only reports what it observed.
-      const usable = fact.quality === "fresh";
-      prices.push({
-        assetId: asset.assetId,
-        priceUsd: usable ? (pair?.priceUsd ?? null) : null,
-        quality: usable
-          ? proxyAsset === null
-            ? "fresh"
-            : "proxied"
-          : fact.quality,
-        fetchedAt: fact.fetchedAt,
-        source: fact.source,
-        proxyAssetId: proxyAsset,
-      });
+      prices.push(await readPrice(asset, formula.formula));
     }
     const computation = computeMiningSnapshot(
       { balances, prices, communityWeights },

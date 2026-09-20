@@ -307,6 +307,7 @@ export const miningAssetsResourceSchema = {
           "referencePriceUsd",
           "referencePriceQuality",
           "referencePriceProxyAssetId",
+          "referencePricePairAddress",
           "weight",
           "power",
           "blockNumber",
@@ -320,13 +321,21 @@ export const miningAssetsResourceSchema = {
             type: "string",
             enum: [...miningReferencePriceQualities],
             description:
-              "fresh = the asset's own Provider price; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044).",
+              "fresh = the asset is the base token of the pair that was read; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044); derived = the asset is the quote token of referencePricePairAddress and the price is that pair's inverted price, accepted only under a reference pricing rule the version declares and only inside its guard band (Decision 0059).",
           },
           referencePriceProxyAssetId: {
             anyOf: [
               { type: "string", pattern: assetIdPatternSource },
               { type: "null" },
             ],
+          },
+          referencePricePairAddress: {
+            anyOf: [
+              { type: "string", pattern: "^0x[0-9a-f]{40}$" },
+              { type: "null" },
+            ],
+            description:
+              "The pair the reference price was read from; never null when referencePriceQuality is derived (Decision 0059).",
           },
           weight: {
             ...decimalSchema,

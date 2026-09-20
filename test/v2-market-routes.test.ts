@@ -386,6 +386,15 @@ function pairsProviderFake(): MarketPairsProvider & {
         rawDigest: "a".repeat(64),
       });
     },
+    readPair: (pairAddress: string) => {
+      calls += 1;
+      return Promise.resolve({
+        value: { pairAddress, pair: null },
+        source: "dexscreener" as const,
+        fetchedAt,
+        rawDigest: "e".repeat(64),
+      });
+    },
   };
 }
 

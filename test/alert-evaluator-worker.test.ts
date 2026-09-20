@@ -193,6 +193,7 @@ function harness(options: {
   const facts: MarketFactService = {
     readTokenPairs,
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+    readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice,
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),

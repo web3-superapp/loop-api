@@ -164,6 +164,37 @@ function priceReader(
         proxyAsset,
       }),
     ),
+    readPair: vi.fn(() => Promise.reject(new Error("not used"))),
+  };
+}
+
+const deepPairAddress = "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae";
+const shallowPairAddress = "0x172fcd41e0913e95784454622d1c3724f546f849";
+
+/**
+ * A pair in which the weighted asset is the *quote* token: `priceUsd` is the
+ * base token in USD, `priceNative` the base token in asset units, so the
+ * asset is `priceUsd / priceNative` (Decision 0059).
+ */
+function quotePair(priceUsd: string, liquidityUsd: string) {
+  return {
+    pairAddress: liquidityUsd === "1000" ? deepPairAddress : shallowPairAddress,
+    dexId: "pancakeswap",
+    labels: [] as string[],
+    baseTokenAddress: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    baseTokenSymbol: "WBNB",
+    quoteTokenAddress: "0x0000000000000000000000000000000000000001",
+    quoteTokenSymbol: "LOOP",
+    priceUsd,
+    priceNative: "1",
+    liquidityUsd,
+    volumeH24: null,
+    priceChangeH24: null,
+    fdv: null,
+    marketCap: null,
+    buysH24: null,
+    sellsH24: null,
+    pairCreatedAt: null,
   };
 }
 
@@ -322,6 +353,7 @@ describe("mining-snapshot lane", () => {
         ) =>
           priceReader("fresh", null, pairFound).readAssetPrice(asset, options),
       ),
+      readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     };
     const worker = createMiningSnapshotWorker({
       repository,
@@ -399,6 +431,190 @@ describe("mining-snapshot lane", () => {
             referencePriceQuality: "proxied",
             referencePriceProxyAssetId: wbnb,
             power: "2",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("derives a declared stable price from the quote side of the deepest pair and carries it as derived (Decision 0059)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          ...approvedTestFormula,
+          formula: {
+            ...approvedTestFormula.formula,
+            referencePricing: {
+              [loopAssetId]: {
+                kind: "stable" as const,
+                pegUsd: "1",
+                guardBps: 200,
+              },
+            },
+          },
+        }),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      // No pair has the asset as base, exactly as DexScreener answered for
+      // BSC USDT from 2026-09-18; one pair has it as the quote token.
+      prices: {
+        readAssetPrice: vi.fn(() =>
+          Promise.resolve({
+            fact: {
+              value: {
+                tokenAddress: loopAsset.address as string,
+                pairs: [quotePair("0.5", "10"), quotePair("1", "1000")],
+              },
+              source: "dexscreener" as const,
+              fetchedAt: "2026-09-08T00:04:00.000Z",
+              ttlSeconds: 30,
+              quality: "fresh" as const,
+              reasonCode: null,
+              rawDigest: null,
+            },
+            pair: null,
+            proxyAsset: null,
+          }),
+        ),
+        readPair: vi.fn(() => Promise.reject(new Error("not used"))),
+      },
+    });
+    const result = await worker.runOnce();
+    expect(result.kind).toBe("snapshotted");
+    expect(calls(repository, "writeSnapshot")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        powers: [
+          expect.objectContaining({
+            assetId: loopAssetId,
+            referencePriceUsd: "1",
+            referencePriceQuality: "derived",
+            referencePriceProxyAssetId: null,
+            referencePricePairAddress: deepPairAddress,
+            power: "4",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("records the holding as unread when the derived price leaves the declared band (Decisions 0057 and 0059)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          ...approvedTestFormula,
+          formula: {
+            ...approvedTestFormula.formula,
+            referencePricing: {
+              [loopAssetId]: {
+                kind: "stable" as const,
+                pegUsd: "1",
+                guardBps: 200,
+              },
+            },
+          },
+        }),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: {
+        readAssetPrice: vi.fn(() =>
+          Promise.resolve({
+            fact: {
+              value: {
+                tokenAddress: loopAsset.address as string,
+                pairs: [quotePair("0.5", "1000")],
+              },
+              source: "dexscreener" as const,
+              fetchedAt: "2026-09-08T00:04:00.000Z",
+              ttlSeconds: 30,
+              quality: "fresh" as const,
+              reasonCode: null,
+              rawDigest: null,
+            },
+            pair: null,
+            proxyAsset: null,
+          }),
+        ),
+        readPair: vi.fn(() => Promise.reject(new Error("not used"))),
+      },
+    });
+    const result = await worker.runOnce();
+    expect(result).toMatchObject({
+      kind: "incomplete",
+      unread: [
+        { assetId: loopAssetId, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+      ],
+    });
+    expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
+  });
+
+  it("reads a declared pair by its own address and never falls back to the token pair list (Decision 0059)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          ...approvedTestFormula,
+          formula: {
+            ...approvedTestFormula.formula,
+            referencePricing: {
+              [loopAssetId]: {
+                kind: "pair" as const,
+                pairAddress: deepPairAddress,
+              },
+            },
+          },
+        }),
+      ),
+    });
+    const readAssetPrice = vi.fn(() =>
+      Promise.reject(new Error("the declared pair is authoritative")),
+    );
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: {
+        readAssetPrice,
+        readPair: vi.fn((pairAddress: string) =>
+          Promise.resolve({
+            value: {
+              pairAddress,
+              pair: {
+                ...quotePair("1", "1000"),
+                baseTokenAddress: loopAsset.address as string,
+                baseTokenSymbol: "LOOP",
+                quoteTokenAddress: "0x55d398326f99059ff775485246999027b3197955",
+                quoteTokenSymbol: "USDT",
+                priceUsd: "0.25",
+              },
+            },
+            source: "dexscreener" as const,
+            fetchedAt: "2026-09-08T00:04:00.000Z",
+            ttlSeconds: 30,
+            quality: "fresh" as const,
+            reasonCode: null,
+            rawDigest: null,
+          }),
+        ),
+      },
+    });
+    const result = await worker.runOnce();
+    expect(result.kind).toBe("snapshotted");
+    expect(readAssetPrice).not.toHaveBeenCalled();
+    expect(calls(repository, "writeSnapshot")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        powers: [
+          expect.objectContaining({
+            assetId: loopAssetId,
+            referencePriceUsd: "0.25",
+            // The asset is the declared pair's base token: nothing was
+            // inverted, so nothing is derived.
+            referencePriceQuality: "fresh",
+            referencePricePairAddress: deepPairAddress,
+            power: "1",
           }),
         ],
       }),

@@ -503,6 +503,45 @@ describe("GeckoTerminal adapter", () => {
     );
   });
 
+  it("reads one declared pair by its own address and keeps only that pair on this chain (Decision 0059)", async () => {
+    const pairAddress = "0x172fcd41e0913e95784454622d1c3724f546f849";
+    const stub = fetchStub(() => ({
+      body: `{"schemaVersion":"1.0.0","pairs":${dexscreenerBody}}`,
+    }));
+    const adapter = createDexscreenerAdapter({ fetch: stub.fetch });
+    const observation = await adapter.readPair(
+      "0x172fcD41E0913e95784454622d1c3724f546f849",
+    );
+    expect(stub.calls).toEqual([
+      `https://api.dexscreener.com/latest/dex/pairs/bsc/${pairAddress}`,
+    ]);
+    expect(observation.value.pairAddress).toBe(pairAddress);
+    expect(observation.value.pair).toMatchObject({
+      pairAddress,
+      baseTokenAddress: wbnb,
+      quoteTokenAddress: usdt,
+      priceUsd: "747.39",
+      priceNative: "747.3948",
+    });
+  });
+
+  it("answers with no pair when the Provider knows none, and never substitutes another", async () => {
+    const stub = fetchStub(() => ({ body: `{"pairs":null}` }));
+    const adapter = createDexscreenerAdapter({ fetch: stub.fetch });
+    const observation = await adapter.readPair(
+      "0x0000000000000000000000000000000000000009",
+    );
+    expect(observation.value.pair).toBe(null);
+    const other = fetchStub(() => ({
+      body: `{"pairs":${dexscreenerBody}}`,
+    }));
+    await expect(
+      createDexscreenerAdapter({ fetch: other.fetch }).readPair(
+        "0x0000000000000000000000000000000000000009",
+      ),
+    ).resolves.toMatchObject({ value: { pair: null } });
+  });
+
   it("re-signs once when GoPlus rejects the cached access token", async () => {
     let tokens = 0;
     let securityCalls = 0;

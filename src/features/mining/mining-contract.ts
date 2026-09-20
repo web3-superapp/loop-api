@@ -167,10 +167,63 @@ export interface MiningDailyOutputDocument {
   readonly unitKey: typeof miningDailyOutputUnitKey;
 }
 
-/** How a power row's reference price was observed (Decision 0044). */
-export const miningReferencePriceQualities = ["fresh", "proxied"] as const;
+/**
+ * How a power row's reference price was observed (Decisions 0044 and 0059).
+ *
+ * - `fresh`    — the asset is the base token of the pair that was read.
+ * - `proxied`  — the price of the proxy asset the version declares
+ *                (native BNB via WBNB).
+ * - `derived`  — the asset is the *quote* token of the pair that was read
+ *                and the price is `priceUsd / priceNative` of that pair,
+ *                accepted only under a reference pricing rule the version
+ *                declares and only inside that rule's guard band.
+ */
+export const miningReferencePriceQualities = [
+  "fresh",
+  "proxied",
+  "derived",
+] as const;
 export type MiningReferencePriceQuality =
   (typeof miningReferencePriceQualities)[number];
+
+/**
+ * Reference pricing rule (Decision 0059): what a formula version declares
+ * about how one asset may be priced when the base-token rule of Decision
+ * 0036 finds nothing.
+ *
+ * - `stable` — the asset is pegged; the price may be inverted out of a pair
+ *   in which the asset is the quote token, and is accepted only when it
+ *   lands within `guardBps` of `pegUsd`. The peg itself is never published
+ *   as a price: outside the band the holding stays unread.
+ * - `pair` — the price comes from one declared pair, read by its own
+ *   address. The asset must be that pair's base or quote token; when it is
+ *   the quote token the price is inverted and the rule must also declare
+ *   `pegUsd` (an inversion with nothing to compare against cannot be
+ *   guarded, and an unguarded derived price is refused).
+ */
+export type MiningReferencePricingRule =
+  | {
+      readonly kind: "stable";
+      /** Positive decimal string the derived price must stay close to. */
+      readonly pegUsd: string;
+      /** Half-width of the accepted band, in basis points of `pegUsd`. */
+      readonly guardBps: number;
+    }
+  | {
+      readonly kind: "pair";
+      /** Lowercase `0x` pair (pool) address on the asset's chain. */
+      readonly pairAddress: string;
+      readonly pegUsd?: string | undefined;
+      readonly guardBps?: number | undefined;
+    };
+
+/**
+ * Deviation band used when a rule declares a guard subject but no width.
+ * `03-非合约产品方案` §19 leaves the Mining price guard to be frozen, so no
+ * product threshold exists to inherit; 500 bps is the conservative default
+ * this decision pins and it lives with the formula version.
+ */
+export const miningReferencePriceDefaultGuardBps = 500;
 
 /**
  * Formula document. `assetWeights` maps canonical asset IDs to decimal
@@ -191,6 +244,12 @@ export interface MiningFormulaDocument {
   readonly scope?: MiningFormulaScope | undefined;
   readonly dailyOutput?: MiningDailyOutputDocument | undefined;
   readonly priceProxies?: Readonly<Record<string, string>> | undefined;
+  /**
+   * Per-asset reference pricing rules (Decision 0059). An asset without a
+   * rule keeps the base-token-only rule of Decision 0036.
+   */
+  readonly referencePricing?:
+    Readonly<Record<string, MiningReferencePricingRule>> | undefined;
 }
 
 /** Inclusive decimal bounds a reviewed community weight must satisfy. */
@@ -233,6 +292,31 @@ export const miningDailyOutputDocumentSchema = z
   })
   .strict();
 
+const positiveDecimalSchema = decimalSchema.refine(
+  (value) => value !== "0" && !/^0(\.0+)?$/.test(value),
+  { message: "must be positive" },
+);
+const guardBpsSchema = z.number().int().min(1).max(10_000);
+const pairAddressSchema = z.string().regex(/^0x[0-9a-f]{40}$/);
+
+export const miningReferencePricingRuleSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("stable"),
+      pegUsd: positiveDecimalSchema,
+      guardBps: guardBpsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pair"),
+      pairAddress: pairAddressSchema,
+      pegUsd: positiveDecimalSchema.optional(),
+      guardBps: guardBpsSchema.optional(),
+    })
+    .strict(),
+]);
+
 export const miningFormulaDocumentSchema = z
   .object({
     kind: z.literal("holding_times_reference_price_times_weight"),
@@ -249,6 +333,9 @@ export const miningFormulaDocumentSchema = z
           Object.entries(proxies).every(([asset, proxy]) => asset !== proxy),
         { message: "an asset cannot proxy itself" },
       )
+      .optional(),
+    referencePricing: z
+      .record(assetIdSchema, miningReferencePricingRuleSchema)
       .optional(),
   })
   .strict();

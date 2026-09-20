@@ -83,7 +83,7 @@ Until DexScreener returns a USDT-base pair (or the pricing rule below is changed
 
 ### Not decided here (main agent)
 
-- **Pricing a stablecoin that is the quote of its own deepest pairs.** Options: (1) keep the base-only rule (today; USDT stays unread whenever DexScreener omits `USDT/USDC`); (2) let a formula version declare a reference pair per asset (`referencePairs: {assetId: pairAddress}`) read through `/latest/dex/pairs/bsc/{pair}` — deterministic, no inversion, one more declared fact like `priceProxies`; (3) invert `priceUsd / priceNative` of a quote pair — derived, refused by Decision 0036 unless the price-guard rules of 03 §19 allow it. This decision implements none of them.
+- **Pricing a stablecoin that is the quote of its own deepest pairs.** _(Decided 2026-09-21 by Decision 0059 — see the addendum below.)_ Options: (1) keep the base-only rule (today; USDT stays unread whenever DexScreener omits `USDT/USDC`); (2) let a formula version declare a reference pair per asset (`referencePairs: {assetId: pairAddress}`) read through `/latest/dex/pairs/bsc/{pair}` — deterministic, no inversion, one more declared fact like `priceProxies`; (3) invert `priceUsd / priceNative` of a quote pair — derived, refused by Decision 0036 unless the price-guard rules of 03 §19 allow it. This decision implements none of them.
 - Whether `stale` should also carry a maximum age after which the fallback snapshot is withdrawn. Today the client has `computedAt` and `latestAttempt.computedAt`.
 
 ## Consequences
@@ -92,3 +92,35 @@ Until DexScreener returns a USDT-base pair (or the pricing rule below is changed
 - `MiningSnapshotRunResult` gains `unread`; `MiningRepository` gains `getLatestSnapshotAttempt`, `writeIncompleteSnapshot`, `invalidateSnapshots`; fakes in tests provide them.
 - `mining_snapshots.price_version` is nullable (only for `incomplete` rows, by constraint).
 - The rollback of `000033` refuses while any non-complete row exists.
+
+## Addendum 2026-09-21 (Decision 0059: declared reference pricing)
+
+The open item above is resolved by **Decision 0059**, which adopts a guarded
+form of option (2)+(3): a formula version may declare, per asset, a
+`referencePricing` rule — `{kind: "stable", pegUsd, guardBps}` or
+`{kind: "pair", pairAddress}`. Under a `stable` rule, and only when the
+base-token rule of Decision 0036 finds nothing, the price may be inverted out
+of the deepest pair in which the asset is the _quote_ token
+(`priceUsd / priceNative`) and is accepted only inside the declared band. An
+asset without a rule keeps the base-only rule unchanged.
+
+What does **not** change in this decision:
+
+- An out-of-band derived price is still an **unread holding**: the reason code
+  stays `MINING_PRICE_PAIR_NOT_FOUND`, the run is still `incomplete`, and the
+  reads still fall back to the last complete snapshot with `stale: true`. The
+  peg is a guard, never a published price.
+- `power: 0` is still only ever an observed zero balance.
+
+What is added: a power row carries `reference_price_quality = 'derived'` and
+`reference_price_pair_address` (migration `000034`), and the wire gains
+`referencePricePairAddress` plus the enum value `derived` on
+`referencePriceQuality`.
+
+The Development repair sequence of the section above is therefore extended:
+after `pnpm db:migrate` and the invalidation, write and approve the r3
+baseline (`pnpm mining:dev-baseline --confirm`,
+`pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15-r3 --confirm`)
+and then run `pnpm mining:snapshot --confirm`. Under r3 the 2026-09-20
+Provider answer values USDT at ≈ `0.9995` (inside ±2 % of `1`) and the lane
+writes complete snapshots again.

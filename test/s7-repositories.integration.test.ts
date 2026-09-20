@@ -726,6 +726,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "1.25",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "1",
             power: "2.5",
             blockNumber: "120",
@@ -884,7 +885,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         requestId: randomUUID(),
       });
       expect(created).toMatchObject({
-        configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+        configVersion: "miningFormula-devBaseline-2026-09-15-r3",
         status: "pending_approval",
         effectiveAt: null,
         formula: {
@@ -896,6 +897,9 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           },
           dailyOutput: { status: "development_placeholder", budget: "1000000" },
           priceProxies: { [nativeAsset]: wbnbAsset },
+          // USDT is not registered in this fixture, so the stable rule of
+          // Decision 0059 is not declared.
+          referencePricing: {},
         },
         weightRange: { community: { range: { min: "0.5", max: "2" } } },
       });
@@ -1034,6 +1038,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "720.78",
             referencePriceQuality: "proxied",
             referencePriceProxyAssetId: wbnbAsset,
+            referencePricePairAddress: null,
             weight: "1",
             power: "1081.17",
             blockNumber: "122037728",
@@ -1046,6 +1051,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "2.3",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "0.5",
             power: "57.5",
             blockNumber: "122037728",
@@ -1058,6 +1064,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "1",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "1",
             power: "0.0000000000000001",
             blockNumber: "122037728",
@@ -1070,6 +1077,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "2.3",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "0.5",
             power: "34.5",
             blockNumber: "122037728",
@@ -1082,6 +1090,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "720.78",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "1",
             power: "0",
             blockNumber: "122037728",
@@ -1125,6 +1134,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           referencePriceUsd: "2.3",
           referencePriceQuality: "fresh",
           referencePriceProxyAssetId: null,
+          referencePricePairAddress: null,
           weight: "0.5",
           power: "57.5",
           blockNumber: "122037728",
@@ -1136,6 +1146,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           referencePriceUsd: "720.78",
           referencePriceQuality: "proxied",
           referencePriceProxyAssetId: wbnbAsset,
+          referencePricePairAddress: null,
           weight: "1",
           power: "1081.17",
           blockNumber: "122037728",
@@ -1285,6 +1296,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             referencePriceUsd: "0.9994",
             referencePriceQuality: "fresh" as const,
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "1.5",
             power: "4.482309",
             blockNumber,
@@ -1562,6 +1574,73 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         values: [version],
       });
       expect(await mining.getApprovedFormula()).toBeNull();
+    });
+    it("stores a derived reference price with the pair it was read from, and the schema refuses one without a pair (Decision 0059)", async () => {
+      const derivedSnapshot = randomUUID();
+      const pairAddress = "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae";
+      await mining.writeSnapshot({
+        snapshotId: derivedSnapshot,
+        blockNumber: "123001455",
+        blockHash: hash,
+        formulaVersion: version,
+        priceVersion: "dexscreener:2026-09-21T00:00:00.000Z",
+        // 2.99 × 0.999535369961668021 × 1 = 2.98860775618538738279
+        totalPower: "2.98860775618538738279",
+        powers: [
+          {
+            ownerUserId: dave,
+            assetId: cakeAsset,
+            holding: "2.99",
+            referencePriceUsd: "0.999535369961668021",
+            referencePriceQuality: "derived",
+            referencePriceProxyAssetId: null,
+            referencePricePairAddress: pairAddress,
+            weight: "1",
+            power: "2.98860775618538738279",
+            blockNumber: "123001455",
+          },
+        ],
+      });
+      expect(
+        await mining.listAccountPowers({
+          snapshotId: derivedSnapshot,
+          ownerUserId: dave,
+        }),
+      ).toEqual([
+        {
+          ownerUserId: dave,
+          assetId: cakeAsset,
+          holding: "2.99",
+          referencePriceUsd: "0.999535369961668021",
+          referencePriceQuality: "derived",
+          referencePriceProxyAssetId: null,
+          referencePricePairAddress: pairAddress,
+          weight: "1",
+          power: "2.98860775618538738279",
+          blockNumber: "123001455",
+        },
+      ]);
+      // A derived row without its pair, and a pair address that is not an
+      // address, are both refused by the table itself.
+      for (const values of [
+        [derivedSnapshot, dave, nativeAsset, "derived", null],
+        [derivedSnapshot, dave, nativeAsset, "derived", "not-an-address"],
+        [derivedSnapshot, dave, nativeAsset, "invented", pairAddress],
+      ]) {
+        await expect(
+          pool.query({
+            text: `
+              insert into public.mining_snapshot_powers (
+                snapshot_id, owner_user_id, asset_id, holding,
+                reference_price_usd, reference_price_quality,
+                reference_price_pair_address, weight, power, block_number
+              )
+              values ($1, $2, $3, '1', '1', $4, $5, '1', '1', 123001455)
+            `,
+            values,
+          }),
+        ).rejects.toThrow();
+      }
     });
   });
 

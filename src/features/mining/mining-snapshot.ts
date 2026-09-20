@@ -10,6 +10,7 @@ import {
   type MiningFormulaDocument,
   type MiningReferencePriceQuality,
 } from "./mining-contract.js";
+import { isDerivedPriceAllowed } from "./mining-reference-pricing.js";
 
 /**
  * Pure Mining Power snapshot computation (Decisions 0036 and 0043, 03 §7.1).
@@ -55,6 +56,10 @@ export interface MiningPriceInput {
   readonly source: string;
   /** The asset whose price was read in this asset's place, if any. */
   readonly proxyAssetId?: string | null | undefined;
+  /** The pair the price was read from, when the lane selected one (Decision 0059). */
+  readonly pairAddress?: string | null | undefined;
+  /** True when the price is the inverted quote side of `pairAddress`. */
+  readonly derivedInverted?: boolean | undefined;
 }
 
 export interface MiningCommunityWeightInput {
@@ -78,6 +83,8 @@ export interface MiningSnapshotPower {
   /** `proxied` when the price is a declared proxy asset's (Decision 0044). */
   readonly referencePriceQuality: MiningReferencePriceQuality;
   readonly referencePriceProxyAssetId: string | null;
+  /** The pair the reference price was read from; required when `derived`. */
+  readonly referencePricePairAddress: string | null;
   readonly weight: string;
   readonly power: string;
   readonly blockNumber: string;
@@ -195,6 +202,7 @@ type PriceSelection =
       readonly source: string;
       readonly quality: MiningReferencePriceQuality;
       readonly proxyAssetId: string | null;
+      readonly pairAddress: string | null;
     }
   | { readonly kind: "skip"; readonly reasonCode: string };
 
@@ -202,7 +210,11 @@ type PriceSelection =
  * A price is usable when the Provider fact is fresh on its own observation
  * time. A price read through a proxy asset is usable only when the version
  * declares exactly that proxy for the asset, and is then carried as
- * `proxied` (Decision 0044); an undeclared proxy is refused.
+ * `proxied` (Decision 0044); an undeclared proxy is refused. A price the
+ * lane inverted out of a pair's quote side is usable only when the version
+ * declares a reference pricing rule that names the pair (or accepts the
+ * asset as a pegged stable) and the price lands inside that rule's guard
+ * band, and is then carried as `derived` (Decision 0059).
  */
 export function selectMiningPrice(
   assetId: string,
@@ -212,7 +224,9 @@ export function selectMiningPrice(
   const price = prices.find((candidate) => candidate.assetId === assetId);
   if (
     price === undefined ||
-    (price.quality !== "fresh" && price.quality !== "proxied") ||
+    (price.quality !== "fresh" &&
+      price.quality !== "proxied" &&
+      price.quality !== "derived") ||
     price.fetchedAt === null
   ) {
     return { kind: "skip", reasonCode: miningReasonCodes.priceNotFresh };
@@ -225,6 +239,31 @@ export function selectMiningPrice(
   }
   if (!isUnsignedDecimalString(price.priceUsd)) {
     return { kind: "skip", reasonCode: miningReasonCodes.priceNotFresh };
+  }
+  const pairAddress = price.pairAddress ?? null;
+  if (price.quality === "derived") {
+    // The rule, the pair, and the guard are re-checked here so the pure
+    // computation — not the lane — decides what may enter a snapshot.
+    if (
+      !isDerivedPriceAllowed({
+        assetId,
+        formula,
+        priceUsd: price.priceUsd,
+        pairAddress,
+        inverted: price.derivedInverted ?? false,
+      })
+    ) {
+      return { kind: "skip", reasonCode: miningReasonCodes.pricePairNotFound };
+    }
+    return {
+      kind: "price",
+      priceUsd: price.priceUsd,
+      fetchedAt: price.fetchedAt,
+      source: price.source,
+      quality: "derived",
+      proxyAssetId: null,
+      pairAddress,
+    };
   }
   const proxyAssetId = price.proxyAssetId ?? null;
   if (proxyAssetId === null && price.quality === "proxied") {
@@ -249,6 +288,7 @@ export function selectMiningPrice(
     source: price.source,
     quality: proxyAssetId === null ? "fresh" : "proxied",
     proxyAssetId,
+    pairAddress,
   };
 }
 
@@ -362,6 +402,7 @@ export function computeMiningSnapshot(
         referencePriceUsd: price.priceUsd,
         referencePriceQuality: price.quality,
         referencePriceProxyAssetId: price.proxyAssetId,
+        referencePricePairAddress: price.pairAddress,
         weight,
         power:
           existing === undefined

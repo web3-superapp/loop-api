@@ -155,6 +155,15 @@ function providerFake(
         rawDigest: "b".repeat(64),
       });
     },
+    readPair: (pairAddress) => {
+      calls += 1;
+      return Promise.resolve({
+        value: { pairAddress, pair: null },
+        source: "dexscreener" as const,
+        fetchedAt,
+        rawDigest: "c".repeat(64),
+      });
+    },
   };
 }
 
@@ -251,6 +260,7 @@ describe("market fact service", () => {
           ),
         ),
       readTokenPairsBatch: () => Promise.reject(new Error("not used")),
+      readPair: () => Promise.reject(new Error("not used")),
     };
     const cache = cacheFake({
       subjectKey: `token:${wbnb}`,
@@ -294,6 +304,7 @@ describe("market fact service", () => {
           ),
         ),
       readTokenPairsBatch: () => Promise.reject(new Error("not used")),
+      readPair: () => Promise.reject(new Error("not used")),
     };
     const cache = cacheFake({
       subjectKey: `token:${wbnb}`,
@@ -392,5 +403,43 @@ describe("market fact service", () => {
       status: "blocked",
     });
     expect(blocked.fact.reasonCode).toBe("ASSET_BLOCKED");
+  });
+
+  it("caches one declared pair under its own subject key and is unavailable without the Provider (Decision 0059)", async () => {
+    const provider = providerFake(() => snapshot("747.39"));
+    const cache = cacheFake();
+    const service = createMarketFactService({
+      config,
+      cache: cache.repository,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+      now: () => new Date("2026-09-08T00:00:10.000Z"),
+    });
+    const pairAddress = "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae";
+    const fact = await service.readPair(pairAddress);
+    expect(fact.quality).toBe("fresh");
+    expect(fact.value).toEqual({ pairAddress, pair: null });
+    expect(cache.get).toHaveBeenCalledWith(
+      `pair:${pairAddress}`,
+      "pair",
+      "dexscreener",
+    );
+    // A second read inside the TTL is served from the cache.
+    await service.readPair(pairAddress);
+    expect(provider.calls()).toBe(1);
+
+    const withoutProvider = createMarketFactService({
+      config,
+      cache: cacheFake().repository,
+      pairsProvider: null,
+      securityProvider: null,
+      candlesProvider: null,
+    });
+    await expect(withoutProvider.readPair(pairAddress)).resolves.toMatchObject({
+      quality: "unavailable",
+      value: null,
+      reasonCode: "MARKET_PROVIDER_DEXSCREENER_DISABLED",
+    });
   });
 });

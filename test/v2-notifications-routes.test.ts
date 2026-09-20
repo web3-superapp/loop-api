@@ -161,6 +161,7 @@ function marketFactsFake(available = true): MarketFactService {
       Promise.resolve(pairsFor(address)),
     ),
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+    readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice: vi.fn((asset: { readonly address: string | null }) => {
       const fact = pairsFor(asset.address ?? wbnb);
       return Promise.resolve({

@@ -71,6 +71,15 @@ export interface TokenPairsSnapshot {
   readonly pairs: readonly TokenPairSnapshot[];
 }
 
+/**
+ * One pair read by its own address (Decision 0059). `pair` is null when the
+ * Provider does not know the pair; it is never a guess.
+ */
+export interface PairSnapshot {
+  readonly pairAddress: string;
+  readonly pair: TokenPairSnapshot | null;
+}
+
 /** Documented ceiling of addresses per DexScreener batch request. */
 export const marketPairsBatchLimit = 30;
 
@@ -85,6 +94,15 @@ export interface MarketPairsProvider {
     tokenAddresses: readonly string[],
     options?: ProviderReadOptions,
   ): Promise<ProviderObservation<readonly TokenPairsSnapshot[]>>;
+  /**
+   * One pair addressed by the pool itself, for a reference pricing rule that
+   * declares it (Decision 0059). The token-list endpoint returns only a
+   * subset of a token's pairs, so a declared pair is read directly.
+   */
+  readPair(
+    pairAddress: string,
+    options?: ProviderReadOptions,
+  ): Promise<ProviderObservation<PairSnapshot>>;
 }
 
 /**
@@ -213,6 +231,7 @@ export function createUnavailableMarketPairsProvider(
     source,
     readTokenPairs: disabled(reasonCode),
     readTokenPairsBatch: disabled(reasonCode),
+    readPair: disabled(reasonCode),
   });
 }
 

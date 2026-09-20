@@ -5,6 +5,7 @@ import {
   type MiningCommunityWeightRange,
   type MiningFormulaDocument,
   type MiningPriceGuardRule,
+  type MiningReferencePricingRule,
   type MiningWeightRangeDocument,
 } from "./mining-contract.js";
 
@@ -33,7 +34,7 @@ import {
  */
 
 export const miningDevBaselineConfigVersion =
-  "miningFormula-devBaseline-2026-09-15-r2" as const;
+  "miningFormula-devBaseline-2026-09-15-r3" as const;
 
 /** Every registered, non-blocked asset weighs exactly one. */
 export const miningDevBaselineAssetWeight = "1" as const;
@@ -66,6 +67,34 @@ const bscNativeAssetId = "eip155:56:native";
 export const miningDevBaselinePriceProxies: Readonly<Record<string, string>> =
   Object.freeze({ [bscNativeAssetId]: bscWrappedNativeAssetId });
 
+/** BSC-USD (USDT) on BNB Smart Chain, the asset the stable rule declares. */
+export const bscUsdtAssetId =
+  "eip155:56:0x55d398326f99059ff775485246999027b3197955" as const;
+
+/** The guard band of the baseline's stable rule: ±2 % of the peg. */
+export const miningDevBaselineStableGuardBps = 200;
+
+/**
+ * Decision 0059: from 2026-09-18 DexScreener answers for BSC USDT with a
+ * short list of pairs (`WBNB/USDT`, `USDT/USDC`) in which USDT is usually
+ * only the quote token, so the base-token rule of Decision 0036 found no
+ * price and every snapshot became incomplete (Decision 0057). USDT is a USD
+ * stable, so this version declares it as such: the price may be inverted out
+ * of the deepest pair in which it is the quote token and is accepted only
+ * within ±2 % of `1`. Outside that band the holding stays unread — the peg
+ * is a guard, never a published price. Declared only when the asset is
+ * registered.
+ */
+export const miningDevBaselineReferencePricing: Readonly<
+  Record<string, MiningReferencePricingRule>
+> = Object.freeze({
+  [bscUsdtAssetId]: Object.freeze({
+    kind: "stable" as const,
+    pegUsd: "1",
+    guardBps: miningDevBaselineStableGuardBps,
+  }),
+});
+
 export interface MiningDevBaselineDocuments {
   readonly configVersion: typeof miningDevBaselineConfigVersion;
   readonly formula: MiningFormulaDocument;
@@ -94,6 +123,14 @@ export function buildMiningDevBaselineDocuments(
       priceProxies[asset] = proxy;
     }
   }
+  const referencePricing: Record<string, MiningReferencePricingRule> = {};
+  for (const [asset, rule] of Object.entries(
+    miningDevBaselineReferencePricing,
+  )) {
+    if (asset in assetWeights) {
+      referencePricing[asset] = rule;
+    }
+  }
   return Object.freeze({
     configVersion: miningDevBaselineConfigVersion,
     formula: Object.freeze({
@@ -109,6 +146,7 @@ export function buildMiningDevBaselineDocuments(
         unitKey: miningDailyOutputUnitKey,
       }),
       priceProxies: Object.freeze(priceProxies),
+      referencePricing: Object.freeze(referencePricing),
     }),
     weightRange: Object.freeze({
       // The LOOP token has no contract, so its fixed-maximum weight rule is
@@ -132,8 +170,9 @@ export function buildMiningDevBaselineDocuments(
         "mining.rules.reviewFactor.loopPartnership",
       ]),
     }),
-    // No price guard is approved: the lane still requires a fresh Provider
-    // price (own or declared proxy), which is the only guard in force.
+    // No product price guard is approved: the lane still requires a fresh
+    // Provider price (own, declared proxy, or a declared reference pricing
+    // rule inside its band), which is the only guard in force.
     priceGuardRules: Object.freeze([
       Object.freeze({
         ruleKey: "mining.rules.priceGuard.twap",
@@ -160,5 +199,19 @@ export function assertMiningDevBaselineConstants(): void {
     !isUnsignedDecimalString(miningDevBaselineCommunityWeightRange.max)
   ) {
     throw new Error("Mining dev baseline constants are not decimal strings");
+  }
+  for (const rule of Object.values(miningDevBaselineReferencePricing)) {
+    if (rule.kind !== "stable") {
+      continue;
+    }
+    if (
+      !isUnsignedDecimalString(rule.pegUsd) ||
+      rule.pegUsd === "0" ||
+      !Number.isInteger(rule.guardBps) ||
+      rule.guardBps < 1 ||
+      rule.guardBps > 10_000
+    ) {
+      throw new Error("Mining dev baseline reference pricing rule is invalid");
+    }
   }
 }

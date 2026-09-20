@@ -1292,6 +1292,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     return {
       readTokenPairs: vi.fn(() => Promise.resolve(fact)),
       readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
+      readPair: vi.fn(() => Promise.reject(new Error("not used"))),
       readAssetPrice: vi.fn((asset: { readonly address: string | null }) =>
         Promise.resolve({
           fact,

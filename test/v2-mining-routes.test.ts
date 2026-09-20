@@ -508,6 +508,7 @@ describe("LOOP API V2 mining module", () => {
               referencePriceUsd: "2.3",
               referencePriceQuality: "fresh" as const,
               referencePriceProxyAssetId: null,
+              referencePricePairAddress: null,
               weight: "0.5",
               power: "115",
               blockNumber: "122037728",
@@ -519,6 +520,7 @@ describe("LOOP API V2 mining module", () => {
               referencePriceUsd: "885",
               referencePriceQuality: "fresh" as const,
               referencePriceProxyAssetId: null,
+              referencePricePairAddress: null,
               weight: "1",
               power: "885",
               blockNumber: "122037728",
@@ -626,7 +628,7 @@ describe("LOOP API V2 mining module", () => {
           budget: "1000000",
           unitKey: "mining.rules.dailyOutput.unit.loopTokenPending",
           budgetStatus: "development_placeholder",
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
           scope: "development_baseline",
         },
         accumulated: {
@@ -645,7 +647,7 @@ describe("LOOP API V2 mining module", () => {
         },
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -653,7 +655,7 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
           // Decision 0057: the snapshot itself is the newest run.
@@ -790,6 +792,7 @@ describe("LOOP API V2 mining module", () => {
             referencePriceUsd: "2.3",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "0.5",
             power: "115",
             blockNumber: "122037728",
@@ -801,6 +804,7 @@ describe("LOOP API V2 mining module", () => {
             referencePriceUsd: "885",
             referencePriceQuality: "fresh",
             referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
             weight: "1",
             power: "885",
             blockNumber: "122037728",
@@ -819,7 +823,7 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
           stale: false,
@@ -837,7 +841,7 @@ describe("LOOP API V2 mining module", () => {
         },
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -966,7 +970,7 @@ describe("LOOP API V2 mining module", () => {
         // development-baseline label from one field (Decision 0046).
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -1145,7 +1149,7 @@ describe("LOOP API V2 mining module", () => {
         weight: {
           status: "approved",
           value: "0.5",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           reviewedAt: approvedAt,
         },
         communityPower: { status: "available", value: "230" },
@@ -1514,7 +1518,7 @@ describe("LOOP API V2 mining module", () => {
         // in force (rewards has no such block and is out of scope).
         if (!url.endsWith("/rewards")) {
           expect(response.body, url).toContain(
-            "miningFormula-devBaseline-2026-09-15-r2",
+            "miningFormula-devBaseline-2026-09-15-r3",
           );
         }
       }
@@ -1530,7 +1534,7 @@ describe("LOOP API V2 mining module", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         approved: {
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           status: "approved",
           scope: "development_baseline",
           assetWeights: {
@@ -1552,7 +1556,7 @@ describe("LOOP API V2 mining module", () => {
         pendingApproval: [{ configVersion: "miningFormulaV1-draft" }],
         baseline: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r2",
+          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },

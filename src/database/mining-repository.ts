@@ -74,6 +74,8 @@ const decimalSchema = z
   .string()
   .regex(new RegExp(unsignedDecimalPatternSource));
 const blockNumberSchema = z.string().regex(/^(0|[1-9][0-9]{0,19})$/);
+/** Lowercase pool address a derived reference price names (Decision 0059). */
+const pairAddressSchema = z.string().regex(/^0x[0-9a-f]{40}$/);
 const blockHashSchema = z.string().regex(/^0x[0-9a-f]{64}$/);
 const dateSchema = z.date().refine((value) => !Number.isNaN(value.getTime()));
 
@@ -144,6 +146,10 @@ const powerRowSchema = z
     reference_price_usd: decimalSchema,
     reference_price_quality: z.enum(miningReferencePriceQualities),
     reference_price_proxy_asset_id: z.string().min(1).nullable(),
+    reference_price_pair_address: z
+      .string()
+      .regex(/^0x[0-9a-f]{40}$/)
+      .nullable(),
     weight: decimalSchema,
     power: decimalSchema,
     block_number: blockNumberSchema,
@@ -153,6 +159,11 @@ const powerRowSchema = z
     (row) =>
       (row.reference_price_quality === "proxied") ===
       (row.reference_price_proxy_asset_id !== null),
+  )
+  .refine(
+    (row) =>
+      row.reference_price_quality !== "derived" ||
+      row.reference_price_pair_address !== null,
   );
 
 /** `numeric::text` may carry trailing zeros; the wire form is canonical. */
@@ -773,9 +784,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 insert into public.mining_snapshot_powers (
                   snapshot_id, owner_user_id, asset_id, holding,
                   reference_price_usd, reference_price_quality,
-                  reference_price_proxy_asset_id, weight, power, block_number
+                  reference_price_proxy_asset_id, reference_price_pair_address,
+                  weight, power, block_number
                 )
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
               `,
               values: [
                 snapshotId,
@@ -787,6 +799,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                   .enum(miningReferencePriceQualities)
                   .parse(power.referencePriceQuality),
                 power.referencePriceProxyAssetId,
+                power.referencePricePairAddress === null
+                  ? null
+                  : pairAddressSchema.parse(power.referencePricePairAddress),
                 decimalSchema.parse(power.weight),
                 decimalSchema.parse(power.power),
                 blockNumberSchema.parse(power.blockNumber),
@@ -950,7 +965,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
           text: `
             select
               owner_user_id, asset_id, holding, reference_price_usd,
-              reference_price_quality, reference_price_proxy_asset_id, weight,
+              reference_price_quality, reference_price_proxy_asset_id,
+              reference_price_pair_address, weight,
               power, block_number::text as block_number
             from public.mining_snapshot_powers
             where snapshot_id = $1 and owner_user_id = $2
@@ -968,6 +984,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               referencePriceUsd: row.reference_price_usd,
               referencePriceQuality: row.reference_price_quality,
               referencePriceProxyAssetId: row.reference_price_proxy_asset_id,
+              referencePricePairAddress: row.reference_price_pair_address,
               weight: row.weight,
               power: row.power,
               blockNumber: row.block_number,
