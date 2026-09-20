@@ -349,11 +349,39 @@ describe("computeMiningSnapshot (pure)", () => {
       },
       declared,
     );
-    expect(result.kind).toBe("computed");
-    if (result.kind !== "computed") {
+    // LOOP is held and cannot be valued through an undeclared proxy: since
+    // Decision 0057 that makes the run incomplete rather than dropping the
+    // holding. The declared BNB proxy is still not the problem.
+    expect(result).toMatchObject({
+      kind: "incomplete",
+      unread: [
+        { assetId: loopAsset, reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED" },
+      ],
+      skipped: [],
+      priceVersion: "dexscreener:2026-09-08T00:00:00.000Z",
+    });
+    // With no LOOP holding the declared proxy alone yields the row.
+    const declaredOnly = computeMiningSnapshot(
+      {
+        balances: [balance(alice, nativeAsset, "250000000000000000")],
+        prices: [
+          price(
+            nativeAsset,
+            "720.78",
+            "proxied",
+            "2026-09-08T00:00:00.000Z",
+            wbnbAsset,
+          ),
+        ],
+        communityWeights: [],
+      },
+      declared,
+    );
+    expect(declaredOnly.kind).toBe("computed");
+    if (declaredOnly.kind !== "computed") {
       return;
     }
-    expect(result.powers).toEqual([
+    expect(declaredOnly.powers).toEqual([
       {
         ownerUserId: alice,
         assetId: nativeAsset,
@@ -366,9 +394,7 @@ describe("computeMiningSnapshot (pure)", () => {
         blockNumber: "100",
       },
     ]);
-    expect(result.skipped).toEqual([
-      { assetId: loopAsset, reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED" },
-    ]);
+    expect(declaredOnly.skipped).toEqual([]);
     // The same proxied price under a version that declares no proxy.
     const undeclared = computeMiningSnapshot(
       {
@@ -393,8 +419,10 @@ describe("computeMiningSnapshot (pure)", () => {
       },
     );
     expect(undeclared).toMatchObject({
-      kind: "unavailable",
-      reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED",
+      kind: "incomplete",
+      unread: [
+        { assetId: nativeAsset, reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED" },
+      ],
     });
     // A stale proxy observation is stale on its own clock, declared or not.
     const stale = computeMiningSnapshot(
@@ -414,45 +442,98 @@ describe("computeMiningSnapshot (pure)", () => {
       declared,
     );
     expect(stale).toMatchObject({
-      kind: "unavailable",
-      reasonCode: "MINING_PRICE_NOT_FRESH",
+      kind: "incomplete",
+      unread: [{ assetId: nativeAsset, reasonCode: "MINING_PRICE_NOT_FRESH" }],
     });
   });
 
-  it("never uses a stale, undeclared-proxy, or missing price", () => {
-    const stale = computeMiningSnapshot(
+  it("never uses a stale, undeclared-proxy, unpaired, or missing price, and a positive holding without one makes the run incomplete (Decision 0057)", () => {
+    // A held asset the run cannot value is an unread holding: no number is
+    // produced at all, because leaving the asset out would publish the
+    // holding as zero.
+    for (const [input, reasonCode] of [
+      [price(loopAsset, "0.25", "stale"), "MINING_PRICE_NOT_FRESH"],
+      [price(loopAsset, "0.25", "proxied"), "MINING_PRICE_PROXY_NOT_DECLARED"],
+      [price(loopAsset, null), "MINING_PRICE_PAIR_NOT_FOUND"],
+      [null, "MINING_PRICE_NOT_FRESH"],
+    ] as const) {
+      const result = computeMiningSnapshot(
+        {
+          balances: [balance(alice, loopAsset, "1000000000000000000")],
+          prices: input === null ? [] : [input],
+          communityWeights: [],
+        },
+        testOnlyFormula,
+      );
+      expect(result).toEqual({
+        kind: "incomplete",
+        formulaVersion: "miningFormulaTestOnly",
+        blockNumber: "100",
+        blockHash: hash,
+        priceVersion: null,
+        unread: [{ assetId: loopAsset, reasonCode }],
+        skipped: [],
+      });
+    }
+  });
+
+  it("stays complete when only a zero balance lacks a price, and records the unread holding once per asset with the other prices' version (Decision 0057)", () => {
+    const twoWeighted = {
+      ...testOnlyFormula,
+      document: {
+        ...testOnlyFormula.document,
+        assetWeights: { [loopAsset]: "1", [communityAsset]: "1" },
+      },
+    };
+    // 0 × any price = 0: nothing is zeroed by leaving the row out, so the
+    // asset is only skipped and the snapshot is complete.
+    const zero = computeMiningSnapshot(
       {
-        balances: [balance(alice, loopAsset, "1000000000000000000")],
-        prices: [price(loopAsset, "0.25", "stale")],
+        balances: [
+          balance(alice, loopAsset, "2000000000000000000"),
+          balance(alice, communityAsset, "0"),
+        ],
+        prices: [price(loopAsset, "1.5"), price(communityAsset, null)],
         communityWeights: [],
       },
-      testOnlyFormula,
+      twoWeighted,
     );
-    expect(stale).toMatchObject({
-      kind: "unavailable",
-      reasonCode: "MINING_PRICE_NOT_FRESH",
+    expect(zero).toMatchObject({
+      kind: "computed",
+      totalPower: "3",
+      skipped: [
+        { assetId: communityAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+      ],
     });
-    const proxied = computeMiningSnapshot(
+    // The 2026-09-20 case: two accounts, one of them holding USDT while
+    // USDT has no base pair; the other prices were read.
+    const held = computeMiningSnapshot(
       {
-        balances: [balance(alice, loopAsset, "1000000000000000000")],
-        prices: [price(loopAsset, "0.25", "proxied")],
+        balances: [
+          balance(alice, loopAsset, "0", "110"),
+          balance(alice, communityAsset, "2990000000000000000", "110"),
+          balance(bob, loopAsset, "0", "120"),
+          balance(bob, communityAsset, "0", "120"),
+        ],
+        prices: [
+          price(loopAsset, "751.72", "fresh", "2026-09-20T13:51:04.473Z"),
+          price(communityAsset, null, "fresh", "2026-09-20T13:51:04.473Z"),
+        ],
         communityWeights: [],
       },
-      testOnlyFormula,
+      twoWeighted,
     );
-    expect(proxied).toMatchObject({
-      kind: "unavailable",
-      reasonCode: "MINING_PRICE_PROXY_NOT_DECLARED",
+    expect(held).toEqual({
+      kind: "incomplete",
+      formulaVersion: "miningFormulaTestOnly",
+      blockNumber: "120",
+      blockHash: hash,
+      priceVersion: "dexscreener:2026-09-20T13:51:04.473Z",
+      unread: [
+        { assetId: communityAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+      ],
+      skipped: [],
     });
-    const missing = computeMiningSnapshot(
-      {
-        balances: [balance(alice, loopAsset, "1000000000000000000")],
-        prices: [],
-        communityWeights: [],
-      },
-      testOnlyFormula,
-    );
-    expect(missing.kind).toBe("unavailable");
   });
 
   it("is unavailable with no balances and never produces a number for nothing", () => {

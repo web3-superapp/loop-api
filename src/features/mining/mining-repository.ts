@@ -3,6 +3,8 @@ import type {
   MiningFormulaDocument,
   MiningFormulaStatus,
   MiningPriceGuardRule,
+  MiningSnapshotStatus,
+  MiningUnreadInput,
   MiningWeightRangeDocument,
 } from "./mining-contract.js";
 import type {
@@ -38,6 +40,7 @@ export interface CommunityWeightRecord {
   readonly reviewedAt: string | null;
 }
 
+/** A complete snapshot: the only kind a read path publishes numbers from. */
 export interface MiningSnapshotRecord {
   readonly snapshotId: string;
   readonly blockNumber: string;
@@ -47,6 +50,48 @@ export interface MiningSnapshotRecord {
   readonly totalPower: string;
   readonly accountCount: number;
   readonly computedAt: string;
+}
+
+/**
+ * The newest run under a version, whatever its outcome (Decision 0057): a
+ * complete snapshot, an incomplete attempt with its unread holdings, or a
+ * snapshot an operator invalidated.
+ */
+export interface MiningSnapshotAttemptRecord {
+  readonly snapshotId: string;
+  readonly status: MiningSnapshotStatus;
+  readonly formulaVersion: string;
+  readonly blockNumber: string;
+  readonly computedAt: string;
+  /** Non-empty exactly when `status` is `incomplete`. */
+  readonly unreadInputs: readonly MiningUnreadInput[];
+  readonly invalidatedAt: string | null;
+  readonly invalidationReason: string | null;
+}
+
+export interface WriteIncompleteMiningSnapshotInput {
+  readonly snapshotId: string;
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly formulaVersion: string;
+  /** Null when no price at all was usable in the run. */
+  readonly priceVersion: string | null;
+  readonly unreadInputs: readonly MiningUnreadInput[];
+}
+
+/** Which complete snapshots to withdraw: every one after an anchor, or an explicit list. */
+export type InvalidateMiningSnapshotsSelector =
+  | { readonly kind: "after"; readonly snapshotId: string }
+  | { readonly kind: "ids"; readonly snapshotIds: readonly string[] };
+
+export interface InvalidateMiningSnapshotsInput {
+  readonly selector: InvalidateMiningSnapshotsSelector;
+  readonly reason: string;
+  readonly requestId: string;
+}
+
+export interface InvalidateMiningSnapshotsResult {
+  readonly snapshotIds: readonly string[];
 }
 
 export interface CreateMiningFormulaVersionInput {
@@ -144,8 +189,25 @@ export interface MiningRepository {
   listCommunityWeightInputs(
     configVersion: string,
   ): Promise<readonly MiningCommunityWeightInput[]>;
+  /** The newest `complete` snapshot of any version; never an incomplete or invalidated row. */
   getLatestSnapshot(): Promise<MiningSnapshotRecord | null>;
+  /** The newest row of any status computed under exactly this version (Decision 0057). */
+  getLatestSnapshotAttempt(
+    configVersion: string,
+  ): Promise<MiningSnapshotAttemptRecord | null>;
   writeSnapshot(input: WriteMiningSnapshotInput): Promise<MiningSnapshotRecord>;
+  /** Records a run that could not value every holding; writes no power row and no number. */
+  writeIncompleteSnapshot(
+    input: WriteIncompleteMiningSnapshotInput,
+  ): Promise<MiningSnapshotAttemptRecord>;
+  /**
+   * Operator path (Decision 0057): withdraws complete snapshots so they are
+   * never read as latest again. Rows are kept; only `complete →
+   * invalidated` is allowed.
+   */
+  invalidateSnapshots(
+    input: InvalidateMiningSnapshotsInput,
+  ): Promise<InvalidateMiningSnapshotsResult>;
   /** Latest observed balance per active wallet and readable asset. */
   listBalanceInputs(): Promise<readonly MiningBalanceInput[]>;
   /** Operator path (Decision 0043): inserts a new `pending_approval` version. */
@@ -189,6 +251,8 @@ export interface MiningRepository {
   }): Promise<readonly MiningMemberPowerRecord[]>;
   /** Assets the account's active wallets have any observed balance row for. */
   listAccountBalanceAssetIds(ownerUserId: string): Promise<readonly string[]>;
+  /** Whether the account has an active wallet the lane could include (Decision 0057). */
+  hasActiveWallet(ownerUserId: string): Promise<boolean>;
 }
 
 export class MiningRepositoryUnavailableError extends Error {
@@ -263,6 +327,16 @@ export class MiningCommunityWeightConflictError extends Error {
   }
 }
 
+/** The anchor or listed snapshot does not exist, or is not a complete snapshot. */
+export class MiningSnapshotNotFoundError extends Error {
+  readonly code = "mining_snapshot_not_found";
+
+  constructor() {
+    super("The mining snapshot does not exist or is not complete");
+    this.name = "MiningSnapshotNotFoundError";
+  }
+}
+
 export function createUnavailableMiningRepository(): MiningRepository {
   const unavailable = () =>
     Promise.reject(new MiningRepositoryUnavailableError());
@@ -273,7 +347,10 @@ export function createUnavailableMiningRepository(): MiningRepository {
     getCommunityWeight: unavailable,
     listCommunityWeightInputs: unavailable,
     getLatestSnapshot: unavailable,
+    getLatestSnapshotAttempt: unavailable,
     writeSnapshot: unavailable,
+    writeIncompleteSnapshot: unavailable,
+    invalidateSnapshots: unavailable,
     listBalanceInputs: unavailable,
     createFormulaVersion: unavailable,
     setCommunityWeight: unavailable,
@@ -284,5 +361,6 @@ export function createUnavailableMiningRepository(): MiningRepository {
     getCommunityStanding: unavailable,
     listMemberPowers: unavailable,
     listAccountBalanceAssetIds: unavailable,
+    hasActiveWallet: unavailable,
   });
 }

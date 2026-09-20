@@ -25,6 +25,12 @@ import {
  * bound community under that version, computes the snapshot through the
  * pure `computeMiningSnapshot`, and writes it. It never settles a reward,
  * never claims, and never estimates a price.
+ *
+ * A run that cannot value a positive weighted holding is `incomplete`
+ * (Decision 0057): it is recorded with its unread holdings and no number,
+ * never becomes the latest snapshot, and is reported through
+ * `onRunResult` so an operator can see it. Leaving the asset out would have
+ * published the holding as zero.
  */
 
 export const MINING_SNAPSHOT_LANE = "mining-snapshot" as const;
@@ -32,14 +38,19 @@ export const MINING_SNAPSHOT_IDLE_DELAY_MS = 300_000;
 export const MINING_SNAPSHOT_RETRY_BASE_DELAY_MS = 1_000;
 export const MINING_SNAPSHOT_RETRY_MAX_DELAY_MS = 300_000;
 
-export type MiningSnapshotRunKind = "aborted" | "idle" | "snapshotted";
+export type MiningSnapshotRunKind =
+  "aborted" | "idle" | "incomplete" | "snapshotted";
 
 export interface MiningSnapshotRunResult {
   readonly kind: MiningSnapshotRunKind;
   readonly reasonCode: string | null;
+  /** The written snapshot, or the recorded incomplete attempt. */
   readonly snapshotId: string | null;
   readonly powerRowCount: number;
+  /** Policy exclusions (unweighted, pending or ambiguous community weight, unpriced zero balance). */
   readonly skipped: readonly MiningSnapshotSkip[];
+  /** Positive weighted holdings without a usable price; non-empty exactly when `incomplete`. */
+  readonly unread: readonly MiningSnapshotSkip[];
 }
 
 export interface MiningSnapshotInfrastructureBackoff {
@@ -71,6 +82,8 @@ export interface CreateMiningSnapshotWorkerOptions {
   readonly onInfrastructureBackoff?: (
     event: MiningSnapshotInfrastructureBackoff,
   ) => void;
+  /** Every completed tick, so the process can log an incomplete attempt. */
+  readonly onRunResult?: (result: MiningSnapshotRunResult) => void;
 }
 
 async function waitFor(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -108,6 +121,7 @@ function idle(reasonCode: string, skipped: readonly MiningSnapshotSkip[] = []) {
     snapshotId: null,
     powerRowCount: 0,
     skipped: Object.freeze([...skipped]),
+    unread: Object.freeze([]),
   });
 }
 
@@ -133,6 +147,7 @@ export function createMiningSnapshotWorker(
         snapshotId: null,
         powerRowCount: 0,
         skipped: Object.freeze([]),
+        unread: Object.freeze([]),
       });
     }
     const [balances, communityWeights] = await Promise.all([
@@ -186,6 +201,25 @@ export function createMiningSnapshotWorker(
     if (computation.kind === "unavailable") {
       return idle(computation.reasonCode, computation.skipped);
     }
+    if (computation.kind === "incomplete") {
+      // Fail closed: record what could not be valued and publish nothing.
+      const attempt = await options.repository.writeIncompleteSnapshot({
+        snapshotId: createUuid(),
+        blockNumber: computation.blockNumber,
+        blockHash: computation.blockHash,
+        formulaVersion: computation.formulaVersion,
+        priceVersion: computation.priceVersion,
+        unreadInputs: computation.unread,
+      });
+      return Object.freeze({
+        kind: "incomplete" as const,
+        reasonCode: miningReasonCodes.snapshotIncomplete,
+        snapshotId: attempt.snapshotId,
+        powerRowCount: 0,
+        skipped: computation.skipped,
+        unread: computation.unread,
+      });
+    }
     const snapshot = await options.repository.writeSnapshot({
       snapshotId: createUuid(),
       blockNumber: computation.blockNumber,
@@ -201,6 +235,7 @@ export function createMiningSnapshotWorker(
       snapshotId: snapshot.snapshotId,
       powerRowCount: computation.powers.length,
       skipped: computation.skipped,
+      unread: Object.freeze([]),
     });
   }
 
@@ -208,9 +243,14 @@ export function createMiningSnapshotWorker(
     if (inFlight !== null) {
       return inFlight;
     }
-    const promise = execute(signal).finally(() => {
-      inFlight = null;
-    });
+    const promise = execute(signal)
+      .then((result) => {
+        options.onRunResult?.(result);
+        return result;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
     inFlight = promise;
     return promise;
   }

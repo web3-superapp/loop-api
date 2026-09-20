@@ -30,6 +30,8 @@ import {
   type MiningPriceGuardRule,
   type MiningRankScope,
   type MiningReferencePriceQuality,
+  type MiningSnapshotStatus,
+  type MiningUnreadInput,
   type MiningWeightRangeDocument,
   type UnavailableProjection,
 } from "./mining-contract.js";
@@ -45,6 +47,7 @@ import {
   type MiningFormulaRecord,
   type MiningRankedAccountRecord,
   type MiningRepository,
+  type MiningSnapshotAttemptRecord,
   type MiningSnapshotRecord,
 } from "./mining-repository.js";
 import { selectMiningWeight } from "./mining-snapshot.js";
@@ -76,6 +79,20 @@ export interface MiningFormulaProjection {
   readonly referralBoost: { readonly status: "pending_approval" | "approved" };
 }
 
+/**
+ * The newest run under the version in force (Decision 0057): the published
+ * snapshot itself, an incomplete attempt naming the holdings it could not
+ * value, or a snapshot an operator invalidated.
+ */
+export interface MiningSnapshotAttemptProjection {
+  readonly snapshotId: string;
+  readonly status: MiningSnapshotStatus;
+  readonly computedAt: string;
+  /** `MINING_SNAPSHOT_INCOMPLETE`, the invalidation reason, or null when complete. */
+  readonly reasonCode: string | null;
+  readonly unreadInputs: readonly MiningUnreadInput[];
+}
+
 export interface MiningSnapshotProjection {
   readonly snapshotId: string;
   readonly blockNumber: string;
@@ -83,7 +100,21 @@ export interface MiningSnapshotProjection {
   readonly formulaVersion: string;
   readonly priceVersion: string;
   readonly computedAt: string;
+  /**
+   * A newer attempt under the same version did not complete: the numbers on
+   * the page are this snapshot's and are older than `latestAttempt`.
+   */
+  readonly stale: boolean;
+  readonly latestAttempt: MiningSnapshotAttemptProjection;
 }
+
+/** No complete snapshot; `latestAttempt` explains the newest run when there is one. */
+export type MiningSnapshotUnavailableProjection = UnavailableProjection & {
+  readonly latestAttempt?: MiningSnapshotAttemptProjection;
+};
+
+export type MiningSnapshotOrUnavailable =
+  MiningSnapshotProjection | MiningSnapshotUnavailableProjection;
 
 export interface MiningDecimalProjection {
   readonly status: "available";
@@ -128,7 +159,7 @@ export interface MiningSummaryResource {
   readonly claimable: UnavailableProjection;
   readonly referralBoost: UnavailableProjection;
   readonly formula: MiningFormulaStateProjection;
-  readonly snapshot: MiningSnapshotProjection | UnavailableProjection;
+  readonly snapshot: MiningSnapshotOrUnavailable;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -157,7 +188,7 @@ export interface MiningAssetsResource {
   readonly totalPower: MiningDecimalOrUnavailable;
   readonly included: readonly MiningIncludedAssetProjection[];
   readonly excluded: readonly MiningExcludedAssetProjection[];
-  readonly source: MiningSnapshotProjection | UnavailableProjection;
+  readonly source: MiningSnapshotOrUnavailable;
   readonly referencePrice:
     | { readonly status: "available"; readonly priceVersion: string }
     | UnavailableProjection;
@@ -248,7 +279,7 @@ export interface MiningRankResource {
   readonly scope: MiningRankScope;
   readonly ranking: MiningRankingProjection;
   readonly myPosition: MiningPositionProjection;
-  readonly snapshot: MiningSnapshotProjection | UnavailableProjection;
+  readonly snapshot: MiningSnapshotOrUnavailable;
   readonly display: {
     readonly anonymousMemberKey: typeof miningRankAnonymousMemberKey;
     readonly ruleKey: typeof miningRankDisplayRuleKey;
@@ -272,7 +303,7 @@ export interface MiningCommunityResource {
   readonly rank: MiningPositionProjection;
   /** Shared with the community-side `miningPower` (Decision 0045). */
   readonly participants: MiningParticipantsProjection;
-  readonly snapshot: MiningSnapshotProjection | UnavailableProjection;
+  readonly snapshot: MiningSnapshotOrUnavailable;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -351,9 +382,35 @@ function formulaProjection(
   });
 }
 
+function attemptProjection(
+  attempt: MiningSnapshotAttemptRecord,
+): MiningSnapshotAttemptProjection {
+  return Object.freeze({
+    snapshotId: attempt.snapshotId,
+    status: attempt.status,
+    computedAt: attempt.computedAt,
+    reasonCode:
+      attempt.status === "incomplete"
+        ? miningReasonCodes.snapshotIncomplete
+        : attempt.status === "invalidated"
+          ? attempt.invalidationReason
+          : null,
+    unreadInputs: Object.freeze(
+      attempt.unreadInputs.map((input) => Object.freeze({ ...input })),
+    ),
+  });
+}
+
+/** A resolution that carries a complete snapshot under the version in force. */
+type MiningBaselineWithSnapshot = Extract<
+  MiningBaselineResolution,
+  { readonly snapshot: MiningSnapshotRecord }
+>;
+
 function snapshotProjection(
-  record: MiningSnapshotRecord,
+  resolution: MiningBaselineWithSnapshot,
 ): MiningSnapshotProjection {
+  const record = resolution.snapshot;
   return Object.freeze({
     snapshotId: record.snapshotId,
     blockNumber: record.blockNumber,
@@ -361,6 +418,26 @@ function snapshotProjection(
     formulaVersion: record.formulaVersion,
     priceVersion: record.priceVersion,
     computedAt: record.computedAt,
+    stale: resolution.stale,
+    latestAttempt: attemptProjection(resolution.latestAttempt),
+  });
+}
+
+/**
+ * The `snapshot` slot without a complete snapshot: the same reason as every
+ * number, plus the newest attempt under the version in force when there is
+ * one, so the client can say *why* nothing is published (Decision 0057).
+ */
+function missingSnapshot(
+  resolution: MiningBaselineWithoutSnapshot,
+): MiningSnapshotUnavailableProjection {
+  const reason = missingReason(resolution);
+  if (resolution.status === "pending" || resolution.latestAttempt === null) {
+    return reason;
+  }
+  return Object.freeze({
+    ...reason,
+    latestAttempt: attemptProjection(resolution.latestAttempt),
   });
 }
 
@@ -392,9 +469,10 @@ function estimateProjection(
   formula: MiningFormulaRecord,
   snapshot: MiningSnapshotRecord,
   accountPower: string | null,
+  absentReason: UnavailableProjection,
 ): MiningEstimateOrUnavailable {
   if (accountPower === null) {
-    return unavailable(miningReasonCodes.accountNotInSnapshot);
+    return absentReason;
   }
   const dailyOutput = formula.formula.dailyOutput;
   if (dailyOutput === undefined) {
@@ -488,6 +566,23 @@ export function createMiningService(dependencies: {
     return resolveMiningBaseline(repository, now());
   }
 
+  /**
+   * Why an account has no row in the snapshot (Decision 0057): with an
+   * active wallet the snapshot simply predates it (or its balances were
+   * never observed) — `MINING_SNAPSHOT_PENDING`, shown after the next
+   * complete snapshot that includes it; without one there is nothing for
+   * the lane to read — `MINING_ACCOUNT_NOT_IN_SNAPSHOT`. Never a zero.
+   */
+  async function absentReason(
+    ownerUserId: string,
+  ): Promise<UnavailableProjection> {
+    return unavailable(
+      (await repository.hasActiveWallet(ownerUserId))
+        ? miningReasonCodes.snapshotPending
+        : miningReasonCodes.accountNotInSnapshot,
+    );
+  }
+
   async function formulaState(
     resolution: MiningBaselineResolution,
   ): Promise<MiningFormulaStateProjection> {
@@ -521,7 +616,7 @@ export function createMiningService(dependencies: {
             claimable: rewardAuthorityPending,
             referralBoost: unavailable(miningReasonCodes.referralBoostPending),
             formula,
-            snapshot: reason,
+            snapshot: missingSnapshot(resolution),
             contractVersion: v2ContractVersion,
           });
         }
@@ -530,22 +625,22 @@ export function createMiningService(dependencies: {
           snapshotId: snapshot.snapshotId,
           ownerUserId: input.principal.userId,
         });
+        const absent =
+          standing === null ? await absentReason(input.principal.userId) : null;
         return Object.freeze({
-          power:
-            standing === null
-              ? unavailable(miningReasonCodes.accountNotInSnapshot)
-              : decimal(standing.totalPower),
+          power: absent ?? decimal(standing?.totalPower ?? "0"),
           networkPower: decimal(snapshot.totalPower),
           estimatedToday: estimateProjection(
             resolution.formula,
             snapshot,
             standing?.totalPower ?? null,
+            absent ?? unavailable(miningReasonCodes.accountNotInSnapshot),
           ),
           accumulated: rewardAuthorityPending,
           claimable: rewardAuthorityPending,
           referralBoost: unavailable(miningReasonCodes.referralBoostPending),
           formula,
-          snapshot: snapshotProjection(snapshot),
+          snapshot: snapshotProjection(resolution),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -563,7 +658,7 @@ export function createMiningService(dependencies: {
             totalPower: reason,
             included: Object.freeze([]),
             excluded: Object.freeze([]),
-            source: reason,
+            source: missingSnapshot(resolution),
             referencePrice: reason,
             formula,
             contractVersion: v2ContractVersion,
@@ -592,7 +687,15 @@ export function createMiningService(dependencies: {
         const symbols = await symbolsFor([...includedIds, ...excludedIds]);
         // An asset the account holds but the snapshot did not weight was
         // skipped by the lane; the reason is re-derived from the same
-        // inputs the lane used (weight first, then the price guard).
+        // inputs the lane used (weight first, then the price guard). When
+        // the newest attempt under the version recorded the asset as unread,
+        // that recorded reason is the fact (Decision 0057).
+        const unreadReasons = new Map(
+          resolution.latestAttempt.unreadInputs.map((input) => [
+            input.assetId,
+            input.reasonCode,
+          ]),
+        );
         const excluded = excludedIds.map((assetId) => {
           const selection = selectMiningWeight(
             assetId,
@@ -605,13 +708,14 @@ export function createMiningService(dependencies: {
             reasonCode:
               selection.kind === "skip"
                 ? selection.reasonCode
-                : miningReasonCodes.priceNotFresh,
+                : (unreadReasons.get(assetId) ??
+                  miningReasonCodes.priceNotFresh),
           });
         });
         return Object.freeze({
           totalPower:
             standing === null
-              ? unavailable(miningReasonCodes.accountNotInSnapshot)
+              ? await absentReason(input.principal.userId)
               : decimal(standing.totalPower),
           included: Object.freeze(
             powers.map((row) =>
@@ -629,7 +733,7 @@ export function createMiningService(dependencies: {
             ),
           ),
           excluded: Object.freeze(excluded),
-          source: snapshotProjection(snapshot),
+          source: snapshotProjection(resolution),
           referencePrice: Object.freeze({
             status: "available" as const,
             priceVersion: snapshot.priceVersion,
@@ -657,6 +761,9 @@ export function createMiningService(dependencies: {
             resolution.formula,
             resolution.snapshot,
             standing?.totalPower ?? null,
+            standing === null
+              ? await absentReason(input.principal.userId)
+              : unavailable(miningReasonCodes.accountNotInSnapshot),
           );
         }
         return Object.freeze({
@@ -697,7 +804,7 @@ export function createMiningService(dependencies: {
             scope,
             ranking: reason,
             myPosition: reason,
-            snapshot: reason,
+            snapshot: missingSnapshot(resolution),
             display,
             formula,
             contractVersion: v2ContractVersion,
@@ -733,7 +840,7 @@ export function createMiningService(dependencies: {
               participants: rows.filter((row) => row.position !== null).length,
             }),
             myPosition: unavailable(miningReasonCodes.rankNotApplicable),
-            snapshot: snapshotProjection(snapshot),
+            snapshot: snapshotProjection(resolution),
             display,
             formula,
             contractVersion: v2ContractVersion,
@@ -761,7 +868,7 @@ export function createMiningService(dependencies: {
           }),
           myPosition:
             standing === null
-              ? unavailable(miningReasonCodes.accountNotInSnapshot)
+              ? await absentReason(input.principal.userId)
               : standing.position === null
                 ? unavailable(miningReasonCodes.rankNotRanked)
                 : Object.freeze({
@@ -769,7 +876,7 @@ export function createMiningService(dependencies: {
                     position: standing.position,
                     power: standing.totalPower,
                   }),
-          snapshot: snapshotProjection(snapshot),
+          snapshot: snapshotProjection(resolution),
           display,
           formula,
           contractVersion: v2ContractVersion,
@@ -801,7 +908,7 @@ export function createMiningService(dependencies: {
             myContribution: reason,
             rank: reason,
             participants: reason,
-            snapshot: reason,
+            snapshot: missingSnapshot(resolution),
             contractVersion: v2ContractVersion,
           });
         }
@@ -825,7 +932,7 @@ export function createMiningService(dependencies: {
             myContribution: reason,
             rank: reason,
             participants: reason,
-            snapshot: snapshotProjection(snapshot),
+            snapshot: snapshotProjection(resolution),
             contractVersion: v2ContractVersion,
           });
         }
@@ -841,9 +948,11 @@ export function createMiningService(dependencies: {
           weight,
           communityPower: decimal(standing.power),
           myContribution:
-            mine === undefined
-              ? unavailable(miningReasonCodes.accountNotInSnapshot)
-              : decimal(mine.power),
+            mine !== undefined
+              ? decimal(mine.power)
+              : myPowers.length === 0
+                ? await absentReason(input.principal.userId)
+                : unavailable(miningReasonCodes.accountNotInSnapshot),
           rank:
             standing.position === null
               ? unavailable(miningReasonCodes.rankNotRanked)
@@ -853,7 +962,7 @@ export function createMiningService(dependencies: {
                   power: standing.power,
                 }),
           participants: projectParticipants(standing),
-          snapshot: snapshotProjection(snapshot),
+          snapshot: snapshotProjection(resolution),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {

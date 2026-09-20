@@ -32,11 +32,29 @@ export const miningReasonCodes = Object.freeze({
    */
   referralBoostPending: "MINING_REFERRAL_BOOST_PENDING",
   priceNotFresh: "MINING_PRICE_NOT_FRESH",
+  /** The Provider fact is fresh but lists no pair in which the asset is the base token (Decision 0057). */
+  pricePairNotFound: "MINING_PRICE_PAIR_NOT_FOUND",
   /** The Provider priced the asset through a proxy the version does not declare. */
   priceProxyNotDeclared: "MINING_PRICE_PROXY_NOT_DECLARED",
   noBalanceInputs: "MINING_NO_BALANCE_INPUTS",
-  /** The account has no balance row in the snapshot (no active wallet). */
+  /**
+   * The newest run under the version in force could not value at least one
+   * positive weighted holding, so nothing was published from it
+   * (Decision 0057). Emitted on every number only while no complete
+   * snapshot exists under that version.
+   */
+  snapshotIncomplete: "MINING_SNAPSHOT_INCOMPLETE",
+  /** Default `invalidation_reason` for a snapshot the old writer published while a holding was unread (Decision 0057). */
+  snapshotPublishedIncomplete: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+  /** The account has no balance row in the snapshot and no active wallet. */
   accountNotInSnapshot: "MINING_ACCOUNT_NOT_IN_SNAPSHOT",
+  /**
+   * The account has an active wallet but no complete snapshot under the
+   * version in force includes it yet (Decision 0057): the wallet was
+   * observed after the snapshot, or its balances have not been observed at
+   * all. Shown after the next complete snapshot that includes it.
+   */
+  snapshotPending: "MINING_SNAPSHOT_PENDING",
   /** Share of network power is undefined while the network total is zero. */
   networkPowerZero: "MINING_NETWORK_POWER_ZERO",
   /** The account has no positive power in the snapshot, so it holds no position. */
@@ -69,6 +87,35 @@ export const miningFormulaStatuses = [
 export type MiningFormulaStatus = (typeof miningFormulaStatuses)[number];
 
 export const communityWeightStatuses = ["pending_review", "approved"] as const;
+
+/**
+ * What a `mining_snapshots` row is (Decision 0057). Only `complete` rows are
+ * read as the latest snapshot; `incomplete` rows record which holdings could
+ * not be valued and carry no numbers; `invalidated` rows were withdrawn by
+ * an operator after the fact.
+ */
+export const miningSnapshotStatuses = [
+  "complete",
+  "incomplete",
+  "invalidated",
+] as const;
+export type MiningSnapshotStatus = (typeof miningSnapshotStatuses)[number];
+
+/** One holding a run could not value: the asset and the price reason. */
+export interface MiningUnreadInput {
+  readonly assetId: string;
+  readonly reasonCode: string;
+}
+
+export const miningUnreadInputSchema = z
+  .object({
+    assetId: z
+      .string()
+      .regex(/^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/),
+    reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
+  })
+  .strict();
+export const miningUnreadInputsSchema = z.array(miningUnreadInputSchema);
 export type CommunityWeightStatus = (typeof communityWeightStatuses)[number];
 
 /**

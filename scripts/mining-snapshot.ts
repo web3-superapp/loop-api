@@ -22,9 +22,10 @@ import {
  * It composes the same repository, registry, and fresh-price reader the
  * standalone worker uses and calls the lane's `runOnce`. Nothing is
  * different from a worker tick: no approved formula → idle; a skipped asset
- * is reported with its reason; the snapshot is written only when the pure
- * computation succeeds. Refuses `NODE_ENV=production` before opening a
- * connection.
+ * is reported with its reason; a run that cannot value a held asset is
+ * recorded as an incomplete attempt and exits 1 (Decision 0057); the
+ * snapshot is written only when the pure computation succeeds. Refuses
+ * `NODE_ENV=production` before opening a connection.
  */
 
 export type MiningSnapshotScriptErrorCode =
@@ -154,16 +155,16 @@ export async function runMiningSnapshot(
       options.environment,
       options.createDependencies,
     );
+    const list = (items: readonly { assetId: string; reasonCode: string }[]) =>
+      items.map((item) => `${item.assetId} (${item.reasonCode})`).join(", ");
     const skipped =
-      result.skipped.length === 0
-        ? ""
-        : `; skipped ${result.skipped
-            .map((skip) => `${skip.assetId} (${skip.reasonCode})`)
-            .join(", ")}`;
+      result.skipped.length === 0 ? "" : `; skipped ${list(result.skipped)}`;
     options.stdout.write(
       result.kind === "snapshotted"
         ? `Mining snapshot ${result.snapshotId ?? "?"} written with ${result.powerRowCount} power row(s)${skipped}\n`
-        : `Mining snapshot lane ${result.kind} (${result.reasonCode ?? "n/a"})${skipped}\n`,
+        : result.kind === "incomplete"
+          ? `Mining snapshot attempt ${result.snapshotId ?? "?"} incomplete (${result.reasonCode ?? "n/a"}); nothing published; unread ${list(result.unread)}${skipped}\n`
+          : `Mining snapshot lane ${result.kind} (${result.reasonCode ?? "n/a"})${skipped}\n`,
     );
     return result.kind === "snapshotted" ? 0 : 1;
   } catch {

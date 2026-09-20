@@ -122,6 +122,10 @@ function repositoryFake(
     getApprovedFormula: vi.fn(() => Promise.resolve(null)),
     listFormulaVersions: vi.fn(() => Promise.resolve([draftFormula])),
     getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
+    getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+    // Without an active wallet an absent account is "not in the snapshot";
+    // the snapshot-pending case sets this to true (Decision 0057).
+    hasActiveWallet: vi.fn(() => Promise.resolve(false)),
     getCommunityWeight: vi.fn(() =>
       Promise.resolve({
         communityId,
@@ -652,6 +656,15 @@ describe("LOOP API V2 mining module", () => {
           formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
+          // Decision 0057: the snapshot itself is the newest run.
+          stale: false,
+          latestAttempt: {
+            snapshotId,
+            status: "complete",
+            computedAt: "2026-09-15T13:30:00.000Z",
+            reasonCode: null,
+            unreadInputs: [],
+          },
         },
         contractVersion: "2.0",
       });
@@ -809,6 +822,14 @@ describe("LOOP API V2 mining module", () => {
           formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
+          stale: false,
+          latestAttempt: {
+            snapshotId,
+            status: "complete",
+            computedAt: "2026-09-15T13:30:00.000Z",
+            reasonCode: null,
+            unreadInputs: [],
+          },
         },
         referencePrice: {
           status: "available",
@@ -1186,6 +1207,253 @@ describe("LOOP API V2 mining module", () => {
           status: "unavailable",
           reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
         },
+      });
+    });
+
+    describe("fail-closed snapshot completeness (Decision 0057)", () => {
+      const usdtAsset = "eip155:56:0x55d398326f99059ff775485246999027b3197955";
+      const incompleteAttempt = {
+        snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+        status: "incomplete" as const,
+        formulaVersion: documents.configVersion,
+        blockNumber: "123000110",
+        computedAt: "2026-09-20T13:51:26.116Z",
+        unreadInputs: [
+          { assetId: nativeAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+          { assetId: usdtAsset, reasonCode: "MINING_PRICE_NOT_FRESH" },
+        ],
+        invalidatedAt: null,
+        invalidationReason: null,
+      };
+      const attemptProjection = {
+        snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+        status: "incomplete",
+        computedAt: "2026-09-20T13:51:26.116Z",
+        reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+        unreadInputs: incompleteAttempt.unreadInputs,
+      };
+      const readUrls = [
+        "/v2/mining/summary",
+        "/v2/mining/assets",
+        "/v2/mining/rewards",
+        "/v2/mining/rank?scope=users",
+        "/v2/mining/rank?scope=communities",
+        `/v2/mining/communities/${communityId}`,
+      ];
+
+      it("keeps the last complete snapshot's numbers and marks every snapshot block stale when a newer attempt did not complete", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getLatestSnapshotAttempt: vi.fn(() =>
+              Promise.resolve(incompleteAttempt),
+            ),
+          }),
+        );
+        const summary = await app.inject({
+          method: "GET",
+          url: "/v2/mining/summary",
+          headers: s7CommonHeaders(),
+        });
+        expect(summary.statusCode).toBe(200);
+        expect(summary.json()).toMatchObject({
+          power: { status: "available", value: "1000" },
+          networkPower: { status: "available", value: "4000" },
+          snapshot: {
+            snapshotId,
+            computedAt: "2026-09-15T13:30:00.000Z",
+            stale: true,
+            latestAttempt: attemptProjection,
+          },
+        });
+        // The composition page names the recorded reason for a held asset
+        // the attempt could not value, not a re-derived guess.
+        const assets = await app.inject({
+          method: "GET",
+          url: "/v2/mining/assets",
+          headers: s7CommonHeaders(),
+        });
+        expect(assets.json()).toMatchObject({
+          totalPower: { status: "available", value: "1000" },
+          excluded: [
+            {
+              assetId: nativeAsset,
+              symbol: "BNB",
+              reasonCode: "MINING_PRICE_PAIR_NOT_FOUND",
+            },
+          ],
+          source: { snapshotId, stale: true, latestAttempt: attemptProjection },
+        });
+        for (const url of [
+          "/v2/mining/rank?scope=users",
+          `/v2/mining/communities/${communityId}`,
+        ]) {
+          const response = await app.inject({
+            method: "GET",
+            url,
+            headers: s7CommonHeaders(),
+          });
+          expect(response.statusCode, url).toBe(200);
+          expect(response.json(), url).toMatchObject({
+            snapshot: {
+              snapshotId,
+              stale: true,
+              latestAttempt: attemptProjection,
+            },
+          });
+        }
+      });
+
+      it("publishes no number while the version in force has only an incomplete attempt: never a zero for an unread holding", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
+            getLatestSnapshotAttempt: vi.fn(() =>
+              Promise.resolve(incompleteAttempt),
+            ),
+          }),
+        );
+        const summary = await app.inject({
+          method: "GET",
+          url: "/v2/mining/summary",
+          headers: s7CommonHeaders(),
+        });
+        expect(summary.statusCode).toBe(200);
+        expect(summary.json()).toMatchObject({
+          power: {
+            status: "unavailable",
+            reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+          },
+          networkPower: {
+            status: "unavailable",
+            reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+          },
+          estimatedToday: {
+            status: "unavailable",
+            reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+          },
+          formula: { status: "approved" },
+          snapshot: {
+            status: "unavailable",
+            reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+            latestAttempt: attemptProjection,
+          },
+        });
+        for (const url of readUrls) {
+          const response = await app.inject({
+            method: "GET",
+            url,
+            headers: s7CommonHeaders(),
+          });
+          expect(response.statusCode, url).toBe(200);
+          // Structural: no slot publishes an available zero anywhere.
+          expect(response.body, url).not.toContain(
+            '"status":"available","value":"0"',
+          );
+          expect(response.body, url).toContain("MINING_SNAPSHOT_INCOMPLETE");
+          // Neither invalidation reason nor the "no version" code appears.
+          expect(response.body, url).not.toContain(
+            "MINING_FORMULA_BASELINE_PENDING",
+          );
+        }
+      });
+
+      it("answers 200 with MINING_SNAPSHOT_PENDING on every read for a wallet no snapshot includes yet", async () => {
+        // The 2026-09-20 device case: an account whose wallet was created
+        // after the last snapshot and has no balance or power row at all.
+        const { app } = await createApp(
+          approvedRepository({
+            getAccountStanding: vi.fn(() => Promise.resolve(null)),
+            listAccountPowers: vi.fn(() => Promise.resolve([])),
+            listAccountBalanceAssetIds: vi.fn(() => Promise.resolve([])),
+            hasActiveWallet: vi.fn(() => Promise.resolve(true)),
+          }),
+        );
+        const pending = {
+          status: "unavailable",
+          reasonCode: "MINING_SNAPSHOT_PENDING",
+        };
+        const expectations: readonly [string, Record<string, unknown>][] = [
+          [
+            "/v2/mining/summary",
+            {
+              power: pending,
+              estimatedToday: pending,
+              networkPower: { status: "available", value: "4000" },
+            },
+          ],
+          [
+            "/v2/mining/assets",
+            { totalPower: pending, included: [], excluded: [] },
+          ],
+          ["/v2/mining/rewards", { estimatedToday: pending }],
+          ["/v2/mining/rank?scope=users", { myPosition: pending }],
+          [
+            `/v2/mining/communities/${communityId}`,
+            { myContribution: pending },
+          ],
+        ];
+        for (const [url, expected] of expectations) {
+          const response = await app.inject({
+            method: "GET",
+            url,
+            headers: s7CommonHeaders(),
+          });
+          expect(response.statusCode, url).toBe(200);
+          expect(response.json(), url).toMatchObject(expected);
+          expect(response.body, url).not.toContain("CAPABILITY_UNAVAILABLE");
+        }
+        // Without an active wallet the older, distinct reason stays.
+        const walletless = await createApp(
+          approvedRepository({
+            getAccountStanding: vi.fn(() => Promise.resolve(null)),
+            hasActiveWallet: vi.fn(() => Promise.resolve(false)),
+          }),
+        );
+        const summary = await walletless.app.inject({
+          method: "GET",
+          url: "/v2/mining/summary",
+          headers: s7CommonHeaders(),
+        });
+        expect(summary.json()).toMatchObject({
+          power: {
+            status: "unavailable",
+            reasonCode: "MINING_ACCOUNT_NOT_IN_SNAPSHOT",
+          },
+        });
+      });
+
+      it("treats an invalidated newest snapshot as stale and names the operator's reason", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getLatestSnapshotAttempt: vi.fn(() =>
+              Promise.resolve({
+                ...incompleteAttempt,
+                status: "invalidated" as const,
+                unreadInputs: [],
+                invalidatedAt: "2026-09-20T15:00:00.000Z",
+                invalidationReason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+              }),
+            ),
+          }),
+        );
+        const summary = await app.inject({
+          method: "GET",
+          url: "/v2/mining/summary",
+          headers: s7CommonHeaders(),
+        });
+        expect(summary.json()).toMatchObject({
+          power: { status: "available", value: "1000" },
+          snapshot: {
+            snapshotId,
+            stale: true,
+            latestAttempt: {
+              snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+              status: "invalidated",
+              reasonCode: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+              unreadInputs: [],
+            },
+          },
+        });
       });
     });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  attemptOf,
   createMiningFormulaBaselineProbe,
   resolveMiningBaseline,
 } from "../src/features/mining/mining-baseline.js";
@@ -22,6 +23,7 @@ import { createMiningPowerReader } from "../src/features/mining/mining-power-rea
 import {
   createUnavailableMiningRepository,
   type MiningFormulaRecord,
+  type MiningSnapshotAttemptRecord,
   type MiningSnapshotRecord,
 } from "../src/features/mining/mining-repository.js";
 
@@ -268,12 +270,27 @@ describe("baseline resolution", () => {
   function repository(
     formula: MiningFormulaRecord | null,
     latest: MiningSnapshotRecord | null,
+    attempt: MiningSnapshotAttemptRecord | null = null,
   ) {
     return {
       getApprovedFormula: vi.fn(() => Promise.resolve(formula)),
       getLatestSnapshot: vi.fn(() => Promise.resolve(latest)),
+      getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(attempt)),
     };
   }
+  const usdtAsset = "eip155:56:0x55d398326f99059ff775485246999027b3197955";
+  const incompleteAttempt: MiningSnapshotAttemptRecord = {
+    snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+    status: "incomplete",
+    formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
+    blockNumber: "123000110",
+    computedAt: "2026-09-20T13:51:26.116Z",
+    unreadInputs: [
+      { assetId: usdtAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+    ],
+    invalidatedAt: null,
+    invalidationReason: null,
+  };
 
   it("is pending without an approved version or before effectiveAt, and never reads the snapshot then", async () => {
     const none = repository(null, snapshot);
@@ -303,6 +320,8 @@ describe("baseline resolution", () => {
       formula: approved,
       snapshot,
       snapshotReasonCode: null,
+      stale: false,
+      latestAttempt: attemptOf(snapshot),
     });
     expect(
       await resolveMiningBaseline(repository(approved, null), now),
@@ -310,6 +329,8 @@ describe("baseline resolution", () => {
       status: "approved",
       snapshot: null,
       snapshotReasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+      stale: false,
+      latestAttempt: null,
     });
     expect(
       await resolveMiningBaseline(
@@ -323,6 +344,90 @@ describe("baseline resolution", () => {
       status: "approved",
       snapshot: null,
       snapshotReasonCode: "MINING_SNAPSHOT_STALE",
+    });
+  });
+
+  it("keeps the last complete snapshot and marks it stale when a newer attempt did not complete (Decision 0057)", async () => {
+    // The 2026-09-20 case: USDT could not be priced, the attempt was
+    // recorded, and the last complete snapshot stays the one that is read.
+    const resolution = await resolveMiningBaseline(
+      repository(approved, snapshot, incompleteAttempt),
+      now,
+    );
+    expect(resolution).toEqual({
+      status: "approved",
+      formula: approved,
+      snapshot,
+      snapshotReasonCode: null,
+      stale: true,
+      latestAttempt: incompleteAttempt,
+    });
+    // A withdrawn snapshot newer than the last complete one is stale too.
+    const invalidated: MiningSnapshotAttemptRecord = {
+      ...incompleteAttempt,
+      status: "invalidated",
+      unreadInputs: [],
+      invalidatedAt: "2026-09-20T15:00:00.000Z",
+      invalidationReason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+    };
+    expect(
+      await resolveMiningBaseline(
+        repository(approved, snapshot, invalidated),
+        now,
+      ),
+    ).toMatchObject({ snapshot, stale: true, latestAttempt: invalidated });
+    // The snapshot itself as the newest attempt is not stale.
+    expect(
+      await resolveMiningBaseline(
+        repository(approved, snapshot, attemptOf(snapshot)),
+        now,
+      ),
+    ).toMatchObject({ snapshot, stale: false });
+  });
+
+  it("is MINING_SNAPSHOT_INCOMPLETE, never a zero, while the version in force has only incomplete attempts", async () => {
+    expect(
+      await resolveMiningBaseline(
+        repository(approved, null, incompleteAttempt),
+        now,
+      ),
+    ).toEqual({
+      status: "approved",
+      formula: approved,
+      snapshot: null,
+      snapshotReasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+      stale: false,
+      latestAttempt: incompleteAttempt,
+    });
+    // An older complete snapshot of another version does not soften it.
+    expect(
+      await resolveMiningBaseline(
+        repository(
+          approved,
+          { ...snapshot, formulaVersion: "miningFormulaV1-draft" },
+          incompleteAttempt,
+        ),
+        now,
+      ),
+    ).toMatchObject({
+      snapshot: null,
+      snapshotReasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+    });
+    // Only invalidated rows under the version: nothing usable, not incomplete.
+    expect(
+      await resolveMiningBaseline(
+        repository(approved, null, {
+          ...incompleteAttempt,
+          status: "invalidated",
+          unreadInputs: [],
+          invalidatedAt: "2026-09-20T15:00:00.000Z",
+          invalidationReason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+        }),
+        now,
+      ),
+    ).toMatchObject({
+      snapshot: null,
+      snapshotReasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
     });
   });
 
@@ -371,6 +476,7 @@ describe("community mining power reader", () => {
         ...createUnavailableMiningRepository(),
         getApprovedFormula: () => Promise.resolve(approved),
         getLatestSnapshot: () => Promise.resolve(snapshot),
+        getLatestSnapshotAttempt: () => Promise.resolve(null),
         getCommunityWeight: () => Promise.resolve(weightRecord),
         getCommunityStanding: () =>
           Promise.resolve({
@@ -393,6 +499,7 @@ describe("community mining power reader", () => {
       formulaVersion: documents.configVersion,
       computedAt: snapshot.computedAt,
       scope: "development_baseline",
+      stale: false,
       weight: {
         status: "approved",
         value: "0.8",
@@ -409,6 +516,7 @@ describe("community mining power reader", () => {
         ...createUnavailableMiningRepository(),
         getApprovedFormula: () => Promise.resolve(approved),
         getLatestSnapshot: () => Promise.resolve(snapshot),
+        getLatestSnapshotAttempt: () => Promise.resolve(null),
         getCommunityWeight: () =>
           Promise.resolve({
             ...weightRecord,
@@ -444,6 +552,7 @@ describe("community mining power reader", () => {
             formula: { ...approved.formula, scope: undefined },
           }),
         getLatestSnapshot: () => Promise.resolve(snapshot),
+        getLatestSnapshotAttempt: () => Promise.resolve(null),
         listMemberPowers: () =>
           Promise.resolve([
             {
@@ -468,6 +577,107 @@ describe("community mining power reader", () => {
       formulaVersion: documents.configVersion,
       computedAt: snapshot.computedAt,
       scope: null,
+      stale: false,
+    });
+  });
+
+  it("marks both subjects stale while a newer attempt under the version did not complete, and keeps the last complete numbers (Decision 0057)", async () => {
+    const profileId = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
+    const repository = {
+      ...createUnavailableMiningRepository(),
+      getApprovedFormula: () => Promise.resolve(approved),
+      getLatestSnapshot: () => Promise.resolve(snapshot),
+      getLatestSnapshotAttempt: () =>
+        Promise.resolve({
+          snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+          status: "incomplete" as const,
+          formulaVersion: documents.configVersion,
+          blockNumber: "123000110",
+          computedAt: "2026-09-20T13:51:26.116Z",
+          unreadInputs: [
+            {
+              assetId: "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+              reasonCode: "MINING_PRICE_PAIR_NOT_FOUND",
+            },
+          ],
+          invalidatedAt: null,
+          invalidationReason: null,
+        }),
+      getCommunityWeight: () => Promise.resolve(weightRecord),
+      getCommunityStanding: () =>
+        Promise.resolve({
+          communityId,
+          communityName: "Frog Holders",
+          boundAssetId: weightRecord.boundAssetId,
+          weight: "0.8",
+          power: "92",
+          participantCount: 3,
+          position: 1,
+        }),
+      listMemberPowers: () =>
+        Promise.resolve([
+          {
+            publicProfileId: profileId,
+            ownerUserId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+            totalPower: "4.482309",
+            visibleToOthers: true,
+          },
+        ]),
+    };
+    const reader = createMiningPowerReader({ repository, now: () => now });
+    expect(await reader.readCommunityPower(communityId)).toMatchObject({
+      status: "available",
+      power: "92",
+      snapshotId: snapshot.snapshotId,
+      stale: true,
+    });
+    const powers = await reader.readMemberPowers({
+      viewerUserId: "6d12a86e-4134-47e6-9312-c5ef75a30f55",
+      publicProfileIds: [profileId],
+    });
+    expect(powers.get(profileId)).toMatchObject({
+      status: "available",
+      power: "4.482309",
+      stale: true,
+    });
+  });
+
+  it("publishes no number at all while the version in force has only an incomplete attempt (Decision 0057)", async () => {
+    const reader = createMiningPowerReader({
+      repository: {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: () => Promise.resolve(approved),
+        getLatestSnapshot: () => Promise.resolve(null),
+        getLatestSnapshotAttempt: () =>
+          Promise.resolve({
+            snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
+            status: "incomplete" as const,
+            formulaVersion: documents.configVersion,
+            blockNumber: "123000110",
+            computedAt: "2026-09-20T13:51:26.116Z",
+            unreadInputs: [
+              {
+                assetId: "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+                reasonCode: "MINING_PRICE_PAIR_NOT_FOUND",
+              },
+            ],
+            invalidatedAt: null,
+            invalidationReason: null,
+          }),
+      },
+      now: () => now,
+    });
+    expect(await reader.readCommunityPower(communityId)).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+    });
+    const powers = await reader.readMemberPowers({
+      viewerUserId: "6d12a86e-4134-47e6-9312-c5ef75a30f55",
+      publicProfileIds: ["9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f"],
+    });
+    expect(powers.get("9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f")).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
     });
   });
 

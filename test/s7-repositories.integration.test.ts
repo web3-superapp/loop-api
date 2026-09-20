@@ -23,6 +23,7 @@ import {
   LaunchVersionConflictError,
   type LaunchRepository,
 } from "../src/features/launch/launch-repository.js";
+import { resolveMiningBaseline } from "../src/features/mining/mining-baseline.js";
 import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
 import {
   MiningCommunityAssetNotBoundError,
@@ -31,6 +32,7 @@ import {
   MiningFormulaExistsError,
   MiningFormulaNotFoundError,
   MiningFormulaStateError,
+  MiningSnapshotNotFoundError,
   MiningWeightOutOfRangeError,
   type MiningRepository,
 } from "../src/features/mining/mining-repository.js";
@@ -1251,6 +1253,313 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       await pool.query({
         text: `update public.mining_formula_versions set status = 'retired' where config_version = $1`,
         values: [baselineVersion],
+      });
+      expect(await mining.getApprovedFormula()).toBeNull();
+    });
+  });
+
+  describe("snapshot completeness (Decision 0057)", () => {
+    const cakeAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const nativeAsset = "eip155:56:native";
+    const version = "miningFormulaCompletenessTest";
+    const hash = `0x${"e".repeat(64)}`;
+    let dave = "";
+    let eve = "";
+    let complete = "";
+    let attempt = "";
+    let later = "";
+
+    function completeInput(snapshotId: string, blockNumber: string) {
+      return {
+        snapshotId,
+        blockNumber,
+        blockHash: hash,
+        formulaVersion: version,
+        priceVersion: "dexscreener:2026-09-20T05:21:58.558Z",
+        totalPower: "4.482309",
+        powers: [
+          {
+            ownerUserId: dave,
+            assetId: cakeAsset,
+            holding: "2.99",
+            referencePriceUsd: "0.9994",
+            referencePriceQuality: "fresh" as const,
+            referencePriceProxyAssetId: null,
+            weight: "1.5",
+            power: "4.482309",
+            blockNumber,
+          },
+        ],
+      };
+    }
+
+    it("reads only complete snapshots as latest, records an incomplete attempt without numbers, and resolves the baseline as stale", async () => {
+      dave = await createUser(true, true);
+      eve = await createUser(true, true);
+      // A TEST-ONLY version; the seeded draft is never approved here.
+      await mining.createFormulaVersion({
+        configVersion: version,
+        formula: {
+          kind: "holding_times_reference_price_times_weight",
+          expressionKey: "k",
+          dailyOutputKey: "k",
+          assetWeights: { [nativeAsset]: "1", [cakeAsset]: "1" },
+          referralBoost: { status: "pending_approval" },
+        },
+        weightRange: {
+          loop: { status: "approved", descriptionKey: "k" },
+          community: { status: "pending_approval", descriptionKey: "k" },
+          reviewFactorKeys: [],
+        },
+        priceGuardRules: [],
+        requestId: randomUUID(),
+      });
+      await mining.approveFormula({
+        configVersion: version,
+        requestId: randomUUID(),
+      });
+      complete = randomUUID();
+      const written = await mining.writeSnapshot(
+        completeInput(complete, "122998659"),
+      );
+      expect(written.snapshotId).toBe(complete);
+      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(complete);
+      expect(await mining.getLatestSnapshotAttempt(version)).toMatchObject({
+        snapshotId: complete,
+        status: "complete",
+        unreadInputs: [],
+        invalidatedAt: null,
+        invalidationReason: null,
+      });
+
+      // The 2026-09-20 case: USDT could not be priced for a positive holding.
+      attempt = randomUUID();
+      const recorded = await mining.writeIncompleteSnapshot({
+        snapshotId: attempt,
+        blockNumber: "123000110",
+        blockHash: hash,
+        formulaVersion: version,
+        priceVersion: null,
+        unreadInputs: [
+          { assetId: cakeAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+        ],
+      });
+      expect(recorded).toMatchObject({
+        snapshotId: attempt,
+        status: "incomplete",
+        formulaVersion: version,
+        blockNumber: "123000110",
+        unreadInputs: [
+          { assetId: cakeAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+        ],
+      });
+      // Not the latest snapshot; the newest attempt under the version.
+      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(complete);
+      expect((await mining.getLatestSnapshotAttempt(version))?.snapshotId).toBe(
+        attempt,
+      );
+      const resolution = await resolveMiningBaseline(mining);
+      expect(resolution).toMatchObject({
+        status: "approved",
+        snapshot: { snapshotId: complete, totalPower: "4.482309" },
+        stale: true,
+        latestAttempt: { snapshotId: attempt, status: "incomplete" },
+      });
+      // The stored row carries no number and no price version.
+      const stored = await pool.query<{
+        status: string;
+        total_power: string;
+        account_count: number;
+        price_version: string | null;
+      }>({
+        text: `select status, total_power, account_count, price_version from public.mining_snapshots where snapshot_id = $1`,
+        values: [attempt],
+      });
+      expect(stored.rows[0]).toEqual({
+        status: "incomplete",
+        total_power: "0",
+        account_count: 0,
+        price_version: null,
+      });
+      // An account whose wallet was never observed reads as absent, not as
+      // an error: every per-account read answers for it.
+      expect(
+        await mining.getAccountStanding({
+          snapshotId: complete,
+          ownerUserId: eve,
+        }),
+      ).toBeNull();
+      expect(
+        await mining.listAccountPowers({
+          snapshotId: complete,
+          ownerUserId: eve,
+        }),
+      ).toEqual([]);
+      expect(await mining.listAccountBalanceAssetIds(eve)).toEqual([]);
+      expect(await mining.hasActiveWallet(eve)).toBe(true);
+      expect(await mining.hasActiveWallet(await createUser(true, false))).toBe(
+        false,
+      );
+    });
+
+    it("pins the incomplete shape at the schema: no power rows, no numbers, no empty unread list, no rewrite", async () => {
+      await expect(
+        pool.query({
+          text: `
+            insert into public.mining_snapshot_powers (
+              snapshot_id, owner_user_id, asset_id, holding, reference_price_usd,
+              reference_price_quality, reference_price_proxy_asset_id, weight, power, block_number
+            )
+            values ($1, $2, $3, '1', '1', 'fresh', null, '1', '1', 1)
+          `,
+          values: [attempt, dave, cakeAsset],
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        mining.writeIncompleteSnapshot({
+          snapshotId: randomUUID(),
+          blockNumber: "1",
+          blockHash: hash,
+          formulaVersion: version,
+          priceVersion: null,
+          unreadInputs: [],
+        }),
+      ).rejects.toThrow();
+      await expect(
+        pool.query({
+          text: `
+            insert into public.mining_snapshots (
+              snapshot_id, block_number, block_hash, formula_version, price_version,
+              total_power, account_count, status, unread_inputs
+            )
+            values ($1, 1, $2, $3, null, '5', 1, 'incomplete', '[{"assetId":"x","reasonCode":"Y"}]'::jsonb)
+          `,
+          values: [randomUUID(), hash, version],
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
+      // A complete row cannot lose its price version.
+      await expect(
+        pool.query({
+          text: `
+            insert into public.mining_snapshots (
+              snapshot_id, block_number, block_hash, formula_version, price_version,
+              total_power, account_count, status
+            )
+            values ($1, 1, $2, $3, null, '0', 0, 'complete')
+          `,
+          values: [randomUUID(), hash, version],
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
+      // Rows are append-only apart from invalidation.
+      await expect(
+        pool.query({
+          text: `update public.mining_snapshots set total_power = '9' where snapshot_id = $1`,
+          values: [complete],
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        pool.query({
+          text: `update public.mining_snapshots set status = 'complete', unread_inputs = '[]'::jsonb where snapshot_id = $1`,
+          values: [attempt],
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
+    });
+
+    it("withdraws every complete snapshot after an anchor, keeps the rows, and falls back to the anchor as latest", async () => {
+      later = randomUUID();
+      await mining.writeSnapshot(completeInput(later, "123001455"));
+      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(later);
+      const result = await mining.invalidateSnapshots({
+        selector: { kind: "after", snapshotId: complete },
+        reason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+        requestId: randomUUID(),
+      });
+      expect(result.snapshotIds).toEqual([later]);
+      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(complete);
+      expect(await mining.getLatestSnapshotAttempt(version)).toMatchObject({
+        snapshotId: later,
+        status: "invalidated",
+        invalidationReason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+        unreadInputs: [],
+      });
+      expect(
+        (await mining.getLatestSnapshotAttempt(version))?.invalidatedAt,
+      ).not.toBeNull();
+      expect(await resolveMiningBaseline(mining)).toMatchObject({
+        snapshot: { snapshotId: complete },
+        stale: true,
+        latestAttempt: { snapshotId: later, status: "invalidated" },
+      });
+      // The power rows of a withdrawn snapshot are kept.
+      const rows = await pool.query<{ count: string }>({
+        text: `select count(*)::text as count from public.mining_snapshot_powers where snapshot_id = $1`,
+        values: [later],
+      });
+      expect(rows.rows[0]?.count).toBe("1");
+      // Nothing left after the anchor: an empty, successful result.
+      expect(
+        await mining.invalidateSnapshots({
+          selector: { kind: "after", snapshotId: complete },
+          reason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+          requestId: randomUUID(),
+        }),
+      ).toEqual({ snapshotIds: [] });
+      // An already-withdrawn or unknown snapshot is not a complete one.
+      for (const snapshotId of [later, attempt, randomUUID()]) {
+        await expect(
+          mining.invalidateSnapshots({
+            selector: { kind: "ids", snapshotIds: [snapshotId] },
+            reason: "OPERATOR_REVIEW",
+            requestId: randomUUID(),
+          }),
+        ).rejects.toBeInstanceOf(MiningSnapshotNotFoundError);
+        await expect(
+          mining.invalidateSnapshots({
+            selector: { kind: "after", snapshotId },
+            reason: "OPERATOR_REVIEW",
+            requestId: randomUUID(),
+          }),
+        ).rejects.toBeInstanceOf(MiningSnapshotNotFoundError);
+      }
+      // With every complete snapshot of this version withdrawn, the latest
+      // complete snapshot of any version belongs to an earlier suite's
+      // version, so the resolution is MINING_SNAPSHOT_STALE; a fresh
+      // incomplete attempt then makes it MINING_SNAPSHOT_INCOMPLETE.
+      expect(
+        await mining.invalidateSnapshots({
+          selector: { kind: "ids", snapshotIds: [complete] },
+          reason: "OPERATOR_REVIEW",
+          requestId: randomUUID(),
+        }),
+      ).toEqual({ snapshotIds: [complete] });
+      const latestOfAnyVersion = await mining.getLatestSnapshot();
+      expect(latestOfAnyVersion?.formulaVersion).not.toBe(version);
+      expect(latestOfAnyVersion?.snapshotId).not.toBe(later);
+      // The newest row under the version is `later` (withdrawn earlier).
+      expect(await resolveMiningBaseline(mining)).toMatchObject({
+        snapshot: null,
+        snapshotReasonCode: "MINING_SNAPSHOT_STALE",
+        latestAttempt: { snapshotId: later, status: "invalidated" },
+      });
+      await mining.writeIncompleteSnapshot({
+        snapshotId: randomUUID(),
+        blockNumber: "123002000",
+        blockHash: hash,
+        formulaVersion: version,
+        priceVersion: "dexscreener:2026-09-20T14:15:12.507Z",
+        unreadInputs: [
+          { assetId: cakeAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+        ],
+      });
+      expect(await resolveMiningBaseline(mining)).toMatchObject({
+        snapshot: null,
+        snapshotReasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+        latestAttempt: { status: "incomplete" },
+      });
+      // Retire the test version so later suites see no approved version.
+      await pool.query({
+        text: `update public.mining_formula_versions set status = 'retired' where config_version = $1`,
+        values: [version],
       });
       expect(await mining.getApprovedFormula()).toBeNull();
     });

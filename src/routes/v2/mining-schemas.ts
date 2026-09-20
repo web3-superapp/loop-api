@@ -9,6 +9,7 @@ import {
   miningRankDisplayRuleKey,
   miningRankPowerRuleKey,
   miningRankScopes,
+  miningSnapshotStatuses,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
 } from "../../features/mining/mining-contract.js";
@@ -49,6 +50,52 @@ const decimalSchema = {
 } as const;
 const scopeSchema = miningScopeSchema;
 
+/**
+ * The newest run under the version in force (Decision 0057). `complete` is
+ * the published snapshot itself; `incomplete` names the holdings the run
+ * could not value (nothing was published from it); `invalidated` is a
+ * snapshot an operator withdrew, with the reason.
+ */
+const snapshotAttemptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "snapshotId",
+    "status",
+    "computedAt",
+    "reasonCode",
+    "unreadInputs",
+  ],
+  properties: {
+    snapshotId: { type: "string", pattern: opaqueIdPatternSource },
+    status: { type: "string", enum: [...miningSnapshotStatuses] },
+    computedAt: { type: "string", format: "date-time" },
+    reasonCode: {
+      anyOf: [
+        { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+        { type: "null" },
+      ],
+      description:
+        "MINING_SNAPSHOT_INCOMPLETE for an incomplete attempt, the operator's invalidation reason for an invalidated snapshot, null for a complete one.",
+    },
+    unreadInputs: {
+      type: "array",
+      maxItems: 500,
+      description:
+        "Positive weighted holdings the run could not value (non-empty exactly when status is incomplete). An asset listed here is unread, not zero.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["assetId", "reasonCode"],
+        properties: {
+          assetId: { type: "string", pattern: assetIdPatternSource },
+          reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+        },
+      },
+    },
+  },
+} as const;
+
 const snapshotProjectionSchema = {
   type: "object",
   additionalProperties: false,
@@ -67,11 +114,36 @@ const snapshotProjectionSchema = {
     formulaVersion: { type: "string", pattern: configVersionPatternSource },
     priceVersion: { type: "string", pattern: priceVersionPatternSource },
     computedAt: { type: "string", format: "date-time" },
+    stale: {
+      type: "boolean",
+      description:
+        "True when a newer run under the same version did not complete (Decision 0057): every number on the page is this snapshot's and is older than latestAttempt.computedAt. Always emitted; optional for older clients.",
+    },
+    latestAttempt: {
+      ...snapshotAttemptSchema,
+      description:
+        "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients.",
+    },
+  },
+} as const;
+
+/** The unavailable `snapshot` slot may still explain the newest run. */
+const snapshotUnavailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "reasonCode"],
+  properties: {
+    ...unavailableSchema.properties,
+    latestAttempt: {
+      ...snapshotAttemptSchema,
+      description:
+        "Present when the version in force has a run but no complete snapshot: an incomplete attempt (numbers are MINING_SNAPSHOT_INCOMPLETE) or an invalidated snapshot (MINING_SNAPSHOT_NOT_AVAILABLE).",
+    },
   },
 } as const;
 
 const snapshotSchema = {
-  anyOf: [unavailableSchema, snapshotProjectionSchema],
+  anyOf: [snapshotUnavailableSchema, snapshotProjectionSchema],
 } as const;
 
 const decimalOrUnavailableSchema = {

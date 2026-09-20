@@ -19,10 +19,15 @@ import {
  * reference price is a *fresh* market fact, and `weight` is the formula's
  * asset weight multiplied by the approved community weight when exactly one
  * community binds the asset. An asset the formula does not weight, an asset
- * bound to a community whose weight is still under review, an asset bound by
- * two communities with approved weights, and an asset without a fresh price
- * all contribute nothing and are reported as skipped; nothing is ever
- * assumed, defaulted, or interpolated.
+ * bound to a community whose weight is still under review, and an asset
+ * bound by two communities with approved weights are policy exclusions: they
+ * contribute nothing, are reported as skipped, and the snapshot is complete
+ * without them. A weighted asset with a *positive* observed balance and no
+ * usable price is an unread holding (Decision 0057): the computation is
+ * `incomplete`, reports the holding, and yields no number at all — leaving
+ * the asset out would publish the holding as zero. A zero balance without a
+ * price is only skipped (0 × any price = 0). Nothing is ever assumed,
+ * defaulted, or interpolated.
  *
  * The function has no I/O: the lane gathers inputs, this computes, the
  * repository writes. Every number is a canonical decimal string.
@@ -92,6 +97,21 @@ export type MiningSnapshotComputation =
       readonly priceVersion: string;
       readonly totalPower: string;
       readonly powers: readonly MiningSnapshotPower[];
+      readonly skipped: readonly MiningSnapshotSkip[];
+    }
+  | {
+      /**
+       * At least one positive, weighted holding has no usable price
+       * (Decision 0057). No number is produced; the lane records the
+       * attempt and the read paths keep the last complete snapshot.
+       */
+      readonly kind: "incomplete";
+      readonly formulaVersion: string;
+      readonly blockNumber: string;
+      readonly blockHash: string;
+      /** Null when no price at all was usable in this run. */
+      readonly priceVersion: string | null;
+      readonly unread: readonly MiningSnapshotSkip[];
       readonly skipped: readonly MiningSnapshotSkip[];
     }
   | {
@@ -193,9 +213,17 @@ export function selectMiningPrice(
   if (
     price === undefined ||
     (price.quality !== "fresh" && price.quality !== "proxied") ||
-    !isUnsignedDecimalString(price.priceUsd) ||
     price.fetchedAt === null
   ) {
+    return { kind: "skip", reasonCode: miningReasonCodes.priceNotFresh };
+  }
+  if (price.priceUsd === null) {
+    // The Provider answered freshly but no pair has the asset as base
+    // (Decision 0057): a distinct, stable reason so an operator sees the
+    // difference between "stale" and "not priced at all".
+    return { kind: "skip", reasonCode: miningReasonCodes.pricePairNotFound };
+  }
+  if (!isUnsignedDecimalString(price.priceUsd)) {
     return { kind: "skip", reasonCode: miningReasonCodes.priceNotFresh };
   }
   const proxyAssetId = price.proxyAssetId ?? null;
@@ -252,6 +280,8 @@ export function computeMiningSnapshot(
   }
 
   const skippedAssets = new Set<string>();
+  const unread: MiningSnapshotSkip[] = [];
+  const unreadAssets = new Set<string>();
   const perAccountAsset = new Map<string, MiningSnapshotPower>();
   let snapshotBlock: { readonly number: string; readonly hash: string } | null =
     null;
@@ -287,7 +317,17 @@ export function computeMiningSnapshot(
       inputs.prices,
     );
     if (price.kind === "skip") {
-      if (!skippedAssets.has(balance.assetId)) {
+      // A positive holding without a price is an unread holding; a zero
+      // balance without a price changes no number and is only skipped.
+      if (BigInt(balance.rawValue) > 0n) {
+        if (!unreadAssets.has(balance.assetId)) {
+          unreadAssets.add(balance.assetId);
+          unread.push({
+            assetId: balance.assetId,
+            reasonCode: price.reasonCode,
+          });
+        }
+      } else if (!skippedAssets.has(balance.assetId)) {
         skippedAssets.add(balance.assetId);
         skipped.push({
           assetId: balance.assetId,
@@ -334,6 +374,25 @@ export function computeMiningSnapshot(
             : existing.blockNumber,
       }),
     );
+  }
+
+  if (unread.length > 0 && snapshotBlock !== null) {
+    return Object.freeze({
+      kind: "incomplete",
+      formulaVersion: formula.configVersion,
+      blockNumber: snapshotBlock.number,
+      blockHash: snapshotBlock.hash,
+      priceVersion:
+        latestPriceFetchedAt === null || priceSource === null
+          ? null
+          : `${priceSource}:${latestPriceFetchedAt}`,
+      unread: Object.freeze(unread),
+      // An asset that is unread for one account is unread, full stop; a
+      // zero balance of it elsewhere does not also make it a policy skip.
+      skipped: Object.freeze(
+        skipped.filter((skip) => !unreadAssets.has(skip.assetId)),
+      ),
+    });
   }
 
   if (

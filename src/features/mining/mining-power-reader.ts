@@ -40,6 +40,11 @@ interface AvailableMiningPowerBase {
   readonly computedAt: string;
   /** `formula.scope` of the version in force; null for a product version. */
   readonly scope: MiningFormulaScope | null;
+  /**
+   * A newer run under the version did not complete (Decision 0057): the
+   * number is the last complete snapshot's and is older than that run.
+   */
+  readonly stale: boolean;
 }
 
 export interface AvailableCommunityMiningPowerProjection extends AvailableMiningPowerBase {
@@ -118,6 +123,7 @@ export function createMiningPowerReader(dependencies: {
           formulaVersion: baseline.snapshot.formulaVersion,
           computedAt: baseline.snapshot.computedAt,
           scope: baseline.formula.formula.scope ?? null,
+          stale: baseline.stale,
           weight: projectCommunityWeight(weight),
           participants: projectParticipants(standing),
         });
@@ -151,6 +157,7 @@ export function createMiningPowerReader(dependencies: {
         }
         const snapshot = baseline.snapshot;
         const scope = baseline.formula.formula.scope ?? null;
+        const stale = baseline.stale;
         const rows = await repository.listMemberPowers({
           snapshotId: snapshot.snapshotId,
           publicProfileIds: input.publicProfileIds,
@@ -178,6 +185,7 @@ export function createMiningPowerReader(dependencies: {
                 formulaVersion: snapshot.formulaVersion,
                 computedAt: snapshot.computedAt,
                 scope,
+                stale,
               }),
             );
           }

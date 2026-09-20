@@ -452,6 +452,25 @@ export async function runReconciliationWorker(
                 "LOOP reconciliation worker infrastructure retry scheduled",
               );
             },
+            onRunResult: (result) => {
+              // Decision 0057: an incomplete attempt publishes nothing, so
+              // it must be visible somewhere other than the database.
+              if (result.kind === "incomplete") {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    ...(result.reasonCode === null
+                      ? {}
+                      : { reasonCode: result.reasonCode }),
+                    ...(result.snapshotId === null
+                      ? {}
+                      : { snapshotId: result.snapshotId }),
+                    unreadInputs: result.unread,
+                  },
+                  "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published",
+                );
+              }
+            },
           });
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).

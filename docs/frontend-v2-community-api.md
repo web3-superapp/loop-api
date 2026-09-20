@@ -101,27 +101,27 @@ Privy ID、Stream ID**：
 出现该对象的字段一律显示 unavailable 说明，**不显示 0、不显示假数据**。本模块
 用到的 `reasonCode`：
 
-| reasonCode                                                                                                       | 出现位置                                                                                   |
-| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `STREAM_UNREAD_NOT_CONNECTED`                                                                                    | `home.unread`                                                                              |
-| `STREAM_VOICE_NOT_CONNECTED`                                                                                     | `home.liveVoice`                                                                           |
-| `STREAM_PRESENCE_NOT_CONNECTED`                                                                                  | `community.onlineCount`（后端无 Stream 凭据）、`members.counts.online`（成员列表暂不观测） |
-| `STREAM_PRESENCE_NOT_OBSERVED`                                                                                   | 写接口返回的 `community.onlineCount`（create/patch/join/leave 不观测，详情页重新 GET）     |
-| `COMMUNICATION_RUNTIME_UNAVAILABLE` / `COMMUNITY_CHANNEL_NOT_PROVISIONED` / `COMMUNITY_CHANNEL_PROVISION_FAILED` | `community.onlineCount`（没有可询问的官方频道）                                            |
-| `STREAM_PRESENCE_READ_FAILED` / `STREAM_PRESENCE_READ_TIMEOUT` / `STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED`         | `community.onlineCount`（Stream 查询失败 / 超过 3 s 预算 / 成员数超过 500 的分页上限）     |
-| `MINING_FORMULA_BASELINE_PENDING`                                                                                | `community.miningPower`、成员/关注行 `miningPower`（无生效公式或未启用 `mining` 模块）     |
-| `MINING_SNAPSHOT_NOT_AVAILABLE` / `MINING_SNAPSHOT_STALE`                                                        | 同上（有公式但没有本版本的快照）                                                           |
-| `COMMUNITY_ASSET_NOT_BOUND` / `COMMUNITY_WEIGHT_PENDING_REVIEW`                                                  | `community.miningPower`（社区未绑定资产 / 权重未批准）                                     |
-| `MINING_POWER_PRIVATE` / `MINING_ACCOUNT_NOT_IN_SNAPSHOT` / `MINING_RUNTIME_UNAVAILABLE`                         | 成员/关注行 `miningPower`                                                                  |
-| `COMMUNITY_ANNOUNCEMENTS_DEFERRED`                                                                               | `community.announcements`                                                                  |
-| `COMMUNITY_LINKS_DEFERRED`                                                                                       | `community.officialLinks`                                                                  |
-| `MESSAGE_PREVIEW_DEFERRED`                                                                                       | `message-requests[].preview`                                                               |
-| `AI_MODERATION_DEFERRED`                                                                                         | `message-requests[].aiModeration`                                                          |
-| `ASSET_REGISTRY_DEFERRED`                                                                                        | `search?domain=assets`                                                                     |
-| `LAUNCH_MODULE_DEFERRED`                                                                                         | `search?domain=launch`                                                                     |
-| `DAPP_DIRECTORY_DEFERRED`                                                                                        | `search?domain=dapps`                                                                      |
-| `REFERRAL_GRAPH_DEFERRED`                                                                                        | `referral.edges`                                                                           |
-| `INVITE_CODE_DEFERRED`                                                                                           | `referral.inviteCode`                                                                      |
+| reasonCode                                                                                                       | 出现位置                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `STREAM_UNREAD_NOT_CONNECTED`                                                                                    | `home.unread`                                                                                      |
+| `STREAM_VOICE_NOT_CONNECTED`                                                                                     | `home.liveVoice`                                                                                   |
+| `STREAM_PRESENCE_NOT_CONNECTED`                                                                                  | `community.onlineCount`（后端无 Stream 凭据）、`members.counts.online`（成员列表暂不观测）         |
+| `STREAM_PRESENCE_NOT_OBSERVED`                                                                                   | 写接口返回的 `community.onlineCount`（create/patch/join/leave 不观测，详情页重新 GET）             |
+| `COMMUNICATION_RUNTIME_UNAVAILABLE` / `COMMUNITY_CHANNEL_NOT_PROVISIONED` / `COMMUNITY_CHANNEL_PROVISION_FAILED` | `community.onlineCount`（没有可询问的官方频道）                                                    |
+| `STREAM_PRESENCE_READ_FAILED` / `STREAM_PRESENCE_READ_TIMEOUT` / `STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED`         | `community.onlineCount`（Stream 查询失败 / 超过 3 s 预算 / 成员数超过 500 的分页上限）             |
+| `MINING_FORMULA_BASELINE_PENDING`                                                                                | `community.miningPower`、成员/关注行 `miningPower`（无生效公式或未启用 `mining` 模块）             |
+| `MINING_SNAPSHOT_NOT_AVAILABLE` / `MINING_SNAPSHOT_STALE` / `MINING_SNAPSHOT_INCOMPLETE`                         | 同上（有公式但没有本版本的完整快照；`INCOMPLETE` = 最近一次计算有持仓读不到价、未发布，决策 0057） |
+| `COMMUNITY_ASSET_NOT_BOUND` / `COMMUNITY_WEIGHT_PENDING_REVIEW`                                                  | `community.miningPower`（社区未绑定资产 / 权重未批准）                                             |
+| `MINING_POWER_PRIVATE` / `MINING_ACCOUNT_NOT_IN_SNAPSHOT` / `MINING_RUNTIME_UNAVAILABLE`                         | 成员/关注行 `miningPower`                                                                          |
+| `COMMUNITY_ANNOUNCEMENTS_DEFERRED`                                                                               | `community.announcements`                                                                          |
+| `COMMUNITY_LINKS_DEFERRED`                                                                                       | `community.officialLinks`                                                                          |
+| `MESSAGE_PREVIEW_DEFERRED`                                                                                       | `message-requests[].preview`                                                                       |
+| `AI_MODERATION_DEFERRED`                                                                                         | `message-requests[].aiModeration`                                                                  |
+| `ASSET_REGISTRY_DEFERRED`                                                                                        | `search?domain=assets`                                                                             |
+| `LAUNCH_MODULE_DEFERRED`                                                                                         | `search?domain=launch`                                                                             |
+| `DAPP_DIRECTORY_DEFERRED`                                                                                        | `search?domain=dapps`                                                                              |
+| `REFERRAL_GRAPH_DEFERRED`                                                                                        | `referral.edges`                                                                                   |
+| `INVITE_CODE_DEFERRED`                                                                                           | `referral.inviteCode`                                                                              |
 
 ### 社区投影
 
@@ -320,8 +320,10 @@ fixture 顶替。写接口（create / patch / join / leave）返回的同一字�
 `GET /v2/mining/communities/{id}` 的同名字段同形同源。成员行与关注行的 `miningPower` 是
 `subject: "account"` 分支（同前五个字段加 `scope`，不带 `weight`/`participants`），为对方个人总算力，
 对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`。`unavailable` 分支仍是
-`{status, reasonCode}` 两个字段。完整规则、全部 reasonCode 与三条路由的开发库样例见
-`docs/frontend-v2-mining-api.md` §4。
+`{status, reasonCode}` 两个字段。S51（决策 0057）起两个 `available` 分支都多一个 `stale: boolean`
+（服务端总是给，schema 可选）：`true` 表示数字来自最新**完整**快照、之后有一次未完成/已作废的计算，卡片上标
+"数据截至 `computedAt`"；"持仓读不到"永远不会以 `power: "0"` 出现。完整规则、全部 reasonCode 与三条路由的
+开发库样例见 `docs/frontend-v2-mining-api.md` §4。
 
 `viewer.membership === null` 表示未加入（显示"加入"按钮）。`status === "muted"`
 表示被禁言，`banned` 表示被封禁。

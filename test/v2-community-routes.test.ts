@@ -1491,6 +1491,8 @@ describe("LOOP API V2 community, social, and search modules", () => {
             computedAt: "2026-09-15T13:30:00.000Z",
           }),
         ),
+        getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+        hasActiveWallet: vi.fn(() => Promise.resolve(false)),
         getCommunityStanding: vi.fn(() =>
           Promise.resolve({
             communityId,
@@ -1608,6 +1610,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
       formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
       computedAt: "2026-09-15T13:30:00.000Z",
       scope: "development_baseline",
+      stale: false,
       weight: {
         status: "approved",
         value: "1.5",
@@ -1627,6 +1630,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
         formulaVersion: "miningFormula-devBaseline-2026-09-15-r2",
         computedAt: "2026-09-15T13:30:00.000Z",
         scope: "development_baseline",
+        stale: false,
       } as const;
     }
 

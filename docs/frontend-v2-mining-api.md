@@ -37,6 +37,28 @@
    （原来错误地说成 `COMMUNITY_WEIGHT_PENDING_REVIEW` / `pending_review`）；`reviewStatus` 枚举现为
    `pending_review | not_applicable`，与 reasonCode 一一对应。
 
+**S51（决策 0057）对本契约的加法——"持仓读不到" ≠ "0"**（只加字段、加码，不改路径、不删字段）：
+
+1. **一次快照里任何一个有正持仓的计权资产读不到参考价，这次快照不发布**（服务端记为 `incomplete` 尝试，
+   不写任何算力行）。所有读接口继续返回**上一次完整快照**的数字，并在 `snapshot`（`assets` 是 `source`）
+   上带 `stale: true` 与 `latestAttempt`；没有任何完整快照时，所有数字块是 `MINING_SNAPSHOT_INCOMPLETE`。
+   **客户端口径：`power` 为 `{status: "available", value: "0"}` 只可能是链上观测到的 0 持仓；读失败永远是
+   `unavailable`，绝不显示 0。**
+2. `snapshot` / `source` 的 `available` 分支多了两个字段（服务端总是给，schema 里为可选以兼容旧客户端）：
+   `stale: boolean`、`latestAttempt: {snapshotId, status: "complete"|"incomplete"|"invalidated", computedAt,
+reasonCode: string|null, unreadInputs: [{assetId, reasonCode}]}`。`stale: true` 时页面必须标"数据截至
+   `snapshot.computedAt`；最近一次计算（`latestAttempt.computedAt`）未完成：`unreadInputs[].assetId` 读不到价格"。
+   `unavailable` 分支可能多一个可选的 `latestAttempt`（同形），解释为什么没有快照。
+3. 社区侧 `miningPower` 两个 `available` 分支多了 `stale: boolean`（同义）。
+4. 新 reasonCode：`MINING_SNAPSHOT_INCOMPLETE`（生效版本只有未完成尝试、没有完整快照）、
+   `MINING_SNAPSHOT_PENDING`（本账号有激活钱包，但还没有任何完整快照包含它——文案"下一次快照后显示"）、
+   `MINING_PRICE_PAIR_NOT_FOUND`（Provider 给了新鲜事实，但没有一个以该资产为 base 的交易对；2026-09-20 USDT 的实际情况）、
+   `MINING_SNAPSHOT_PUBLISHED_INCOMPLETE`（只出现在 `latestAttempt.reasonCode`：运维作废了一个旧写法发布的、
+   缺持仓的快照）。`MINING_ACCOUNT_NOT_IN_SNAPSHOT` 从此**只**表示"没有激活钱包"。
+5. **没进过快照的钱包（新注册账号）四个读接口都是 200**：`power`/`estimatedToday`/`totalPower`/`myPosition`/
+   `myContribution` 为 `unavailable(MINING_SNAPSHOT_PENDING)`，`networkPower` 与榜单照常。任何 `503
+CAPABILITY_UNAVAILABLE` 都不是"账号没数据"，而是仓储/Registry 不可用。
+
 2026-09-15 Development 实跑事实（可复核）：`miningFormula-devBaseline-2026-09-15-r2` 已批准
 （`effectiveAt 2026-09-15T14:57:37.026Z`，r1 同时退休）；两个已 verified 社区经产品写路径
 （`updateCommunity`，即 `PUT /v2/communities/{id}` 的命令）绑定资产并落权重：`mock-defi-morning → Cake`
@@ -62,33 +84,80 @@ BNB 行 `referencePriceQuality: "proxied"`、代理 WBNB、`713.42`。要看到�
 - 数字一律为无符号 decimal 字符串（`^(0|[1-9][0-9]{0,77})(\.[0-9]{1,60})?$`），用等宽字体。
 - `{status: "available", value}` 与 `{status: "unavailable", reasonCode}` 二选一；前端对 unavailable 显示 `—`
   并按 reasonCode 给文案。
-- `snapshot` 有值时为 `{snapshotId, blockNumber, blockHash, formulaVersion, priceVersion, computedAt}`。
+- `snapshot` 有值时为 `{snapshotId, blockNumber, blockHash, formulaVersion, priceVersion, computedAt, stale,
+latestAttempt}`（后两个是 S51 加法，见 §0）。它永远是**最新的完整快照**；`stale: true` 表示之后还有一次未完成
+  或已作废的尝试，`latestAttempt` 就是那次尝试。`unavailable` 分支为 `{status, reasonCode}`，在生效版本下有尝试但
+  没有完整快照时另带可选 `latestAttempt`。
 
 ### 2.1 全部 reasonCode
 
-| reasonCode                           | 含义                                               | 出现位置                                                                         |
-| ------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `MINING_FORMULA_BASELINE_PENDING`    | 没有已批准且已生效的公式版本（**只**表示这一件事） | 无生效版本时的所有数字块、`snapshot`、`formula`、capability                      |
-| `MINING_REFERRAL_BOOST_PENDING`      | 邀请加成尚未被生效版本批准（只说加成，不说别的）   | `summary.referralBoost`、`GET /v2/referral.boost`                                |
-| `MINING_SNAPSHOT_NOT_AVAILABLE`      | 有生效版本但 lane 尚未算出快照                     | 所有数字块、`snapshot`                                                           |
-| `MINING_SNAPSHOT_STALE`              | 最新快照是在另一个版本下算的                       | 同上                                                                             |
-| `MINING_ACCOUNT_NOT_IN_SNAPSHOT`     | 该账号在快照里没有余额行（无激活钱包）             | `power`、`estimatedToday`、`myPosition`、`myContribution`、成员行                |
-| `MINING_NETWORK_POWER_ZERO`          | 全网算力为 0，份额无定义                           | `estimatedToday`                                                                 |
-| `MINING_DAILY_OUTPUT_NOT_CONFIGURED` | 生效版本没有日产出预算（产品草稿）                 | `estimatedToday`                                                                 |
-| `MINING_RANK_NOT_RANKED`             | 本人算力为 0，没有名次                             | `myPosition`、社区 `rank`                                                        |
-| `MINING_RANK_NOT_APPLICABLE`         | `scope=communities` 时 `myPosition` 无意义         | `myPosition`                                                                     |
-| `MINING_POWER_PRIVATE`               | 对方 `miningPowerVisibility: self`                 | 成员行、关注列表 `miningPower`                                                   |
-| `MINING_RUNTIME_UNAVAILABLE`         | 仓储读失败                                         | 社区侧 `miningPower`、capability                                                 |
-| `COMMUNITY_ASSET_NOT_BOUND`          | 社区未绑定资产（无权重可审）                       | `weight`（`reviewStatus: not_applicable`）、社区算力四块、社区详情 `miningPower` |
-| `COMMUNITY_WEIGHT_PENDING_REVIEW`    | 绑定了资产但生效版本下没有已批准权重               | `weight`（`reviewStatus: pending_review`）、社区算力、`excluded`                 |
-| `COMMUNITY_WEIGHT_AMBIGUOUS`         | 两个社区在同一资产上都有已批准权重（该资产被排除） | `excluded`                                                                       |
-| `MINING_ASSET_WEIGHT_NOT_CONFIGURED` | 资产不在生效版本的 `assetWeights` 里               | `excluded`                                                                       |
-| `MINING_PRICE_NOT_FRESH`             | 参考价不新鲜（代理价按代理源自己的观测时间判定）   | `excluded`                                                                       |
-| `MINING_PRICE_PROXY_NOT_DECLARED`    | Provider 通过版本未声明的代理资产定价              | `excluded`                                                                       |
-| `REWARD_AUTHORITY_PENDING`           | 没有奖励账本/合约                                  | `claimable`、`accumulated`、rewards `source`                                     |
+| reasonCode                             | 含义                                                                                  | 出现位置                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `MINING_FORMULA_BASELINE_PENDING`      | 没有已批准且已生效的公式版本（**只**表示这一件事）                                    | 无生效版本时的所有数字块、`snapshot`、`formula`、capability                      |
+| `MINING_REFERRAL_BOOST_PENDING`        | 邀请加成尚未被生效版本批准（只说加成，不说别的）                                      | `summary.referralBoost`、`GET /v2/referral.boost`                                |
+| `MINING_SNAPSHOT_NOT_AVAILABLE`        | 有生效版本但 lane 尚未算出快照                                                        | 所有数字块、`snapshot`                                                           |
+| `MINING_SNAPSHOT_STALE`                | 最新完整快照是在另一个版本下算的                                                      | 同上                                                                             |
+| `MINING_SNAPSHOT_INCOMPLETE`           | 生效版本下最近一次计算有持仓读不到价、没有发布，且没有任何完整快照可回退（决策 0057） | 所有数字块、`snapshot`（带 `latestAttempt`）、社区侧 `miningPower`               |
+| `MINING_SNAPSHOT_PENDING`              | 本账号有激活钱包，但还没有完整快照包含它；文案"下一次快照后显示"（决策 0057）         | `power`、`estimatedToday`、`totalPower`、`myPosition`、`myContribution`          |
+| `MINING_ACCOUNT_NOT_IN_SNAPSHOT`       | 该账号在快照里没有余额行且**没有激活钱包**                                            | `power`、`estimatedToday`、`myPosition`、`myContribution`、成员行                |
+| `MINING_NETWORK_POWER_ZERO`            | 全网算力为 0，份额无定义                                                              | `estimatedToday`                                                                 |
+| `MINING_DAILY_OUTPUT_NOT_CONFIGURED`   | 生效版本没有日产出预算（产品草稿）                                                    | `estimatedToday`                                                                 |
+| `MINING_RANK_NOT_RANKED`               | 本人算力为 0，没有名次                                                                | `myPosition`、社区 `rank`                                                        |
+| `MINING_RANK_NOT_APPLICABLE`           | `scope=communities` 时 `myPosition` 无意义                                            | `myPosition`                                                                     |
+| `MINING_POWER_PRIVATE`                 | 对方 `miningPowerVisibility: self`                                                    | 成员行、关注列表 `miningPower`                                                   |
+| `MINING_RUNTIME_UNAVAILABLE`           | 仓储读失败                                                                            | 社区侧 `miningPower`、capability                                                 |
+| `COMMUNITY_ASSET_NOT_BOUND`            | 社区未绑定资产（无权重可审）                                                          | `weight`（`reviewStatus: not_applicable`）、社区算力四块、社区详情 `miningPower` |
+| `COMMUNITY_WEIGHT_PENDING_REVIEW`      | 绑定了资产但生效版本下没有已批准权重                                                  | `weight`（`reviewStatus: pending_review`）、社区算力、`excluded`                 |
+| `COMMUNITY_WEIGHT_AMBIGUOUS`           | 两个社区在同一资产上都有已批准权重（该资产被排除）                                    | `excluded`                                                                       |
+| `MINING_ASSET_WEIGHT_NOT_CONFIGURED`   | 资产不在生效版本的 `assetWeights` 里                                                  | `excluded`                                                                       |
+| `MINING_PRICE_NOT_FRESH`               | 参考价不新鲜（代理价按代理源自己的观测时间判定）                                      | `excluded`、`latestAttempt.unreadInputs[]`                                       |
+| `MINING_PRICE_PAIR_NOT_FOUND`          | Provider 事实新鲜，但没有一个以该资产为 base 的交易对（决策 0057；稳定币常见）        | `excluded`、`latestAttempt.unreadInputs[]`                                       |
+| `MINING_PRICE_PROXY_NOT_DECLARED`      | Provider 通过版本未声明的代理资产定价                                                 | `excluded`、`latestAttempt.unreadInputs[]`                                       |
+| `MINING_SNAPSHOT_PUBLISHED_INCOMPLETE` | 运维作废了旧写法在读价失败时仍发布的快照（决策 0057）                                 | 只在 `latestAttempt.reasonCode`（`status: "invalidated"`）                       |
+| `REWARD_AUTHORITY_PENDING`             | 没有奖励账本/合约                                                                     | `claimable`、`accumulated`、rewards `source`                                     |
 
 HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`401 AUTH_*`、`404 NOT_FOUND`
 （社区不存在）、`503 CAPABILITY_UNAVAILABLE`（挖矿仓储不可用；`assets` 另含 Asset Registry 不可用）。错误体固定七字段。
+"账号还没有数据"**从不**是 503：没进过快照的钱包四个读都是 200 + `MINING_SNAPSHOT_PENDING`（有服务端结构性测试）。
+
+### 2.2a `snapshot.stale` / `latestAttempt`（S51，决策 0057）
+
+2026-09-20 Development 的实际状态（`cy` 的 USDT 2.99 在 09-18 起大部分时间读不到以 USDT 为 base 的交易对）：
+
+```json
+{
+  "power": { "status": "available", "value": "4.482309" },
+  "networkPower": { "status": "available", "value": "4.482309" },
+  "snapshot": {
+    "snapshotId": "43880746-17f3-43c3-8213-9e8033319093",
+    "blockNumber": "122998659",
+    "blockHash": "0x…",
+    "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "priceVersion": "dexscreener:2026-09-20T05:21:58.558Z",
+    "computedAt": "2026-09-20T05:22:10.589Z",
+    "stale": true,
+    "latestAttempt": {
+      "snapshotId": "…",
+      "status": "incomplete",
+      "computedAt": "2026-09-20T15:05:00.000Z",
+      "reasonCode": "MINING_SNAPSHOT_INCOMPLETE",
+      "unreadInputs": [
+        {
+          "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+          "reasonCode": "MINING_PRICE_PAIR_NOT_FOUND"
+        }
+      ]
+    }
+  }
+}
+```
+
+- 数字来自 `snapshot`（05:22Z 那次完整快照），**不是** 0；`stale: true` 必须在同屏标出"数据截至 05:22Z，最近一次
+  计算（15:05Z）未完成：USDT 读不到价格"。`unreadInputs[].assetId` 用 `GET /v2/mining/assets` 的 `symbol` 映射。
+- `latestAttempt.status === "complete"` 且 `stale: false`：正常，`latestAttempt.snapshotId === snapshot.snapshotId`。
+- `latestAttempt.status === "invalidated"`：运维作废了更新的快照，`reasonCode` 是作废原因，`unreadInputs` 为空。
+- 没有完整快照时：`snapshot = {status: "unavailable", reasonCode: "MINING_SNAPSHOT_INCOMPLETE", latestAttempt}`，
+  所有数字块同码；页面展示 `—` 并用 `latestAttempt.unreadInputs` 说明原因。
 
 ### 2.2 `formula` 块（summary / assets / rank 共用）
 
@@ -484,12 +553,17 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 `GET /v2/communities/{id}.miningPower`（含 join/leave 等返回社区资源的写接口）、
 `GET /v2/communities/{id}/members.items[].miningPower`、`GET /v2/connections.items[].miningPower`
-共用**一个**定义（OpenAPI `miningPowerSchema`）。`available` 分支按 `subject` 分两种，都是**必填字段、无可选项**：
+共用**一个**定义（OpenAPI `miningPowerSchema`）。`available` 分支按 `subject` 分两种；除 S51 加的 `stale`
+（服务端总是给、schema 可选）外都是**必填字段、无可选项**：
 
-| `subject`   | 谁的数                               | 字段                                                                                     |
-| ----------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `community` | 社区未封禁成员在绑定资产上的算力之和 | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`、`weight`、`participants` |
-| `account`   | 对方个人总算力（成员行、关注行）     | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`                           |
+| `subject`   | 谁的数                               | 字段                                                                                              |
+| ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `community` | 社区未封禁成员在绑定资产上的算力之和 | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`、`stale`、`weight`、`participants` |
+| `account`   | 对方个人总算力（成员行、关注行）     | `power`、`snapshotId`、`formulaVersion`、`computedAt`、`scope`、`stale`                           |
+
+- `stale: true`（决策 0057）：数字来自最新**完整**快照，而之后有一次未完成/已作废的计算；卡片上标"数据截至
+  `computedAt`"。社区侧不带 `latestAttempt`，要看原因去 `GET /v2/mining/summary.snapshot.latestAttempt`。
+  没有完整快照时整块是 `unavailable(MINING_SNAPSHOT_INCOMPLETE)`。
 
 - `scope` 与摘要页 `formula.scope`、规则页 `baseline.scope` **同一枚举同一来源**（生效版本的 `formula.scope`）：
   `"development_baseline"` 或 `null`（产品版本）。**只用它打"开发基线"标签，不要从 `formulaVersion` 字符串猜**。

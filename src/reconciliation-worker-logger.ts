@@ -16,6 +16,7 @@ const levelValues = Object.freeze({
 const safeCodePattern = /^[A-Za-z0-9_.-]{1,64}$/;
 const safeWorkerIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const safeAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/;
 
 export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker started"
@@ -26,7 +27,14 @@ export type ReconciliationWorkerLogMessage =
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
   | "Community persona projection lease was lost; outcome not recorded"
-  | "Community persona projection was not confirmed";
+  | "Community persona projection was not confirmed"
+  | "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published";
+
+/** One holding a mining snapshot attempt could not value (Decision 0057). */
+export interface ReconciliationWorkerUnreadInput {
+  readonly assetId: string;
+  readonly reasonCode: string;
+}
 
 export interface ReconciliationWorkerLogFields {
   readonly workerId?: string;
@@ -37,6 +45,9 @@ export interface ReconciliationWorkerLogFields {
   readonly consecutiveFailureCount?: number;
   readonly postgresCode?: string;
   readonly startupErrorCode?: string;
+  /** Decision 0057 mining-snapshot lane; an opaque attempt ID and asset IDs with reason codes only. */
+  readonly snapshotId?: string;
+  readonly unreadInputs?: readonly ReconciliationWorkerUnreadInput[];
   /** Decision 0055 persona lane; opaque identifiers and an error class only. */
   readonly communityId?: string;
   readonly ownerUserId?: string;
@@ -117,6 +128,20 @@ function sanitizeFields(
     fields.signal === "SIGINT" || fields.signal === "SIGTERM"
       ? fields.signal
       : undefined;
+  const snapshotId =
+    fields.snapshotId !== undefined &&
+    safeWorkerIdPattern.test(fields.snapshotId)
+      ? fields.snapshotId
+      : undefined;
+  const unreadInputs =
+    fields.unreadInputs === undefined
+      ? undefined
+      : fields.unreadInputs.flatMap((input) => {
+          const code = safeCode(input.reasonCode);
+          return safeAssetIdPattern.test(input.assetId) && code !== undefined
+            ? [Object.freeze({ assetId: input.assetId, reasonCode: code })]
+            : [];
+        });
 
   return Object.freeze({
     ...(workerId === undefined ? {} : { workerId }),
@@ -129,6 +154,10 @@ function sanitizeFields(
       : { consecutiveFailureCount }),
     ...(postgresCode === undefined ? {} : { postgresCode }),
     ...(startupErrorCode === undefined ? {} : { startupErrorCode }),
+    ...(snapshotId === undefined ? {} : { snapshotId }),
+    ...(unreadInputs === undefined || unreadInputs.length === 0
+      ? {}
+      : { unreadInputs: Object.freeze(unreadInputs) }),
   });
 }
 

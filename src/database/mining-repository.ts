@@ -9,6 +9,8 @@ import {
   miningFormulaStatuses,
   miningPriceGuardRulesSchema,
   miningReferencePriceQualities,
+  miningSnapshotStatuses,
+  miningUnreadInputsSchema,
   miningWeightRangeDocumentSchema,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
@@ -21,17 +23,21 @@ import {
   MiningFormulaNotFoundError,
   MiningFormulaStateError,
   MiningRepositoryUnavailableError,
+  MiningSnapshotNotFoundError,
   MiningWeightOutOfRangeError,
   type CommunityWeightRecord,
   type CreateMiningFormulaVersionInput,
+  type InvalidateMiningSnapshotsInput,
   type MiningAccountStandingRecord,
   type MiningCommunityStandingRecord,
   type MiningFormulaRecord,
   type MiningMemberPowerRecord,
   type MiningRankedAccountRecord,
   type MiningRepository,
+  type MiningSnapshotAttemptRecord,
   type MiningSnapshotRecord,
   type SetCommunityWeightInput,
+  type WriteIncompleteMiningSnapshotInput,
   type WriteMiningSnapshotInput,
 } from "../features/mining/mining-repository.js";
 import type {
@@ -108,6 +114,27 @@ const snapshotRowSchema = z
     computed_at: dateSchema,
   })
   .strict();
+
+const snapshotAttemptRowSchema = z
+  .object({
+    snapshot_id: opaqueIdSchema,
+    status: z.enum(miningSnapshotStatuses),
+    formula_version: configVersionSchema,
+    block_number: blockNumberSchema,
+    computed_at: dateSchema,
+    unread_inputs: miningUnreadInputsSchema,
+    invalidated_at: dateSchema.nullable(),
+    invalidation_reason: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+      .nullable(),
+  })
+  .strict();
+
+const snapshotAttemptColumns = `
+  snapshot_id, status, formula_version, block_number::text as block_number,
+  computed_at, unread_inputs, invalidated_at, invalidation_reason
+`;
 
 const powerRowSchema = z
   .object({
@@ -222,6 +249,22 @@ function mapSnapshot(raw: unknown): MiningSnapshotRecord {
   });
 }
 
+function mapSnapshotAttempt(raw: unknown): MiningSnapshotAttemptRecord {
+  const row = snapshotAttemptRowSchema.parse(raw);
+  return Object.freeze({
+    snapshotId: row.snapshot_id,
+    status: row.status,
+    formulaVersion: row.formula_version,
+    blockNumber: row.block_number,
+    computedAt: toIsoString(row.computed_at),
+    unreadInputs: Object.freeze(
+      row.unread_inputs.map((input) => Object.freeze({ ...input })),
+    ),
+    invalidatedAt: toNullableIsoString(row.invalidated_at),
+    invalidationReason: row.invalidation_reason,
+  });
+}
+
 function mapCommunityStanding(raw: unknown): MiningCommunityStandingRecord {
   const row = communityStandingRowSchema.parse(raw);
   return Object.freeze({
@@ -261,6 +304,7 @@ function translate(error: unknown): never {
     error instanceof MiningCommunityAssetNotBoundError ||
     error instanceof MiningWeightOutOfRangeError ||
     error instanceof MiningCommunityWeightConflictError ||
+    error instanceof MiningSnapshotNotFoundError ||
     error instanceof MiningRepositoryUnavailableError
   ) {
     throw error;
@@ -521,12 +565,167 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               snapshot_id, block_number::text as block_number, block_hash,
               formula_version, price_version, total_power, account_count, computed_at
             from public.mining_snapshots
+            where status = 'complete'
             order by computed_at desc, snapshot_id desc
             limit 1
           `,
         });
         const row: unknown = result.rows[0];
         return row === undefined ? null : mapSnapshot(row);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async getLatestSnapshotAttempt(rawConfigVersion: string) {
+      try {
+        const configVersion = configVersionSchema.parse(rawConfigVersion);
+        const result = await pool.query({
+          text: `
+            select ${snapshotAttemptColumns}
+            from public.mining_snapshots
+            where formula_version = $1
+            order by computed_at desc, snapshot_id desc
+            limit 1
+          `,
+          values: [configVersion],
+        });
+        const row: unknown = result.rows[0];
+        return row === undefined ? null : mapSnapshotAttempt(row);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async writeIncompleteSnapshot(
+      rawInput: WriteIncompleteMiningSnapshotInput,
+    ) {
+      try {
+        const snapshotId = uuidV4Schema.parse(rawInput.snapshotId);
+        const blockNumber = blockNumberSchema.parse(rawInput.blockNumber);
+        const blockHash = blockHashSchema.parse(rawInput.blockHash);
+        const formulaVersion = configVersionSchema.parse(
+          rawInput.formulaVersion,
+        );
+        const priceVersion =
+          rawInput.priceVersion === null
+            ? null
+            : z
+                .string()
+                .regex(new RegExp(priceVersionPatternSource))
+                .parse(rawInput.priceVersion);
+        const unreadInputs = miningUnreadInputsSchema
+          .min(1)
+          .parse(rawInput.unreadInputs);
+        const inserted = await pool.query({
+          text: `
+            insert into public.mining_snapshots (
+              snapshot_id, block_number, block_hash, formula_version,
+              price_version, total_power, account_count, status, unread_inputs
+            )
+            values ($1, $2, $3, $4, $5, '0', 0, 'incomplete', $6::jsonb)
+            returning ${snapshotAttemptColumns}
+          `,
+          values: [
+            snapshotId,
+            blockNumber,
+            blockHash,
+            formulaVersion,
+            priceVersion,
+            JSON.stringify(unreadInputs),
+          ],
+        });
+        return mapSnapshotAttempt(inserted.rows[0]);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async invalidateSnapshots(rawInput: InvalidateMiningSnapshotsInput) {
+      try {
+        uuidV4Schema.parse(rawInput.requestId);
+        const reason = z
+          .string()
+          .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+          .parse(rawInput.reason);
+        const selector = rawInput.selector;
+        return await withV2Transaction(pool, unavailable, async (client) => {
+          let targetIds: string[];
+          if (selector.kind === "after") {
+            const anchorId = opaqueIdSchema.parse(selector.snapshotId);
+            const anchor = await client.query<{ snapshot_id: string }>({
+              text: `
+                select snapshot_id
+                from public.mining_snapshots
+                where snapshot_id = $1 and status = 'complete'
+                for update
+              `,
+              values: [anchorId],
+            });
+            if (anchor.rows[0] === undefined) {
+              throw new MiningSnapshotNotFoundError();
+            }
+            // The anchor's clock is compared inside SQL: `computed_at` has
+            // microsecond precision and a JS Date would truncate it to
+            // milliseconds, which made the anchor match itself.
+            const later = await client.query<{ snapshot_id: string }>({
+              text: `
+                select s.snapshot_id
+                from public.mining_snapshots as s
+                where s.status = 'complete'
+                  and (s.computed_at, s.snapshot_id) > (
+                    (select a.computed_at from public.mining_snapshots as a where a.snapshot_id = $1),
+                    $1::uuid
+                  )
+                order by s.computed_at asc, s.snapshot_id asc
+                for update
+              `,
+              values: [anchorId],
+            });
+            targetIds = later.rows.map((row) =>
+              opaqueIdSchema.parse(row.snapshot_id),
+            );
+          } else {
+            const ids = z
+              .array(opaqueIdSchema)
+              .min(1)
+              .parse(selector.snapshotIds);
+            const found = await client.query<{ snapshot_id: string }>({
+              text: `
+                select snapshot_id
+                from public.mining_snapshots
+                where status = 'complete' and snapshot_id = any($1::uuid[])
+                for update
+              `,
+              values: [ids],
+            });
+            if (found.rows.length !== new Set(ids).size) {
+              throw new MiningSnapshotNotFoundError();
+            }
+            targetIds = found.rows.map((row) =>
+              opaqueIdSchema.parse(row.snapshot_id),
+            );
+          }
+          if (targetIds.length === 0) {
+            return Object.freeze({ snapshotIds: Object.freeze([]) });
+          }
+          const updated = await client.query<{ snapshot_id: string }>({
+            text: `
+              update public.mining_snapshots
+              set status = 'invalidated',
+                  invalidated_at = clock_timestamp(),
+                  invalidation_reason = $2
+              where status = 'complete' and snapshot_id = any($1::uuid[])
+              returning snapshot_id
+            `,
+            values: [targetIds, reason],
+          });
+          return Object.freeze({
+            snapshotIds: Object.freeze(
+              updated.rows.map((row) => opaqueIdSchema.parse(row.snapshot_id)),
+            ),
+          });
+        });
       } catch (error) {
         return translate(error);
       }
@@ -551,9 +750,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             text: `
               insert into public.mining_snapshots (
                 snapshot_id, block_number, block_hash, formula_version,
-                price_version, total_power, account_count
+                price_version, total_power, account_count, status
               )
-              values ($1, $2, $3, $4, $5, $6, $7)
+              values ($1, $2, $3, $4, $5, $6, $7, 'complete')
               returning
                 snapshot_id, block_number::text as block_number, block_hash,
                 formula_version, price_version, total_power, account_count, computed_at
@@ -975,6 +1174,25 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         return Object.freeze(
           result.rows.map((row) => z.string().min(1).parse(row.asset_id)),
         );
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async hasActiveWallet(rawOwnerUserId: string) {
+      try {
+        const ownerUserId = opaqueIdSchema.parse(rawOwnerUserId);
+        const result = await pool.query<{ present: boolean }>({
+          text: `
+            select exists (
+              select 1
+              from public.account_wallets
+              where owner_user_id = $1 and status = 'active'
+            ) as present
+          `,
+          values: [ownerUserId],
+        });
+        return z.boolean().parse(result.rows[0]?.present);
       } catch (error) {
         return translate(error);
       }

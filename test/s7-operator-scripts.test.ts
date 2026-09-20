@@ -26,6 +26,10 @@ import {
   runMiningDevBaseline,
 } from "../scripts/mining-dev-baseline.js";
 import {
+  parseMiningInvalidateSnapshotsRequest,
+  runMiningInvalidateSnapshots,
+} from "../scripts/mining-invalidate-snapshots.js";
+import {
   MiningSnapshotScriptError,
   parseMiningSnapshotRequest,
   runMiningSnapshot,
@@ -34,6 +38,7 @@ import { miningDevBaselineConfigVersion } from "../src/features/mining/mining-de
 import {
   MiningCommunityAssetNotBoundError,
   MiningFormulaExistsError,
+  MiningSnapshotNotFoundError,
   MiningWeightOutOfRangeError,
 } from "../src/features/mining/mining-repository.js";
 import { venueEvidenceDigest } from "../src/features/launch/launch-contract.js";
@@ -696,5 +701,268 @@ describe("pnpm mining:snapshot (Decision 0043)", () => {
       }),
     ).toBe(1);
     expect(idle.contents()).toContain("idle (MINING_FORMULA_BASELINE_PENDING)");
+  });
+
+  it("reports an incomplete attempt with its unread holdings and exits 1 (Decision 0057)", async () => {
+    const usdt = "eip155:56:0x55d398326f99059ff775485246999027b3197955";
+    const output = outputWriter();
+    const repository = {
+      getApprovedFormula: () =>
+        Promise.resolve({
+          configVersion: "miningFormulaTestOnly",
+          formula: {
+            kind: "holding_times_reference_price_times_weight",
+            expressionKey: "k",
+            dailyOutputKey: "k",
+            assetWeights: { [usdt]: "1" },
+            referralBoost: { status: "pending_approval" },
+          },
+          weightRange: {
+            loop: { status: "approved", descriptionKey: "k" },
+            community: { status: "pending_approval", descriptionKey: "k" },
+            reviewFactorKeys: [],
+          },
+          priceGuardRules: [],
+          status: "approved",
+          effectiveAt: "2026-09-08T00:00:00.000Z",
+          approvedAt: "2026-09-08T00:00:00.000Z",
+          createdAt: "2026-09-08T00:00:00.000Z",
+        }),
+      listBalanceInputs: () =>
+        Promise.resolve([
+          {
+            ownerUserId: "3bb58597-2e31-45e7-b5f0-957803a824ed",
+            walletId: "d60627ca-fe23-4608-93ee-5ae0e77716ef",
+            assetId: usdt,
+            decimals: 18,
+            rawValue: "2990000000000000000",
+            blockNumber: "123000110",
+            blockHash: `0x${"a".repeat(64)}`,
+          },
+        ]),
+      listCommunityWeightInputs: () => Promise.resolve([]),
+      writeIncompleteSnapshot: vi.fn((input: { snapshotId: string }) =>
+        Promise.resolve({
+          snapshotId: input.snapshotId,
+          status: "incomplete",
+          formulaVersion: "miningFormulaTestOnly",
+          blockNumber: "123000110",
+          computedAt: "2026-09-20T13:51:26.116Z",
+          unreadInputs: [
+            { assetId: usdt, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
+          ],
+          invalidatedAt: null,
+          invalidationReason: null,
+        }),
+      ),
+      writeSnapshot: vi.fn(),
+    };
+    expect(
+      await runMiningSnapshot({
+        argv: ["node", "s", "--confirm"],
+        environment: development,
+        stdout: output,
+        stderr: outputWriter(),
+        createDependencies: () => ({
+          dependencies: {
+            repository: repository as never,
+            registry: {
+              listAssets: () =>
+                Promise.resolve([
+                  {
+                    assetId: usdt,
+                    chainId: "eip155:56",
+                    address: "0x55d398326f99059ff775485246999027b3197955",
+                    symbol: "USDT",
+                    name: "Tether USD",
+                    decimals: 18,
+                    status: "pending",
+                    sourceKind: "chain_call",
+                    sourceBlockNumber: "1",
+                    sourceVerifiedAt: null,
+                    updatedAt: "2026-09-08T00:00:00.000Z",
+                  },
+                ]),
+            },
+            prices: {
+              readAssetPrice: () =>
+                Promise.resolve({
+                  fact: {
+                    value: {
+                      tokenAddress:
+                        "0x55d398326f99059ff775485246999027b3197955",
+                      pairs: [],
+                    },
+                    source: "dexscreener",
+                    fetchedAt: "2026-09-20T13:51:04.473Z",
+                    ttlSeconds: 30,
+                    quality: "fresh",
+                    reasonCode: null,
+                    rawDigest: null,
+                  },
+                  pair: null,
+                  proxyAsset: null,
+                }) as never,
+            },
+          },
+          close: () => Promise.resolve(),
+        }),
+      }),
+    ).toBe(1);
+    expect(output.contents()).toContain(
+      "incomplete (MINING_SNAPSHOT_INCOMPLETE)",
+    );
+    expect(output.contents()).toContain("nothing published");
+    expect(output.contents()).toContain(
+      `${usdt} (MINING_PRICE_PAIR_NOT_FOUND)`,
+    );
+    expect(repository.writeIncompleteSnapshot).toHaveBeenCalledTimes(1);
+    expect(repository.writeSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("pnpm mining:invalidate-snapshots (Decision 0057)", () => {
+  const anchor = "43880746-17f3-43c3-8213-9e8033319093";
+  const other = "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee";
+
+  it("refuses production, requires --confirm, and validates the selector and reason", () => {
+    expect(() =>
+      parseMiningInvalidateSnapshotsRequest(
+        ["node", "s", "--after", anchor, "--confirm"],
+        production,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_invalidate_forbidden_in_production",
+      }),
+    );
+    expect(() =>
+      parseMiningInvalidateSnapshotsRequest(
+        ["node", "s", "--after", anchor],
+        development,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_invalidate_confirmation_required",
+      }),
+    );
+    for (const argv of [
+      ["node", "s", "--confirm"],
+      ["node", "s", "--after", "not-a-uuid", "--confirm"],
+      ["node", "s", "--after", anchor, other, "--confirm"],
+      ["node", "s", "--after", anchor, "--after", other, "--confirm"],
+      ["node", "s", other, "--reason", "lower_case", "--confirm"],
+      ["node", "s", other, "--bogus", "--confirm"],
+    ]) {
+      expect(() =>
+        parseMiningInvalidateSnapshotsRequest(argv, development),
+      ).toThrow(
+        expect.objectContaining({
+          code: "mining_invalidate_arguments_invalid",
+        }),
+      );
+    }
+    expect(() =>
+      parseMiningInvalidateSnapshotsRequest(["node", "s", other, "--confirm"], {
+        NODE_ENV: "development",
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "mining_invalidate_database_unconfigured",
+      }),
+    );
+    expect(
+      parseMiningInvalidateSnapshotsRequest(
+        ["node", "s", "--after", anchor, "--confirm"],
+        development,
+      ),
+    ).toEqual({
+      selector: { kind: "after", snapshotId: anchor },
+      reason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+      databaseUrl,
+    });
+    expect(
+      parseMiningInvalidateSnapshotsRequest(
+        [
+          "node",
+          "s",
+          other,
+          anchor,
+          "--reason",
+          "OPERATOR_REVIEW",
+          "--confirm",
+        ],
+        development,
+      ),
+    ).toEqual({
+      selector: { kind: "ids", snapshotIds: [other, anchor] },
+      reason: "OPERATOR_REVIEW",
+      databaseUrl,
+    });
+  });
+
+  it("invalidates through the repository, prints the withdrawn IDs, maps a missing anchor, and closes the pool", async () => {
+    const invalidateSnapshots = vi.fn(() =>
+      Promise.resolve({ snapshotIds: [other] }),
+    );
+    const close = vi.fn(() => Promise.resolve());
+    const stdout = outputWriter();
+    expect(
+      await runMiningInvalidateSnapshots({
+        argv: ["node", "s", "--after", anchor, "--confirm"],
+        environment: development,
+        stdout,
+        stderr: outputWriter(),
+        createRepository: () => ({
+          repository: { invalidateSnapshots },
+          close,
+        }),
+      }),
+    ).toBe(0);
+    expect(invalidateSnapshots).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selector: { kind: "after", snapshotId: anchor },
+        reason: "MINING_SNAPSHOT_PUBLISHED_INCOMPLETE",
+      }),
+    );
+    expect(stdout.contents()).toContain(
+      `Invalidated 1 mining snapshot(s) (MINING_SNAPSHOT_PUBLISHED_INCOMPLETE): ${other}`,
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+
+    const stderr = outputWriter();
+    expect(
+      await runMiningInvalidateSnapshots({
+        argv: ["node", "s", other, "--confirm"],
+        environment: development,
+        stdout: outputWriter(),
+        stderr,
+        createRepository: () => ({
+          repository: {
+            invalidateSnapshots: () =>
+              Promise.reject(new MiningSnapshotNotFoundError()),
+          },
+          close,
+        }),
+      }),
+    ).toBe(1);
+    expect(stderr.contents()).toContain("mining_invalidate_snapshot_not_found");
+    expect(close).toHaveBeenCalledTimes(2);
+
+    const refused = outputWriter();
+    expect(
+      await runMiningInvalidateSnapshots({
+        argv: ["node", "s", "--after", anchor, "--confirm"],
+        environment: production,
+        stdout: outputWriter(),
+        stderr: refused,
+        createRepository: () => {
+          throw new Error("must not open a connection");
+        },
+      }),
+    ).toBe(1);
+    expect(refused.contents()).toContain(
+      "mining_invalidate_forbidden_in_production",
+    );
   });
 });

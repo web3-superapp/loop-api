@@ -117,6 +117,11 @@ const availableMiningPowerProperties = {
   },
   computedAt: { type: "string", format: "date-time" },
   scope: miningScopeSchema,
+  stale: {
+    type: "boolean",
+    description:
+      "True when a newer run under the same version did not complete (Decision 0057): the number is the last complete snapshot's and is older than that run. Always emitted; optional for older clients.",
+  },
 } as const;
 
 /**

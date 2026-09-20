@@ -6,6 +6,7 @@ import {
   createUnavailableMiningRepository,
   type MiningFormulaRecord,
   type MiningRepository,
+  type WriteIncompleteMiningSnapshotInput,
   type WriteMiningSnapshotInput,
 } from "../src/features/mining/mining-repository.js";
 import { calls } from "./s7-route-fakes.js";
@@ -100,6 +101,19 @@ function repositoryFake(
         computedAt: "2026-09-08T00:05:00.000Z",
       }),
     ),
+    writeIncompleteSnapshot: vi.fn(
+      (input: WriteIncompleteMiningSnapshotInput) =>
+        Promise.resolve({
+          snapshotId: input.snapshotId,
+          status: "incomplete" as const,
+          formulaVersion: input.formulaVersion,
+          blockNumber: input.blockNumber,
+          computedAt: "2026-09-08T00:05:00.000Z",
+          unreadInputs: input.unreadInputs,
+          invalidatedAt: null,
+          invalidationReason: null,
+        }),
+    ),
     ...overrides,
   };
 }
@@ -107,6 +121,7 @@ function repositoryFake(
 function priceReader(
   quality: "fresh" | "stale",
   proxyAsset: string | null = null,
+  pairFound = true,
 ): MiningPriceReader {
   return {
     readAssetPrice: vi.fn(() =>
@@ -123,25 +138,29 @@ function priceReader(
           reasonCode: null,
           rawDigest: null,
         },
-        pair: {
-          pairAddress: "0x172fcd41e0913e95784454622d1c3724f546f849",
-          dexId: "pancakeswap",
-          labels: [],
-          baseTokenAddress: "0x0000000000000000000000000000000000000001",
-          baseTokenSymbol: "LOOP",
-          quoteTokenAddress: "0x55d398326f99059ff775485246999027b3197955",
-          quoteTokenSymbol: "USDT",
-          priceUsd: "0.5",
-          priceNative: null,
-          liquidityUsd: "1000",
-          volumeH24: null,
-          priceChangeH24: null,
-          fdv: null,
-          marketCap: null,
-          buysH24: null,
-          sellsH24: null,
-          pairCreatedAt: null,
-        },
+        // `pair` is null when the fresh fact lists no pair with the asset
+        // as base (the 2026-09-20 USDT case).
+        pair: !pairFound
+          ? null
+          : {
+              pairAddress: "0x172fcd41e0913e95784454622d1c3724f546f849",
+              dexId: "pancakeswap",
+              labels: [],
+              baseTokenAddress: "0x0000000000000000000000000000000000000001",
+              baseTokenSymbol: "LOOP",
+              quoteTokenAddress: "0x55d398326f99059ff775485246999027b3197955",
+              quoteTokenSymbol: "USDT",
+              priceUsd: "0.5",
+              priceNative: null,
+              liquidityUsd: "1000",
+              volumeH24: null,
+              priceChangeH24: null,
+              fdv: null,
+              marketCap: null,
+              buysH24: null,
+              sellsH24: null,
+              pairCreatedAt: null,
+            },
         proxyAsset,
       }),
     ),
@@ -165,6 +184,7 @@ describe("mining-snapshot lane", () => {
       snapshotId: null,
       powerRowCount: 0,
       skipped: [],
+      unread: [],
     });
     expect(calls(repository, "listBalanceInputs")).not.toHaveBeenCalled();
     expect(calls(prices, "readAssetPrice")).not.toHaveBeenCalled();
@@ -243,28 +263,112 @@ describe("mining-snapshot lane", () => {
     expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
   });
 
-  it("stays idle when the only price is stale or an undeclared proxy and never writes", async () => {
-    for (const [quality, proxy, reasonCode] of [
-      ["stale", null, "MINING_PRICE_NOT_FRESH"],
+  it("records an incomplete attempt and publishes nothing when a held asset's price is stale, an undeclared proxy, or has no base pair (Decision 0057)", async () => {
+    for (const [quality, proxy, pairFound, reasonCode] of [
+      ["stale", null, true, "MINING_PRICE_NOT_FRESH"],
       [
         "fresh",
         "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        true,
         "MINING_PRICE_PROXY_NOT_DECLARED",
       ],
+      ["fresh", null, false, "MINING_PRICE_PAIR_NOT_FOUND"],
     ] as const) {
       const repository = repositoryFake({
         getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
       });
+      const results: unknown[] = [];
       const worker = createMiningSnapshotWorker({
         repository,
         registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
-        prices: priceReader(quality, proxy),
+        prices: priceReader(quality, proxy, pairFound),
+        createUuid: () => "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+        onRunResult: (result) => results.push(result),
       });
       const result = await worker.runOnce();
-      expect(result.kind).toBe("idle");
-      expect(result.reasonCode).toBe(reasonCode);
+      expect(result).toEqual({
+        kind: "incomplete",
+        reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
+        snapshotId: "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+        powerRowCount: 0,
+        skipped: [],
+        unread: [{ assetId: loopAssetId, reasonCode }],
+      });
+      expect(results).toEqual([result]);
       expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
+      expect(calls(repository, "writeIncompleteSnapshot")).toHaveBeenCalledWith(
+        {
+          snapshotId: "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+          blockNumber: "500",
+          blockHash: hash,
+          formulaVersion: "miningFormulaTestOnly",
+          priceVersion: null,
+          unreadInputs: [{ assetId: loopAssetId, reasonCode }],
+        },
+      );
     }
+  });
+
+  it("recovers on the next tick once the price is readable again: a complete snapshot follows an incomplete attempt (Decision 0057)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+    });
+    let pairFound = false;
+    const prices: MiningPriceReader = {
+      readAssetPrice: vi.fn(
+        (
+          asset: Pick<AssetRecord, "address" | "status">,
+          options: { readonly requireFresh: true },
+        ) =>
+          priceReader("fresh", null, pairFound).readAssetPrice(asset, options),
+      ),
+    };
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices,
+    });
+    expect((await worker.runOnce()).kind).toBe("incomplete");
+    pairFound = true;
+    const recovered = await worker.runOnce();
+    expect(recovered).toMatchObject({
+      kind: "snapshotted",
+      powerRowCount: 1,
+      unread: [],
+    });
+    expect(calls(repository, "writeIncompleteSnapshot")).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(calls(repository, "writeSnapshot")).toHaveBeenCalledTimes(1);
+  });
+
+  it("records no attempt when only a zero balance lacks a price: nothing was held, so nothing was unread (Decision 0057)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+      listBalanceInputs: vi.fn(() =>
+        Promise.resolve([
+          {
+            ownerUserId: alice,
+            walletId: "d64786bb-408d-415d-8a69-6277d56c921b",
+            assetId: loopAssetId,
+            decimals: 18,
+            rawValue: "0",
+            blockNumber: "500",
+            blockHash: hash,
+          },
+        ]),
+      ),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: priceReader("fresh", null, false),
+    });
+    const result = await worker.runOnce();
+    expect(result.kind).toBe("idle");
+    expect(result.reasonCode).toBe("MINING_PRICE_PAIR_NOT_FOUND");
+    expect(calls(repository, "writeIncompleteSnapshot")).not.toHaveBeenCalled();
+    expect(calls(repository, "writeSnapshot")).not.toHaveBeenCalled();
   });
 
   it("writes a proxied row when the version declares the proxy and the proxy's own observation is fresh (Decision 0044)", async () => {
