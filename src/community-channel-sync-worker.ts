@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  CommunityChannelSyncJobRecord,
-  CommunityChannelSyncRepository,
+import {
+  CommunicationRepositoryUnavailableError,
+  type CommunityChannelSyncJobRecord,
+  type CommunityChannelSyncRepository,
 } from "./features/communication/communication-repository.js";
 import type { CommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
@@ -51,10 +52,29 @@ export interface CreateCommunityChannelSyncWorkerOptions {
   readonly gateway: StreamCommunityChannelGateway;
   /** Decision 0055: generates and projects the member's community persona. */
   readonly personas: CommunityPersonaService;
+  /** Sanitized warn lines for persona bookkeeping that could not be recorded. */
+  readonly logger?: CommunityChannelSyncWorkerLogger;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
     event: CommunityChannelSyncInfrastructureBackoff,
   ) => void;
+}
+
+export type CommunityChannelSyncWorkerLogMessage =
+  "Community persona bookkeeping failed after a completed sync job";
+
+export interface CommunityChannelSyncWorkerLogContext {
+  readonly communityId: string;
+  readonly ownerUserId: string;
+  readonly write: "confirm" | "request" | "reset";
+  readonly errorName: string;
+}
+
+export interface CommunityChannelSyncWorkerLogger {
+  warn(
+    context: CommunityChannelSyncWorkerLogContext,
+    message: CommunityChannelSyncWorkerLogMessage,
+  ): void;
 }
 
 class CommunityChannelSyncUnavailableError extends Error {
@@ -147,13 +167,25 @@ export function createCommunityChannelSyncWorker(
    * Persona bookkeeping after the membership fact is already recorded. A
    * failure here must not turn a completed job into a retry: the persona
    * simply keeps (or regains) its `pending` state and the persona lane
-   * repairs it.
+   * repairs it. It is logged, never swallowed silently.
    */
-  async function recordPersonaOutcome(run: () => Promise<void>): Promise<void> {
+  async function recordPersonaOutcome(
+    job: CommunityChannelSyncJobRecord,
+    write: "confirm" | "request" | "reset",
+    run: () => Promise<unknown>,
+  ): Promise<void> {
     try {
       await run();
-    } catch {
-      // Bookkeeping only; see above.
+    } catch (error) {
+      options.logger?.warn(
+        {
+          communityId: job.communityId,
+          ownerUserId: job.ownerUserId,
+          write,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Community persona bookkeeping failed after a completed sync job",
+      );
     }
   }
 
@@ -180,7 +212,7 @@ export function createCommunityChannelSyncWorker(
         });
         // Stream drops member custom data with the membership; the persona
         // row stays and is re-projected on the next add.
-        await recordPersonaOutcome(() =>
+        await recordPersonaOutcome(job, "reset", () =>
           options.personas.resetProjectionForMember({
             communityId: job.communityId,
             ownerUserId: job.ownerUserId,
@@ -210,7 +242,7 @@ export function createCommunityChannelSyncWorker(
       // The persona is generated (or resumed) before the single provider
       // call so the add carries it; a generation failure retries the job
       // without having touched Stream.
-      const persona = await options.personas.ensurePersona({
+      const lease = await options.personas.ensurePersona({
         communityId: job.communityId,
         ownerUserId: job.ownerUserId,
       });
@@ -221,8 +253,8 @@ export function createCommunityChannelSyncWorker(
         memberPersonas: [
           {
             streamUserId: job.memberStreamUserId,
-            personaId: persona.personaId,
-            alias: persona.alias,
+            personaId: lease.persona.personaId,
+            alias: lease.persona.alias,
           },
         ],
         signal,
@@ -234,21 +266,34 @@ export function createCommunityChannelSyncWorker(
         memberState: "synced",
         channelState: "created",
       });
-      await recordPersonaOutcome(() =>
-        projection.confirmedPersonaStreamUserIds.includes(
-          job.memberStreamUserId,
-        )
+      const echoed = projection.confirmedPersonaStreamUserIds.includes(
+        job.memberStreamUserId,
+      );
+      await recordPersonaOutcome(job, echoed ? "confirm" : "request", () =>
+        echoed
           ? options.personas.confirmProjection({
-              personaId: persona.personaId,
+              personaId: lease.persona.personaId,
+              leaseToken: lease.leaseToken,
             })
-          : options.personas.requestProjection({
-              personaId: persona.personaId,
-            }),
+          : options.personas.requestProjection(lease),
       );
       return "succeeded";
     } catch (error) {
       if (isAborted(signal)) {
         throw error;
+      }
+      // Persona generation failed before the provider was touched (M1): the
+      // job is retried under its own code, does not spend the Stream attempt
+      // budget, and never marks the channel `failed`.
+      if (error instanceof CommunicationRepositoryUnavailableError) {
+        await options.repository.retryJob({
+          communityId: job.communityId,
+          ownerUserId: job.ownerUserId,
+          workerId,
+          errorCode: "community_persona_unavailable",
+          retryDelaySeconds: jobRetryDelaySeconds(job.attempts),
+        });
+        return "retried";
       }
       if (error instanceof StreamChannelProjectionMismatchError) {
         await options.repository.failJob({

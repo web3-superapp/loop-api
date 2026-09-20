@@ -23,7 +23,10 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker stopped"
   | "LOOP reconciliation worker infrastructure retry scheduled"
   | "LOOP reconciliation worker failed to start"
-  | "Unexpected idle PostgreSQL client error";
+  | "Unexpected idle PostgreSQL client error"
+  | "Community persona bookkeeping failed after a completed sync job"
+  | "Community persona projection lease was lost; outcome not recorded"
+  | "Community persona projection was not confirmed";
 
 export interface ReconciliationWorkerLogFields {
   readonly workerId?: string;
@@ -34,6 +37,13 @@ export interface ReconciliationWorkerLogFields {
   readonly consecutiveFailureCount?: number;
   readonly postgresCode?: string;
   readonly startupErrorCode?: string;
+  /** Decision 0055 persona lane; opaque identifiers and an error class only. */
+  readonly communityId?: string;
+  readonly ownerUserId?: string;
+  readonly personaId?: string;
+  readonly write?: "confirm" | "request" | "reset";
+  readonly projectionAttempts?: number;
+  readonly errorName?: string;
 }
 
 export interface ReconciliationWorkerLogger {

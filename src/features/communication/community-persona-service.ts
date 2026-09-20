@@ -3,7 +3,7 @@ import {
   isCommunityPersonaAlias,
 } from "./community-persona-generator.js";
 import type {
-  CommunityChannelPersonaRecord,
+  CommunityChannelPersonaLease,
   CommunityChannelPersonaRepository,
 } from "./communication-repository.js";
 import type { StreamCommunityChannelGateway } from "../../integrations/stream/channel-gateway.js";
@@ -15,8 +15,7 @@ export const COMMUNITY_PERSONA_RETRY_MAX_SECONDS = 3_600;
 
 export type CommunityPersonaProjectionOutcome = "confirmed" | "pending";
 
-export interface ProjectCommunityPersonaInput {
-  readonly persona: CommunityChannelPersonaRecord;
+export interface ProjectCommunityPersonaInput extends CommunityChannelPersonaLease {
   readonly streamChannelId: string;
   readonly memberStreamUserId: string;
   readonly signal: AbortSignal;
@@ -28,27 +27,55 @@ export type CommunityPersonaSyncResult = Readonly<{
   deferredCount: number;
 }>;
 
+export type CommunityPersonaServiceLogMessage =
+  | "Community persona projection lease was lost; outcome not recorded"
+  | "Community persona projection was not confirmed";
+
+/** Sanitized warn lines only: identifiers and an error class, never a body. */
+export interface CommunityPersonaLogContext {
+  readonly personaId: string;
+  readonly write?: "confirm" | "reset";
+  readonly projectionAttempts?: number;
+  readonly errorName?: string;
+}
+
+export interface CommunityPersonaServiceLogger {
+  warn(
+    context: CommunityPersonaLogContext,
+    message: CommunityPersonaServiceLogMessage,
+  ): void;
+}
+
 /**
  * Decision 0055 persona service: the single place that generates a persona,
  * projects it onto the Stream channel member, and records the outcome. The
  * database is the authority; a projection is `confirmed` only after Stream
  * echoed the exact custom fields, otherwise it stays `pending` and is retried
- * with bounded backoff.
+ * with bounded backoff. Every bookkeeping write presents the projection lease
+ * it was issued, so a stale holder never overwrites a newer outcome.
  */
 export interface CommunityPersonaService {
   ensurePersona(input: {
     readonly communityId: string;
     readonly ownerUserId: string;
-  }): Promise<CommunityChannelPersonaRecord>;
-  confirmProjection(input: { readonly personaId: string }): Promise<void>;
-  /** Mark the projection due now (after an `add` that did not echo it). */
-  requestProjection(input: { readonly personaId: string }): Promise<void>;
-  /** Mark the member's projection pending (after a `remove`). */
+  }): Promise<CommunityChannelPersonaLease>;
+  /** Fenced confirm; false when the lease was lost. */
+  confirmProjection(input: {
+    readonly personaId: string;
+    readonly leaseToken: string;
+  }): Promise<boolean>;
+  /**
+   * Schedule the next projection with the persona's backoff (5 s base) after
+   * an `add` whose response did not echo the persona. Fenced; false when the
+   * lease was lost.
+   */
+  requestProjection(input: CommunityChannelPersonaLease): Promise<boolean>;
+  /** Mark the member's persona pending (after a `remove`); unfenced. */
   resetProjectionForMember(input: {
     readonly communityId: string;
     readonly ownerUserId: string;
   }): Promise<void>;
-  /** One `updateMemberPartial` for an existing member; never throws on a provider failure. */
+  /** One `updateMemberPartial` for a leased persona; never throws on a provider failure. */
   projectPersona(
     input: ProjectCommunityPersonaInput,
   ): Promise<CommunityPersonaProjectionOutcome>;
@@ -63,6 +90,7 @@ export interface CreateCommunityPersonaServiceOptions {
   readonly personas: CommunityChannelPersonaRepository;
   readonly gateway: Pick<StreamCommunityChannelGateway, "projectMemberPersona">;
   readonly generateAlias?: () => string;
+  readonly logger?: CommunityPersonaServiceLogger;
 }
 
 export function personaRetryDelaySeconds(projectionAttempts: number): number {
@@ -73,8 +101,8 @@ export function personaRetryDelaySeconds(projectionAttempts: number): number {
   );
 }
 
-function isAborted(signal: AbortSignal): boolean {
-  return signal.aborted;
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown";
 }
 
 export function createCommunityPersonaService(
@@ -83,15 +111,34 @@ export function createCommunityPersonaService(
   const generateAlias =
     options.generateAlias ?? createCommunityPersonaAliasGenerator();
 
+  function warnLeaseLost(personaId: string, write: "confirm" | "reset"): void {
+    options.logger?.warn(
+      { personaId, write },
+      "Community persona projection lease was lost; outcome not recorded",
+    );
+  }
+
+  async function reset(
+    lease: CommunityChannelPersonaLease,
+    retryDelaySeconds: number,
+  ): Promise<boolean> {
+    const written = await options.personas.resetProjection({
+      personaId: lease.persona.personaId,
+      leaseToken: lease.leaseToken,
+      retryDelaySeconds,
+    });
+    if (!written) {
+      warnLeaseLost(lease.persona.personaId, "reset");
+    }
+    return written;
+  }
+
   async function projectPersona(
     input: ProjectCommunityPersonaInput,
   ): Promise<CommunityPersonaProjectionOutcome> {
     if (!isCommunityPersonaAlias(input.persona.alias)) {
       // A row that violates the alias shape is never sent to the provider.
-      await options.personas.resetProjection({
-        personaId: input.persona.personaId,
-        retryDelaySeconds: COMMUNITY_PERSONA_RETRY_MAX_SECONDS,
-      });
+      await reset(input, COMMUNITY_PERSONA_RETRY_MAX_SECONDS);
       return "pending";
     }
     try {
@@ -103,20 +150,31 @@ export function createCommunityPersonaService(
         signal: input.signal,
       });
     } catch (error) {
-      if (isAborted(input.signal)) {
+      if (input.signal.aborted) {
         throw error;
       }
-      await options.personas.resetProjection({
-        personaId: input.persona.personaId,
-        retryDelaySeconds: personaRetryDelaySeconds(
-          input.persona.projectionAttempts,
-        ),
-      });
+      options.logger?.warn(
+        {
+          personaId: input.persona.personaId,
+          projectionAttempts: input.persona.projectionAttempts,
+          errorName: errorName(error),
+        },
+        "Community persona projection was not confirmed",
+      );
+      await reset(
+        input,
+        personaRetryDelaySeconds(input.persona.projectionAttempts),
+      );
       return "pending";
     }
-    await options.personas.confirmProjection({
+    const written = await options.personas.confirmProjection({
       personaId: input.persona.personaId,
+      leaseToken: input.leaseToken,
     });
+    if (!written) {
+      warnLeaseLost(input.persona.personaId, "confirm");
+      return "pending";
+    }
     return "confirmed";
   }
 
@@ -124,7 +182,7 @@ export function createCommunityPersonaService(
     ensurePersona(input: {
       readonly communityId: string;
       readonly ownerUserId: string;
-    }): Promise<CommunityChannelPersonaRecord> {
+    }): Promise<CommunityChannelPersonaLease> {
       return options.personas.ensurePersona({
         communityId: input.communityId,
         ownerUserId: input.ownerUserId,
@@ -132,15 +190,22 @@ export function createCommunityPersonaService(
       });
     },
 
-    confirmProjection(input: { readonly personaId: string }): Promise<void> {
-      return options.personas.confirmProjection(input);
+    async confirmProjection(input: {
+      readonly personaId: string;
+      readonly leaseToken: string;
+    }): Promise<boolean> {
+      const written = await options.personas.confirmProjection(input);
+      if (!written) {
+        warnLeaseLost(input.personaId, "confirm");
+      }
+      return written;
     },
 
-    requestProjection(input: { readonly personaId: string }): Promise<void> {
-      return options.personas.resetProjection({
-        personaId: input.personaId,
-        retryDelaySeconds: 0,
-      });
+    requestProjection(input: CommunityChannelPersonaLease): Promise<boolean> {
+      return reset(
+        input,
+        personaRetryDelaySeconds(input.persona.projectionAttempts),
+      );
     },
 
     resetProjectionForMember(input: {
@@ -171,6 +236,7 @@ export function createCommunityPersonaService(
         input.signal.throwIfAborted();
         const outcome = await projectPersona({
           persona: target.persona,
+          leaseToken: target.leaseToken,
           streamChannelId: target.streamChannelId,
           memberStreamUserId: target.memberStreamUserId,
           signal: input.signal,

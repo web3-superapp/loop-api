@@ -21,6 +21,7 @@ const ownerUserId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
 const streamChannelId = `loop_community_${communityId.replaceAll("-", "")}`;
 const memberStreamUserId = `loop_${ownerUserId.replaceAll("-", "")}`;
+const leaseToken = "0f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f";
 
 function persona(
   overrides: Partial<CommunityChannelPersonaRecord> = {},
@@ -42,10 +43,13 @@ function repositoryFake(
 ) {
   const ensurePersona = vi.fn(
     (input: { readonly generateAlias: () => string }) =>
-      Promise.resolve(persona({ alias: input.generateAlias() })),
+      Promise.resolve({
+        persona: persona({ alias: input.generateAlias() }),
+        leaseToken,
+      }),
   );
-  const confirmProjection = vi.fn(() => Promise.resolve());
-  const resetProjection = vi.fn(() => Promise.resolve());
+  const confirmProjection = vi.fn(() => Promise.resolve(true));
+  const resetProjection = vi.fn(() => Promise.resolve(true));
   const resetProjectionForMember = vi.fn(() => Promise.resolve());
   const claimPendingProjections = vi.fn(() => Promise.resolve([]));
   const repository: CommunityChannelPersonaRepository = {
@@ -80,9 +84,10 @@ describe("community persona service (Decision 0055)", () => {
       generateAlias: () => "Comet-0042",
     });
 
-    const record = await service.ensurePersona({ communityId, ownerUserId });
+    const lease = await service.ensurePersona({ communityId, ownerUserId });
 
-    expect(record.alias).toBe("Comet-0042");
+    expect(lease.persona.alias).toBe("Comet-0042");
+    expect(lease.leaseToken).toBe(leaseToken);
     expect(personas.ensurePersona).toHaveBeenCalledWith(
       expect.objectContaining({ communityId, ownerUserId }),
     );
@@ -95,9 +100,9 @@ describe("community persona service (Decision 0055)", () => {
       gateway: { projectMemberPersona: vi.fn(() => Promise.resolve()) },
     });
 
-    const record = await service.ensurePersona({ communityId, ownerUserId });
+    const lease = await service.ensurePersona({ communityId, ownerUserId });
 
-    expect(record.alias).toMatch(/^[A-Z][a-z]{2,15}-[0-9]{4}$/);
+    expect(lease.persona.alias).toMatch(/^[A-Z][a-z]{2,15}-[0-9]{4}$/);
   });
 
   it("confirms only after the gateway resolved", async () => {
@@ -110,6 +115,7 @@ describe("community persona service (Decision 0055)", () => {
 
     const outcome = await service.projectPersona({
       persona: persona(),
+      leaseToken,
       streamChannelId,
       memberStreamUserId,
       signal: signal(),
@@ -123,7 +129,10 @@ describe("community persona service (Decision 0055)", () => {
       alias: "Harbor-4821",
       signal: expect.any(AbortSignal) as AbortSignal,
     });
-    expect(personas.confirmProjection).toHaveBeenCalledWith({ personaId });
+    expect(personas.confirmProjection).toHaveBeenCalledWith({
+      personaId,
+      leaseToken,
+    });
     expect(personas.resetProjection).not.toHaveBeenCalled();
   });
 
@@ -140,6 +149,7 @@ describe("community persona service (Decision 0055)", () => {
 
     const outcome = await service.projectPersona({
       persona: persona({ projectionAttempts: 3 }),
+      leaseToken,
       streamChannelId,
       memberStreamUserId,
       signal: signal(),
@@ -149,6 +159,7 @@ describe("community persona service (Decision 0055)", () => {
     expect(personas.confirmProjection).not.toHaveBeenCalled();
     expect(personas.resetProjection).toHaveBeenCalledWith({
       personaId,
+      leaseToken,
       retryDelaySeconds: 20,
     });
   });
@@ -166,6 +177,7 @@ describe("community persona service (Decision 0055)", () => {
 
     const outcome = await service.projectPersona({
       persona: persona({ projectionAttempts: 20 }),
+      leaseToken,
       streamChannelId,
       memberStreamUserId,
       signal: signal(),
@@ -174,6 +186,7 @@ describe("community persona service (Decision 0055)", () => {
     expect(outcome).toBe("pending");
     expect(personas.resetProjection).toHaveBeenCalledWith({
       personaId,
+      leaseToken,
       retryDelaySeconds: 3_600,
     });
   });
@@ -188,6 +201,7 @@ describe("community persona service (Decision 0055)", () => {
 
     const outcome = await service.projectPersona({
       persona: persona({ alias: "loop_3bb585972e3145e7b5f0957803a824ed" }),
+      leaseToken,
       streamChannelId,
       memberStreamUserId,
       signal: signal(),
@@ -197,6 +211,7 @@ describe("community persona service (Decision 0055)", () => {
     expect(projectMemberPersona).not.toHaveBeenCalled();
     expect(personas.resetProjection).toHaveBeenCalledWith({
       personaId,
+      leaseToken,
       retryDelaySeconds: 3_600,
     });
   });
@@ -217,6 +232,7 @@ describe("community persona service (Decision 0055)", () => {
     await expect(
       service.projectPersona({
         persona: persona(),
+        leaseToken,
         streamChannelId,
         memberStreamUserId,
         signal: controller.signal,
@@ -229,6 +245,7 @@ describe("community persona service (Decision 0055)", () => {
     const targets = [
       {
         persona: persona(),
+        leaseToken,
         streamChannelId,
         memberStreamUserId,
       },
@@ -237,6 +254,7 @@ describe("community persona service (Decision 0055)", () => {
           personaId: "c6e7a1d3-3e2f-4d4b-8a7c-8b9d0e1f2a3b",
           alias: "Owl-0007",
         }),
+        leaseToken: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
         streamChannelId,
         memberStreamUserId,
       },
@@ -266,25 +284,91 @@ describe("community persona service (Decision 0055)", () => {
     });
   });
 
-  it("requests an immediate projection and resets a removed member's persona", async () => {
+  it("requests a projection with the 5 s-based backoff (never immediately) and resets a removed member's persona", async () => {
     const personas = repositoryFake();
     const service = createCommunityPersonaService({
       personas: personas.repository,
       gateway: { projectMemberPersona: vi.fn(() => Promise.resolve()) },
     });
 
-    await service.requestProjection({ personaId });
+    await expect(
+      service.requestProjection({
+        persona: persona({ projectionAttempts: 0 }),
+        leaseToken,
+      }),
+    ).resolves.toBe(true);
+    await service.requestProjection({
+      persona: persona({ projectionAttempts: 4 }),
+      leaseToken,
+    });
     await service.resetProjectionForMember({ communityId, ownerUserId });
 
-    expect(personas.resetProjection).toHaveBeenCalledWith({
+    expect(personas.resetProjection).toHaveBeenNthCalledWith(1, {
       personaId,
-      retryDelaySeconds: 0,
+      leaseToken,
+      retryDelaySeconds: 5,
+    });
+    expect(personas.resetProjection).toHaveBeenNthCalledWith(2, {
+      personaId,
+      leaseToken,
+      retryDelaySeconds: 40,
     });
     expect(personas.resetProjectionForMember).toHaveBeenCalledWith({
       communityId,
       ownerUserId,
       retryDelaySeconds: 0,
     });
+  });
+
+  it("reports a lost lease as pending and logs it instead of recording the outcome (M2)", async () => {
+    const warn = vi.fn();
+    const personas = repositoryFake({
+      confirmProjection: vi.fn(() => Promise.resolve(false)),
+      resetProjection: vi.fn(() => Promise.resolve(false)),
+    });
+    const service = createCommunityPersonaService({
+      personas: personas.repository,
+      gateway: {
+        projectMemberPersona: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new StreamChannelGatewayUnavailableError()),
+      },
+      logger: { warn },
+    });
+    const input = () => ({
+      persona: persona(),
+      leaseToken,
+      streamChannelId,
+      memberStreamUserId,
+      signal: signal(),
+    });
+
+    expect(await service.projectPersona(input())).toBe("pending");
+    expect(await service.projectPersona(input())).toBe("pending");
+    expect(await service.confirmProjection({ personaId, leaseToken })).toBe(
+      false,
+    );
+    expect(
+      await service.requestProjection({ persona: persona(), leaseToken }),
+    ).toBe(false);
+
+    expect(warn).toHaveBeenCalledWith(
+      { personaId, write: "confirm" },
+      "Community persona projection lease was lost; outcome not recorded",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      { personaId, write: "reset" },
+      "Community persona projection lease was lost; outcome not recorded",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      {
+        personaId,
+        projectionAttempts: 1,
+        errorName: "StreamChannelGatewayUnavailableError",
+      },
+      "Community persona projection was not confirmed",
+    );
   });
 
   it("doubles the retry delay from 5 s and caps it at one hour", () => {

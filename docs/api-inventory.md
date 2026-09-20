@@ -424,11 +424,15 @@ Every `synced` member of an official channel carries a community persona
 (the Decision 0024 shape). The `add` sync job attaches it on `add_members`; a
 persona lane in the same worker re-projects `pending` personas of `synced`
 members with `updateMemberPartial` under bounded backoff; a `remove` resets the
-projection. The client draws only `member.custom.loop_group_alias` (fallback
-"成员"), never `user.name`/`user.id`. Members synced before this decision are
-backfilled with `pnpm community:persona-backfill --confirm` (dev only; needs
-`DATABASE_URL`, `STREAM_API_KEY`, `STREAM_API_SECRET`; idempotent; exit 1 while
-any projection is still pending).
+projection. Every bookkeeping write is fenced by a projection lease
+(migration 000032), so the add path, the lane, a second replica, and the
+backfill never overwrite each other's outcome. The client draws only
+`member.custom.loop_group_alias` (fallback "成员"), never `user.name`/`user.id`.
+Members synced before this decision are backfilled with
+`pnpm community:persona-backfill --confirm [--max N]` (dev only; needs
+`DATABASE_URL`, `STREAM_API_KEY`, `STREAM_API_SECRET`; idempotent; the worker
+may keep running; exit 1 while any projection is still pending or `--max`
+stopped the run early).
 
 `POST /v2/communities/{communityId}/voice-rooms` is the only product path
 that opens a room; the mobile app carries no control for it yet, so on the

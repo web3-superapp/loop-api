@@ -470,7 +470,17 @@ export async function runReconciliationWorker(
             personas: createCommunityPersonaService({
               personas: database.communityChannelPersonas,
               gateway: communityChannelGateway,
+              logger: {
+                warn: (context, message) => {
+                  options.logger.warn({ ...logFields(), ...context }, message);
+                },
+              },
             }),
+            logger: {
+              warn: (context, message) => {
+                options.logger.warn({ ...logFields(), ...context }, message);
+              },
+            },
             onInfrastructureBackoff: (event) => {
               options.logger.warn(
                 { ...logFields(), ...event },

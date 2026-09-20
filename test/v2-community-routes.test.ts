@@ -2071,6 +2071,55 @@ describe("LOOP API V2 community, social, and search modules", () => {
       }
     });
 
+    it("keeps the viewer's persona on the syncing and unavailable chat states too", async () => {
+      const gateway = presenceGateway(
+        vi.fn(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 1,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const stored = { alias: "Owl-0007", projectionState: "pending" as const };
+      const cases: readonly (readonly [
+        Parameters<typeof communicationFake>[0],
+        { status: string; reasonCode: string },
+      ])[] = [
+        [
+          { provisioned: false, state: "created" },
+          {
+            status: "syncing",
+            reasonCode: "COMMUNITY_CHANNEL_NOT_PROVISIONED",
+          },
+        ],
+        [
+          { provisioned: true, state: "failed" },
+          {
+            status: "unavailable",
+            reasonCode: "COMMUNITY_CHANNEL_PROVISION_FAILED",
+          },
+        ],
+      ];
+      for (const [channel, expected] of cases) {
+        const { app } = await presenceApp(channel, gateway, {}, stored);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json<{ chat: unknown }>().chat).toEqual({
+          status: expected.status,
+          channelCid: null,
+          memberState: "synced",
+          reasonCode: expected.reasonCode,
+          viewerPersona: { alias: "Owl-0007", projectionState: "pending" },
+        });
+      }
+    });
+
     it("publishes the observed count with its timestamp and source on the detail read only", async () => {
       const read = vi.fn<
         StreamCommunityChannelGateway["readCommunityChannelPresence"]

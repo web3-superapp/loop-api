@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createCommunityChannelSyncWorker } from "../src/community-channel-sync-worker.js";
-import type {
-  CommunityChannelSyncJobRecord,
-  CommunityChannelSyncRepository,
+import {
+  CommunicationRepositoryUnavailableError,
+  type CommunityChannelSyncJobRecord,
+  type CommunityChannelSyncRepository,
 } from "../src/features/communication/communication-repository.js";
 import type {
   CommunityPersonaService,
@@ -80,6 +81,7 @@ type ChannelMock = ReturnType<typeof vi.fn>;
 
 const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
 const personaAlias = "Harbor-4821";
+const leaseToken = "0f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f";
 
 function personaRecord() {
   return Object.freeze({
@@ -101,9 +103,11 @@ function personasFake(
     deferredCount: 0,
   },
 ) {
-  const ensurePersona = vi.fn(() => Promise.resolve(personaRecord()));
-  const confirmProjection = vi.fn(() => Promise.resolve());
-  const requestProjection = vi.fn(() => Promise.resolve());
+  const ensurePersona = vi.fn(() =>
+    Promise.resolve({ persona: personaRecord(), leaseToken }),
+  );
+  const confirmProjection = vi.fn(() => Promise.resolve(true));
+  const requestProjection = vi.fn(() => Promise.resolve(true));
   const resetProjectionForMember = vi.fn(() => Promise.resolve());
   const projectPersona = vi.fn(() => Promise.resolve("confirmed" as const));
   const syncPendingProjections = vi.fn(() => Promise.resolve(syncResult));
@@ -500,7 +504,10 @@ describe("community channel sync worker lane", () => {
     expect(completeJob).toHaveBeenCalledWith(
       expect.objectContaining({ memberState: "synced" }),
     );
-    expect(personas.confirmProjection).toHaveBeenCalledWith({ personaId });
+    expect(personas.confirmProjection).toHaveBeenCalledWith({
+      personaId,
+      leaseToken,
+    });
     expect(personas.requestProjection).not.toHaveBeenCalled();
   });
 
@@ -523,14 +530,50 @@ describe("community channel sync worker lane", () => {
       expect.objectContaining({ memberState: "synced" }),
     );
     expect(personas.confirmProjection).not.toHaveBeenCalled();
-    expect(personas.requestProjection).toHaveBeenCalledWith({ personaId });
+    expect(personas.requestProjection).toHaveBeenCalledWith({
+      persona: personaRecord(),
+      leaseToken,
+    });
   });
 
-  it("retries the job without touching Stream when persona generation fails", async () => {
-    const { repository, retryJob, completeJob } = repositoryFake([job()]);
-    const { gateway, addMembers } = gatewayMocks();
+  it("retries under community_persona_unavailable without touching Stream or the attempt budget when persona generation fails (M1)", async () => {
+    for (const attempts of [1, 10, 11]) {
+      const { repository, retryJob, completeJob, failJob } = repositoryFake([
+        job({ attempts }),
+      ]);
+      const { gateway, addMembers } = gatewayMocks();
+      const personas = personasFake({
+        ensurePersona: vi.fn(() =>
+          Promise.reject(new CommunicationRepositoryUnavailableError()),
+        ),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personas.personas,
+      });
+
+      const result = await worker.runOnce();
+
+      expect(result).toMatchObject({
+        retriedCount: 1,
+        succeededCount: 0,
+        failedCount: 0,
+      });
+      expect(addMembers).not.toHaveBeenCalled();
+      expect(completeJob).not.toHaveBeenCalled();
+      expect(failJob).not.toHaveBeenCalled();
+      expect(retryJob).toHaveBeenCalledWith(
+        expect.objectContaining({ errorCode: "community_persona_unavailable" }),
+      );
+    }
+  });
+
+  it("still treats an unknown persona-generation failure as a Stream-lane retry", async () => {
+    const { repository, retryJob } = repositoryFake([job()]);
+    const { gateway } = gatewayMocks();
     const personas = personasFake({
-      ensurePersona: vi.fn(() => Promise.reject(new Error("db down"))),
+      ensurePersona: vi.fn(() => Promise.reject(new Error("unexpected"))),
     });
     const worker = createCommunityChannelSyncWorker({
       repository,
@@ -538,17 +581,14 @@ describe("community channel sync worker lane", () => {
       personas: personas.personas,
     });
 
-    const result = await worker.runOnce();
+    await worker.runOnce();
 
-    expect(result).toMatchObject({ retriedCount: 1, succeededCount: 0 });
-    expect(addMembers).not.toHaveBeenCalled();
-    expect(completeJob).not.toHaveBeenCalled();
     expect(retryJob).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "stream_channel_sync_unavailable" }),
     );
   });
 
-  it("keeps a completed add as succeeded when persona bookkeeping fails", async () => {
+  it("keeps a completed add as succeeded and logs when persona bookkeeping fails", async () => {
     const { repository, completeJob, retryJob } = repositoryFake([job()]);
     const { gateway } = gatewayMocks({
       addMembers: vi.fn(() =>
@@ -556,12 +596,16 @@ describe("community channel sync worker lane", () => {
       ),
     });
     const personas = personasFake({
-      confirmProjection: vi.fn(() => Promise.reject(new Error("db down"))),
+      confirmProjection: vi.fn(() =>
+        Promise.reject(new CommunicationRepositoryUnavailableError()),
+      ),
     });
+    const warn = vi.fn();
     const worker = createCommunityChannelSyncWorker({
       repository,
       gateway,
       personas: personas.personas,
+      logger: { warn },
     });
 
     const result = await worker.runOnce();
@@ -569,6 +613,15 @@ describe("community channel sync worker lane", () => {
     expect(result).toMatchObject({ succeededCount: 1, retriedCount: 0 });
     expect(completeJob).toHaveBeenCalledTimes(1);
     expect(retryJob).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      {
+        communityId,
+        ownerUserId,
+        write: "confirm",
+        errorName: "CommunicationRepositoryUnavailableError",
+      },
+      "Community persona bookkeeping failed after a completed sync job",
+    );
   });
 
   it("resets the member's persona projection after a remove", async () => {

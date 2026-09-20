@@ -24,6 +24,7 @@ import { deriveCommunityChannelId } from "../src/features/communication/communic
 import {
   CommunicationRepositoryUnavailableError,
   type CommunicationRepository,
+  type CommunityChannelPersonaLease,
   type CommunityChannelPersonaRepository,
   type CommunityChannelSyncRepository,
 } from "../src/features/communication/communication-repository.js";
@@ -212,6 +213,7 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
     const result = await pool.query<Record<string, unknown>>({
       text: `
         select projection_state, confirmed_at, projection_attempts,
+          projection_lease,
           next_projection_at <= clock_timestamp() as due
         from public.community_channel_personas
         where persona_id = $1
@@ -225,7 +227,7 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
     return row;
   }
 
-  it("generates one immutable, community-unique persona per member and resumes it", async () => {
+  it("generates one immutable, community-unique persona per member, leases it, and resumes it", async () => {
     const owner = await createAccount();
     const communityId = await createVerifiedCommunity(owner);
     const member = await createAccount();
@@ -236,16 +238,22 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       ownerUserId: member,
       generateAlias,
     });
-    expect(first.alias).toMatch(aliasPattern);
-    expect(first.alias.toLowerCase()).not.toContain(
+    expect(first.persona.alias).toMatch(aliasPattern);
+    expect(first.persona.alias.toLowerCase()).not.toContain(
       member.replaceAll("-", "").slice(0, 8),
     );
-    expect(first).toMatchObject({
+    expect(first.persona).toMatchObject({
       communityId,
       ownerUserId: member,
       aliasVersion: 1,
       projectionState: "pending",
       projectionAttempts: 0,
+    });
+    expect(first.leaseToken).toMatch(/^[0-9a-f-]{36}$/);
+    // L1: a fresh persona is not due for the lane (60 s lease).
+    expect(await personaRow(first.persona.personaId)).toMatchObject({
+      due: false,
+      projection_lease: first.leaseToken,
     });
 
     const again = await personas.ensurePersona({
@@ -253,10 +261,18 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       ownerUserId: member,
       generateAlias: () => "Different-0001",
     });
-    expect(again).toEqual(first);
+    expect(again.persona).toEqual(first.persona);
+    // Re-ensuring issues a new lease and supersedes the old one.
+    expect(again.leaseToken).not.toBe(first.leaseToken);
+    expect(
+      await personas.confirmProjection({
+        personaId: first.persona.personaId,
+        leaseToken: first.leaseToken,
+      }),
+    ).toBe(false);
     expect(
       await personas.findPersona({ communityId, ownerUserId: member }),
-    ).toEqual(first);
+    ).toEqual(first.persona);
 
     // The same account in another community draws independently.
     const otherCommunity = await createVerifiedCommunity(owner);
@@ -266,18 +282,18 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       ownerUserId: member,
       generateAlias,
     });
-    expect(elsewhere.personaId).not.toBe(first.personaId);
+    expect(elsewhere.persona.personaId).not.toBe(first.persona.personaId);
 
     await expect(
       pool.query({
         text: `update public.community_channel_personas set alias = 'Owl-0001' where persona_id = $1`,
-        values: [first.personaId],
+        values: [first.persona.personaId],
       }),
     ).rejects.toMatchObject({ code: "55000" });
     await expect(
       pool.query({
         text: `delete from public.community_channel_personas where persona_id = $1`,
-        values: [first.personaId],
+        values: [first.persona.personaId],
       }),
     ).rejects.toMatchObject({ code: "55000" });
     await expect(
@@ -301,7 +317,7 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       ownerUserId: first,
       generateAlias: () => "Harbor-4821",
     });
-    expect(taken.alias).toBe("Harbor-4821");
+    expect(taken.persona.alias).toBe("Harbor-4821");
 
     const draws = ["Harbor-4821", "Harbor-4821", "Comet-0042"];
     let calls = 0;
@@ -313,7 +329,7 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
         return draws.shift() ?? "Zephyr-9999";
       },
     });
-    expect(colliding.alias).toBe("Comet-0042");
+    expect(colliding.persona.alias).toBe("Comet-0042");
     expect(calls).toBe(3);
 
     const third = await createAccount();
@@ -338,20 +354,47 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
     ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
   });
 
-  it("confirms, resets, and exposes the viewer's persona on the channel read", async () => {
+  it("fences confirm and reset by lease and pending state, and exposes the viewer's persona on the channel read (M2)", async () => {
     const owner = await createAccount();
     const communityId = await createVerifiedCommunity(owner);
     const member = await createAccount();
     await join(member, communityId);
-    const persona = await personas.ensurePersona({
+    const lease = await personas.ensurePersona({
       communityId,
       ownerUserId: member,
       generateAlias,
     });
+    const personaId = lease.persona.personaId;
 
-    await personas.confirmProjection({ personaId: persona.personaId });
-    expect(await personaRow(persona.personaId)).toMatchObject({
+    // Wrong lease: nothing written.
+    expect(
+      await personas.confirmProjection({
+        personaId,
+        leaseToken: randomUUID(),
+      }),
+    ).toBe(false);
+    expect(
+      await personas.resetProjection({
+        personaId,
+        leaseToken: randomUUID(),
+        retryDelaySeconds: 600,
+      }),
+    ).toBe(false);
+    expect(await personaRow(personaId)).toMatchObject({
+      projection_state: "pending",
+      projection_lease: lease.leaseToken,
+    });
+
+    // Right lease: confirmed, lease consumed.
+    expect(
+      await personas.confirmProjection({
+        personaId,
+        leaseToken: lease.leaseToken,
+      }),
+    ).toBe(true);
+    expect(await personaRow(personaId)).toMatchObject({
       projection_state: "confirmed",
+      projection_lease: null,
     });
     expect(
       (
@@ -360,24 +403,36 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
           viewerUserId: member,
         })
       ).viewerPersona,
-    ).toEqual({ alias: persona.alias, projectionState: "confirmed" });
+    ).toEqual({ alias: lease.persona.alias, projectionState: "confirmed" });
 
-    await personas.resetProjection({
-      personaId: persona.personaId,
+    // A confirmed row is never reset through the fenced path, even with the
+    // (already consumed) lease.
+    expect(
+      await personas.resetProjection({
+        personaId,
+        leaseToken: lease.leaseToken,
+        retryDelaySeconds: 0,
+      }),
+    ).toBe(false);
+
+    // The unfenced remove path forces pending and clears any lease.
+    await personas.resetProjectionForMember({
+      communityId,
+      ownerUserId: member,
       retryDelaySeconds: 600,
     });
-    expect(await personaRow(persona.personaId)).toMatchObject({
+    expect(await personaRow(personaId)).toMatchObject({
       projection_state: "pending",
       confirmed_at: null,
+      projection_lease: null,
       due: false,
     });
-
     await personas.resetProjectionForMember({
       communityId,
       ownerUserId: member,
       retryDelaySeconds: 0,
     });
-    expect(await personaRow(persona.personaId)).toMatchObject({ due: true });
+    expect(await personaRow(personaId)).toMatchObject({ due: true });
     // No persona: a no-op, never an error.
     await personas.resetProjectionForMember({
       communityId,
@@ -392,69 +447,107 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
         })
       ).viewerPersona,
     ).toBeNull();
-  });
 
-  it("claims only due pending personas of synced members on a provisioned channel, under a lease", async () => {
-    const owner = await createAccount();
-    const communityId = await createVerifiedCommunity(owner);
-    const member = await createAccount();
-    await join(member, communityId);
-    const persona = await personas.ensurePersona({
+    // Fenced reset under a fresh lease from ensure: written, lease cleared.
+    const release = await personas.ensurePersona({
       communityId,
       ownerUserId: member,
       generateAlias,
     });
+    expect(
+      await personas.resetProjection({
+        personaId,
+        leaseToken: release.leaseToken,
+        retryDelaySeconds: 5,
+      }),
+    ).toBe(true);
+    expect(await personaRow(personaId)).toMatchObject({
+      projection_state: "pending",
+      projection_lease: null,
+      due: false,
+    });
+  });
 
-    // The member is still `pending` on the channel: nothing to project.
-    const before = await personas.claimPendingProjections({
-      limit: 20,
-      leaseSeconds: 60,
+  it("claims only due pending personas of synced members on a provisioned channel, issuing a lease per claim", async () => {
+    const owner = await createAccount();
+    const communityId = await createVerifiedCommunity(owner);
+    const member = await createAccount();
+    await join(member, communityId);
+    const lease = await personas.ensurePersona({
+      communityId,
+      ownerUserId: member,
+      generateAlias,
+    });
+    const personaId = lease.persona.personaId;
+    const findClaim = (
+      targets: readonly CommunityChannelPersonaLease[],
+    ): CommunityChannelPersonaLease | undefined =>
+      targets.find((t) => t.persona.personaId === personaId);
+
+    // Not due yet (ensure lease) and the member is still `pending`.
+    expect(
+      findClaim(
+        await personas.claimPendingProjections({ limit: 20, leaseSeconds: 60 }),
+      ),
+    ).toBeUndefined();
+
+    // Make it due; the member is still not synced: still not claimable.
+    await personas.resetProjectionForMember({
+      communityId,
+      ownerUserId: member,
+      retryDelaySeconds: 0,
     });
     expect(
-      before.some((target) => target.persona.personaId === persona.personaId),
-    ).toBe(false);
+      findClaim(
+        await personas.claimPendingProjections({ limit: 20, leaseSeconds: 60 }),
+      ),
+    ).toBeUndefined();
 
     await syncCommunity(communityId);
     const claimed = await personas.claimPendingProjections({
       limit: 20,
       leaseSeconds: 60,
     });
-    const target = claimed.find(
-      (candidate) => candidate.persona.personaId === persona.personaId,
-    );
-    expect(target).toEqual({
-      persona: { ...persona, projectionAttempts: 1 },
+    const target = claimed.find((c) => c.persona.personaId === personaId);
+    expect(target).toBeDefined();
+    expect(target).toMatchObject({
+      persona: { ...lease.persona, projectionAttempts: 1 },
       streamChannelId: deriveCommunityChannelId(communityId),
       memberStreamUserId: deriveStreamUserId(member),
     });
+    expect(target?.leaseToken).not.toBe(lease.leaseToken);
+    expect(await personaRow(personaId)).toMatchObject({
+      projection_lease: target?.leaseToken,
+      due: false,
+    });
 
     // Leased: an immediate second claim does not hand it out again.
-    const again = await personas.claimPendingProjections({
-      limit: 20,
-      leaseSeconds: 60,
-    });
     expect(
-      again.some(
-        (candidate) => candidate.persona.personaId === persona.personaId,
+      findClaim(
+        await personas.claimPendingProjections({ limit: 20, leaseSeconds: 60 }),
       ),
-    ).toBe(false);
+    ).toBeUndefined();
 
-    await personas.confirmProjection({ personaId: persona.personaId });
-    await personas.resetProjection({
-      personaId: persona.personaId,
+    // The claim's lease is what confirm needs.
+    expect(
+      await personas.confirmProjection({
+        personaId,
+        leaseToken: target?.leaseToken ?? "",
+      }),
+    ).toBe(true);
+    await personas.resetProjectionForMember({
+      communityId,
+      ownerUserId: member,
       retryDelaySeconds: 0,
     });
     const reclaimed = await personas.claimPendingProjections({
       limit: 20,
       leaseSeconds: 60,
     });
-    expect(
-      reclaimed.find((c) => c.persona.personaId === persona.personaId)?.persona
-        .projectionAttempts,
-    ).toBe(2);
+    expect(findClaim(reclaimed)?.persona.projectionAttempts).toBe(2);
   });
 
-  it("lists synced members for the backfill with keyset paging and their persona when present", async () => {
+  it("lists synced members without a persona for the backfill with keyset paging", async () => {
     const owner = await createAccount();
     const communityId = await createVerifiedCommunity(owner);
     const members = [await createAccount(), await createAccount()];
@@ -462,19 +555,22 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       await join(member, communityId);
     }
     await syncCommunity(communityId);
-    const persona = await personas.ensurePersona({
+    await personas.ensurePersona({
       communityId,
       ownerUserId: members[0] ?? owner,
       generateAlias,
     });
 
-    const all: { ownerUserId: string; persona: unknown }[] = [];
+    const listed: string[] = [];
     let after: { communityId: string; ownerUserId: string } | null = null;
     for (;;) {
-      const page = await personas.listBackfillTargets({ limit: 2, after });
+      const page = await personas.listMembersWithoutPersona({
+        limit: 2,
+        after,
+      });
       for (const row of page) {
         if (row.communityId === communityId) {
-          all.push({ ownerUserId: row.ownerUserId, persona: row.persona });
+          listed.push(row.ownerUserId);
           expect(row.streamChannelId).toBe(
             deriveCommunityChannelId(communityId),
           );
@@ -489,14 +585,41 @@ describe("PostgreSQL community channel persona repository (Decision 0055)", () =
       }
       after = { communityId: last.communityId, ownerUserId: last.ownerUserId };
     }
-    const ids = all.map((row) => row.ownerUserId);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual(expect.arrayContaining([owner, ...members]));
-    expect(all.find((row) => row.ownerUserId === members[0])?.persona).toEqual(
-      persona,
+    expect(new Set(listed).size).toBe(listed.length);
+    expect(listed).toEqual(expect.arrayContaining([owner, members[1]]));
+    expect(listed).not.toContain(members[0]);
+  });
+
+  it("refuses to truncate while personas exist unless the operator opts in (L4)", async () => {
+    await expect(
+      pool.query("truncate table public.community_channel_personas"),
+    ).rejects.toMatchObject({ code: "55000" });
+    // Cascading from a parent table hits the same guard.
+    await expect(
+      pool.query("truncate table public.loop_users cascade"),
+    ).rejects.toMatchObject({ code: "55000" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(
+        "select set_config('loop.allow_persona_truncate', 'on', true)",
+      );
+      await client.query("truncate table public.community_channel_personas");
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const remaining = await pool.query(
+      "select count(*)::int as n from public.community_channel_personas",
     );
-    expect(
-      all.find((row) => row.ownerUserId === members[1])?.persona,
-    ).toBeNull();
+    expect(remaining.rows[0]).toEqual({ n: 0 });
+    // An empty table may be truncated without the opt-in (test fixtures).
+    await expect(
+      pool.query("truncate table public.community_channel_personas"),
+    ).resolves.toBeDefined();
   });
 });

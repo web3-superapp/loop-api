@@ -61,47 +61,71 @@ export interface CommunityChannelPersonaRecord {
   readonly projectionAttempts: number;
 }
 
-/** A persona together with the Stream coordinates its projection needs. */
-export interface CommunityChannelPersonaProjectionTarget {
+/**
+ * A persona plus the projection lease the caller must present to record the
+ * outcome. Issued by `ensurePersona` (the add path) and by
+ * `claimPendingProjections` (the persona lane and the backfill).
+ */
+export interface CommunityChannelPersonaLease {
   readonly persona: CommunityChannelPersonaRecord;
+  readonly leaseToken: string;
+}
+
+/** A leased persona together with the Stream coordinates its projection needs. */
+export interface CommunityChannelPersonaProjectionTarget extends CommunityChannelPersonaLease {
   readonly streamChannelId: string;
   readonly memberStreamUserId: string;
 }
 
-/** One `synced` official-channel member as the backfill script sees it. */
-export interface CommunityChannelPersonaBackfillTarget {
+/** One `synced` official-channel member that has no persona row yet. */
+export interface CommunityChannelMemberWithoutPersona {
   readonly communityId: string;
   readonly ownerUserId: string;
   readonly streamChannelId: string;
   readonly memberStreamUserId: string;
-  readonly persona: CommunityChannelPersonaRecord | null;
 }
 
 export interface CommunityChannelPersonaRepository {
   /**
-   * Returns the existing persona or generates one. `generateAlias` is called
-   * once per attempt; a community-local alias collision is retried with a
-   * fresh draw, and a concurrent insert for the same pair yields that row.
+   * Returns the existing persona or generates one, and issues a fresh
+   * projection lease either way (the row's `next_projection_at` moves 60 s
+   * out so the persona lane does not race the caller). `generateAlias` is
+   * called once per attempt; a community-local alias collision is retried
+   * with a fresh draw, and a concurrent insert for the same pair yields that
+   * row.
    */
   ensurePersona(input: {
     readonly communityId: string;
     readonly ownerUserId: string;
     readonly generateAlias: () => string;
-  }): Promise<CommunityChannelPersonaRecord>;
+  }): Promise<CommunityChannelPersonaLease>;
   findPersona(input: {
     readonly communityId: string;
     readonly ownerUserId: string;
   }): Promise<CommunityChannelPersonaRecord | null>;
-  confirmProjection(input: { readonly personaId: string }): Promise<void>;
   /**
-   * Marks the projection `pending` again (or keeps it pending) and schedules
-   * the next projection attempt. `retryDelaySeconds: 0` makes it due now.
+   * Fenced: writes `confirmed` only while the row is `pending` and still
+   * carries `leaseToken`. Returns whether the row was written.
+   */
+  confirmProjection(input: {
+    readonly personaId: string;
+    readonly leaseToken: string;
+  }): Promise<boolean>;
+  /**
+   * Fenced like `confirmProjection`: keeps the row `pending`, clears the
+   * lease, and schedules the next projection attempt. Returns whether the
+   * row was written.
    */
   resetProjection(input: {
     readonly personaId: string;
+    readonly leaseToken: string;
     readonly retryDelaySeconds: number;
-  }): Promise<void>;
-  /** Same as `resetProjection` for the member's persona when one exists. */
+  }): Promise<boolean>;
+  /**
+   * Unfenced, for the `remove` path: the membership authority knows Stream
+   * dropped the member custom, so the persona becomes `pending` (lease
+   * cleared) regardless of who holds it. No-op without a persona.
+   */
   resetProjectionForMember(input: {
     readonly communityId: string;
     readonly ownerUserId: string;
@@ -109,25 +133,26 @@ export interface CommunityChannelPersonaRepository {
   }): Promise<void>;
   /**
    * Claims due `pending` personas whose LOOP member is `synced` on a
-   * provisioned, non-failed channel. Each claim advances `next_projection_at`
-   * by `leaseSeconds` and increments `projection_attempts`, so replicas do
-   * not project the same persona concurrently.
+   * provisioned, non-failed channel. Each claim issues a new lease, advances
+   * `next_projection_at` by `leaseSeconds`, and increments
+   * `projection_attempts`, so the persona lane, a second replica, and the
+   * backfill script never project the same persona concurrently.
    */
   claimPendingProjections(input: {
     readonly limit: number;
     readonly leaseSeconds: number;
   }): Promise<readonly CommunityChannelPersonaProjectionTarget[]>;
   /**
-   * Keyset page of `synced` members on provisioned channels, ordered by
-   * `(community_id, owner_user_id)`, with their persona when one exists.
+   * Keyset page of `synced` members on provisioned channels that have no
+   * persona row, ordered by `(community_id, owner_user_id)`.
    */
-  listBackfillTargets(input: {
+  listMembersWithoutPersona(input: {
     readonly limit: number;
     readonly after: {
       readonly communityId: string;
       readonly ownerUserId: string;
     } | null;
-  }): Promise<readonly CommunityChannelPersonaBackfillTarget[]>;
+  }): Promise<readonly CommunityChannelMemberWithoutPersona[]>;
 }
 
 export interface VoiceRoomIdentity {
@@ -513,6 +538,6 @@ export function createUnavailableCommunityChannelPersonaRepository(): CommunityC
     resetProjection: unavailable,
     resetProjectionForMember: unavailable,
     claimPendingProjections: unavailable,
-    listBackfillTargets: unavailable,
+    listMembersWithoutPersona: unavailable,
   });
 }

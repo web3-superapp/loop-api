@@ -1,4 +1,4 @@
-export const latestMigrationName = "000031_v2_community_channel_personas";
+export const latestMigrationName = "000032_v2_community_channel_persona_lease";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
