@@ -15,7 +15,11 @@ import type {
   ChainRegistryRepository,
   PoolRecord,
 } from "../src/database/chain-registry-repository.js";
-import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
+import {
+  createUnavailableControlPlaneRepository,
+  IssuanceQuotaExceededError,
+  type ControlPlaneRepository,
+} from "../src/database/control-plane-repository.js";
 import type { Database } from "../src/database/database.js";
 import type {
   MarketFactCacheRecord,
@@ -35,6 +39,8 @@ import {
   type CandlesProvider,
   type MarketPairsProvider,
   type SecurityFactsProvider,
+  type TokenLookupProvider,
+  type TokenLookupSnapshot,
   type TokenPairsSnapshot,
 } from "../src/integrations/market/market-data-provider.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
@@ -54,6 +60,102 @@ const observedAt = "2026-09-08T00:00:00.000Z";
 /** Provider fetch time; inside the 30s price TTL for the cache assertion. */
 const fetchedAt = new Date().toISOString();
 const q96 = 2n ** 96n;
+/** BSC WETH: not in the test registry, the address a user pastes into chat. */
+const weth = "0x2170ed0880ac9a755fd29b2688956bd959f933f8";
+const wethAssetId = `eip155:56:${weth}`;
+const wethPool = "0xd0e226f674bbf064f54ab47f42473ff80db98cba";
+const quotaSecret = "unlisted-lookup-quota-secret-0123456789abcdef";
+
+function lookupSnapshot(): TokenLookupSnapshot {
+  return {
+    tokenAddress: weth,
+    symbol: "ETH",
+    name: "Ethereum Token",
+    decimals: 18,
+    priceUsd: "2575.1402462078",
+    fdvUsd: "1300404347.01321",
+    marketCapUsd: "1300514252.30807",
+    volumeH24Usd: "25016115.5564862",
+    topPools: [
+      {
+        poolAddress: wethPool,
+        dexId: "pancakeswap-v3-bsc",
+        name: "ETH / WBNB 0.05%",
+        baseTokenAddress: weth,
+        quoteTokenAddress: wbnb,
+        quoteTokenSymbol: "WBNB",
+        reserveUsd: "16714230.2158",
+        volumeH24Usd: "8336698.90737144",
+        priceChangeH24: "-2.52",
+        createdAt: "2025-11-14T06:46:14.000Z",
+      },
+    ],
+  };
+}
+
+function lookupProviderFake(
+  mode: "ok" | "unreachable" | "notFound" = "ok",
+): TokenLookupProvider & { readonly calls: () => number } {
+  let calls = 0;
+  return {
+    source: "geckoterminal",
+    calls: () => calls,
+    readToken: () => {
+      calls += 1;
+      if (mode === "unreachable") {
+        return Promise.reject(
+          new MarketProviderError(
+            "market_provider_unreachable",
+            "MARKET_PROVIDER_UNREACHABLE",
+          ),
+        );
+      }
+      if (mode === "notFound") {
+        return Promise.reject(
+          new MarketProviderError(
+            "market_provider_rejected",
+            "MARKET_TOKEN_NOT_FOUND",
+            404,
+          ),
+        );
+      }
+      return Promise.resolve({
+        value: lookupSnapshot(),
+        source: "geckoterminal" as const,
+        fetchedAt,
+        rawDigest: "e".repeat(64),
+      });
+    },
+  };
+}
+
+/** In-memory Decision 0024 quota buckets: exhaustion is reproduced by capacity. */
+function controlPlaneFake(
+  mode: "ok" | "exhausted" = "ok",
+): ControlPlaneRepository & {
+  readonly consumed: () => number;
+} {
+  let consumed = 0;
+  return {
+    ...createUnavailableControlPlaneRepository(),
+    consumed: () => consumed,
+    consumeIssuanceQuota: vi.fn(
+      (input: { readonly buckets: readonly { subjectKind: string }[] }) => {
+        consumed += 1;
+        if (mode === "exhausted") {
+          return Promise.reject(new IssuanceQuotaExceededError());
+        }
+        return Promise.resolve(
+          input.buckets.map((bucket) => ({
+            subjectKind: bucket.subjectKind,
+            issuedCount: consumed,
+            windowStartedAt: observedAt,
+          })),
+        );
+      },
+    ),
+  };
+}
 
 const nativeAsset: AssetRecord = Object.freeze({
   assetId: "eip155:56:native",
@@ -153,6 +255,7 @@ function testConfig(overrides: Readonly<Record<string, string>> = {}) {
     LOG_LEVEL: "silent",
     V2_MODULES_ENABLED: "market,chain,watchlist",
     V2_CURSOR_HMAC_SECRET: cursorSecret,
+    STREAM_TOKEN_QUOTA_HMAC_SECRET: quotaSecret,
     PRIVY_APP_ID: "app_test",
     PRIVY_APP_SECRET: "secret_test",
     BSC_RPC_URLS: "https://rpc-a.example/",
@@ -499,12 +602,14 @@ function fakes(
     readonly indexer?: BscIndexerRepository;
     readonly assets?: readonly AssetRecord[];
     readonly candlesProvider?: CandlesProvider;
+    readonly tokenLookupProvider?: TokenLookupProvider | null;
+    readonly controlPlane?: ControlPlaneRepository;
   } = {},
 ) {
   const database = {
     alerts: createUnavailableAlertRepository(),
     agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
-    controlPlane: createUnavailableControlPlaneRepository(),
+    controlPlane: options.controlPlane ?? controlPlaneFake(),
     deviceSessions: createUnavailableDeviceSessionRepository(),
     perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
     perpIntents: createUnavailablePerpIntentRepository(),
@@ -540,6 +645,10 @@ function fakes(
     pairsProvider,
     securityProvider,
     candlesProvider: options.candlesProvider ?? null,
+    tokenLookupProvider:
+      options.tokenLookupProvider === undefined
+        ? null
+        : options.tokenLookupProvider,
   };
 }
 
@@ -563,6 +672,7 @@ describe("LOOP API V2 market module", () => {
       marketPairsProvider: dependencies.pairsProvider,
       securityFactsProvider: dependencies.securityProvider,
       candlesProvider: dependencies.candlesProvider,
+      tokenLookupProvider: dependencies.tokenLookupProvider,
       logger: false,
     });
     apps.push(app);
@@ -1291,5 +1401,379 @@ describe("LOOP API V2 market module", () => {
       headers: commonHeaders({ authorization: undefined }),
     });
     expect(unauthenticated.statusCode).toBe(401);
+  });
+
+  describe("unregistered address lookup (Decision 0058)", () => {
+    it("describes a registry-unknown address from GeckoTerminal with status unregistered and no swap capability", async () => {
+      const lookup = lookupProviderFake();
+      const deps = fakes({ tokenLookupProvider: lookup });
+      const { app, database } = await createApp(deps);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({
+        asset: {
+          assetId: wethAssetId,
+          chainId: "eip155:56",
+          address: weth,
+          symbol: "ETH",
+          name: "Ethereum Token",
+          decimals: 18,
+          status: "unregistered",
+          source: {
+            kind: "provider_lookup",
+            provider: "geckoterminal",
+            ttlSeconds: 3_600,
+            quality: "fresh",
+            blockNumber: null,
+            verifiedAt: null,
+          },
+        },
+        capability: {
+          viewable: true,
+          swappable: false,
+          value: "viewable",
+          reasonCode: "ASSET_NOT_REGISTERED",
+        },
+        price: {
+          value: "2575.1402462078",
+          source: "geckoterminal",
+          ttlSeconds: 60,
+          quality: "fresh",
+        },
+        priceChange24h: { value: "-2.52", source: "geckoterminal" },
+        liquidityUsd: { value: "16714230.2158" },
+        volume24h: { value: "25016115.5564862" },
+        marketCap: { value: "1300514252.30807" },
+        fdv: { value: "1300404347.01321" },
+        primaryPair: {
+          pairAddress: wethPool,
+          dexId: "pancakeswap-v3-bsc",
+          labels: [],
+          quoteTokenAddress: wbnb,
+          quoteTokenSymbol: "WBNB",
+          pairCreatedAt: "2025-11-14T06:46:14.000Z",
+        },
+        community: { status: "unavailable", reasonCode: "COMMUNITY_NOT_BOUND" },
+        // GoPlus is keyed by address and answers for any token.
+        security: { status: "available", source: "goplus" },
+        holderCount: { value: "8019338", source: "goplus" },
+        contractVersion: "2.0",
+      });
+      // The lookup consumed the quota; DexScreener was not consulted.
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(1);
+      expect(deps.pairsProvider?.calls()).toBe(0);
+
+      // A registered asset never consumes the lookup quota.
+      const registered = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(registered.statusCode).toBe(200);
+      expect(registered.json()).toMatchObject({
+        asset: { status: "pending", symbol: "WBNB" },
+      });
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(1);
+    });
+
+    it("falls back to DexScreener when GeckoTerminal is disabled and publishes decimals as null", async () => {
+      const pairsProvider: MarketPairsProvider & {
+        readonly calls: () => number;
+      } = {
+        source: "dexscreener",
+        calls: () => 0,
+        readTokenPairsBatch: () => Promise.reject(new Error("not used")),
+        readPair: () => Promise.reject(new Error("not used")),
+        readTokenPairs: (tokenAddress: string) =>
+          Promise.resolve({
+            value: {
+              tokenAddress,
+              pairs: [
+                {
+                  ...pairsSnapshot().pairs[0]!,
+                  pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
+                  baseTokenAddress: weth,
+                  baseTokenSymbol: "ETH",
+                  baseTokenName: "Ethereum Token",
+                  priceUsd: "2576.66",
+                  liquidityUsd: "899550.52",
+                  volumeH24: "2926215.92",
+                },
+              ],
+            },
+            source: "dexscreener" as const,
+            fetchedAt,
+            rawDigest: "f".repeat(64),
+          }),
+      };
+      const deps = { ...fakes(), pairsProvider };
+      const { app } = await createApp(deps);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        asset: {
+          status: "unregistered",
+          symbol: "ETH",
+          name: "Ethereum Token",
+          decimals: null,
+          source: { kind: "provider_lookup", provider: "dexscreener" },
+        },
+        price: { value: "2576.66", source: "dexscreener", ttlSeconds: 60 },
+        primaryPair: {
+          pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
+          dexId: "pancakeswap",
+          labels: ["v3"],
+        },
+      });
+    });
+
+    it("answers 200 with unavailable blocks when the Providers cannot be reached, and 404 only when they say the token does not exist", async () => {
+      const { app: unreachable } = await createApp(
+        fakes({
+          providers: false,
+          tokenLookupProvider: lookupProviderFake("unreachable"),
+        }),
+      );
+      const degraded = await unreachable.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(degraded.statusCode).toBe(200);
+      expect(degraded.json()).toMatchObject({
+        asset: {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        },
+        capability: {
+          viewable: false,
+          swappable: false,
+          value: "temporarily_unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        },
+        price: {
+          value: null,
+          quality: "unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        },
+        primaryPair: null,
+        security: {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED",
+        },
+      });
+
+      // GeckoTerminal 404 and DexScreener empty list: both affirmative.
+      const { app: missing } = await createApp(
+        fakes({ tokenLookupProvider: lookupProviderFake("notFound") }),
+      );
+      const notFound = await missing.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(notFound.statusCode).toBe(404);
+      expect(notFound.json()).toMatchObject({ code: "NOT_FOUND" });
+
+      // GeckoTerminal 404 but DexScreener unreachable: not an answer.
+      const unreachablePairs: MarketPairsProvider & {
+        readonly calls: () => number;
+      } = {
+        source: "dexscreener",
+        calls: () => 0,
+        readTokenPairsBatch: () => Promise.reject(new Error("not used")),
+        readPair: () => Promise.reject(new Error("not used")),
+        readTokenPairs: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_unreachable",
+              "MARKET_PROVIDER_UNREACHABLE",
+            ),
+          ),
+      };
+      const { app: half } = await createApp({
+        ...fakes({ tokenLookupProvider: lookupProviderFake("notFound") }),
+        pairsProvider: unreachablePairs,
+      });
+      const partial = await half.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(partial.statusCode).toBe(200);
+      expect(partial.json()).toMatchObject({
+        asset: {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        },
+      });
+
+      // GeckoTerminal 404 with DexScreener disabled: the only enabled
+      // Provider answered, so the token does not exist for LOOP.
+      const { app: only } = await createApp(
+        fakes({
+          providers: false,
+          tokenLookupProvider: lookupProviderFake("notFound"),
+        }),
+      );
+      const onlyResponse = await only.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(onlyResponse.statusCode).toBe(404);
+    });
+
+    it("rejects a malformed or mixed-case address with 400 before any quota or Provider work", async () => {
+      const lookup = lookupProviderFake();
+      const deps = fakes({ tokenLookupProvider: lookup });
+      const { app, database } = await createApp(deps);
+      for (const assetId of [
+        "eip155:56:0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+        "eip155:56:0x2170ed0880ac9a755fd29b2688956bd959f933",
+        "eip155:56:2170ed0880ac9a755fd29b2688956bd959f933f8",
+        "eip155:56:ETH",
+      ]) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/market/assets/${assetId}`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode, assetId).toBe(400);
+        expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(0);
+      expect(lookup.calls()).toBe(0);
+    });
+
+    it("returns 429 when the per-user lookup quota is exhausted and 503 when the quota runtime is missing", async () => {
+      const exhaustedLookup = lookupProviderFake();
+      const { app: exhausted } = await createApp(
+        fakes({
+          tokenLookupProvider: exhaustedLookup,
+          controlPlane: controlPlaneFake("exhausted"),
+        }),
+      );
+      const limited = await exhausted.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json()).toMatchObject({
+        code: "RATE_LIMITED",
+        category: "rateLimit",
+        retryable: true,
+      });
+      expect(exhaustedLookup.calls()).toBe(0);
+
+      const { app: noQuota } = await createApp(
+        fakes({ tokenLookupProvider: lookupProviderFake() }),
+        { STREAM_TOKEN_QUOTA_HMAC_SECRET: "" },
+      );
+      const closed = await noQuota.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(closed.statusCode).toBe(503);
+      expect(closed.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+
+      // The control-plane repository itself unavailable is the same closed state.
+      const { app: noRepository } = await createApp(
+        fakes({
+          tokenLookupProvider: lookupProviderFake(),
+          controlPlane: createUnavailableControlPlaneRepository(),
+        }),
+      );
+      const closedRepository = await noRepository.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(closedRepository.statusCode).toBe(503);
+    });
+
+    it("charts an unregistered address through GeckoTerminal OHLCV of its primary pair, else MARKET_POOL_NOT_REGISTERED", async () => {
+      const candles = candlesProviderFake();
+      const deps = fakes({
+        tokenLookupProvider: lookupProviderFake(),
+        candlesProvider: candles.provider,
+      });
+      const { app, database } = await createApp(deps);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}/candles?interval=1h&limit=5`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        assetId: wethAssetId,
+        interval: "1h",
+        candles: {
+          status: "available",
+          quality: "fresh",
+          source: "geckoterminal",
+          labelKey: null,
+          proxyAsset: null,
+          pool: {
+            address: wethPool,
+            protocol: "pancakeswap-v3-bsc",
+            quoteAssetId: null,
+            quoteSymbol: "USD",
+          },
+          priceUnit: "USD per ETH",
+          items: [{ open: "747.12", close: "747.48", swapCount: null }],
+        },
+      });
+      expect(candles.readPoolOhlcv).toHaveBeenCalledWith(
+        wethPool,
+        "1h",
+        5,
+        expect.objectContaining({ tokenAddress: weth }),
+      );
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(1);
+
+      const { app: withoutOhlcv } = await createApp(
+        fakes({ tokenLookupProvider: lookupProviderFake() }),
+      );
+      const closed = await withoutOhlcv.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wethAssetId}/candles?interval=1h`,
+        headers: commonHeaders(),
+      });
+      expect(closed.statusCode).toBe(200);
+      expect(closed.json()).toMatchObject({
+        candles: {
+          status: "unavailable",
+          reasonCode: "MARKET_POOL_NOT_REGISTERED",
+        },
+      });
+    });
   });
 });

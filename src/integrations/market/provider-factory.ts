@@ -6,6 +6,7 @@ import type {
   CandlesProvider,
   MarketPairsProvider,
   SecurityFactsProvider,
+  TokenLookupProvider,
 } from "./market-data-provider.js";
 import type { ProviderFetch } from "./provider-http.js";
 
@@ -18,6 +19,12 @@ export interface MarketProviders {
   readonly pairs: MarketPairsProvider | null;
   readonly security: SecurityFactsProvider | null;
   readonly candles: CandlesProvider | null;
+  /**
+   * Unregistered-address lookup (Decision 0058): the GeckoTerminal adapter,
+   * sharing its throttle with the candles surface. `null` when GeckoTerminal
+   * is disabled; the DexScreener pairs Provider is then the only lookup path.
+   */
+  readonly tokenLookup: TokenLookupProvider | null;
 }
 
 /**
@@ -33,6 +40,12 @@ export function createMarketProviders(
 ): MarketProviders {
   const fetchOption =
     options.fetch === undefined ? {} : { fetch: options.fetch };
+  const geckoterminal = config.geckoterminal.enabled
+    ? createGeckoterminalAdapter({
+        rateLimitPerMinute: config.geckoterminal.rateLimitPerMinute,
+        ...fetchOption,
+      })
+    : null;
   return Object.freeze({
     pairs: config.dexscreener.enabled
       ? createDexscreenerAdapter({
@@ -52,11 +65,7 @@ export function createMarketProviders(
             rateLimitPerMinute: config.goplus.rateLimitPerMinute,
             ...fetchOption,
           }),
-    candles: config.geckoterminal.enabled
-      ? createGeckoterminalAdapter({
-          rateLimitPerMinute: config.geckoterminal.rateLimitPerMinute,
-          ...fetchOption,
-        })
-      : null,
+    candles: geckoterminal,
+    tokenLookup: geckoterminal,
   });
 }

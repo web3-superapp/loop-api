@@ -1303,6 +1303,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
       readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
       readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+      readUnlistedToken: vi.fn(() => Promise.reject(new Error("not used"))),
       candlesProviderEnabled: false,
     };
   }

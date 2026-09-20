@@ -52,6 +52,12 @@ export interface TokenPairSnapshot {
   readonly labels: readonly string[];
   readonly baseTokenAddress: string;
   readonly baseTokenSymbol: string;
+  /**
+   * The base token's display name as the Provider reports it; `null` when
+   * not reported. Rows cached before Decision 0058 lack the field and read
+   * as `undefined`, which consumers treat as `null`.
+   */
+  readonly baseTokenName?: string | null;
   readonly quoteTokenAddress: string;
   readonly quoteTokenSymbol: string;
   readonly priceUsd: string | null;
@@ -127,6 +133,50 @@ export interface SecurityFactsProvider {
     tokenAddress: string,
     options?: ProviderReadOptions,
   ): Promise<ProviderObservation<TokenSecuritySnapshot>>;
+}
+
+/**
+ * One token as a lookup Provider describes it (Decision 0058): identity
+ * fields plus the token-level market facts and the Provider's top pools,
+ * deepest first. Every number is a canonical decimal string or `null` when
+ * the Provider did not report it.
+ */
+export interface TokenLookupPoolSnapshot {
+  readonly poolAddress: string;
+  readonly dexId: string;
+  readonly name: string;
+  readonly baseTokenAddress: string | null;
+  readonly quoteTokenAddress: string | null;
+  readonly quoteTokenSymbol: string | null;
+  readonly reserveUsd: string | null;
+  readonly volumeH24Usd: string | null;
+  readonly priceChangeH24: string | null;
+  readonly createdAt: string | null;
+}
+
+export interface TokenLookupSnapshot {
+  readonly tokenAddress: string;
+  readonly symbol: string | null;
+  readonly name: string | null;
+  readonly decimals: number | null;
+  readonly priceUsd: string | null;
+  readonly fdvUsd: string | null;
+  readonly marketCapUsd: string | null;
+  readonly volumeH24Usd: string | null;
+  readonly topPools: readonly TokenLookupPoolSnapshot[];
+}
+
+export interface TokenLookupProvider {
+  readonly source: MarketSource;
+  /**
+   * Describe one token by address. A Provider that answers "no such token"
+   * rejects with `market_provider_rejected` and reason code
+   * `MARKET_TOKEN_NOT_FOUND`; transport failures keep their usual codes.
+   */
+  readToken(
+    tokenAddress: string,
+    options?: ProviderReadOptions,
+  ): Promise<ProviderObservation<TokenLookupSnapshot>>;
 }
 
 export interface OhlcvCandle {
@@ -240,6 +290,13 @@ export function createUnavailableSecurityFactsProvider(
   source: MarketSource = "goplus",
 ): SecurityFactsProvider {
   return Object.freeze({ source, readTokenSecurity: disabled(reasonCode) });
+}
+
+export function createUnavailableTokenLookupProvider(
+  reasonCode: string,
+  source: MarketSource = "geckoterminal",
+): TokenLookupProvider {
+  return Object.freeze({ source, readToken: disabled(reasonCode) });
 }
 
 export function createUnavailableCandlesProvider(

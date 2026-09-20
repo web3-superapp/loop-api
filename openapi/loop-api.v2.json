@@ -44187,7 +44187,7 @@
         "operationId": "getV2MarketAsset",
         "summary": "Get market, community, and security facts for one asset",
         "tags": ["market"],
-        "description": "Registry identity and capability, DexScreener price/liquidity/volume facts from the deepest pair, the verified community bound to the asset, and GoPlus security facts as a labelled list. `swappable` stays false; no rating or verdict is derived.",
+        "description": "Registry identity and capability, DexScreener price/liquidity/volume facts from the deepest pair, the verified community bound to the asset, and GoPlus security facts as a labelled list. `swappable` stays false; no rating or verdict is derived. A BSC token address the registry does not know (for example one pasted into a community chat) is resolved through a Provider lookup (GeckoTerminal first, DexScreener fallback; Decision 0058): `asset.status` is `unregistered`, identity fields come from the Provider, and the lookup is quota-bound per user (429 `RATE_LIMITED`). A Provider that answers \"no such token\" is 404; a Provider that cannot be reached leaves the facts `unavailable` in a 200.",
         "parameters": [
           {
             "schema": {
@@ -44253,91 +44253,226 @@
                   ],
                   "properties": {
                     "asset": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "assetId",
-                        "chainId",
-                        "address",
-                        "symbol",
-                        "name",
-                        "decimals",
-                        "status",
-                        "source",
-                        "updatedAt"
-                      ],
-                      "properties": {
-                        "assetId": {
-                          "type": "string",
-                          "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
-                          "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
-                        },
-                        "chainId": {
-                          "type": "string",
-                          "pattern": "^eip155:[1-9][0-9]{0,9}$"
-                        },
-                        "address": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^0x[0-9a-f]{40}$",
-                              "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
-                            },
-                            { "type": "null" }
-                          ]
-                        },
-                        "symbol": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 32
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128
-                        },
-                        "decimals": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 36
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": ["pending", "verified", "blocked"]
-                        },
-                        "source": {
+                      "description": "Discriminate on `status`: `pending|verified|blocked` is the registry projection; `unregistered` is a Provider-described address (Decision 0058); `unavailable` is an unregistered address no Provider could describe right now (`reasonCode` says why) — render the address with the unavailable state, never a placeholder ticker.",
+                      "anyOf": [
+                        {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["kind", "blockNumber", "verifiedAt"],
+                          "required": [
+                            "assetId",
+                            "chainId",
+                            "address",
+                            "symbol",
+                            "name",
+                            "decimals",
+                            "status",
+                            "source",
+                            "updatedAt"
+                          ],
                           "properties": {
-                            "kind": {
+                            "assetId": {
                               "type": "string",
-                              "enum": [
-                                "chain_call",
-                                "chain_native",
-                                "operator_block"
-                              ]
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                              "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
                             },
-                            "blockNumber": {
+                            "chainId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                            },
+                            "address": {
                               "anyOf": [
                                 {
                                   "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,19})$",
-                                  "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                  "pattern": "^0x[0-9a-f]{40}$",
+                                  "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
                                 },
                                 { "type": "null" }
                               ]
                             },
-                            "verifiedAt": {
-                              "anyOf": [
-                                { "type": "string", "format": "date-time" },
-                                { "type": "null" }
-                              ]
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "decimals": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 36
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "blocked"]
+                            },
+                            "source": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["kind", "blockNumber", "verifiedAt"],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "chain_call",
+                                    "chain_native",
+                                    "operator_block"
+                                  ]
+                                },
+                                "blockNumber": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                      "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "verifiedAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time"
                             }
                           }
                         },
-                        "updatedAt": { "type": "string", "format": "date-time" }
-                      }
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "chainId",
+                            "address",
+                            "symbol",
+                            "name",
+                            "decimals",
+                            "status",
+                            "source",
+                            "updatedAt"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                            },
+                            "chainId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                            },
+                            "address": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 32
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "Provider-reported symbol; null when the Provider did not report one. Display the address instead; never invent a ticker."
+                            },
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "decimals": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 36
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "Null when the Provider did not report decimals (DexScreener never does). Do not format raw amounts without it."
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["unregistered"]
+                            },
+                            "source": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "provider",
+                                "fetchedAt",
+                                "ttlSeconds",
+                                "quality",
+                                "blockNumber",
+                                "verifiedAt"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["provider_lookup"]
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "enum": [
+                                    "dexscreener",
+                                    "goplus",
+                                    "geckoterminal",
+                                    "loop_indexer"
+                                  ]
+                                },
+                                "fetchedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "ttlSeconds": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "quality": {
+                                  "type": "string",
+                                  "enum": ["fresh", "stale"],
+                                  "description": "`stale`: the identity is remembered from an earlier lookup inside its TTL but the Provider could not confirm it now; the price facts then carry the reason."
+                                },
+                                "blockNumber": { "type": "null" },
+                                "verifiedAt": { "type": "null" }
+                              }
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        }
+                      ]
                     },
                     "capability": {
                       "type": "object",
@@ -45436,6 +45571,76 @@
               }
             }
           },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Default Response",
             "headers": {
@@ -45591,7 +45796,7 @@
         "operationId": "getV2MarketCandles",
         "summary": "Get OHLCV candles for one asset",
         "tags": ["market"],
-        "description": "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other.",
+        "description": "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An unregistered address (Decision 0058) is charted only through GeckoTerminal OHLCV of its lookup's primary pair (`pool.protocol` is then the Provider's dex id) and consumes the lookup quota; without GeckoTerminal it is `MARKET_POOL_NOT_REGISTERED`.",
         "parameters": [
           {
             "schema": {
@@ -45742,7 +45947,9 @@
                                 },
                                 "protocol": {
                                   "type": "string",
-                                  "enum": ["pancakeswap_v3"]
+                                  "minLength": 1,
+                                  "maxLength": 64,
+                                  "description": "`pancakeswap_v3` for a registered pool; for an unregistered address the lookup Provider's dex id of the primary pair (e.g. `pancakeswap-v3-bsc`)."
                                 },
                                 "quoteAssetId": {
                                   "anyOf": [
@@ -46170,6 +46377,76 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["CHAIN_MISMATCH"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
                     "category": {
                       "type": "string",
                       "enum": [

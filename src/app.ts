@@ -78,6 +78,7 @@ import type {
   CandlesProvider,
   MarketPairsProvider,
   SecurityFactsProvider,
+  TokenLookupProvider,
 } from "./integrations/market/market-data-provider.js";
 import {
   createAssetRegistryService,
@@ -183,6 +184,7 @@ import {
 } from "./features/profile/profile-v2-service.js";
 import { createSocialCursorCodec } from "./features/social/social-cursor.js";
 import { createSocialMutationQuota } from "./features/social/social-mutation-quota.js";
+import { createUnlistedTokenLookupQuota } from "./features/market/unlisted-token-lookup-quota.js";
 import {
   createSocialService,
   createUnavailableSocialService,
@@ -431,6 +433,8 @@ export interface BuildAppOptions {
   readonly marketPairsProvider?: MarketPairsProvider | null;
   readonly securityFactsProvider?: SecurityFactsProvider | null;
   readonly candlesProvider?: CandlesProvider | null;
+  /** Unregistered-address lookup Provider (Decision 0058); `null` disables the GeckoTerminal path. */
+  readonly tokenLookupProvider?: TokenLookupProvider | null;
   readonly marketFactService?: MarketFactService;
   readonly marketReadService?: MarketReadService;
   readonly alertV2Service?: AlertV2Service;
@@ -1240,6 +1244,10 @@ export async function buildApp(
       : options.candlesProvider;
   const marketFactCacheRepository =
     database.marketFacts ?? createUnavailableMarketFactCacheRepository();
+  const tokenLookupProvider =
+    options.tokenLookupProvider === undefined
+      ? providers.tokenLookup
+      : options.tokenLookupProvider;
   const marketFactService =
     options.marketFactService ??
     createMarketFactService({
@@ -1248,7 +1256,19 @@ export async function buildApp(
       pairsProvider: marketPairsProvider,
       securityProvider: securityFactsProvider,
       candlesProvider,
+      tokenLookupProvider,
     });
+  // Unregistered-address lookup quota (Decision 0058): the alias-search
+  // secret keys the HMAC subjects; without it the lookup fails closed.
+  const unlistedTokenLookupQuota =
+    config.streamTokenQuota === null
+      ? null
+      : createUnlistedTokenLookupQuota({
+          repository: database.controlPlane,
+          hmacSecret: new TextEncoder().encode(
+            config.streamTokenQuota.hmacSecret,
+          ),
+        });
   const marketRuntimeAvailable =
     registeredModuleIds.includes("market") &&
     (options.marketReadService !== undefined ||
@@ -1289,6 +1309,7 @@ export async function buildApp(
       wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
       cursorCodec: v2CursorCodec,
+      lookupQuota: unlistedTokenLookupQuota,
       chainId: bscChainId,
     });
   const alertV2Service =

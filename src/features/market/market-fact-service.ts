@@ -15,6 +15,8 @@ import {
   type PoolOhlcvSnapshot,
   type ProviderObservation,
   type SecurityFactsProvider,
+  type TokenLookupProvider,
+  type TokenLookupSnapshot,
   type TokenPairSnapshot,
   type TokenPairsSnapshot,
   type TokenSecuritySnapshot,
@@ -54,6 +56,47 @@ export interface ReadFactOptions {
   /** When true only a fresh Provider read or fresh cache row is accepted. */
   readonly requireFresh?: boolean;
   readonly signal?: AbortSignal;
+}
+
+/**
+ * Identity of a token the registry does not know, as one Provider reported
+ * it (Decision 0058). Any field the Provider did not report is `null`;
+ * nothing is filled in from another source.
+ */
+export interface UnlistedTokenIdentity {
+  readonly symbol: string | null;
+  readonly name: string | null;
+  readonly decimals: number | null;
+}
+
+export interface UnlistedTokenPair {
+  readonly pairAddress: string;
+  readonly dexId: string;
+  readonly labels: readonly string[];
+  readonly quoteTokenAddress: string;
+  readonly quoteTokenSymbol: string;
+  readonly pairCreatedAt: string | null;
+}
+
+export interface UnlistedTokenMarket {
+  readonly priceUsd: string | null;
+  readonly priceChangeH24: string | null;
+  readonly liquidityUsd: string | null;
+  readonly volumeH24: string | null;
+  readonly marketCap: string | null;
+  readonly fdv: string | null;
+  readonly primaryPair: UnlistedTokenPair | null;
+}
+
+export interface UnlistedTokenFact {
+  readonly identity: CachedFact<UnlistedTokenIdentity>;
+  readonly market: CachedFact<UnlistedTokenMarket>;
+  /**
+   * True only when every enabled lookup Provider affirmatively answered
+   * that it knows no such token. A Provider that could not be reached
+   * leaves this false: absence of an answer is not an answer.
+   */
+  readonly notFound: boolean;
 }
 
 /**
@@ -108,6 +151,17 @@ export interface MarketFactService {
   readNewPools(
     options?: ReadFactOptions,
   ): Promise<CachedFact<NewPoolsSnapshot>>;
+  /**
+   * Describe a token the registry does not know (Decision 0058):
+   * GeckoTerminal's token lookup first, the DexScreener pairs Provider as
+   * the fallback, each with its own cache row and TTL. The identity is
+   * kept for `unlistedMetadataTtlSeconds`, the market facts for
+   * `unlistedPriceTtlSeconds`.
+   */
+  readUnlistedToken(
+    tokenAddress: string,
+    options?: ReadFactOptions,
+  ): Promise<UnlistedTokenFact>;
   readonly candlesProviderEnabled: boolean;
 }
 
@@ -117,6 +171,8 @@ export interface CreateMarketFactServiceInput {
   readonly pairsProvider: MarketPairsProvider | null;
   readonly securityProvider: SecurityFactsProvider | null;
   readonly candlesProvider: CandlesProvider | null;
+  /** Unregistered-address lookup Provider (Decision 0058); `null` when GeckoTerminal is disabled. */
+  readonly tokenLookupProvider?: TokenLookupProvider | null;
   readonly now?: () => Date;
 }
 
@@ -126,6 +182,10 @@ export const marketFactKinds = Object.freeze({
   tokenSecurity: "token_security",
   poolOhlcv: "pool_ohlcv",
   newPools: "new_pools",
+  /** GeckoTerminal token lookup snapshot (price-class TTL). */
+  tokenLookup: "token_lookup",
+  /** Identity of an unregistered token as one Provider reported it (metadata TTL). */
+  tokenIdentity: "token_identity",
 } as const);
 
 function unavailableFact<T>(
@@ -318,29 +378,41 @@ export function createMarketFactService(
     });
   }
 
+  function readTokenPairsWithTtl(
+    tokenAddress: string,
+    ttlSeconds: number,
+    options: ReadFactOptions,
+  ): Promise<CachedFact<TokenPairsSnapshot>> {
+    const provider = input.pairsProvider;
+    const key = `token:${tokenAddress}|${marketFactKinds.tokenPairs}|${String(options.requireFresh === true)}|${String(ttlSeconds)}`;
+    return dedupe(key, () =>
+      read<TokenPairsSnapshot>({
+        subjectKey: `token:${tokenAddress}`,
+        factKind: marketFactKinds.tokenPairs,
+        source: "dexscreener",
+        ttlSeconds,
+        disabledReasonCode: marketReasonCodes.dexscreenerDisabled,
+        fetch:
+          provider === null
+            ? null
+            : () =>
+                provider.readTokenPairs(
+                  tokenAddress,
+                  options.signal === undefined
+                    ? {}
+                    : { signal: options.signal },
+                ),
+        options,
+      }),
+    );
+  }
+
   const service: MarketFactService = {
     readTokenPairs(tokenAddress: string, options: ReadFactOptions = {}) {
-      const provider = input.pairsProvider;
-      const key = `token:${tokenAddress}|${marketFactKinds.tokenPairs}|${String(options.requireFresh === true)}`;
-      return dedupe(key, () =>
-        read<TokenPairsSnapshot>({
-          subjectKey: `token:${tokenAddress}`,
-          factKind: marketFactKinds.tokenPairs,
-          source: "dexscreener",
-          ttlSeconds: input.config.priceTtlSeconds,
-          disabledReasonCode: marketReasonCodes.dexscreenerDisabled,
-          fetch:
-            provider === null
-              ? null
-              : () =>
-                  provider.readTokenPairs(
-                    tokenAddress,
-                    options.signal === undefined
-                      ? {}
-                      : { signal: options.signal },
-                  ),
-          options,
-        }),
+      return readTokenPairsWithTtl(
+        tokenAddress,
+        input.config.priceTtlSeconds,
+        options,
       );
     },
 
@@ -608,7 +680,331 @@ export function createMarketFactService(
       });
     },
 
+    async readUnlistedToken(
+      tokenAddress: string,
+      options: ReadFactOptions = {},
+    ): Promise<UnlistedTokenFact> {
+      const lookup = input.tokenLookupProvider ?? null;
+      const pairs = input.pairsProvider;
+      const priceTtl = input.config.unlistedPriceTtlSeconds;
+      const metadataTtl = input.config.unlistedMetadataTtlSeconds;
+      const subjectKey = `token:${tokenAddress}`;
+      const signalOption =
+        options.signal === undefined ? {} : { signal: options.signal };
+
+      async function rememberIdentity(
+        source: MarketSource,
+        identity: UnlistedTokenIdentity,
+        rawDigest: string,
+        fetchedAt: string,
+      ): Promise<void> {
+        try {
+          await input.cache.put({
+            subjectKey,
+            factKind: marketFactKinds.tokenIdentity,
+            source,
+            value: identity as unknown as Record<string, unknown>,
+            rawDigest,
+            fetchedAt,
+            ttlSeconds: metadataTtl,
+          });
+        } catch (error) {
+          if (!(error instanceof MarketFactCacheUnavailableError)) {
+            throw error;
+          }
+        }
+      }
+
+      // GeckoTerminal first: one request carries identity, token-level
+      // market facts, and the top pools.
+      let lookupFact: CachedFact<TokenLookupSnapshot> | null = null;
+      if (lookup !== null) {
+        lookupFact = await dedupe(
+          `${subjectKey}|${marketFactKinds.tokenLookup}`,
+          () =>
+            read<TokenLookupSnapshot>({
+              subjectKey,
+              factKind: marketFactKinds.tokenLookup,
+              source: lookup.source,
+              ttlSeconds: priceTtl,
+              disabledReasonCode: marketReasonCodes.geckoterminalDisabled,
+              fetch: async () => {
+                const observation = await lookup.readToken(
+                  tokenAddress,
+                  signalOption,
+                );
+                await rememberIdentity(
+                  observation.source,
+                  identityFromLookup(observation.value),
+                  observation.rawDigest,
+                  observation.fetchedAt,
+                );
+                return observation;
+              },
+              options,
+            }),
+        );
+        if (lookupFact.value !== null && lookupFact.fetchedAt !== null) {
+          const quality = lookupFact.quality === "stale" ? "stale" : "fresh";
+          return Object.freeze({
+            identity: Object.freeze({
+              value: identityFromLookup(lookupFact.value),
+              source: lookupFact.source,
+              fetchedAt: lookupFact.fetchedAt,
+              ttlSeconds: metadataTtl,
+              quality,
+              reasonCode: lookupFact.reasonCode,
+              rawDigest: lookupFact.rawDigest,
+            }),
+            market: Object.freeze({
+              value: marketFromLookup(lookupFact.value),
+              source: lookupFact.source,
+              fetchedAt: lookupFact.fetchedAt,
+              ttlSeconds: priceTtl,
+              quality,
+              reasonCode: lookupFact.reasonCode,
+              rawDigest: lookupFact.rawDigest,
+            }),
+            notFound: false,
+          });
+        }
+      }
+      const lookupNotFound =
+        lookupFact !== null &&
+        lookupFact.reasonCode === marketReasonCodes.tokenNotFound;
+
+      // DexScreener fallback: the token's pairs, cached with the lookup's
+      // price TTL rather than the registry price TTL.
+      let pairsFact: CachedFact<TokenPairsSnapshot> | null = null;
+      let pairsNotFound = false;
+      if (pairs !== null) {
+        pairsFact = await readTokenPairsWithTtl(
+          tokenAddress,
+          priceTtl,
+          options,
+        );
+        if (pairsFact.value !== null && pairsFact.fetchedAt !== null) {
+          const identity = identityFromPairs(pairsFact.value);
+          if (identity === null) {
+            // DexScreener answers an unknown token with an empty list.
+            pairsNotFound = true;
+          } else {
+            if (pairsFact.quality === "fresh" && pairsFact.rawDigest !== null) {
+              await rememberIdentity(
+                pairsFact.source,
+                identity,
+                pairsFact.rawDigest,
+                pairsFact.fetchedAt,
+              );
+            }
+            const quality = pairsFact.quality === "stale" ? "stale" : "fresh";
+            return Object.freeze({
+              identity: Object.freeze({
+                value: identity,
+                source: pairsFact.source,
+                fetchedAt: pairsFact.fetchedAt,
+                ttlSeconds: metadataTtl,
+                quality,
+                reasonCode: pairsFact.reasonCode,
+                rawDigest: pairsFact.rawDigest,
+              }),
+              market: Object.freeze({
+                value: marketFromPairs(pairsFact.value),
+                source: pairsFact.source,
+                fetchedAt: pairsFact.fetchedAt,
+                ttlSeconds: priceTtl,
+                quality,
+                reasonCode: pairsFact.reasonCode,
+                rawDigest: pairsFact.rawDigest,
+              }),
+              notFound: false,
+            });
+          }
+        }
+      }
+
+      const notFound =
+        (lookup !== null || pairs !== null) &&
+        (lookup === null || lookupNotFound) &&
+        (pairs === null || pairsNotFound);
+      const marketReason =
+        lookup === null && pairs === null
+          ? marketReasonCodes.lookupProviderDisabled
+          : notFound
+            ? marketReasonCodes.tokenNotFound
+            : ((lookupFact !== null && !lookupNotFound
+                ? lookupFact.reasonCode
+                : null) ??
+              (pairsFact !== null && !pairsNotFound
+                ? pairsFact.reasonCode
+                : null) ??
+              lookupFact?.reasonCode ??
+              pairsFact?.reasonCode ??
+              marketReasonCodes.providerUnreachable);
+      const marketSource: MarketSource =
+        lookup !== null ? lookup.source : "dexscreener";
+      const market = unavailableFact<UnlistedTokenMarket>(
+        marketSource,
+        priceTtl,
+        marketReason,
+      );
+
+      // No live answer: the identity may still be known from a lookup
+      // inside the metadata TTL. It is published as `stale` because the
+      // Provider could not confirm it now.
+      if (!notFound) {
+        for (const source of [
+          ...(lookup === null ? [] : [lookup.source]),
+          ...(pairs === null ? [] : [pairs.source]),
+        ]) {
+          let cached: MarketFactCacheRecord | null = null;
+          try {
+            cached = await input.cache.get(
+              subjectKey,
+              marketFactKinds.tokenIdentity,
+              source,
+            );
+          } catch (error) {
+            if (!(error instanceof MarketFactCacheUnavailableError)) {
+              throw error;
+            }
+          }
+          if (cached === null) {
+            continue;
+          }
+          const ageSeconds =
+            (now().getTime() - Date.parse(cached.fetchedAt)) / 1_000;
+          if (ageSeconds < 0 || ageSeconds >= cached.ttlSeconds) {
+            continue;
+          }
+          return Object.freeze({
+            identity: Object.freeze({
+              value: cached.value as unknown as UnlistedTokenIdentity,
+              source,
+              fetchedAt: cached.fetchedAt,
+              ttlSeconds: cached.ttlSeconds,
+              quality: "stale" as const,
+              reasonCode: marketReason,
+              rawDigest: cached.rawDigest,
+            }),
+            market,
+            notFound: false,
+          });
+        }
+      }
+      return Object.freeze({
+        identity: unavailableFact<UnlistedTokenIdentity>(
+          marketSource,
+          metadataTtl,
+          marketReason,
+        ),
+        market,
+        notFound,
+      });
+    },
+
     candlesProviderEnabled: input.candlesProvider !== null,
   };
   return Object.freeze(service);
+}
+
+function identityFromLookup(
+  snapshot: TokenLookupSnapshot,
+): UnlistedTokenIdentity {
+  return Object.freeze({
+    symbol: snapshot.symbol,
+    name: snapshot.name,
+    decimals: snapshot.decimals,
+  });
+}
+
+/**
+ * GeckoTerminal market facts: price, FDV, market cap, and 24h volume are
+ * token-level attributes; liquidity and 24h change are read from the top
+ * pool, which the response names as `primaryPair` so the client can
+ * attribute them.
+ */
+function marketFromLookup(snapshot: TokenLookupSnapshot): UnlistedTokenMarket {
+  const pool = snapshot.topPools[0] ?? null;
+  return Object.freeze({
+    priceUsd: snapshot.priceUsd,
+    priceChangeH24: pool?.priceChangeH24 ?? null,
+    liquidityUsd: pool?.reserveUsd ?? null,
+    volumeH24: snapshot.volumeH24Usd,
+    marketCap: snapshot.marketCapUsd,
+    fdv: snapshot.fdvUsd,
+    primaryPair:
+      pool === null || pool.quoteTokenAddress === null
+        ? null
+        : Object.freeze({
+            pairAddress: pool.poolAddress,
+            dexId: pool.dexId,
+            labels: Object.freeze([]),
+            quoteTokenAddress: pool.quoteTokenAddress,
+            quoteTokenSymbol: pool.quoteTokenSymbol ?? "",
+            pairCreatedAt: pool.createdAt,
+          }),
+  });
+}
+
+/**
+ * DexScreener identity: the base token of the deepest base pair, else the
+ * quote side of any pair the token appears in (symbol only). Decimals are
+ * never reported by DexScreener and stay `null`.
+ */
+function identityFromPairs(
+  snapshot: TokenPairsSnapshot,
+): UnlistedTokenIdentity | null {
+  const primary = selectPrimaryPair(snapshot);
+  if (primary !== null) {
+    return Object.freeze({
+      symbol:
+        primary.baseTokenSymbol.length === 0 ? null : primary.baseTokenSymbol,
+      name: primary.baseTokenName ?? null,
+      decimals: null,
+    });
+  }
+  const asQuote = snapshot.pairs.find(
+    (pair) => pair.quoteTokenAddress === snapshot.tokenAddress,
+  );
+  if (asQuote === undefined) {
+    return null;
+  }
+  return Object.freeze({
+    symbol:
+      asQuote.quoteTokenSymbol.length === 0 ? null : asQuote.quoteTokenSymbol,
+    name: null,
+    decimals: null,
+  });
+}
+
+function marketFromPairs(snapshot: TokenPairsSnapshot): UnlistedTokenMarket {
+  const pair = selectPrimaryPair(snapshot);
+  if (pair === null) {
+    return Object.freeze({
+      priceUsd: null,
+      priceChangeH24: null,
+      liquidityUsd: null,
+      volumeH24: null,
+      marketCap: null,
+      fdv: null,
+      primaryPair: null,
+    });
+  }
+  return Object.freeze({
+    priceUsd: pair.priceUsd,
+    priceChangeH24: pair.priceChangeH24,
+    liquidityUsd: pair.liquidityUsd,
+    volumeH24: pair.volumeH24,
+    marketCap: pair.marketCap,
+    fdv: pair.fdv,
+    primaryPair: Object.freeze({
+      pairAddress: pair.pairAddress,
+      dexId: pair.dexId,
+      labels: pair.labels,
+      quoteTokenAddress: pair.quoteTokenAddress,
+      quoteTokenSymbol: pair.quoteTokenSymbol,
+      pairCreatedAt: pair.pairCreatedAt,
+    }),
+  });
 }

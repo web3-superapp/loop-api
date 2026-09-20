@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { requireAuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import { canonicalizeClientIp } from "../../core/http/client-ip.js";
 import { emptyQueryStringSchema } from "../../core/http/schemas.js";
 import {
   assertNoBody,
@@ -17,6 +18,7 @@ import {
   marketHoldersResourceSchema,
   marketNewPairsResourceSchema,
   marketOverviewResourceSchema,
+  marketLookupReadErrors,
   marketReadErrors,
   marketSmartMoneyResourceSchema,
   marketTradesResourceSchema,
@@ -31,6 +33,13 @@ import {
 
 interface AssetParams {
   readonly assetId: string;
+}
+
+function lookupCaller(request: FastifyRequest) {
+  return {
+    principal: requireAuthenticatedLoopPrincipal(request),
+    canonicalClientIp: canonicalizeClientIp(request.ip),
+  };
 }
 
 function requestSignal(request: FastifyRequest): AbortSignal {
@@ -82,13 +91,13 @@ export function registerV2MarketRoutes(
         operationId: "getV2MarketAsset",
         summary: "Get market, community, and security facts for one asset",
         description:
-          "Registry identity and capability, DexScreener price/liquidity/volume facts from the deepest pair, the verified community bound to the asset, and GoPlus security facts as a labelled list. `swappable` stays false; no rating or verdict is derived.",
+          'Registry identity and capability, DexScreener price/liquidity/volume facts from the deepest pair, the verified community bound to the asset, and GoPlus security facts as a labelled list. `swappable` stays false; no rating or verdict is derived. A BSC token address the registry does not know (for example one pasted into a community chat) is resolved through a Provider lookup (GeckoTerminal first, DexScreener fallback; Decision 0058): `asset.status` is `unregistered`, identity fields come from the Provider, and the lookup is quota-bound per user (429 `RATE_LIMITED`). A Provider that answers "no such token" is 404; a Provider that cannot be reached leaves the facts `unavailable` in a 200.',
         tags: ["market"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
         params: assetIdParamsSchema,
         querystring: emptyQueryStringSchema,
-        response: { 200: marketAssetResourceSchema, ...marketReadErrors },
+        response: { 200: marketAssetResourceSchema, ...marketLookupReadErrors },
       },
       onRequest: validateChainHeaders,
       preValidation: assertNoBodyOrQuery,
@@ -98,6 +107,7 @@ export function registerV2MarketRoutes(
       const params = request.params as AssetParams;
       const resource = await marketReadService.getAsset({
         assetId: params.assetId,
+        caller: lookupCaller(request),
         signal: requestSignal(request),
       });
       reply.header("cache-control", "no-store");
@@ -112,13 +122,16 @@ export function registerV2MarketRoutes(
         operationId: "getV2MarketCandles",
         summary: "Get OHLCV candles for one asset",
         description:
-          "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other.",
+          "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An unregistered address (Decision 0058) is charted only through GeckoTerminal OHLCV of its lookup's primary pair (`pool.protocol` is then the Provider's dex id) and consumes the lookup quota; without GeckoTerminal it is `MARKET_POOL_NOT_REGISTERED`.",
         tags: ["market"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
         params: assetIdParamsSchema,
         querystring: candlesQuerySchema,
-        response: { 200: marketCandlesResourceSchema, ...marketReadErrors },
+        response: {
+          200: marketCandlesResourceSchema,
+          ...marketLookupReadErrors,
+        },
       },
       onRequest: validateChainHeaders,
       preValidation: assertNoBody,
@@ -134,6 +147,7 @@ export function registerV2MarketRoutes(
         assetId: params.assetId,
         interval: query.interval,
         ...(query.limit === undefined ? {} : { limit: query.limit }),
+        caller: lookupCaller(request),
         signal: requestSignal(request),
       });
       reply.header("cache-control", "no-store");

@@ -166,6 +166,8 @@ const marketEnvironmentShape = {
   MARKET_SECURITY_TTL_SECONDS: positiveIntegerString(60, 86_400),
   MARKET_CANDLES_TTL_SECONDS: positiveIntegerString(15, 3_600),
   MARKET_STALE_GRACE_SECONDS: positiveIntegerString(0, 86_400),
+  MARKET_UNLISTED_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
+  MARKET_UNLISTED_METADATA_TTL_SECONDS: positiveIntegerString(60, 86_400),
   GOPLUS_APP_KEY: optionalCredential(255),
   GOPLUS_APP_SECRET: optionalOpaqueSecret(1, 4_096),
 } as const;
@@ -719,6 +721,12 @@ export interface MarketConfig {
   readonly candlesTtlSeconds: number;
   /** Seconds past TTL during which a cached fact may still be served as stale. */
   readonly staleGraceSeconds: number;
+  /**
+   * Unregistered-address lookup (Decision 0058): price-class facts and the
+   * identity (symbol/name/decimals) of a token the registry does not know.
+   */
+  readonly unlistedPriceTtlSeconds: number;
+  readonly unlistedMetadataTtlSeconds: number;
 }
 
 export interface AlertEvaluatorConfig {
@@ -1263,6 +1271,10 @@ function marketEnvironmentDefaults(
       environment["MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE"] ?? "30",
     MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE:
       environment["MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_UNLISTED_PRICE_TTL_SECONDS:
+      environment["MARKET_UNLISTED_PRICE_TTL_SECONDS"] ?? "60",
+    MARKET_UNLISTED_METADATA_TTL_SECONDS:
+      environment["MARKET_UNLISTED_METADATA_TTL_SECONDS"] ?? "3600",
     MARKET_PRICE_TTL_SECONDS: environment["MARKET_PRICE_TTL_SECONDS"] ?? "30",
     MARKET_SECURITY_TTL_SECONDS:
       environment["MARKET_SECURITY_TTL_SECONDS"] ?? "600",
@@ -1286,6 +1298,8 @@ function parseMarketConfig(data: {
   readonly MARKET_SECURITY_TTL_SECONDS: number;
   readonly MARKET_CANDLES_TTL_SECONDS: number;
   readonly MARKET_STALE_GRACE_SECONDS: number;
+  readonly MARKET_UNLISTED_PRICE_TTL_SECONDS: number;
+  readonly MARKET_UNLISTED_METADATA_TTL_SECONDS: number;
   readonly GOPLUS_APP_KEY?: string | undefined;
   readonly GOPLUS_APP_SECRET?: string | undefined;
 }): MarketConfig {
@@ -1311,6 +1325,8 @@ function parseMarketConfig(data: {
     securityTtlSeconds: data.MARKET_SECURITY_TTL_SECONDS,
     candlesTtlSeconds: data.MARKET_CANDLES_TTL_SECONDS,
     staleGraceSeconds: data.MARKET_STALE_GRACE_SECONDS,
+    unlistedPriceTtlSeconds: data.MARKET_UNLISTED_PRICE_TTL_SECONDS,
+    unlistedMetadataTtlSeconds: data.MARKET_UNLISTED_METADATA_TTL_SECONDS,
   });
 }
 

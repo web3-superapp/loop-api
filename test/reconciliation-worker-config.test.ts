@@ -59,6 +59,8 @@ describe("loadReconciliationWorkerConfig", () => {
         securityTtlSeconds: 600,
         candlesTtlSeconds: 60,
         staleGraceSeconds: 900,
+        unlistedPriceTtlSeconds: 60,
+        unlistedMetadataTtlSeconds: 3_600,
       },
       alertEvaluator: null,
       walletIntentReconcile: null,

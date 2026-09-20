@@ -8,19 +8,23 @@ import {
   InvalidChainIdentityError,
   normalizeEvmAddress,
 } from "../../features/chain/chain-contract.js";
-import type {
-  CandlesProvider,
-  NewPoolSnapshot,
-  NewPoolsSnapshot,
-  OhlcvCandle,
-  OhlcvReadOptions,
-  OhlcvTimeframe,
-  PoolOhlcvSnapshot,
-  PoolRef,
-  PoolTradeSnapshot,
-  PoolTradesSnapshot,
-  ProviderObservation,
-  ProviderReadOptions,
+import {
+  MarketProviderError,
+  type CandlesProvider,
+  type NewPoolSnapshot,
+  type NewPoolsSnapshot,
+  type OhlcvCandle,
+  type OhlcvReadOptions,
+  type OhlcvTimeframe,
+  type PoolOhlcvSnapshot,
+  type PoolRef,
+  type PoolTradeSnapshot,
+  type PoolTradesSnapshot,
+  type ProviderObservation,
+  type ProviderReadOptions,
+  type TokenLookupPoolSnapshot,
+  type TokenLookupProvider,
+  type TokenLookupSnapshot,
 } from "./market-data-provider.js";
 import {
   createProviderHttpKernel,
@@ -100,6 +104,82 @@ const newPoolsResponseSchema = z
         })
         .passthrough(),
     ),
+  })
+  .passthrough();
+
+const tokenIdSchema = z
+  .object({ data: z.object({ id: z.string() }).passthrough() })
+  .passthrough();
+
+const tokenResponseSchema = z
+  .object({
+    data: z
+      .object({
+        attributes: z
+          .object({
+            address: z.string(),
+            name: z.string().max(256).nullable().optional(),
+            symbol: z.string().max(128).nullable().optional(),
+            decimals: numeric.nullable().optional(),
+            price_usd: numeric.nullable().optional(),
+            fdv_usd: numeric.nullable().optional(),
+            market_cap_usd: numeric.nullable().optional(),
+            volume_usd: z
+              .object({ h24: numeric.nullable().optional() })
+              .passthrough()
+              .nullable()
+              .optional(),
+          })
+          .passthrough(),
+        relationships: z
+          .object({
+            top_pools: z
+              .object({
+                data: z.array(z.object({ id: z.string() }).passthrough()),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough(),
+    included: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            type: z.string(),
+            attributes: z
+              .object({
+                address: z.string(),
+                name: z.string().max(128),
+                pool_created_at: z.string().nullable().optional(),
+                reserve_in_usd: numeric.nullable().optional(),
+                volume_usd: z
+                  .object({ h24: numeric.nullable().optional() })
+                  .passthrough()
+                  .nullable()
+                  .optional(),
+                price_change_percentage: z
+                  .object({ h24: numeric.nullable().optional() })
+                  .passthrough()
+                  .nullable()
+                  .optional(),
+              })
+              .passthrough(),
+            relationships: z
+              .object({
+                base_token: tokenIdSchema.optional(),
+                quote_token: tokenIdSchema.optional(),
+                dex: tokenIdSchema.optional(),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -306,6 +386,113 @@ export function normalizeGeckoterminalTrades(
   return Object.freeze({ poolAddress, trades: Object.freeze(trades) });
 }
 
+/**
+ * Decimals arrive as a JSON number; the lossless parser hands it over as a
+ * digit string. Only a small non-negative integer is a token decimals value.
+ */
+function tokenDecimals(
+  value: string | number | null | undefined,
+): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = typeof value === "number" ? String(value) : value;
+  if (!/^(0|[1-9][0-9]?)$/.test(text)) {
+    return malformed();
+  }
+  const decimals = Number.parseInt(text, 10);
+  return decimals > 36 ? malformed() : decimals;
+}
+
+function displayText(
+  value: string | null | undefined,
+  limit: number,
+): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed.slice(0, limit);
+}
+
+/**
+ * Normalises `GET /networks/bsc/tokens/{address}?include=top_pools`
+ * (Decision 0058). Top pools keep the Provider's order (deepest first);
+ * pools whose identifier is not a contract address (Uniswap V4 pool ids)
+ * are dropped here because a lookup's primary pair must be chartable and
+ * openable by address.
+ */
+export function normalizeGeckoterminalToken(
+  json: unknown,
+  tokenAddress: string,
+): TokenLookupSnapshot {
+  const parsed = tokenResponseSchema.safeParse(json);
+  if (!parsed.success) {
+    return malformed();
+  }
+  const attributes = parsed.data.data.attributes;
+  if (address(attributes.address) !== tokenAddress) {
+    return malformed();
+  }
+  const includedPools = new Map(
+    (parsed.data.included ?? [])
+      .filter((entry) => entry.type === "pool")
+      .map((entry) => [entry.id, entry] as const),
+  );
+  const topPools: TokenLookupPoolSnapshot[] = [];
+  for (const ref of parsed.data.data.relationships?.top_pools?.data ?? []) {
+    const pool = includedPools.get(ref.id);
+    if (pool === undefined) {
+      continue;
+    }
+    const poolRef = poolRefOf(pool.attributes.address);
+    if (poolRef === null || poolRef.kind !== "address") {
+      continue;
+    }
+    const quoteTokenAddress = addressFromTokenId(
+      pool.relationships?.quote_token?.data.id,
+    );
+    const [, quoteName] = pool.attributes.name.split(" / ");
+    topPools.push(
+      Object.freeze({
+        poolAddress: poolRef.address,
+        dexId: pool.relationships?.dex?.data.id ?? "unknown",
+        name: pool.attributes.name,
+        baseTokenAddress: addressFromTokenId(
+          pool.relationships?.base_token?.data.id,
+        ),
+        quoteTokenAddress,
+        quoteTokenSymbol:
+          quoteName === undefined
+            ? null
+            : displayText(quoteName.split(" ")[0] ?? null, 32),
+        reserveUsd: decimal(pool.attributes.reserve_in_usd),
+        volumeH24Usd: decimal(pool.attributes.volume_usd?.h24),
+        priceChangeH24: decimal(pool.attributes.price_change_percentage?.h24),
+        createdAt:
+          pool.attributes.pool_created_at === null ||
+          pool.attributes.pool_created_at === undefined
+            ? null
+            : timestamp(pool.attributes.pool_created_at),
+      }),
+    );
+  }
+  return Object.freeze({
+    tokenAddress,
+    symbol: displayText(attributes.symbol, 32),
+    name: displayText(attributes.name, 128),
+    decimals: tokenDecimals(attributes.decimals),
+    priceUsd: decimal(attributes.price_usd),
+    fdvUsd: decimal(attributes.fdv_usd),
+    marketCapUsd: decimal(attributes.market_cap_usd),
+    volumeH24Usd: decimal(attributes.volume_usd?.h24),
+    // `total_reserve_in_usd` is deliberately not read: the Provider sends
+    // it with ~110 fraction digits, beyond the canonical decimal bound, and
+    // liquidity is published from the top pool's `reserve_in_usd` instead.
+    topPools: Object.freeze(topPools),
+  });
+}
+
 const timeframePaths: Readonly<
   Record<
     OhlcvTimeframe,
@@ -422,7 +609,7 @@ export interface CreateGeckoterminalAdapterInput {
 
 export function createGeckoterminalAdapter(
   input: CreateGeckoterminalAdapterInput = {},
-): CandlesProvider {
+): CandlesProvider & TokenLookupProvider {
   const rateLimitPerMinute = Math.min(
     input.rateLimitPerMinute ?? geckoterminalDocumentedRateLimitPerMinute,
     geckoterminalDocumentedRateLimitPerMinute,
@@ -483,6 +670,43 @@ export function createGeckoterminalAdapter(
       });
       return Object.freeze({
         value: normalizeGeckoterminalNewPools(result.json),
+        source: "geckoterminal" as const,
+        fetchedAt: now().toISOString(),
+        rawDigest: result.rawDigest,
+      });
+    },
+
+    async readToken(
+      rawTokenAddress: string,
+      options: ProviderReadOptions = {},
+    ): Promise<ProviderObservation<TokenLookupSnapshot>> {
+      const tokenAddress = normalizeEvmAddress(rawTokenAddress);
+      let result;
+      try {
+        result = await kernel.requestJson({
+          url: `${baseUrl}/networks/${geckoterminalNetwork}/tokens/${tokenAddress}?include=top_pools`,
+          headers,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+      } catch (error) {
+        // The Provider's 404 is an affirmative "no such token", which the
+        // lookup surface may turn into NOT_FOUND; every other failure keeps
+        // its transport reason so it stays an unavailable fact.
+        if (
+          error instanceof MarketProviderError &&
+          error.code === "market_provider_rejected" &&
+          error.httpStatus === 404
+        ) {
+          throw new MarketProviderError(
+            "market_provider_rejected",
+            "MARKET_TOKEN_NOT_FOUND",
+            404,
+          );
+        }
+        throw error;
+      }
+      return Object.freeze({
+        value: normalizeGeckoterminalToken(result.json, tokenAddress),
         source: "geckoterminal" as const,
         fetchedAt: now().toISOString(),
         rawDigest: result.rawDigest,

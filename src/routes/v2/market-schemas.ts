@@ -16,6 +16,7 @@ import {
   marketFactQualities,
   marketSources,
   marketTrendingRules,
+  providerLookupSourceKind,
   signedDecimalPatternSource,
   tradeLimits,
 } from "../../features/market/market-contract.js";
@@ -230,6 +231,81 @@ export const marketOverviewResourceSchema = {
   },
 } as const;
 
+/**
+ * An address the registry does not know, described from a Provider lookup
+ * (Decision 0058). Same keys as the registry projection, plus the
+ * Provider's provenance under `source`; identity fields the Provider did
+ * not report are null.
+ */
+const unregisteredAssetProjectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "assetId",
+    "chainId",
+    "address",
+    "symbol",
+    "name",
+    "decimals",
+    "status",
+    "source",
+    "updatedAt",
+  ],
+  properties: {
+    assetId: { type: "string", pattern: assetIdPatternSource },
+    chainId: assetResourceSchema.properties.asset.properties.chainId,
+    address: { type: "string", pattern: evmAddressPatternSource },
+    symbol: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: 32 },
+        { type: "null" },
+      ],
+      description:
+        "Provider-reported symbol; null when the Provider did not report one. Display the address instead; never invent a ticker.",
+    },
+    name: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: 128 },
+        { type: "null" },
+      ],
+    },
+    decimals: {
+      anyOf: [{ type: "integer", minimum: 0, maximum: 36 }, { type: "null" }],
+      description:
+        "Null when the Provider did not report decimals (DexScreener never does). Do not format raw amounts without it.",
+    },
+    status: { type: "string", const: "unregistered" },
+    source: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "kind",
+        "provider",
+        "fetchedAt",
+        "ttlSeconds",
+        "quality",
+        "blockNumber",
+        "verifiedAt",
+      ],
+      properties: {
+        kind: { type: "string", const: providerLookupSourceKind },
+        provider: { type: "string", enum: [...marketSources] },
+        fetchedAt: dateTimeSchema,
+        ttlSeconds: { type: "integer", minimum: 1 },
+        quality: {
+          type: "string",
+          enum: ["fresh", "stale"],
+          description:
+            "`stale`: the identity is remembered from an earlier lookup inside its TTL but the Provider could not confirm it now; the price facts then carry the reason.",
+        },
+        blockNumber: { type: "null" },
+        verifiedAt: { type: "null" },
+      },
+    },
+    updatedAt: dateTimeSchema,
+  },
+} as const;
+
 export const marketAssetResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -250,7 +326,15 @@ export const marketAssetResourceSchema = {
     "contractVersion",
   ],
   properties: {
-    asset: assetResourceSchema.properties.asset,
+    asset: {
+      description:
+        "Discriminate on `status`: `pending|verified|blocked` is the registry projection; `unregistered` is a Provider-described address (Decision 0058); `unavailable` is an unregistered address no Provider could describe right now (`reasonCode` says why) — render the address with the unavailable state, never a placeholder ticker.",
+      anyOf: [
+        assetResourceSchema.properties.asset,
+        unregisteredAssetProjectionSchema,
+        unavailableSchema,
+      ],
+    },
     capability: assetResourceSchema.properties.capability,
     price: marketFactSchema,
     priceChange24h: marketFactSchema,
@@ -410,7 +494,13 @@ export const marketCandlesResourceSchema = {
               required: ["address", "protocol", "quoteAssetId", "quoteSymbol"],
               properties: {
                 address: { type: "string", pattern: evmAddressPatternSource },
-                protocol: { type: "string", const: "pancakeswap_v3" },
+                protocol: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 64,
+                  description:
+                    "`pancakeswap_v3` for a registered pool; for an unregistered address the lookup Provider's dex id of the primary pair (e.g. `pancakeswap-v3-bsc`).",
+                },
                 quoteAssetId: {
                   anyOf: [
                     { type: "string", pattern: assetIdPatternSource },
@@ -774,4 +864,10 @@ export const marketReadErrors = {
     "PROVIDER_DISCONNECTED",
     "REQUEST_TIMEOUT",
   ]),
+} as const;
+
+/** Routes that admit an unregistered-address lookup also publish its quota exhaustion (Decision 0058). */
+export const marketLookupReadErrors = {
+  ...marketReadErrors,
+  429: v2ErrorResponseSchema(["RATE_LIMITED"]),
 } as const;

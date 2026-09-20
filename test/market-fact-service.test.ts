@@ -12,8 +12,87 @@ import {
 import {
   MarketProviderError,
   type MarketPairsProvider,
+  type TokenLookupProvider,
+  type TokenLookupSnapshot,
   type TokenPairsSnapshot,
 } from "../src/integrations/market/market-data-provider.js";
+
+const weth = "0x2170ed0880ac9a755fd29b2688956bd959f933f8";
+
+function lookupSnapshot(): TokenLookupSnapshot {
+  return {
+    tokenAddress: weth,
+    symbol: "ETH",
+    name: "Ethereum Token",
+    decimals: 18,
+    priceUsd: "2575.14",
+    fdvUsd: "1300404347.01",
+    marketCapUsd: "1300514252.3",
+    volumeH24Usd: "25016115.55",
+    topPools: [
+      {
+        poolAddress: "0xd0e226f674bbf064f54ab47f42473ff80db98cba",
+        dexId: "pancakeswap-v3-bsc",
+        name: "ETH / WBNB 0.05%",
+        baseTokenAddress: weth,
+        quoteTokenAddress: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        quoteTokenSymbol: "WBNB",
+        reserveUsd: "16714230.21",
+        volumeH24Usd: "8336698.9",
+        priceChangeH24: "-2.52",
+        createdAt: "2025-11-14T06:46:14.000Z",
+      },
+    ],
+  };
+}
+
+function lookupProviderFake(
+  behaviour: () => TokenLookupSnapshot,
+  fetchedAt = new Date().toISOString(),
+): TokenLookupProvider & { readonly calls: () => number } {
+  let calls = 0;
+  return {
+    source: "geckoterminal",
+    calls: () => calls,
+    readToken: () => {
+      calls += 1;
+      return Promise.resolve({
+        value: behaviour(),
+        source: "geckoterminal" as const,
+        fetchedAt,
+        rawDigest: "e".repeat(64),
+      });
+    },
+  };
+}
+
+function wethPairs(): TokenPairsSnapshot {
+  return {
+    tokenAddress: weth,
+    pairs: [
+      {
+        pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
+        dexId: "pancakeswap",
+        labels: ["v2"],
+        baseTokenAddress: weth,
+        baseTokenSymbol: "ETH",
+        baseTokenName: "Ethereum Token",
+        quoteTokenAddress: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        quoteTokenSymbol: "WBNB",
+        priceUsd: "2576.66",
+        priceNative: null,
+        liquidityUsd: "899550.52",
+        volumeH24: "2926215.92",
+        priceChangeH24: "-2.4",
+        fdv: "1301174079",
+        marketCap: "1301174079",
+        buysH24: null,
+        sellsH24: null,
+        pairCreatedAt: "2023-04-16T05:30:14.000Z",
+      },
+    ],
+  };
+}
 
 const wbnb = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
 const usdt = "0x55d398326f99059ff775485246999027b3197955";
@@ -30,6 +109,8 @@ const config: MarketConfig = Object.freeze({
   securityTtlSeconds: 600,
   candlesTtlSeconds: 60,
   staleGraceSeconds: 900,
+  unlistedPriceTtlSeconds: 60,
+  unlistedMetadataTtlSeconds: 3_600,
 });
 
 function snapshot(priceUsd: string): TokenPairsSnapshot {
@@ -110,18 +191,20 @@ function cacheFake(initial: MarketFactCacheRecord | null = null) {
   const get = vi.fn((subjectKey: string, factKind: string, source: string) =>
     Promise.resolve(rows.get(keyOf(subjectKey, factKind, source)) ?? null),
   );
+  const put = vi.fn((input: MarketFactCacheRecord) => {
+    const record: MarketFactCacheRecord = { ...input };
+    rows.set(keyOf(input.subjectKey, input.factKind, input.source), record);
+    return Promise.resolve(record);
+  });
   const repository: MarketFactCacheRepository = {
     get,
-    put: vi.fn((input: MarketFactCacheRecord) => {
-      const record: MarketFactCacheRecord = { ...input };
-      rows.set(keyOf(input.subjectKey, input.factKind, input.source), record);
-      return Promise.resolve(record);
-    }),
+    put,
     findVerifiedCommunityByAssetId: vi.fn(() => Promise.resolve(null)),
   };
   return {
     repository,
     get,
+    put,
     current: () =>
       rows.get(keyOf(`token:${wbnb}`, "token_pairs", "dexscreener")) ?? null,
   };
@@ -440,6 +523,216 @@ describe("market fact service", () => {
       quality: "unavailable",
       value: null,
       reasonCode: "MARKET_PROVIDER_DEXSCREENER_DISABLED",
+    });
+  });
+
+  describe("unregistered token lookup (Decision 0058)", () => {
+    it("describes the token from GeckoTerminal, caching the market snapshot for 60s and the identity for 1h", async () => {
+      const cache = cacheFake();
+      const lookup = lookupProviderFake(lookupSnapshot);
+      const pairs = providerFake(() => wethPairs());
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: pairs,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: lookup,
+      });
+      const fact = await service.readUnlistedToken(weth);
+      expect(fact.notFound).toBe(false);
+      expect(fact.identity).toMatchObject({
+        value: { symbol: "ETH", name: "Ethereum Token", decimals: 18 },
+        source: "geckoterminal",
+        quality: "fresh",
+        ttlSeconds: 3_600,
+      });
+      expect(fact.market).toMatchObject({
+        value: {
+          priceUsd: "2575.14",
+          priceChangeH24: "-2.52",
+          liquidityUsd: "16714230.21",
+          volumeH24: "25016115.55",
+          marketCap: "1300514252.3",
+          fdv: "1300404347.01",
+          primaryPair: {
+            pairAddress: "0xd0e226f674bbf064f54ab47f42473ff80db98cba",
+            dexId: "pancakeswap-v3-bsc",
+            quoteTokenSymbol: "WBNB",
+          },
+        },
+        ttlSeconds: 60,
+        quality: "fresh",
+      });
+      // DexScreener is never consulted while GeckoTerminal answers.
+      expect(pairs.calls()).toBe(0);
+      expect(cache.put).toHaveBeenCalledWith(
+        expect.objectContaining({
+          factKind: "token_identity",
+          source: "geckoterminal",
+          ttlSeconds: 3_600,
+        }),
+      );
+      expect(cache.put).toHaveBeenCalledWith(
+        expect.objectContaining({ factKind: "token_lookup", ttlSeconds: 60 }),
+      );
+      // A second read inside the TTL is served from the cache.
+      await service.readUnlistedToken(weth);
+      expect(lookup.calls()).toBe(1);
+    });
+
+    it("falls back to DexScreener when GeckoTerminal is disabled and leaves decimals null", async () => {
+      const cache = cacheFake();
+      const pairs = providerFake(() => wethPairs());
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: pairs,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: null,
+      });
+      const fact = await service.readUnlistedToken(weth);
+      expect(fact.notFound).toBe(false);
+      expect(fact.identity).toMatchObject({
+        value: { symbol: "ETH", name: "Ethereum Token", decimals: null },
+        source: "dexscreener",
+        quality: "fresh",
+      });
+      expect(fact.market).toMatchObject({
+        value: {
+          priceUsd: "2576.66",
+          primaryPair: {
+            pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
+          },
+        },
+        source: "dexscreener",
+        ttlSeconds: 60,
+      });
+      expect(cache.put).toHaveBeenCalledWith(
+        expect.objectContaining({
+          factKind: "token_pairs",
+          source: "dexscreener",
+          ttlSeconds: 60,
+        }),
+      );
+    });
+
+    it("reports notFound only when every enabled Provider affirmatively knows no such token", async () => {
+      const notFound: TokenLookupProvider = {
+        source: "geckoterminal",
+        readToken: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_rejected",
+              "MARKET_TOKEN_NOT_FOUND",
+              404,
+            ),
+          ),
+      };
+      const empty = providerFake(() => ({ tokenAddress: weth, pairs: [] }));
+      const both = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: empty,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: notFound,
+      });
+      await expect(both.readUnlistedToken(weth)).resolves.toMatchObject({
+        notFound: true,
+        identity: {
+          quality: "unavailable",
+          reasonCode: "MARKET_TOKEN_NOT_FOUND",
+        },
+      });
+
+      // GeckoTerminal unreachable + DexScreener empty: not an answer.
+      const unreachable: TokenLookupProvider = {
+        source: "geckoterminal",
+        readToken: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_unreachable",
+              "MARKET_PROVIDER_UNREACHABLE",
+            ),
+          ),
+      };
+      const partial = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: empty,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: unreachable,
+      });
+      await expect(partial.readUnlistedToken(weth)).resolves.toMatchObject({
+        notFound: false,
+        identity: {
+          quality: "unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        },
+        market: { quality: "unavailable" },
+      });
+
+      // No lookup Provider at all.
+      const none = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: null,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: null,
+      });
+      await expect(none.readUnlistedToken(weth)).resolves.toMatchObject({
+        notFound: false,
+        identity: {
+          quality: "unavailable",
+          reasonCode: "MARKET_LOOKUP_PROVIDER_DISABLED",
+        },
+      });
+    });
+
+    it("serves a remembered identity as stale when the Providers cannot be reached", async () => {
+      const cache = cacheFake({
+        subjectKey: `token:${weth}`,
+        factKind: "token_identity",
+        source: "geckoterminal",
+        value: { symbol: "ETH", name: "Ethereum Token", decimals: 18 },
+        rawDigest: "e".repeat(64),
+        fetchedAt: new Date(Date.now() - 600_000).toISOString(),
+        ttlSeconds: 3_600,
+      });
+      const unreachable: TokenLookupProvider = {
+        source: "geckoterminal",
+        readToken: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_unreachable",
+              "MARKET_PROVIDER_UNREACHABLE",
+            ),
+          ),
+      };
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: null,
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: unreachable,
+      });
+      const fact = await service.readUnlistedToken(weth);
+      expect(fact.notFound).toBe(false);
+      expect(fact.identity).toMatchObject({
+        value: { symbol: "ETH", decimals: 18 },
+        quality: "stale",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      });
+      expect(fact.market).toMatchObject({
+        value: null,
+        quality: "unavailable",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      });
     });
   });
 });

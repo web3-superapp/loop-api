@@ -11,6 +11,7 @@ import {
   foldDailyCandlesIntoWeeks,
   normalizeGeckoterminalNewPools,
   normalizeGeckoterminalOhlcv,
+  normalizeGeckoterminalToken,
 } from "../src/integrations/market/geckoterminal-adapter.js";
 import {
   createGoplusAdapter,
@@ -161,6 +162,22 @@ describe("market Provider transport kernel", () => {
 });
 
 describe("DexScreener adapter", () => {
+  it("keeps the base token's display name for unregistered lookups (Decision 0058)", () => {
+    const snapshot = normalizeDexscreenerPairs(
+      parseJsonLossless(
+        `[{"chainId":"bsc","dexId":"pancakeswap","pairAddress":"0x62Fcb3C1794FB95BD8B1A97f6Ad5D8a7e4943a1e","baseToken":{"address":"0x2170Ed0880ac9A755fd29B2688956BD959F933F8","name":"Ethereum Token","symbol":"ETH"},"quoteToken":{"address":"${wbnb}","name":"Wrapped BNB","symbol":"WBNB"},"priceUsd":"2576.66","volume":{"h24":2926215.92},"liquidity":{"usd":899550.52},"fdv":1301174079,"marketCap":1301174079,"pairCreatedAt":1681625414000}]`,
+      ),
+      "0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+    );
+    expect(snapshot.pairs[0]).toMatchObject({
+      baseTokenSymbol: "ETH",
+      baseTokenName: "Ethereum Token",
+      priceUsd: "2576.66",
+      volumeH24: "2926215.92",
+      liquidityUsd: "899550.52",
+    });
+  });
+
   it("normalises pairs losslessly and drops other chains", () => {
     const snapshot = normalizeDexscreenerPairs(
       parseJsonLossless(dexscreenerBody),
@@ -469,6 +486,76 @@ describe("GeckoTerminal adapter", () => {
     expect(stub.calls[0]).toBe(
       `https://api.geckoterminal.com/api/v2/networks/bsc/pools/0x36696169c63e42cd08ce11f5deebbcebae652050/ohlcv/hour?aggregate=4&limit=50&token=${wbnb}`,
     );
+  });
+
+  // Shape observed on 2026-09-20 for BSC WETH (`?include=top_pools`); the
+  // pool id row mirrors a Uniswap V4 pool, which a lookup never lists.
+  const weth = "0x2170ed0880ac9a755fd29b2688956bd959f933f8";
+  const tokenBody = `{"data":{"id":"bsc_${weth}","type":"token","attributes":{"address":"0x2170Ed0880ac9A755fd29B2688956BD959F933F8","name":"Ethereum Token","symbol":"ETH","decimals":18,"image_url":"https://x.example/eth.png","coingecko_coin_id":"binance-peg-weth","total_supply":"504999999958700045164475.0","price_usd":"2575.1402462078","fdv_usd":"1300404347.01321","total_reserve_in_usd":"29281935.667098612665647265409115608503254172423118557289924121920059313257176624834394510957662128478898061490845044","volume_usd":{"h24":"25016115.5564862"},"market_cap_usd":"1300514252.30807"},"relationships":{"top_pools":{"data":[{"id":"bsc_0xd0e226f674bbf064f54ab47f42473ff80db98cba","type":"pool"},{"id":"bsc_0x${"ab".repeat(32)}","type":"pool"}]}}},"included":[{"id":"bsc_0xd0e226f674bbf064f54ab47f42473ff80db98cba","type":"pool","attributes":{"address":"0xd0e226f674bbf064f54ab47f42473ff80db98cba","name":"ETH / WBNB 0.05%","pool_created_at":"2025-11-14T06:46:14Z","reserve_in_usd":"16714230.2158","price_change_percentage":{"h24":"-2.52"},"volume_usd":{"h24":"8336698.90737144"},"transactions":{"h24":{"buys":1822,"sells":2358}}},"relationships":{"base_token":{"data":{"id":"bsc_${weth}","type":"token"}},"quote_token":{"data":{"id":"bsc_${wbnb}","type":"token"}},"dex":{"data":{"id":"pancakeswap-v3-bsc","type":"dex"}}}},{"id":"bsc_0x${"ab".repeat(32)}","type":"pool","attributes":{"address":"0x${"ab".repeat(32)}","name":"ETH / USDT","reserve_in_usd":"1"},"relationships":{"dex":{"data":{"id":"uniswap-v4-bsc","type":"dex"}}}}]}`;
+
+  it("normalises a token lookup with identity, token-level facts, and address-keyed top pools (Decision 0058)", () => {
+    const snapshot = normalizeGeckoterminalToken(
+      parseJsonLossless(tokenBody),
+      weth,
+    );
+    expect(snapshot).toMatchObject({
+      tokenAddress: weth,
+      symbol: "ETH",
+      name: "Ethereum Token",
+      decimals: 18,
+      priceUsd: "2575.1402462078",
+      fdvUsd: "1300404347.01321",
+      marketCapUsd: "1300514252.30807",
+      volumeH24Usd: "25016115.5564862",
+    });
+    expect("totalReserveUsd" in snapshot).toBe(false);
+    expect(snapshot.topPools).toEqual([
+      {
+        poolAddress: "0xd0e226f674bbf064f54ab47f42473ff80db98cba",
+        dexId: "pancakeswap-v3-bsc",
+        name: "ETH / WBNB 0.05%",
+        baseTokenAddress: weth,
+        quoteTokenAddress: wbnb,
+        quoteTokenSymbol: "WBNB",
+        reserveUsd: "16714230.2158",
+        volumeH24Usd: "8336698.90737144",
+        priceChangeH24: "-2.52",
+        createdAt: "2025-11-14T06:46:14.000Z",
+      },
+    ]);
+    // A body for another address is not this token's fact.
+    expect(() =>
+      normalizeGeckoterminalToken(parseJsonLossless(tokenBody), wbnb),
+    ).toThrow(MarketProviderError);
+  });
+
+  it("reads the token endpoint with top pools and maps the Provider's 404 to MARKET_TOKEN_NOT_FOUND", async () => {
+    const stub = fetchStub((url) =>
+      url.includes("000000000000000000000000000000000000dead")
+        ? {
+            status: 404,
+            body: '{"errors":[{"status":"404","title":"Not Found"}]}',
+          }
+        : { body: tokenBody },
+    );
+    const adapter = createGeckoterminalAdapter({ fetch: stub.fetch });
+    const observation = await adapter.readToken(
+      "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+    );
+    expect(stub.calls[0]).toBe(
+      `https://api.geckoterminal.com/api/v2/networks/bsc/tokens/${weth}?include=top_pools`,
+    );
+    expect(observation.value.symbol).toBe("ETH");
+    expect(observation.rawDigest).toBe(
+      createHash("sha256").update(tokenBody, "utf8").digest("hex"),
+    );
+    await expect(
+      adapter.readToken("0x000000000000000000000000000000000000dead"),
+    ).rejects.toMatchObject({
+      code: "market_provider_rejected",
+      reasonCode: "MARKET_TOKEN_NOT_FOUND",
+      httpStatus: 404,
+    });
   });
 
   it("never exceeds the documented 30 requests per minute", () => {

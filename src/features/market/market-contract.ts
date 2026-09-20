@@ -81,7 +81,46 @@ export const marketReasonCodes = Object.freeze({
   watchlistUnavailable: "WATCHLIST_RUNTIME_UNAVAILABLE",
   communityNotBound: "COMMUNITY_NOT_BOUND",
   cacheUnavailable: "MARKET_FACT_CACHE_UNAVAILABLE",
+  /** A Provider answered affirmatively that it knows no such token (Decision 0058). */
+  tokenNotFound: "MARKET_TOKEN_NOT_FOUND",
+  /** The asset is not in the registry; its identity came from a Provider lookup. */
+  assetNotRegistered: "ASSET_NOT_REGISTERED",
+  /** A Provider reported the token but not this identity field (e.g. DexScreener has no decimals). */
+  identityFieldMissing: "MARKET_IDENTITY_FIELD_NOT_REPORTED",
+  /** No Provider that could answer an unregistered lookup is enabled. */
+  lookupProviderDisabled: "MARKET_LOOKUP_PROVIDER_DISABLED",
 } as const);
+
+/**
+ * Unregistered-address lookup policy (Decision 0058). A token that is not
+ * in the registry can still be described from a Provider lookup, but the
+ * lookup is an existence probe and is quota-bound per user, per IP, and per
+ * user-day so the endpoint cannot be used to enumerate Provider coverage.
+ */
+export const unlistedTokenLookupPolicy = Object.freeze({
+  capability: "unlisted_token_lookup",
+  policyVersion: "unlisted_token_lookup_v1",
+  userMinuteCapacity: 30,
+  ipMinuteCapacity: 90,
+  userDayCapacity: 600,
+} as const);
+
+/**
+ * Asset status as the market surface publishes it: the registry statuses
+ * plus `unregistered` for an address the registry does not know but a
+ * Provider described (Decision 0058). The registry table itself never
+ * stores `unregistered`.
+ */
+export const marketAssetStatuses = Object.freeze([
+  "pending",
+  "verified",
+  "blocked",
+  "unregistered",
+] as const);
+export type MarketAssetStatus = (typeof marketAssetStatuses)[number];
+
+/** Where an unregistered asset's identity (symbol/name/decimals) came from. */
+export const providerLookupSourceKind = "provider_lookup" as const;
 
 /** Derived candles are labelled with this key so the client can say what they are. */
 export const derivedCandleLabelKey = "market.candles.onChainSwapAggregate";

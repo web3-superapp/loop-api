@@ -173,6 +173,7 @@ function marketFactsFake(available = true): MarketFactService {
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
     readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
+    readUnlistedToken: vi.fn(() => Promise.reject(new Error("not used"))),
     candlesProviderEnabled: false,
   };
 }

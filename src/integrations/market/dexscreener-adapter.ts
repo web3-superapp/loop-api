@@ -49,6 +49,7 @@ const tokenSchema = z
   .object({
     address: z.string(),
     symbol: z.string().max(64).optional(),
+    name: z.string().max(256).optional(),
   })
   .passthrough();
 
@@ -175,6 +176,11 @@ function normalizePairList(json: unknown): readonly TokenPairSnapshot[] {
         labels: Object.freeze([...(pair.labels ?? [])]),
         baseTokenAddress: address(pair.baseToken.address),
         baseTokenSymbol: (pair.baseToken.symbol ?? "").slice(0, 32),
+        baseTokenName:
+          pair.baseToken.name === undefined ||
+          pair.baseToken.name.trim().length === 0
+            ? null
+            : pair.baseToken.name.trim().slice(0, 128),
         quoteTokenAddress: address(pair.quoteToken.address),
         quoteTokenSymbol: (pair.quoteToken.symbol ?? "").slice(0, 32),
         priceUsd: optionalDecimal(pair.priceUsd),

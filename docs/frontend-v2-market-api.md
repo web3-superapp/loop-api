@@ -6,7 +6,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 `docs/frontend-v2-wallet-api.md` 与 `docs/api-v2-conventions.md`。
 
 覆盖页面：`market`、`token`、`chart-full`、`token-holders`、`token-trades`、
-`new-pairs`、`smart-money`。`watchlist-edit` 仍走 `GET/PUT /v2/watchlist`；
+`new-pairs`、`smart-money`，以及 `community-chat` 里贴出合约地址后的 **Token Card**
+（§4a，决策 0058）。`watchlist-edit` 仍走 `GET/PUT /v2/watchlist`；
 价格提醒与通知见 `docs/frontend-v2-notifications-api.md`。
 
 ## 1. 启用条件与 capability
@@ -54,21 +55,24 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 常见 `reasonCode`：
 
-| reasonCode                               | 含义                                                                                                   |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                                                                                 |
-| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）                                                               |
-| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）；Development 栈已启用（决策 0050），仓库默认与生产仍关闭      |
-| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                                                                                |
-| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                                                                                 |
-| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失）                                                        |
-| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                                                               |
-| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                                                    |
-| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交不可用（价格与 K 线走 `proxied`；WBNB 未登记时 K 线也是这个码） |
-| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                                                   |
-| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                                                             |
-| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                                                       |
-| `ASSET_BLOCKED`                          | registry 标记为 blocked                                                                                |
+| reasonCode                               | 含义                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `MARKET_PROVIDER_DEXSCREENER_DISABLED`   | 后端关闭了 DexScreener                                                                                                   |
+| `MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED`  | 未配置 GoPlus 密钥（安全事实、持有人数）                                                                                 |
+| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | GeckoTerminal 未启用（new-pairs、OHLCV）；Development 栈已启用（决策 0050），仓库默认与生产仍关闭                        |
+| `MARKET_PROVIDER_RATE_LIMITED`           | 本地节流或 Provider 429                                                                                                  |
+| `MARKET_PROVIDER_UNREACHABLE`            | Provider 网络失败/超时                                                                                                   |
+| `MARKET_PROVIDER_RESPONSE_MALFORMED`     | Provider 响应不符合契约（含 JSON 数字精度丢失）                                                                          |
+| `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                                                                                 |
+| `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                                                                      |
+| `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交不可用（价格与 K 线走 `proxied`；WBNB 未登记时 K 线也是这个码）                   |
+| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                                                                     |
+| `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                                                                               |
+| `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                                                                         |
+| `ASSET_BLOCKED`                          | registry 标记为 blocked                                                                                                  |
+| `ASSET_NOT_REGISTERED`                   | （`capability.reasonCode`）该地址不在 registry，身份来自 Provider 查找（§4a）                                            |
+| `MARKET_TOKEN_NOT_FOUND`                 | Provider 明确回答"没有这个 token"（只会出现在 `asset.status: unavailable` 的部分回答里；全部 Provider 都这么答时是 404） |
+| `MARKET_LOOKUP_PROVIDER_DISABLED`        | GeckoTerminal 与 DexScreener 都关闭，未登记地址无法解析                                                                  |
 
 ## 3. `GET /v2/market/overview` → `market` 页
 
@@ -153,7 +157,121 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
   （只有 `verified` 且绑定了该 assetId 的社区），用于"进入 LOOP 社区"入口；
   原型里的讨论量、7 天增长、算力排名没有后端，标 unavailable。
 - 挖矿数据块（Mining Weight、预估/日）没有后端（D19），整块 unavailable。
-- 不在 registry 的 `assetId` → `404 NOT_FOUND`；非 56 链 → `422 CHAIN_MISMATCH`。
+- 非 56 链 → `422 CHAIN_MISMATCH`。**不在 registry 的地址不再 404**：走 §4a 的
+  Provider 查找。只有 `eip155:56:native` 未登记时仍是 `404`。
+
+## 4a. 聊天里贴出的合约地址 → `GET /v2/market/assets/{assetId}` → Token Card（决策 0058）
+
+**入口**：消息文本里匹配到 `0x` + 40 位十六进制 → **小写化** → 拼成
+`eip155:56:<address>` → 请求同一个资产端点。不要发大小写混合的 checksum
+地址（`400 INVALID_REQUEST`），不要发 ticker。同一条消息里的多个地址各发一次；
+客户端应按 `assetId` 本地缓存 60 s（价格）/ 1 h（身份），因为**每次请求都计入配额**
+（缓存命中也计）。
+
+**响应与 §4 完全同一 schema**，只有 `asset` 块是按 `status` 判别的三选一：
+
+| `asset.status`                     | 含义                                   | Token Card                                                    |
+| ---------------------------------- | -------------------------------------- | ------------------------------------------------------------- |
+| `pending` / `verified` / `blocked` | registry 资产（§4 原样）               | 原有渲染                                                      |
+| `unregistered`                     | 未登记地址，身份来自 Provider 查找     | 显示 symbol/name（为 `null` 时显示缩略地址），标注来源与时间  |
+| `unavailable`                      | 未登记地址，此刻没有 Provider 能描述它 | 显示缩略地址 + unavailable 态 + `reasonCode`；不要占位 ticker |
+
+`unregistered` 变体（WETH 实测形状，2026-09-20，GeckoTerminal 路径）：
+
+```json
+{
+  "asset": {
+    "assetId": "eip155:56:0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+    "chainId": "eip155:56",
+    "address": "0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+    "symbol": "ETH",
+    "name": "Ethereum Token",
+    "decimals": 18,
+    "status": "unregistered",
+    "source": {
+      "kind": "provider_lookup",
+      "provider": "geckoterminal",
+      "fetchedAt": "2026-09-20T14:52:33.120Z",
+      "ttlSeconds": 3600,
+      "quality": "fresh",
+      "blockNumber": null,
+      "verifiedAt": null
+    },
+    "updatedAt": "2026-09-20T14:52:33.120Z"
+  },
+  "capability": {
+    "viewable": true,
+    "swappable": false,
+    "value": "viewable",
+    "reasonCode": "ASSET_NOT_REGISTERED"
+  },
+  "price": {
+    "value": "2575.1402462078",
+    "source": "geckoterminal",
+    "fetchedAt": "…",
+    "ttlSeconds": 60,
+    "quality": "fresh",
+    "reasonCode": null
+  },
+  "priceChange24h": { "value": "-2.52", "source": "geckoterminal", "…": "…" },
+  "liquidityUsd": { "value": "16714230.2158", "…": "…" },
+  "volume24h": { "value": "25016115.5564862", "…": "…" },
+  "marketCap": { "value": "1300514252.30807", "…": "…" },
+  "fdv": { "value": "1300404347.01321", "…": "…" },
+  "primaryPair": {
+    "pairAddress": "0xd0e226f674bbf064f54ab47f42473ff80db98cba",
+    "dexId": "pancakeswap-v3-bsc",
+    "labels": [],
+    "quoteTokenAddress": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "quoteTokenSymbol": "WBNB",
+    "pairCreatedAt": "2025-11-14T06:46:14.000Z"
+  },
+  "community": { "status": "unavailable", "reasonCode": "COMMUNITY_NOT_BOUND" },
+  "security": {
+    "status": "unavailable",
+    "reasonCode": "MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED"
+  },
+  "holderCount": {
+    "value": null,
+    "quality": "unavailable",
+    "reasonCode": "MARKET_PROVIDER_GOPLUS_NOT_CONFIGURED",
+    "…": "…"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- **Provider 顺序**：GeckoTerminal（Development 栈已开）优先，DexScreener 兜底。
+  DexScreener 路径下 `source.provider: "dexscreener"`、**`decimals: null`**
+  （DexScreener 不报 decimals；生产默认只开 DexScreener，所以生产里未登记地址
+  的 `decimals` 常为 `null`）。`decimals` 为 `null` 时**不要**格式化任何原始数量，
+  Token Card 只显示价格类事实。`symbol`/`name` 也可能为 `null`。
+- `source.quality: "stale"`：Provider 此刻不可达，身份来自 1 h 内的上次查找；此时
+  价格类事实全部 `unavailable` 并带原因。标注"数据可能过期"。
+- `capability.swappable` 恒 `false`，`reasonCode: ASSET_NOT_REGISTERED`；**不渲染 Swap
+  入口**，也不要把"可展示"当"可成交"。
+- `community` 恒 `COMMUNITY_NOT_BOUND`；`security`/`holderCount` 与登记资产一样来自
+  GoPlus（配了密钥就有）。
+- `asset.status: "unavailable"` 时 `capability.value` 是 `temporarily_unavailable`、
+  `viewable: false`。
+- **HTTP 结果**：
+
+| HTTP | code                     | 何时                                                                                                                              |
+| ---- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | —                        | Provider 描述了它（`unregistered`）或没有 Provider 能答（`unavailable`）                                                          |
+| 400  | `INVALID_REQUEST`        | 地址不是小写 `0x`+40 hex（含 checksum 大小写）、长度不对、发了 ticker                                                             |
+| 404  | `NOT_FOUND`              | **所有已启用的** Provider 都明确回答"没有这个 token"（GeckoTerminal 404 / DexScreener 空列表）                                    |
+| 422  | `CHAIN_MISMATCH`         | 非 `eip155:56`                                                                                                                    |
+| 429  | `RATE_LIMITED`           | 未登记地址查找配额用尽：每用户 30 次/分钟、每 IP 90 次/分钟、每用户 600 次/天；`retryable: true`，UI 显示"稍后再试"，不要自动重试 |
+| 503  | `CAPABILITY_UNAVAILABLE` | 配额运行时未组装（HMAC 密钥或控制面仓储缺失）；登记资产不受影响                                                                   |
+
+- **K 线**：`GET /v2/market/assets/{assetId}/candles` 对未登记地址也可用（同样计配额）。
+  只有 GeckoTerminal 路径：`source: geckoterminal`、`pool.address` = `primaryPair.pairAddress`、
+  **`pool.protocol` 是 Provider 的 dex id 字符串**（如 `pancakeswap-v3-bsc`，不再是
+  `pancakeswap_v3` 常量——严格 codec 要改成字符串）、`quoteAssetId: null`、
+  `quoteSymbol: "USD"`、`priceUnit: "USD per ETH"`。GeckoTerminal 关闭 →
+  `MARKET_POOL_NOT_REGISTERED`（没有登记池，无法链上聚合）；无主交易对 →
+  `MARKET_PAIR_NOT_FOUND`。`trades`/`holders` 对未登记地址仍是 `404`。
 
 ## 5. `GET /v2/market/assets/{assetId}/candles?interval=15m|1h|4h|1d|1w[&limit=1..300]` → `token` 图表 / `chart-full`
 
@@ -363,14 +481,15 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
 
 ## 10. 错误码速查
 
-| HTTP | code                             | 出现位置                                                                      |
-| ---- | -------------------------------- | ----------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | 未知 query、坏 cursor、cursor+limit 同时、带 `Idempotency-Key`、非法 interval |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺失或无效 Bearer                                                             |
-| 404  | `NOT_FOUND`                      | 模块未启用、未知 `assetId`                                                    |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                              |
-| 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56` 的 `assetId`                                                   |
-| 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置（trades 分页）                                              |
+| HTTP | code                             | 出现位置                                                                                           |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | 未知 query、坏 cursor、cursor+limit 同时、带 `Idempotency-Key`、非法 interval、非小写/畸形地址     |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺失或无效 Bearer                                                                                  |
+| 404  | `NOT_FOUND`                      | 模块未启用、`native` 未登记、未登记地址被所有已启用 Provider 明确否认、trades/holders 的未登记地址 |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                   |
+| 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56` 的 `assetId`                                                                        |
+| 429  | `RATE_LIMITED`                   | 未登记地址查找配额用尽（asset / candles）                                                          |
+| 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置（trades 分页）；未登记地址查找的配额运行时缺失                                   |
 
 Provider 故障**不是 HTTP 错误**：请求 200，受影响的块 `unavailable` 或事实 `quality: stale`。
 

@@ -51,6 +51,7 @@ import {
   isCandleInterval,
   marketReasonCodes,
   marketTrendingRules,
+  providerLookupSourceKind,
   sqrtPriceX96ToAssetPrice,
   tradeLimits,
   unavailableFact,
@@ -62,7 +63,13 @@ import {
   selectPrimaryPair,
   type CachedFact,
   type MarketFactService,
+  type UnlistedTokenFact,
 } from "./market-fact-service.js";
+import {
+  UnlistedTokenLookupQuotaUnavailableError,
+  UnlistedTokenLookupRateLimitedError,
+  type UnlistedTokenLookupQuota,
+} from "./unlisted-token-lookup-quota.js";
 import { observedHolderCount } from "../../integrations/market/goplus-adapter.js";
 
 /**
@@ -147,8 +154,41 @@ export interface SecurityFactRow {
   readonly observedAt: string;
 }
 
+/**
+ * An asset the registry does not know, described from a Provider lookup
+ * (Decision 0058). `status` is always `unregistered`; identity fields the
+ * Provider did not report are `null` (DexScreener never reports decimals),
+ * and `source` names the Provider and when it answered. The shape keeps the
+ * registered projection's keys so one client codec can read both.
+ */
+export interface UnregisteredAssetProjection {
+  readonly assetId: string;
+  readonly chainId: string;
+  readonly address: string;
+  readonly symbol: string | null;
+  readonly name: string | null;
+  readonly decimals: number | null;
+  readonly status: "unregistered";
+  readonly source: {
+    readonly kind: typeof providerLookupSourceKind;
+    readonly provider: MarketSource;
+    readonly fetchedAt: string;
+    readonly ttlSeconds: number;
+    readonly quality: "fresh" | "stale";
+    readonly blockNumber: null;
+    readonly verifiedAt: null;
+  };
+  readonly updatedAt: string;
+}
+
 export interface MarketAssetResource {
-  readonly asset: AssetProjection;
+  /**
+   * Registry projection for a registered asset; the Provider-described
+   * projection for an unregistered address; or `unavailable` when the
+   * address is unregistered and no Provider could describe it right now.
+   */
+  readonly asset:
+    AssetProjection | UnregisteredAssetProjection | UnavailableBlock;
   readonly capability: AssetCapabilityProjection;
   readonly price: MarketFactProjection;
   readonly priceChange24h: MarketFactProjection;
@@ -305,6 +345,15 @@ export interface MarketSmartMoneyResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/**
+ * Caller facts an unregistered-address lookup needs for its quota
+ * (Decision 0058). A registered asset never consumes the quota.
+ */
+export interface LookupCaller {
+  readonly principal: AuthenticatedLoopPrincipal;
+  readonly canonicalClientIp: string;
+}
+
 export interface MarketReadService {
   getOverview(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -312,12 +361,14 @@ export interface MarketReadService {
   }): Promise<MarketOverviewResource>;
   getAsset(input: {
     readonly assetId: unknown;
+    readonly caller: LookupCaller;
     readonly signal?: AbortSignal;
   }): Promise<MarketAssetResource>;
   getCandles(input: {
     readonly assetId: unknown;
     readonly interval: unknown;
     readonly limit?: unknown;
+    readonly caller: LookupCaller;
     readonly signal?: AbortSignal;
   }): Promise<MarketCandlesResource>;
   getTrades(input: {
@@ -346,6 +397,12 @@ export interface CreateMarketReadServiceInput {
   readonly wallets: AccountWalletRepository | null;
   readonly readClient: BscReadClient;
   readonly cursorCodec: V2CursorCodec | null;
+  /**
+   * Quota for unregistered-address lookups (Decision 0058); `null` when the
+   * quota secret is not configured, which fails those lookups closed with
+   * `CAPABILITY_UNAVAILABLE` while registered assets keep working.
+   */
+  readonly lookupQuota: UnlistedTokenLookupQuota | null;
   readonly chainId: string;
   readonly now?: () => Date;
   readonly createRecommendationId?: () => string;
@@ -486,17 +543,213 @@ export function createMarketReadService(
   const createRecommendationId = input.createRecommendationId ?? randomUUID;
 
   async function requireAsset(assetId: unknown): Promise<AssetRecord> {
+    const resolved = await resolveAsset(assetId);
+    if (resolved.record === null) {
+      throw V2ApiError.notFound();
+    }
+    return resolved.record;
+  }
+
+  /**
+   * Registry-first resolution. An address the registry does not know is
+   * returned with `record: null` so the caller can decide whether the
+   * surface admits a Provider lookup (Decision 0058); the native asset can
+   * only ever come from the registry.
+   */
+  async function resolveAsset(assetId: unknown): Promise<{
+    readonly assetId: string;
+    readonly record: AssetRecord | null;
+    readonly address: string;
+  }> {
     if (!isAssetId(assetId)) {
       throw V2ApiError.invalidRequest();
     }
-    if (decomposeAssetId(assetId).chainId !== input.chainId) {
+    const parsed = decomposeAssetId(assetId);
+    if (parsed.chainId !== input.chainId) {
       throw V2ApiError.fromCode("CHAIN_MISMATCH");
     }
     const record = await input.registry.getAsset(assetId);
-    if (record === null) {
+    if (record !== null) {
+      return { assetId, record, address: record.address ?? "" };
+    }
+    if (parsed.address === null) {
       throw V2ApiError.notFound();
     }
-    return record;
+    return { assetId, record: null, address: parsed.address };
+  }
+
+  /**
+   * Consume the lookup quota, then read the Provider description of an
+   * unregistered address. Quota exhaustion is `RATE_LIMITED`; a missing
+   * quota runtime is `CAPABILITY_UNAVAILABLE`; a Provider that answered
+   * "no such token" is `NOT_FOUND`.
+   */
+  async function lookupUnregistered(
+    address: string,
+    caller: LookupCaller,
+    signal: AbortSignal | undefined,
+  ): Promise<UnlistedTokenFact> {
+    if (input.lookupQuota === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    try {
+      await input.lookupQuota.consume({
+        userId: caller.principal.userId,
+        canonicalClientIp: caller.canonicalClientIp,
+        signal: signal ?? new AbortController().signal,
+      });
+    } catch (error) {
+      if (error instanceof UnlistedTokenLookupRateLimitedError) {
+        throw V2ApiError.rateLimited();
+      }
+      if (error instanceof UnlistedTokenLookupQuotaUnavailableError) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      throw error;
+    }
+    const fact = await input.facts.readUnlistedToken(
+      address,
+      signal === undefined ? {} : { signal },
+    );
+    if (fact.notFound) {
+      throw V2ApiError.notFound();
+    }
+    return fact;
+  }
+
+  function unregisteredPairFacts(fact: UnlistedTokenFact): PairFacts {
+    const market = fact.market;
+    if (market.value === null || market.fetchedAt === null) {
+      return pairFactsFromSnapshot({
+        value: null,
+        source: market.source,
+        fetchedAt: null,
+        ttlSeconds: market.ttlSeconds,
+        quality: "unavailable",
+        reasonCode: market.reasonCode ?? marketReasonCodes.providerUnreachable,
+        rawDigest: null,
+      });
+    }
+    const fetchedAt = market.fetchedAt;
+    const quality = market.quality === "stale" ? "stale" : "fresh";
+    const project = (value: string | null): MarketFactProjection =>
+      value === null
+        ? unavailableFact(marketReasonCodes.factMissing)
+        : availableFact({
+            value,
+            source: market.source,
+            fetchedAt,
+            ttlSeconds: market.ttlSeconds,
+            quality,
+            reasonCode: market.reasonCode,
+          });
+    const value = market.value;
+    return Object.freeze({
+      price: project(value.priceUsd),
+      priceChange24h: project(value.priceChangeH24),
+      liquidityUsd: project(value.liquidityUsd),
+      volume24h: project(value.volumeH24),
+      marketCap: project(value.marketCap),
+      fdv: project(value.fdv),
+      primaryPair:
+        value.primaryPair === null
+          ? null
+          : Object.freeze({
+              pairAddress: value.primaryPair.pairAddress,
+              dexId: value.primaryPair.dexId,
+              labels: value.primaryPair.labels,
+              quoteTokenAddress: value.primaryPair.quoteTokenAddress,
+              quoteTokenSymbol: value.primaryPair.quoteTokenSymbol,
+              pairCreatedAt: value.primaryPair.pairCreatedAt,
+            }),
+      volumeForOrdering: value.volumeH24,
+    });
+  }
+
+  function projectUnregisteredAsset(
+    assetId: string,
+    address: string,
+    fact: UnlistedTokenFact,
+  ): UnregisteredAssetProjection | UnavailableBlock {
+    const identity = fact.identity;
+    if (identity.value === null || identity.fetchedAt === null) {
+      return unavailableBlock(
+        identity.reasonCode ?? marketReasonCodes.providerUnreachable,
+      );
+    }
+    return Object.freeze({
+      assetId,
+      chainId: input.chainId,
+      address,
+      symbol: identity.value.symbol,
+      name: identity.value.name,
+      decimals: identity.value.decimals,
+      status: "unregistered" as const,
+      source: Object.freeze({
+        kind: providerLookupSourceKind,
+        provider: identity.source,
+        fetchedAt: identity.fetchedAt,
+        ttlSeconds: identity.ttlSeconds,
+        quality:
+          identity.quality === "stale"
+            ? ("stale" as const)
+            : ("fresh" as const),
+        blockNumber: null,
+        verifiedAt: null,
+      }),
+      updatedAt: identity.fetchedAt,
+    });
+  }
+
+  async function securityFor(
+    address: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{
+    readonly security: MarketAssetResource["security"];
+    readonly holderCount: MarketFactProjection;
+  }> {
+    const fact = await input.facts.readTokenSecurity(
+      address,
+      signal === undefined ? {} : { signal },
+    );
+    if (fact.value === null || fact.fetchedAt === null) {
+      const reasonCode =
+        fact.reasonCode ?? marketReasonCodes.providerUnreachable;
+      return {
+        security: unavailableBlock(reasonCode),
+        holderCount: unavailableFact(reasonCode),
+      };
+    }
+    const fetchedAt = fact.fetchedAt;
+    const quality = fact.quality === "stale" ? "stale" : "fresh";
+    return {
+      security: Object.freeze({
+        status: "available",
+        source: fact.source,
+        fetchedAt,
+        ttlSeconds: fact.ttlSeconds,
+        quality,
+        reasonCode: fact.reasonCode,
+        facts: Object.freeze(
+          fact.value.facts.map((row) =>
+            Object.freeze({
+              fact: row.fact,
+              value: row.value,
+              source: fact.source,
+              observedAt: fetchedAt,
+            }),
+          ),
+        ),
+      }),
+      holderCount: holderCountFact({
+        reported: fact.value.holderCount,
+        source: fact.source,
+        fetchedAt,
+        ttlSeconds: fact.ttlSeconds,
+        quality,
+        reasonCode: fact.reasonCode,
+      }),
+    };
   }
 
   async function pairFactsFor(
@@ -694,8 +947,52 @@ export function createMarketReadService(
       });
     },
 
-    async getAsset({ assetId, signal }) {
-      const asset = await requireAsset(assetId);
+    async getAsset({ assetId, caller, signal }) {
+      const resolved = await resolveAsset(assetId);
+      if (resolved.record === null) {
+        // Unregistered address (Decision 0058): quota, then Provider lookup.
+        const lookup = await lookupUnregistered(
+          resolved.address,
+          caller,
+          signal,
+        );
+        const projected = projectUnregisteredAsset(
+          resolved.assetId,
+          resolved.address,
+          lookup,
+        );
+        const facts = unregisteredPairFacts(lookup);
+        const goplus = await securityFor(resolved.address, signal);
+        return Object.freeze({
+          asset: projected,
+          capability:
+            projected.status === "unregistered"
+              ? Object.freeze({
+                  viewable: true,
+                  swappable: false,
+                  value: "viewable" as const,
+                  reasonCode: marketReasonCodes.assetNotRegistered,
+                })
+              : Object.freeze({
+                  viewable: false,
+                  swappable: false,
+                  value: "temporarily_unavailable" as const,
+                  reasonCode: projected.reasonCode,
+                }),
+          price: facts.price,
+          priceChange24h: facts.priceChange24h,
+          liquidityUsd: facts.liquidityUsd,
+          volume24h: facts.volume24h,
+          marketCap: facts.marketCap,
+          fdv: facts.fdv,
+          primaryPair: facts.primaryPair,
+          community: unavailableBlock(marketReasonCodes.communityNotBound),
+          security: goplus.security,
+          holderCount: goplus.holderCount,
+          contractVersion: v2ContractVersion,
+        });
+      }
+      const asset = resolved.record;
       const chainReadable =
         (await input.readClient.verifyChain()) === "verified";
       const facts = await pairFactsFor(asset, signal);
@@ -790,8 +1087,8 @@ export function createMarketReadService(
       });
     },
 
-    async getCandles({ assetId, interval, limit, signal }) {
-      const asset = await requireAsset(assetId);
+    async getCandles({ assetId, interval, limit, caller, signal }) {
+      const resolved = await resolveAsset(assetId);
       if (!isCandleInterval(interval)) {
         throw V2ApiError.invalidRequest();
       }
@@ -809,11 +1106,95 @@ export function createMarketReadService(
       }
       const unavailable = (reasonCode: string): MarketCandlesResource =>
         Object.freeze({
-          assetId: asset.assetId,
+          assetId: resolved.assetId,
           interval,
           candles: unavailableBlock(reasonCode),
           contractVersion: v2ContractVersion,
         });
+      const intervalSeconds = candleIntervalSeconds[interval];
+
+      if (resolved.record === null) {
+        // Unregistered address (Decision 0058): only Provider OHLCV of the
+        // lookup's primary pair can chart it; there is no registered pool
+        // to derive candles from, and nothing is derived from another
+        // source.
+        const lookup = await lookupUnregistered(
+          resolved.address,
+          caller,
+          signal,
+        );
+        if (!input.facts.candlesProviderEnabled) {
+          return unavailable(marketReasonCodes.poolNotRegistered);
+        }
+        const market = lookup.market;
+        if (market.value === null) {
+          return unavailable(
+            market.reasonCode ?? marketReasonCodes.providerUnreachable,
+          );
+        }
+        const pair = market.value.primaryPair;
+        if (pair === null) {
+          return unavailable(marketReasonCodes.pairNotFound);
+        }
+        const fact = await input.facts.readPoolOhlcv(
+          {
+            poolAddress: pair.pairAddress,
+            timeframe: interval,
+            limit: pageSize,
+            tokenAddress: resolved.address,
+          },
+          signal === undefined ? {} : { signal },
+        );
+        if (fact.value === null || fact.fetchedAt === null) {
+          return unavailable(
+            fact.reasonCode ?? marketReasonCodes.providerUnreachable,
+          );
+        }
+        const symbol = lookup.identity.value?.symbol ?? resolved.address;
+        return Object.freeze({
+          assetId: resolved.assetId,
+          interval,
+          candles: Object.freeze({
+            status: "available" as const,
+            quality:
+              fact.quality === "stale"
+                ? ("stale" as const)
+                : ("fresh" as const),
+            source: fact.source,
+            fetchedAt: fact.fetchedAt,
+            labelKey: null,
+            proxyAsset: null,
+            pool: Object.freeze({
+              address: pair.pairAddress,
+              protocol: pair.dexId,
+              quoteAssetId: null,
+              quoteSymbol: "USD",
+            }),
+            priceUnit: `USD per ${symbol}`,
+            items: Object.freeze(
+              fact.value.candles.slice(-pageSize).map((candle) =>
+                Object.freeze({
+                  openTime: candle.openTime,
+                  closeTime: new Date(
+                    Date.parse(candle.openTime) + intervalSeconds * 1_000,
+                  ).toISOString(),
+                  open: candle.open,
+                  high: candle.high,
+                  low: candle.low,
+                  close: candle.close,
+                  volume: candle.volume,
+                  swapCount: null,
+                  isOpen:
+                    Date.parse(candle.openTime) + intervalSeconds * 1_000 >
+                    now().getTime(),
+                }),
+              ),
+            ),
+          }),
+          contractVersion: v2ContractVersion,
+        });
+      }
+      const asset = resolved.record;
       if (asset.status === "blocked") {
         return unavailable("ASSET_BLOCKED");
       }
@@ -845,7 +1226,6 @@ export function createMarketReadService(
       if (pools.length === 0) {
         return unavailable(marketReasonCodes.poolNotRegistered);
       }
-      const intervalSeconds = candleIntervalSeconds[interval];
 
       // Provider path first: GeckoTerminal OHLCV in USD for the asset.
       if (input.facts.candlesProviderEnabled) {
