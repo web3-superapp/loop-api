@@ -9,8 +9,10 @@ import {
   publicProfileIdPatternSource,
 } from "../../features/community/community-contract.js";
 import {
+  directChannelListLimits,
   handRaiseStates,
   streamCallCidPatternSource,
+  streamDirectChannelCidPatternSource,
   voiceRoomMemberAnonymousKey,
   voiceRoomMemberCommands,
   voiceRoomMemberDisplayRuleKey,
@@ -24,6 +26,7 @@ import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
   commandErrors,
   cursorSchema,
+  identityProjectionSchema,
   nullableCursorSchema,
   readErrors,
 } from "./community-schemas.js";
@@ -52,6 +55,58 @@ export const communicationTokenErrors = {
 } as const;
 
 export const communicationReadErrors = readErrors;
+
+/**
+ * Decision 0056: `GET /v2/chat/direct-channels`. `limit` and `cursor` are
+ * mutually exclusive because the cursor carries the page size.
+ */
+export const directChannelListQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: cursorSchema,
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: directChannelListLimits.maximum,
+      description: `Page size, 1-${directChannelListLimits.maximum}; defaults to ${directChannelListLimits.default}.`,
+    },
+  },
+} as const;
+
+export const directChannelListResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["items", "nextCursor", "contractVersion"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: directChannelListLimits.maximum,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["streamCid", "peer", "createdAt"],
+        properties: {
+          streamCid: {
+            type: "string",
+            pattern: streamDirectChannelCidPatternSource,
+            description:
+              "The fixed Stream messaging CID of this direct channel; the same value POST /v2/chat/direct-channels returns.",
+          },
+          peer: {
+            anyOf: [identityProjectionSchema, { type: "null" }],
+            description:
+              "The other member's public identity in the exact GET /v2/connections `profile` shape, or null when that account has no presentable public profile (render as a deactivated user). Never a Stream user ID.",
+          },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+    },
+    nextCursor: nullableCursorSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
 
 export const communityIdParamsSchema = {
   type: "object",

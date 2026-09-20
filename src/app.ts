@@ -1107,6 +1107,7 @@ export async function buildApp(
           streamTokenService,
           repository: communicationRepository,
           channelGateway: streamCommunityChannelGateway,
+          cursorCodec: v2CursorCodec,
         })
       : createUnavailableV2ChatService());
   const voiceRoomService =

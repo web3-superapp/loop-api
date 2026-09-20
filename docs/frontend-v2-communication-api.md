@@ -140,6 +140,67 @@ DELETE /v2/chat/groups/{groupId}/membership
 }
 ```
 
+### 收件箱私聊行：`GET /v2/chat/direct-channels`（决策 0056，2026-09-20）
+
+```text
+GET /v2/chat/direct-channels                 # 默认 50 条
+GET /v2/chat/direct-channels?limit=20        # 1–50
+GET /v2/chat/direct-channels?cursor=<cursor> # cursor 与 limit 互斥
+```
+
+读接口 headers（Bearer + `X-Loop-Contract-Version: 2.0` + `X-Loop-Client-Version`），
+无 body。成功 `200`：
+
+```json
+{
+  "items": [
+    {
+      "streamCid": "messaging:loop_direct_b386bd8d1c2e4f6a8b9c0d1e2f3a4b5c",
+      "peer": {
+        "publicProfileId": "7e25420e-d7ca-46b1-9a2f-3c4d5e6f7a8b",
+        "loopId": "LOOP-2T6JQ8WX",
+        "alias": "Voyager_09",
+        "avatarRef": null
+      },
+      "createdAt": "2026-09-20T06:45:09.123Z"
+    },
+    {
+      "streamCid": "messaging:loop_direct_a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "peer": null,
+      "createdAt": "2026-09-18T11:02:44.010Z"
+    }
+  ],
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+- **用途**：这是收件箱把 Stream 私聊频道映射到对方公开资料的唯一途径（R14-1）。
+  以 LOOP `direct_channels` 表为权威，**不查 Stream**；只返回调用者自己参与、
+  状态 `active` 的频道，按建立时间倒序。
+- `peer` 与 `GET /v2/connections` 的 `profile` **字段完全一致**
+  （`publicProfileId` / `loopId` / `alias` / `avatarRef`），前端复用同一个身份组件。
+- `peer: null` = 对方账号没有可展示的公开资料（已注销 / 从未激活）。
+- **响应里没有任何 Stream user id、内部 user id、钱包地址。**
+- 分页：keyset（`createdAt` desc, `streamCid` desc），cursor 绑定账号与路由，
+  带页大小，因此 `cursor` 和 `limit` 同时出现是 `400 INVALID_REQUEST`；
+  `limit` 越界（0 或 >50）、未知 query、别人的 cursor、过期 cursor 都是 `400`。
+- 权限：仅本人（principal 绑定，不接受任何目标参数）；未登录 `401`；模块未启用
+  `404 NOT_FOUND`；仓储 / cursor 密钥 / Stream 凭据缺失 `503 CAPABILITY_UNAVAILABLE`。
+
+**客户端规则（收件箱私聊行）**：
+
+| 情况                                             | 标题                                         | 头像                             |
+| ------------------------------------------------ | -------------------------------------------- | -------------------------------- |
+| `peer != null`                                   | `peer.alias ?? peer.loopId`                  | `peer.avatarRef`，否则标题首字母 |
+| `peer == null`                                   | 「已注销用户」                               | 占位头像                         |
+| Stream 频道的 cid 不在本列表里（尚未加载 / 503） | **不显示任何名字**（占位骨架或 unavailable） | 占位头像                         |
+
+任何情况下都**不得**回退到 Stream 的 `StreamChannelName` / `User.name` / `User.id`
+（那就是 `loop_…` 的来源）。列表按 `streamCid` 建索引，Stream 频道列表按 cid 查表。
+进入私聊页时把同一个 `peer` 传给 `DirectMessageTarget.identity`，顶栏与 `@`
+候选行即刻可用（R14-3）。
+
 - **退出小群**：`DELETE /v2/chat/groups/{groupId}/membership`，成功 `200`
   `{groupId, membership: null, contractVersion}`。后端先做 Stream `removeMembers`
   再提交本地删除；Stream 未知结果返回 `503 PROVIDER_DISCONNECTED` 且**不提交**，

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +7,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../src/config.js";
+import { createPostgresChatChannelRepository } from "../src/database/chat-channel-repository.js";
 import { createPostgresCommunityRepository } from "../src/database/community-repository.js";
 import {
   createPostgresCommunicationRepository,
@@ -1883,5 +1884,281 @@ describe("PostgreSQL V2 communication repository", () => {
       values: [communityId],
     });
     expect(rooms.rowCount).toBe(1);
+  });
+
+  describe("listDirectChannels (Decision 0056)", () => {
+    function digest(label: string): string {
+      return createHash("sha256").update(label, "utf8").digest("hex");
+    }
+
+    /** Accepted friendship + social privacy that admits a DM, both ways. */
+    async function befriend(
+      firstUserId: string,
+      secondUserId: string,
+    ): Promise<void> {
+      for (const ownerUserId of [firstUserId, secondUserId]) {
+        await pool.query({
+          text: `
+            insert into public.social_privacy_preferences (
+              owner_user_id, friend_requests, group_invites, direct_messages
+            ) values ($1, 'enabled', 'friends', 'friends')
+            on conflict (owner_user_id) do update
+              set direct_messages = 'friends',
+                  group_invites = 'friends',
+                  friend_requests = 'enabled'
+          `,
+          values: [ownerUserId],
+        });
+      }
+      const request = await pool.query<{ friend_request_id: string }>({
+        text: `
+          insert into public.friend_requests (
+            requester_user_id, recipient_user_id, status, expires_at,
+            decided_at, created_at, updated_at
+          ) values (
+            $1, $2, 'accepted', clock_timestamp() + interval '1 day',
+            clock_timestamp(), clock_timestamp() - interval '1 minute',
+            clock_timestamp()
+          )
+          returning friend_request_id
+        `,
+        values: [firstUserId, secondUserId],
+      });
+      const [userIdLow, userIdHigh] = [firstUserId, secondUserId].sort();
+      await pool.query({
+        text: `
+          insert into public.friendships (
+            user_id_low, user_id_high, accepted_friend_request_id
+          ) values ($1, $2, $3)
+        `,
+        values: [userIdLow, userIdHigh, request.rows[0]!.friend_request_id],
+      });
+    }
+
+    /**
+     * The real product path in repository terms: prepare the fixed channel,
+     * claim the one submission, and record success. Returns the
+     * `loop_direct_<32 hex>` channel ID, or leaves the row `pending` when
+     * `succeed` is false.
+     */
+    async function openDirect(
+      ownerUserId: string,
+      targetPublicProfileId: string,
+      succeed = true,
+    ): Promise<string> {
+      const chat = createPostgresChatChannelRepository(pool);
+      const operationId = randomUUID();
+      const prepared = await chat.prepareDirectOperation({
+        operationId,
+        ownerUserId,
+        requestId: randomUUID(),
+        requestDigest: digest(`direct:${operationId}`),
+        targetPublicProfileId,
+      });
+      if (!succeed) {
+        return prepared.channelId;
+      }
+      const claim = await chat.claimSubmission({
+        operationId,
+        ownerUserId,
+        requestId: randomUUID(),
+      });
+      expect(claim?.kind).toBe("direct");
+      await chat.markSucceeded({
+        operationId,
+        ownerUserId,
+        requestId: randomUUID(),
+      });
+      return prepared.channelId;
+    }
+
+    async function identityOf(userId: string): Promise<{
+      readonly publicProfileId: string;
+      readonly loopId: string;
+      readonly alias: string | null;
+      readonly avatarRef: string | null;
+    }> {
+      const row = await pool.query<{
+        public_profile_id: string;
+        loop_id: string;
+        alias: string | null;
+        avatar_ref: string | null;
+      }>({
+        text: `
+          select profile.public_profile_id, account.loop_id,
+                 profile.alias, profile.avatar_ref
+          from public.user_profiles as profile
+          join public.loop_users as account on account.id = profile.owner_user_id
+          where profile.owner_user_id = $1
+        `,
+        values: [userId],
+      });
+      const found = row.rows[0]!;
+      return {
+        publicProfileId: found.public_profile_id,
+        loopId: found.loop_id,
+        alias: found.alias,
+        avatarRef: found.avatar_ref,
+      };
+    }
+
+    it("lists only the viewer's active channels, newest first, with the peer's public identity", async () => {
+      const viewer = await createAccount();
+      const first = await createAccount();
+      const second = await createAccount();
+      const pendingFriend = await createAccount();
+      const outsider = await createAccount();
+      await befriend(viewer.userId, first.userId);
+      await befriend(viewer.userId, second.userId);
+      await befriend(viewer.userId, pendingFriend.userId);
+      await befriend(first.userId, second.userId);
+
+      // Two active channels for the viewer, one active channel between the
+      // two friends (not the viewer's), and one still-pending channel.
+      const withFirst = await openDirect(viewer.userId, first.publicProfileId);
+      const withSecond = await openDirect(
+        second.userId,
+        viewer.publicProfileId,
+      );
+      const between = await openDirect(first.userId, second.publicProfileId);
+      const pending = await openDirect(
+        viewer.userId,
+        pendingFriend.publicProfileId,
+        false,
+      );
+
+      const page = await communication.listDirectChannels({
+        viewerUserId: viewer.userId,
+        limit: 10,
+      });
+      expect(page.map((row) => row.streamChannelId).sort()).toEqual(
+        [withFirst, withSecond].sort(),
+      );
+      expect(page.map((row) => row.streamChannelId)).not.toContain(between);
+      expect(page.map((row) => row.streamChannelId)).not.toContain(pending);
+      const byChannel = new Map(page.map((row) => [row.streamChannelId, row]));
+      expect(byChannel.get(withFirst)?.peer).toEqual(
+        await identityOf(first.userId),
+      );
+      expect(byChannel.get(withSecond)?.peer).toEqual(
+        await identityOf(second.userId),
+      );
+      // Newest first; ties on the millisecond fall back to the channel ID.
+      const ordered = [...page].sort((a, b) =>
+        a.createdAt === b.createdAt
+          ? b.streamChannelId.localeCompare(a.streamChannelId)
+          : b.createdAt.localeCompare(a.createdAt),
+      );
+      expect(page).toEqual(ordered);
+      for (const row of page) {
+        expect(row.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*\.\d{3}Z$/);
+        expect(JSON.stringify(row)).not.toContain(viewer.userId);
+        expect(JSON.stringify(row)).not.toContain(
+          viewer.userId.replaceAll("-", ""),
+        );
+      }
+
+      // The other friend sees the two channels it belongs to, and nothing
+      // of the viewer's other channel; a stranger sees nothing.
+      const firstView = await communication.listDirectChannels({
+        viewerUserId: first.userId,
+        limit: 10,
+      });
+      expect(firstView.map((row) => row.streamChannelId).sort()).toEqual(
+        [withFirst, between].sort(),
+      );
+      expect(byChannel.get(withFirst)?.peer?.publicProfileId).toBe(
+        first.publicProfileId,
+      );
+      expect(
+        firstView.find((row) => row.streamChannelId === withFirst)?.peer
+          ?.publicProfileId,
+      ).toBe(viewer.publicProfileId);
+      await expect(
+        communication.listDirectChannels({
+          viewerUserId: outsider.userId,
+          limit: 10,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("pages by (created_at, stream_channel_id) keyset without gaps or repeats", async () => {
+      const viewer = await createAccount();
+      const channels: string[] = [];
+      for (let index = 0; index < 4; index += 1) {
+        const friend = await createAccount();
+        await befriend(viewer.userId, friend.userId);
+        channels.push(await openDirect(viewer.userId, friend.publicProfileId));
+      }
+      const all = await communication.listDirectChannels({
+        viewerUserId: viewer.userId,
+        limit: 10,
+      });
+      expect(all).toHaveLength(4);
+
+      const walked: string[] = [];
+      let after: { lastCreatedAt: string; lastStreamChannelId: string } | null =
+        null;
+      for (let guard = 0; guard < 6; guard += 1) {
+        const page = await communication.listDirectChannels({
+          viewerUserId: viewer.userId,
+          limit: 2,
+          ...(after === null ? {} : { after }),
+        });
+        if (page.length === 0) {
+          break;
+        }
+        walked.push(...page.map((row) => row.streamChannelId));
+        const last = page.at(-1)!;
+        after = {
+          lastCreatedAt: last.createdAt,
+          lastStreamChannelId: last.streamChannelId,
+        };
+        if (page.length < 2) {
+          break;
+        }
+      }
+      expect(walked).toEqual(all.map((row) => row.streamChannelId));
+      expect(new Set(walked).size).toBe(4);
+      expect(walked.sort()).toEqual([...channels].sort());
+    });
+
+    it("keeps the row with peer null when the other account has no public profile", async () => {
+      const viewer = await createAccount();
+      const gone = await createAccount();
+      await befriend(viewer.userId, gone.userId);
+      const channel = await openDirect(viewer.userId, gone.publicProfileId);
+      await pool.query({
+        text: `delete from public.user_profiles where owner_user_id = $1`,
+        values: [gone.userId],
+      });
+
+      const page = await communication.listDirectChannels({
+        viewerUserId: viewer.userId,
+        limit: 10,
+      });
+      expect(page).toHaveLength(1);
+      expect(page[0]).toMatchObject({ streamChannelId: channel, peer: null });
+      expect(JSON.stringify(page)).not.toContain(gone.userId);
+      expect(JSON.stringify(page)).not.toContain(
+        gone.userId.replaceAll("-", ""),
+      );
+    });
+
+    it("rejects an invalid viewer or page size as unavailable, never as a row", async () => {
+      await expect(
+        communication.listDirectChannels({
+          viewerUserId: "not-a-uuid",
+          limit: 10,
+        }),
+      ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
+      const viewer = await createAccount();
+      await expect(
+        communication.listDirectChannels({
+          viewerUserId: viewer.userId,
+          limit: 0,
+        }),
+      ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
+    });
   });
 });

@@ -1,5 +1,15 @@
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import {
+  InvalidV2CursorError,
+  type V2CursorCodec,
+  type V2CursorContinuation,
+} from "../../core/http/v2-cursor.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
+import {
+  InvalidCommunityRequestError,
+  parseListLimit,
+  type IdentityProjection,
+} from "../community/community-contract.js";
 import {
   StreamChannelProjectionMismatchError,
   type StreamCommunityChannelGateway,
@@ -17,6 +27,9 @@ import {
 } from "./chat-channel-service.js";
 import {
   communicationCommandDigest,
+  directChannelCursorRoutes,
+  directChannelListLimits,
+  directChannelsFilter,
   parseCommunicationOpaqueId,
 } from "./communication-contract.js";
 import {
@@ -126,8 +139,34 @@ export interface V2ChatGroupLeaveInput {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Decision 0056: one inbox row. `peer` is the other member's public identity
+ * in the exact `GET /v2/connections` `profile` shape, or null when that
+ * account has no presentable public profile. No Stream user ID is carried.
+ */
+export interface V2DirectChannelItem {
+  readonly streamCid: string;
+  readonly peer: IdentityProjection | null;
+  readonly createdAt: string;
+}
+
+export interface V2DirectChannelListResource {
+  readonly items: readonly V2DirectChannelItem[];
+  readonly nextCursor: string | null;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+export interface V2DirectChannelListInput {
+  readonly principal: AuthenticatedLoopPrincipal;
+  readonly cursor: unknown;
+  readonly limit: unknown;
+}
+
 export interface V2ChatService {
   issueToken(input: V2StreamTokenInput): Promise<V2StreamTokenResource>;
+  listDirectChannels(
+    input: V2DirectChannelListInput,
+  ): Promise<V2DirectChannelListResource>;
   createGroup(input: V2ChatCommandInput): Promise<V2ChatOperationResource>;
   getOrCreateDirect(
     input: V2ChatCommandInput,
@@ -141,7 +180,10 @@ export interface V2ChatService {
 }
 
 function mapChatError(error: unknown): never {
-  if (error instanceof InvalidChatChannelServiceRequestError) {
+  if (
+    error instanceof InvalidChatChannelServiceRequestError ||
+    error instanceof InvalidCommunityRequestError
+  ) {
     throw V2ApiError.invalidRequest();
   }
   if (error instanceof ChatChannelIdempotencyConflictError) {
@@ -277,6 +319,8 @@ export interface V2ChatServiceOptions {
   readonly streamTokenService: StreamTokenService;
   readonly repository: CommunicationRepository;
   readonly channelGateway: StreamCommunityChannelGateway;
+  /** Null when V2_CURSOR_HMAC_SECRET is absent: the list read fails closed. */
+  readonly cursorCodec?: V2CursorCodec | null;
 }
 
 export function createUnavailableV2ChatService(): V2ChatService {
@@ -284,6 +328,7 @@ export function createUnavailableV2ChatService(): V2ChatService {
     Promise.reject(V2ApiError.capabilityUnavailable());
   return Object.freeze({
     issueToken: unavailable,
+    listDirectChannels: unavailable,
     createGroup: unavailable,
     getOrCreateDirect: unavailable,
     getOperation: unavailable,
@@ -427,5 +472,148 @@ export function createV2ChatService(
         contractVersion: v2ContractVersion,
       });
     },
+
+    /**
+     * Decision 0056: the inbox mapping `streamCid -> peer public identity`.
+     * `direct_channels` is the authority and only `active` rows the caller is
+     * a member of are read, so a stranger's channels are never enumerable
+     * and Stream is never consulted. The cursor is owner/route/filter bound
+     * and carries the page size (`limit` and `cursor` are exclusive).
+     */
+    async listDirectChannels(
+      input: V2DirectChannelListInput,
+    ): Promise<V2DirectChannelListResource> {
+      const ownerUserId = input.principal.userId;
+      const filter = directChannelsFilter();
+      const request = page(ownerUserId, filter, input.cursor, input.limit);
+      const lastCreatedAt = continuationString(
+        request.continuation,
+        "createdAt",
+      );
+      const lastStreamChannelId = continuationString(
+        request.continuation,
+        "streamChannelId",
+      );
+      const records = await chatCall(() =>
+        options.repository.listDirectChannels({
+          viewerUserId: ownerUserId,
+          limit: request.limit + 1,
+          ...(lastCreatedAt === undefined || lastStreamChannelId === undefined
+            ? {}
+            : { after: { lastCreatedAt, lastStreamChannelId } }),
+        }),
+      );
+      const hasMore = records.length > request.limit;
+      const items = records.slice(0, request.limit);
+      const last = items.at(-1);
+      return Object.freeze({
+        items: Object.freeze(
+          items.map((record) =>
+            Object.freeze({
+              streamCid: `messaging:${record.streamChannelId}`,
+              peer:
+                record.peer === null
+                  ? null
+                  : Object.freeze({
+                      publicProfileId: record.peer.publicProfileId,
+                      loopId: record.peer.loopId,
+                      alias: record.peer.alias,
+                      avatarRef: record.peer.avatarRef,
+                    }),
+              createdAt: record.createdAt,
+            }),
+          ),
+        ),
+        nextCursor:
+          last === undefined || !hasMore
+            ? null
+            : codec().encode({
+                ownerId: ownerUserId,
+                route: directChannelCursorRoutes.list,
+                filter,
+                continuation: Object.freeze({
+                  createdAt: last.createdAt,
+                  limit: request.limit,
+                  streamChannelId: last.streamChannelId,
+                }),
+              }),
+        contractVersion: v2ContractVersion,
+      });
+    },
   });
+
+  function codec(): V2CursorCodec {
+    const cursorCodec = options.cursorCodec ?? null;
+    if (cursorCodec === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    return cursorCodec;
+  }
+
+  /**
+   * A cursor carries the page size, so `limit` and `cursor` are mutually
+   * exclusive (the community directory rule): passing both would let a caller
+   * widen a page bound into a cursor signed for another size.
+   */
+  function page(
+    ownerUserId: string,
+    filter: string,
+    cursor: unknown,
+    limit: unknown,
+  ): {
+    readonly limit: number;
+    readonly continuation: V2CursorContinuation | null;
+  } {
+    if (cursor === undefined) {
+      try {
+        return {
+          limit: parseListLimit(limit, directChannelListLimits),
+          continuation: null,
+        };
+      } catch (error) {
+        return mapChatError(error);
+      }
+    }
+    if (limit !== undefined || typeof cursor !== "string") {
+      throw V2ApiError.invalidRequest();
+    }
+    let continuation: V2CursorContinuation;
+    try {
+      continuation = codec().decode({
+        ownerId: ownerUserId,
+        route: directChannelCursorRoutes.list,
+        filter,
+        cursor,
+      });
+    } catch (error) {
+      if (error instanceof InvalidV2CursorError) {
+        throw V2ApiError.invalidRequest();
+      }
+      throw error;
+    }
+    const decodedLimit = continuation["limit"];
+    if (
+      typeof decodedLimit !== "number" ||
+      !Number.isInteger(decodedLimit) ||
+      decodedLimit < 1 ||
+      decodedLimit > directChannelListLimits.maximum
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    return { limit: decodedLimit, continuation };
+  }
+
+  function continuationString(
+    continuation: V2CursorContinuation | null,
+    key: string,
+  ): string | undefined {
+    const value = continuation?.[key];
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value !== "string") {
+      throw V2ApiError.invalidRequest();
+    }
+    return value;
+  }
 }

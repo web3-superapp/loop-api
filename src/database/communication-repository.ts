@@ -37,8 +37,10 @@ import {
   type ChatGroupLeavePreparation,
   type CommunityChannelViewerRecord,
   type CreateVoiceRoomInput,
+  type DirectChannelRecord,
   type HandRaiseQueueEntryRecord,
   type HandRaiseQueuePageRecord,
+  type ListDirectChannelsInput,
   type ListVoiceRoomMembersInput,
   type VoiceRoomCommandInput,
   type VoiceRoomIdentity,
@@ -79,6 +81,9 @@ const personaProjectionStateSchema = z.enum(["pending", "confirmed"]);
 const streamCommunityChannelIdSchema = z
   .string()
   .regex(/^loop_community_[0-9a-f]{32}$/);
+const streamDirectChannelIdSchema = z
+  .string()
+  .regex(/^loop_direct_[0-9a-f]{32}$/);
 
 const voiceRoomColumns = `
   room.voice_room_id,
@@ -1736,6 +1741,84 @@ export function createPostgresCommunicationRepository(
             values: [groupId, actorUserId, recordId, requestId],
           });
         });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    /**
+     * Decision 0056: the viewer's `active` direct channels, newest first.
+     * `direct_channels` is the authority and Stream is never read. The peer
+     * is the other member of the pair; a left join keeps the row when that
+     * account has no `user_profiles` row so the client can label it instead
+     * of falling back to a Stream ID. No `loop_users.id` or Stream user ID
+     * leaves this function.
+     */
+    async listDirectChannels(
+      rawInput: ListDirectChannelsInput,
+    ): Promise<readonly DirectChannelRecord[]> {
+      try {
+        const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
+        const limit = limitSchema.parse(rawInput.limit);
+        const values: unknown[] = [viewerUserId, limit];
+        let keyset = "";
+        const after = rawInput.after;
+        if (after !== undefined) {
+          values.push(
+            dateSchema.parse(new Date(after.lastCreatedAt)),
+            streamDirectChannelIdSchema.parse(after.lastStreamChannelId),
+          );
+          // `createdAt` travels through the cursor in the millisecond ISO
+          // form the response projects, so the keyset compares the
+          // millisecond-truncated column (the community directory rule).
+          keyset = `
+            and (
+              date_trunc('milliseconds', direct.created_at),
+              direct.stream_channel_id
+            ) < ($3::timestamptz, $4::text)
+          `;
+        }
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              direct.stream_channel_id,
+              direct.created_at,
+              profile.public_profile_id,
+              account.loop_id,
+              profile.alias,
+              profile.avatar_ref
+            from public.direct_channels as direct
+            left join public.user_profiles as profile
+              on profile.owner_user_id = case
+                when direct.user_id_low = $1 then direct.user_id_high
+                else direct.user_id_low
+              end
+            left join public.loop_users as account
+              on account.id = profile.owner_user_id
+            where (direct.user_id_low = $1 or direct.user_id_high = $1)
+              and direct.channel_state = 'active'
+              ${keyset}
+            order by
+              date_trunc('milliseconds', direct.created_at) desc,
+              direct.stream_channel_id desc
+            limit $2
+          `,
+          values,
+        });
+        return Object.freeze(
+          result.rows.map((row) =>
+            Object.freeze({
+              streamChannelId: streamDirectChannelIdSchema.parse(
+                row["stream_channel_id"],
+              ),
+              peer:
+                row["public_profile_id"] === null || row["loop_id"] === null
+                  ? null
+                  : toIdentity(row),
+              createdAt: dateSchema.parse(row["created_at"]).toISOString(),
+            }),
+          ),
+        );
       } catch (error) {
         return translateRepositoryError(error);
       }

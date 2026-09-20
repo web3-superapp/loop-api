@@ -15,6 +15,7 @@ import type {
 } from "../../features/communication/v2-chat-service.js";
 import {
   assertNoBodyOrQueryV2,
+  assertNoBodyV2,
   assertNoQuery,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
@@ -31,6 +32,8 @@ import {
   communicationTokenErrors,
   createChatGroupRequestSchema,
   createDirectChannelRequestSchema,
+  directChannelListQuerySchema,
+  directChannelListResourceSchema,
   pendingChatOperationResourceSchema,
   streamTokenResourceSchema,
 } from "./communication-schemas.js";
@@ -175,6 +178,42 @@ export function registerV2ChatRoutes(
         ...commandMetadata(request),
       });
       return sendOperation(reply, resource);
+    },
+  );
+
+  app.get(
+    "/v2/chat/direct-channels",
+    {
+      schema: {
+        operationId: "listV2DirectChatChannels",
+        summary: "List the caller's direct channels with each peer's identity",
+        description:
+          "The inbox mapping from a Stream direct CID to the other member's public identity (Decision 0056). LOOP's direct_channels table is the authority and Stream is never read; only active channels the caller belongs to are listed, newest first. `peer` is null when the other account has no presentable public profile. No Stream user ID is projected. `limit` and `cursor` are mutually exclusive.",
+        tags: ["communication"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: directChannelListQuerySchema,
+        response: {
+          200: directChannelListResourceSchema,
+          ...communicationReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as {
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await service.listDirectChannels({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        cursor: query.cursor,
+        limit: query.limit,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
     },
   );
 

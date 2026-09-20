@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { createV2CursorCodec } from "../src/core/http/v2-cursor.js";
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import {
@@ -19,9 +20,11 @@ import {
   CommunicationDataStaleError,
   CommunicationNotFoundError,
   CommunicationPermissionDeniedError,
+  CommunicationRepositoryUnavailableError,
   CommunicationUnprovisionedRoomError,
   createUnavailableCommunicationRepository,
   type CommunicationRepository,
+  type DirectChannelRecord,
   type VoiceRoomViewerRecord,
 } from "../src/features/communication/communication-repository.js";
 import { createVoiceRoomService } from "../src/features/communication/voice-room-service.js";
@@ -190,6 +193,7 @@ function communicationRepositoryFake(
 ): { readonly repository: CommunicationRepository; readonly mocks: Mocks } {
   const mocks: Mocks = {
     ...createUnavailableCommunicationRepository(),
+    listDirectChannels: vi.fn(() => Promise.resolve([])),
     readCommunityChannel: vi.fn(() =>
       Promise.resolve({
         channel: null,
@@ -2366,5 +2370,268 @@ describe("LOOP API V2 communication module", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  describe("GET /v2/chat/direct-channels (Decision 0056)", () => {
+    const peerUserId = "7d23b97f-5245-48f7-a423-d6f086b41f66";
+    const directChannelIds = [
+      "loop_direct_b386bd8d1c2e4f6a8b9c0d1e2f3a4b5c",
+      "loop_direct_a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "loop_direct_0123456789abcdef0123456789abcdef",
+    ] as const;
+
+    function directRecord(
+      index: 0 | 1 | 2,
+      peer: DirectChannelRecord["peer"] = profile,
+    ): DirectChannelRecord {
+      return Object.freeze({
+        streamChannelId: directChannelIds[index],
+        peer,
+        createdAt: `2026-09-20T06:45:0${index}.123Z`,
+      });
+    }
+
+    function directFakes(rows: readonly DirectChannelRecord[]) {
+      return fakes({
+        communication: communicationRepositoryFake({
+          listDirectChannels: vi.fn(() => Promise.resolve(rows)),
+        }),
+      });
+    }
+
+    it("maps each direct CID to the peer's public identity in the connections shape, or null", async () => {
+      const { app, communicationMocks } = await createApp(
+        directFakes([directRecord(0), directRecord(1, null)]),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = jsonOf<{
+        items: readonly {
+          streamCid: string;
+          peer: Record<string, unknown> | null;
+          createdAt: string;
+        }[];
+        nextCursor: string | null;
+        contractVersion: string;
+      }>(response);
+      expect(body).toEqual({
+        items: [
+          {
+            streamCid: `messaging:${directChannelIds[0]}`,
+            peer: {
+              publicProfileId: targetProfileId,
+              loopId: "LOOP-7HJKMNPQ",
+              alias: "frog_maxi",
+              avatarRef: "avatar:preset/people-03",
+            },
+            createdAt: "2026-09-20T06:45:00.123Z",
+          },
+          {
+            streamCid: `messaging:${directChannelIds[1]}`,
+            peer: null,
+            createdAt: "2026-09-20T06:45:01.123Z",
+          },
+        ],
+        nextCursor: null,
+        contractVersion: "2.0",
+      });
+      // The peer object is exactly the GET /v2/connections `profile` key set.
+      expect(Object.keys(body.items[0]!.peer!).sort()).toEqual([
+        "alias",
+        "avatarRef",
+        "loopId",
+        "publicProfileId",
+      ]);
+      // No Stream user ID or internal user UUID leaves the route: the only
+      // `loop_` tokens are the direct CIDs themselves.
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(accountId);
+      expect(serialized).not.toContain(accountId.replaceAll("-", ""));
+      expect(serialized).not.toContain(peerUserId.replaceAll("-", ""));
+      expect(serialized.match(/loop_[0-9a-f]{32}/g)).toBeNull();
+      // Owner-bound: the repository sees only the caller and the page size + 1.
+      expect(communicationMocks["listDirectChannels"]).toHaveBeenCalledTimes(1);
+      expect(communicationMocks["listDirectChannels"]).toHaveBeenCalledWith({
+        viewerUserId: accountId,
+        limit: 51,
+      });
+    });
+
+    it("pages by keyset: the cursor carries the page size and replays the last row", async () => {
+      const dependencies = directFakes([
+        directRecord(0),
+        directRecord(1),
+        directRecord(2),
+      ]);
+      const { app, communicationMocks } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels?limit=2",
+        headers: commonHeaders(),
+      });
+      expect(first.statusCode).toBe(200);
+      const firstBody = jsonOf<{
+        items: readonly { streamCid: string }[];
+        nextCursor: string | null;
+      }>(first);
+      expect(firstBody.items.map((item) => item.streamCid)).toEqual([
+        `messaging:${directChannelIds[0]}`,
+        `messaging:${directChannelIds[1]}`,
+      ]);
+      expect(firstBody.nextCursor).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+      expect(communicationMocks["listDirectChannels"]).toHaveBeenLastCalledWith(
+        { viewerUserId: accountId, limit: 3 },
+      );
+
+      communicationMocks["listDirectChannels"]!.mockResolvedValueOnce([
+        directRecord(2),
+      ]);
+      const second = await app.inject({
+        method: "GET",
+        url: `/v2/chat/direct-channels?cursor=${encodeURIComponent(firstBody.nextCursor!)}`,
+        headers: commonHeaders(),
+      });
+      expect(second.statusCode).toBe(200);
+      expect(jsonOf<{ items: unknown[]; nextCursor: null }>(second)).toEqual({
+        items: [
+          {
+            streamCid: `messaging:${directChannelIds[2]}`,
+            peer: {
+              publicProfileId: targetProfileId,
+              loopId: "LOOP-7HJKMNPQ",
+              alias: "frog_maxi",
+              avatarRef: "avatar:preset/people-03",
+            },
+            createdAt: "2026-09-20T06:45:02.123Z",
+          },
+        ],
+        nextCursor: null,
+        contractVersion: "2.0",
+      });
+      expect(communicationMocks["listDirectChannels"]).toHaveBeenLastCalledWith(
+        {
+          viewerUserId: accountId,
+          limit: 3,
+          after: {
+            lastCreatedAt: "2026-09-20T06:45:01.123Z",
+            lastStreamChannelId: directChannelIds[1],
+          },
+        },
+      );
+
+      // `limit` and `cursor` together, an out-of-range limit, an unknown
+      // key, and a body are all INVALID_REQUEST before any repository read.
+      const before =
+        communicationMocks["listDirectChannels"]!.mock.calls.length;
+      for (const url of [
+        `/v2/chat/direct-channels?cursor=${encodeURIComponent(firstBody.nextCursor!)}&limit=2`,
+        "/v2/chat/direct-channels?limit=0",
+        "/v2/chat/direct-channels?limit=51",
+        "/v2/chat/direct-channels?direction=following",
+        "/v2/chat/direct-channels?cursor=not-a-cursor",
+      ]) {
+        const rejected = await app.inject({
+          method: "GET",
+          url,
+          headers: commonHeaders(),
+        });
+        expect(rejected.statusCode, url).toBe(400);
+        expect(rejected.json()).toMatchObject({
+          code: "INVALID_REQUEST",
+          category: "validation",
+          retryable: false,
+          detailsSafe: null,
+          providerReferenceSafe: null,
+        });
+      }
+      expect(communicationMocks["listDirectChannels"]!.mock.calls).toHaveLength(
+        before,
+      );
+    });
+
+    it("rejects a cursor minted for another account: another user's inbox is never readable", async () => {
+      const { app, communicationMocks } = await createApp(
+        directFakes([directRecord(0)]),
+      );
+      const foreignCursor = createV2CursorCodec({
+        secret: new TextEncoder().encode(cursorSecret),
+      }).encode({
+        ownerId: peerUserId,
+        route: "v2DirectChannels",
+        filter: "state=active",
+        continuation: {
+          createdAt: "2026-09-20T06:45:00.123Z",
+          limit: 2,
+          streamChannelId: directChannelIds[0],
+        },
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/chat/direct-channels?cursor=${encodeURIComponent(foreignCursor)}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      expect(communicationMocks["listDirectChannels"]).not.toHaveBeenCalled();
+    });
+
+    it("requires the Privy Bearer and the contract headers like every V2 read", async () => {
+      const { app, communicationMocks } = await createApp(
+        directFakes([directRecord(0)]),
+      );
+      const unauthenticated = await app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels",
+        headers: commonHeaders({ authorization: undefined }),
+      });
+      expect(unauthenticated.statusCode).toBe(401);
+      expect(unauthenticated.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+      const wrongContract = await app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels",
+        headers: commonHeaders({ "x-loop-contract-version": "1.0" }),
+      });
+      expect(wrongContract.statusCode).toBe(409);
+      expect(wrongContract.json()).toMatchObject({ code: "VERSION_CONFLICT" });
+      expect(communicationMocks["listDirectChannels"]).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when the repository is unavailable or the module is disabled", async () => {
+      const unavailable = await createApp(
+        fakes({
+          communication: communicationRepositoryFake({
+            listDirectChannels: vi.fn(() =>
+              Promise.reject(new CommunicationRepositoryUnavailableError()),
+            ),
+          }),
+        }),
+      );
+      const response = await unavailable.app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        retryable: true,
+      });
+
+      const disabled = await createApp(fakes(), {
+        V2_MODULES_ENABLED: "community",
+      });
+      const missing = await disabled.app.inject({
+        method: "GET",
+        url: "/v2/chat/direct-channels",
+        headers: commonHeaders(),
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toMatchObject({ code: "NOT_FOUND" });
+    });
   });
 });

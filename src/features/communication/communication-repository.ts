@@ -279,7 +279,36 @@ export interface ChatGroupLeavePreparation {
   readonly alreadyCommitted: boolean;
 }
 
+/**
+ * Decision 0056: one `active` direct channel the viewer is a member of. `peer`
+ * is the other member's public identity (the `GET /v2/connections` shape) or
+ * null when that account has no presentable public profile. No Stream user
+ * ID is carried.
+ */
+export interface DirectChannelRecord {
+  readonly streamChannelId: string;
+  readonly peer: VoiceRoomIdentity | null;
+  readonly createdAt: string;
+}
+
+export interface ListDirectChannelsInput {
+  readonly viewerUserId: string;
+  readonly limit: number;
+  readonly after?: {
+    readonly lastCreatedAt: string;
+    readonly lastStreamChannelId: string;
+  };
+}
+
 export interface CommunicationRepository {
+  /**
+   * The viewer's `active` direct channels, newest first, keyed by
+   * (millisecond created_at, stream_channel_id). `direct_channels` is the
+   * authority; Stream is never read (Decision 0056).
+   */
+  listDirectChannels(
+    input: ListDirectChannelsInput,
+  ): Promise<readonly DirectChannelRecord[]>;
   readCommunityChannel(input: {
     readonly communityId: string;
     readonly viewerUserId: string;
@@ -505,6 +534,7 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
   const unavailable = (): Promise<never> =>
     Promise.reject(new CommunicationRepositoryUnavailableError());
   return Object.freeze({
+    listDirectChannels: unavailable,
     readCommunityChannel: unavailable,
     createVoiceRoom: unavailable,
     recordVoiceRoomProvisioning: unavailable,

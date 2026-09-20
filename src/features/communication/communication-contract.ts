@@ -115,6 +115,27 @@ export function voiceRoomMembersFilter(
   return `${voiceRoomId}:${role}`;
 }
 
+/**
+ * Decision 0056: the direct channel inbox read. The list is small (one row
+ * per accepted friend that ever opened a DM), so one page carries up to 50
+ * rows and the default is the maximum.
+ */
+export const directChannelListLimits = Object.freeze({
+  default: 50,
+  maximum: 50,
+});
+
+export const directChannelCursorRoutes = Object.freeze({
+  list: "v2DirectChannels",
+} as const);
+
+/** Canonical cursor filter: only `active` channels are ever listed. */
+export function directChannelsFilter(): string {
+  return "state=active";
+}
+
+export const streamDirectChannelCidPatternSource =
+  "^messaging:loop_direct_[0-9a-f]{32}$";
 export const streamChannelCidPatternSource =
   "^messaging:loop_community_[0-9a-f]{32}$";
 export const streamCallCidPatternSource =
