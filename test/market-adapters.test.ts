@@ -20,6 +20,7 @@ import {
   normalizeGoplusTokenSecurity,
   observedHolderCount,
 } from "../src/integrations/market/goplus-adapter.js";
+import { selectPrimaryPair } from "../src/features/market/market-fact-service.js";
 import { MarketProviderError } from "../src/integrations/market/market-data-provider.js";
 import {
   createProviderHttpKernel,
@@ -94,6 +95,20 @@ const dexscreenerBody = `[
     "quoteToken": { "address": "${usdt}", "symbol": "USDT" }
   }
 ]`;
+
+const btcb = "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c";
+
+/**
+ * Captured verbatim from `GET /token-pairs/v1/bsc/{BTCB}` on 2026-09-21
+ * (only `url` removed). The dust squadswap pool reports a 24 h price change
+ * of `3.725857251510287e+42`; `normalizeDecimalString` refuses exponent
+ * notation, and before Decision 0062 that one field made BTCB unpriceable
+ * for every reader of the API.
+ */
+const btcbExponentPair = `{"chainId":"bsc","dexId":"squadswap","pairAddress":"0x02259FDbF99Ea59e3Bb6589f67e99C0A6322AfF7","labels":["v3"],"baseToken":{"address":"0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c","name":"BTCB Token","symbol":"BTCB"},"quoteToken":{"address":"0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c","name":"Wrapped BNB","symbol":"WBNB"},"priceNative":"105.3723","priceUsd":"82269.44","txns":{"m5":{"buys":0,"sells":0},"h1":{"buys":2,"sells":0},"h6":{"buys":7,"sells":7},"h24":{"buys":33,"sells":31}},"volume":{"h24":4.78,"h6":0.91,"h1":0,"m5":0},"priceChange":{"h1":0.59,"h6":0.47,"h24":3.725857251510287e+42},"liquidity":{"usd":60.88,"base":0.0003514,"quote":0.04094},"fdv":5371677570,"marketCap":5371677570,"pairCreatedAt":1762901008000}`;
+
+/** The deepest BTCB pool of the same response, captured the same way. */
+const btcbDeepPair = `{"chainId":"bsc","dexId":"pancakeswap","pairAddress":"0x6bbc40579ad1BBD243895cA0ACB086BB6300d636","labels":["v3"],"baseToken":{"address":"0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c","name":"BTCB Token","symbol":"BTCB"},"quoteToken":{"address":"0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c","name":"Wrapped BNB","symbol":"WBNB"},"priceNative":"107.8878","priceUsd":"84584.076","txns":{"h24":{"buys":6734,"sells":7609}},"volume":{"h24":27032542.63},"priceChange":{"h24":5.08},"liquidity":{"usd":28700176.37},"fdv":5522808255,"marketCap":5522808255,"pairCreatedAt":1619352299000}`;
 
 describe("market Provider transport kernel", () => {
   it("keeps every JSON number as its exact digit string", () => {
@@ -613,6 +628,57 @@ describe("GeckoTerminal adapter", () => {
     ]);
     // The drop is counted, never silent.
     expect(snapshot.unrepresentablePairCount).toBe(1);
+  });
+
+  it("drops the one pair whose number is not a canonical decimal and prices the token from the rest (Decision 0062)", () => {
+    const body = `[${btcbExponentPair},${btcbDeepPair}]`;
+    const snapshot = normalizeDexscreenerPairs(parseJsonLossless(body), btcb);
+    expect(snapshot.pairs).toHaveLength(1);
+    expect(snapshot.unrepresentablePairCount).toBe(1);
+    const [kept] = snapshot.pairs;
+    expect(kept).toMatchObject({
+      pairAddress: "0x6bbc40579ad1bbd243895ca0acb086bb6300d636",
+      baseTokenAddress: btcb,
+      priceUsd: "84584.076",
+      priceNative: "107.8878",
+      liquidityUsd: "28700176.37",
+      priceChangeH24: "5.08",
+    });
+    // The base-token rule of Decision 0036 can now price BTCB.
+    expect(selectPrimaryPair(snapshot)?.priceUsd).toBe("84584.076");
+  });
+
+  it("drops that pair for the exponent alone: the same pool with a plain decimal is kept", () => {
+    const repaired = btcbExponentPair.replace("3.725857251510287e+42", "3.72");
+    const snapshot = normalizeDexscreenerPairs(
+      parseJsonLossless(`[${repaired}]`),
+      btcb,
+    );
+    expect(snapshot.unrepresentablePairCount).toBe(0);
+    expect(snapshot.pairs[0]).toMatchObject({
+      pairAddress: "0x02259fdbf99ea59e3bb6589f67e99c0a6322aff7",
+      priceChangeH24: "3.72",
+      buysH24: 33,
+      sellsH24: 31,
+      pairCreatedAt: "2025-11-11T22:43:28.000Z",
+    });
+  });
+
+  it("drops a pair whose count or timestamp is outside its documented shape, and keeps the others", () => {
+    for (const broken of [
+      btcbDeepPair.replace('"buys":6734', '"buys":"6.7e3"'),
+      btcbDeepPair.replace(
+        '"pairCreatedAt":1619352299000',
+        '"pairCreatedAt":0',
+      ),
+    ]) {
+      const snapshot = normalizeDexscreenerPairs(
+        parseJsonLossless(`[${broken},${btcbDeepPair}]`),
+        btcb,
+      );
+      expect(snapshot.pairs).toHaveLength(1);
+      expect(snapshot.unrepresentablePairCount).toBe(1);
+    }
   });
 
   it("still refuses a response whose shape it cannot trust", () => {

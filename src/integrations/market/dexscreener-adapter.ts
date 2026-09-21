@@ -103,14 +103,38 @@ const pairResponseSchema = z
   })
   .passthrough();
 
+/**
+ * Something this one pair carries that cannot be represented exactly
+ * (Decisions 0060 and 0062):
+ *
+ * - a pool or token identifier that is not an EVM address — four.meme pools
+ *   are `{address}:4meme`, Uniswap V4 pools are a 32-byte pool id, and
+ *   Decision 0052 refuses to put either into an address field;
+ * - a number the Provider sent as a *string* that is not a canonical
+ *   decimal — `"3.725857251510287e+42"` as a 24 h price change, a count or
+ *   a timestamp outside its documented shape.
+ *
+ * The pair is dropped and counted; the rest of the response stands. This is
+ * not the same as a JSON *number* reaching the normaliser, which proves the
+ * transport lost precision and still refuses the whole response.
+ */
+class UnrepresentablePairError extends Error {
+  constructor(readonly field: string) {
+    super("The Provider sent a pair field this adapter cannot represent");
+    this.name = "UnrepresentablePairError";
+  }
+}
+
 function optionalDecimal(
+  field: string,
   value: string | number | null | undefined,
 ): string | null {
   if (value === null || value === undefined) {
     return null;
   }
   // Only lossless digit strings are accepted; a JavaScript number here would
-  // mean the transport lost precision, so it is refused rather than used.
+  // mean the transport lost precision, so the whole response is refused
+  // rather than used.
   if (typeof value !== "string") {
     return malformed();
   }
@@ -118,24 +142,30 @@ function optionalDecimal(
     return normalizeDecimalString(value);
   } catch (error) {
     if (error instanceof InvalidMarketDecimalError) {
-      return malformed();
+      // The Provider's own digits, in a shape we cannot express exactly
+      // (exponent notation, out of range): this pair alone is dropped.
+      throw new UnrepresentablePairError(field);
     }
     throw error;
   }
 }
 
-function optionalCount(value: string | number | undefined): number | null {
+function optionalCount(
+  field: string,
+  value: string | number | undefined,
+): number | null {
   if (value === undefined) {
     return null;
   }
   const text = typeof value === "number" ? String(value) : value;
   if (!/^(0|[1-9][0-9]{0,15})$/.test(text)) {
-    return malformed();
+    throw new UnrepresentablePairError(field);
   }
   return Number.parseInt(text, 10);
 }
 
 function optionalEpochMillis(
+  field: string,
   value: string | number | null | undefined,
 ): string | null {
   if (value === null || value === undefined) {
@@ -143,33 +173,17 @@ function optionalEpochMillis(
   }
   const text = typeof value === "number" ? String(value) : value;
   if (!/^[1-9][0-9]{0,15}$/.test(text)) {
-    return malformed();
+    throw new UnrepresentablePairError(field);
   }
   return new Date(Number.parseInt(text, 10)).toISOString();
 }
 
-/**
- * A pool or token identifier this Provider reports that is not an EVM
- * address: four.meme pools are `{address}:4meme`, Uniswap V4 pools are a
- * 32-byte pool id. Decision 0052 refuses to put such an identifier into an
- * address field, and Decision 0060 refuses to let one such pool take down
- * the whole token's fact — the pair is dropped and counted instead.
- */
-class UnrepresentablePairError extends Error {
-  constructor() {
-    super(
-      "The Provider identifies this pair by something other than an address",
-    );
-    this.name = "UnrepresentablePairError";
-  }
-}
-
-function pairIdentifier(value: string): string {
+function pairIdentifier(field: string, value: string): string {
   try {
     return normalizeEvmAddress(value);
   } catch (error) {
     if (error instanceof InvalidChainIdentityError) {
-      throw new UnrepresentablePairError();
+      throw new UnrepresentablePairError(field);
     }
     throw error;
   }
@@ -178,36 +192,44 @@ function pairIdentifier(value: string): string {
 type ParsedPair = z.infer<typeof pairSchema>;
 
 /**
- * One pair. Throws `UnrepresentablePairError` when the Provider identifies
- * the pool or one of its tokens by something that is not an EVM address
- * (that pair alone is dropped), and `malformed()` for anything else — a JSON
- * number that proves the transport lost precision, an unparseable timestamp
- * — because those say the response as a whole cannot be trusted.
+ * One pair. Throws `UnrepresentablePairError` when any value this pair
+ * carries cannot be represented exactly — a pool or token identifier that is
+ * not an address, or one of the Provider's own digit strings in a shape this
+ * codebase refuses (exponent notation, out of range). That pair alone is
+ * dropped. `malformed()` is left for what the response as a whole cannot be
+ * trusted for: a JSON number reaching the normaliser, which proves the
+ * transport lost precision.
  */
 function normalizePair(pair: ParsedPair): TokenPairSnapshot {
   return Object.freeze({
-    pairAddress: pairIdentifier(pair.pairAddress),
+    pairAddress: pairIdentifier("pairAddress", pair.pairAddress),
     dexId: pair.dexId,
     labels: Object.freeze([...(pair.labels ?? [])]),
-    baseTokenAddress: pairIdentifier(pair.baseToken.address),
+    baseTokenAddress: pairIdentifier(
+      "baseToken.address",
+      pair.baseToken.address,
+    ),
     baseTokenSymbol: (pair.baseToken.symbol ?? "").slice(0, 32),
     baseTokenName:
       pair.baseToken.name === undefined ||
       pair.baseToken.name.trim().length === 0
         ? null
         : pair.baseToken.name.trim().slice(0, 128),
-    quoteTokenAddress: pairIdentifier(pair.quoteToken.address),
+    quoteTokenAddress: pairIdentifier(
+      "quoteToken.address",
+      pair.quoteToken.address,
+    ),
     quoteTokenSymbol: (pair.quoteToken.symbol ?? "").slice(0, 32),
-    priceUsd: optionalDecimal(pair.priceUsd),
-    priceNative: optionalDecimal(pair.priceNative),
-    liquidityUsd: optionalDecimal(pair.liquidity?.usd),
-    volumeH24: optionalDecimal(pair.volume?.h24),
-    priceChangeH24: optionalDecimal(pair.priceChange?.h24),
-    fdv: optionalDecimal(pair.fdv),
-    marketCap: optionalDecimal(pair.marketCap),
-    buysH24: optionalCount(pair.txns?.h24?.buys),
-    sellsH24: optionalCount(pair.txns?.h24?.sells),
-    pairCreatedAt: optionalEpochMillis(pair.pairCreatedAt),
+    priceUsd: optionalDecimal("priceUsd", pair.priceUsd),
+    priceNative: optionalDecimal("priceNative", pair.priceNative),
+    liquidityUsd: optionalDecimal("liquidity.usd", pair.liquidity?.usd),
+    volumeH24: optionalDecimal("volume.h24", pair.volume?.h24),
+    priceChangeH24: optionalDecimal("priceChange.h24", pair.priceChange?.h24),
+    fdv: optionalDecimal("fdv", pair.fdv),
+    marketCap: optionalDecimal("marketCap", pair.marketCap),
+    buysH24: optionalCount("txns.h24.buys", pair.txns?.h24?.buys),
+    sellsH24: optionalCount("txns.h24.sells", pair.txns?.h24?.sells),
+    pairCreatedAt: optionalEpochMillis("pairCreatedAt", pair.pairCreatedAt),
   });
 }
 
@@ -224,18 +246,20 @@ interface NormalizedPairList {
 
 /**
  * The response shape itself must parse and every number in it must have
- * survived the transport losslessly; a single pair the Provider identifies
- * by something other than an address is dropped and counted rather than
- * refused together with the whole list (Decision 0060).
+ * survived the transport losslessly; a single pair carrying a value this
+ * adapter cannot represent is dropped and counted rather than refused
+ * together with the whole list (Decisions 0060 and 0062).
  *
- * The list endpoint mixes venues: four.meme pools are identified as
- * `{address}:4meme` and Uniswap V4 pools by a 32-byte pool id, neither of
- * which is a pair address. Decision 0052 already refuses to put such an
- * identifier into an address field. Before this change one such pool in a
- * token's list made the token's entire price fact `unavailable`
- * (`MARKET_PROVIDER_RESPONSE_MALFORMED`) — on 2026-09-21 exactly that
- * happened to BSC USDT and kept the Mining lane incomplete. Nothing is
- * invented for the dropped pool: it is simply not published.
+ * Both halves of that rule were learned from production. The list endpoint
+ * mixes venues: four.meme pools are identified as `{address}:4meme` and
+ * Uniswap V4 pools by a 32-byte pool id, neither of which is a pair address
+ * (Decision 0052 refuses to put either into an address field) — one such
+ * pool in USDT's list made the whole token unpriceable on 2026-09-21. And
+ * the Provider's own numbers are not always canonical decimals: a dust
+ * squadswap BTCB/WBNB pool reported `priceChange.h24` as
+ * `"3.725857251510287e+42"`, which made BTCB unpriceable the same way.
+ * Nothing is invented for a dropped pair: it is simply not published, and
+ * the count says how many there were.
  */
 function normalizePairList(json: unknown): NormalizedPairList {
   const parsed = responseSchema.safeParse(json);

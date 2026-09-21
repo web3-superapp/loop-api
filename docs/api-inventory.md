@@ -222,7 +222,11 @@ published; every read keeps the last complete snapshot with `snapshot.stale`
   dropped from the token's pair fact and counted
   (`unrepresentablePairCount`) instead of making the whole token's price
   `MARKET_PROVIDER_RESPONSE_MALFORMED`; a lossy JSON number still refuses the
-  whole response. Decision 0061: an observed balance carries
+  whole response. Decision 0062 widens that to any value a single pair
+  carries that cannot be represented exactly — the Provider's own digits in a
+  non-canonical shape (`priceChange.h24: "3.725857251510287e+42"` on a dust
+  BTCB pool), a count or a timestamp outside its documented form — so one
+  pool never decides whether a token has a price. Decision 0061: an observed balance carries
   `wallet_balance_snapshots.source` (`chain | mock_seed`); the lane counts a
   `mock_seed` row only under `MINING_MOCK_HOLDINGS_ENABLED` (refused under
   `NODE_ENV=production`), and every snapshot publishes
