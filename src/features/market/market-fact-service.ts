@@ -135,6 +135,18 @@ export interface MarketFactService {
     asset: Pick<AssetRecord, "address" | "status">,
     options?: ReadFactOptions,
   ): Promise<AssetPriceFact>;
+  /**
+   * The same fact as `readAssetPrice` for many assets, answered in the order
+   * asked (Decision 0063). The reads overlap under a fixed concurrency bound
+   * so one screen's worth of assets does not cost one Provider round trip
+   * after another, and does not burst the Provider either. Every asset gets
+   * its own Provider fact and its own cache row: this is the single-token
+   * read run concurrently, never the batch endpoint.
+   */
+  readAssetPrices(
+    assets: readonly Pick<AssetRecord, "address" | "status">[],
+    options?: ReadFactOptions,
+  ): Promise<readonly AssetPriceFact[]>;
   readTokenSecurity(
     tokenAddress: string,
     options?: ReadFactOptions,
@@ -175,6 +187,15 @@ export interface CreateMarketFactServiceInput {
   readonly tokenLookupProvider?: TokenLookupProvider | null;
   readonly now?: () => Date;
 }
+
+/**
+ * How many asset prices are read from the Provider at once (Decision 0063).
+ * It is a compromise measured against DexScreener: reading one asset after
+ * another makes a wallet screen wait for a round trip per asset, and reading
+ * all of them at once makes the Provider itself slow down and start failing,
+ * which turns fresh prices into stale ones.
+ */
+const assetPriceConcurrency = 4;
 
 export const marketFactKinds = Object.freeze({
   tokenPairs: "token_pairs",
@@ -581,6 +602,32 @@ export function createMarketFactService(
         }
       }
       return results;
+    },
+
+    async readAssetPrices(
+      assets: readonly Pick<AssetRecord, "address" | "status">[],
+      options: ReadFactOptions = {},
+    ) {
+      const facts = new Array<AssetPriceFact>(assets.length);
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const index = next;
+          next += 1;
+          const asset = assets[index];
+          if (asset === undefined) {
+            return;
+          }
+          facts[index] = await service.readAssetPrice(asset, options);
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(assetPriceConcurrency, assets.length) },
+          worker,
+        ),
+      );
+      return Object.freeze(facts);
     },
 
     async readAssetPrice(

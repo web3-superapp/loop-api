@@ -156,20 +156,25 @@ function marketFactsFake(available = true): MarketFactService {
     reasonCode: available ? null : "MARKET_PROVIDER_UNREACHABLE",
     rawDigest: null,
   });
+  const assetPrice = (asset: { readonly address: string | null }) => {
+    const fact = pairsFor(asset.address ?? wbnb);
+    return Promise.resolve({
+      fact,
+      pair: fact.value?.pairs[0] ?? null,
+      proxyAsset: asset.address === null ? wbnbAssetId : null,
+    });
+  };
   return {
     readTokenPairs: vi.fn((address: string) =>
       Promise.resolve(pairsFor(address)),
     ),
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
     readPair: vi.fn(() => Promise.reject(new Error("not used"))),
-    readAssetPrice: vi.fn((asset: { readonly address: string | null }) => {
-      const fact = pairsFor(asset.address ?? wbnb);
-      return Promise.resolve({
-        fact,
-        pair: fact.value?.pairs[0] ?? null,
-        proxyAsset: asset.address === null ? wbnbAssetId : null,
-      });
-    }),
+    readAssetPrice: vi.fn(assetPrice),
+    readAssetPrices: vi.fn(
+      (assets: readonly { readonly address: string | null }[]) =>
+        Promise.all(assets.map(assetPrice)),
+    ),
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
     readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),

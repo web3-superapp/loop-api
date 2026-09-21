@@ -323,6 +323,15 @@ export const defaultBscConfirmations = 15;
 export const defaultBscReorgDepthBlocks = 64;
 const healthyLatencyMs = 1_500;
 const requestTimeoutMs = 6_000;
+/**
+ * Point reads (`eth_blockNumber`-class head reads, Multicall3 balances,
+ * `eth_getBalance`) sit on an interactive screen, so a slow endpoint must be
+ * abandoned for the next one in seconds rather than after the log-scan budget
+ * (Decision 0063). Range scans, simulations, and gas estimates keep the longer
+ * budget: those are batch-shaped and a premature timeout would make the whole
+ * read fail closed for no reason.
+ */
+const pointReadTimeoutMs = 2_500;
 
 /**
  * Stable, non-reversible endpoint reference. It lets operators correlate a
@@ -348,7 +357,12 @@ export function endpointLabelFor(url: string): string {
 }
 
 export interface BscTransportFactory {
-  (url: string): Transport;
+  /**
+   * `timeoutMs` is the per-attempt budget for the lane the transport serves.
+   * A test seam may ignore it; the HTTP transport applies it per endpoint so
+   * the fallback chain moves on instead of waiting out a stalled endpoint.
+   */
+  (url: string, options: { readonly timeoutMs: number }): Transport;
 }
 
 export interface CreateBscReadClientOptions {
@@ -361,8 +375,11 @@ export interface CreateBscReadClientOptions {
 
 type ViemClient = PublicClient<Transport, Chain>;
 
-function defaultTransport(url: string): Transport {
-  return http(url, { timeout: requestTimeoutMs, retryCount: 0 });
+function defaultTransport(
+  url: string,
+  options: { readonly timeoutMs: number },
+): Transport {
+  return http(url, { timeout: options.timeoutMs, retryCount: 0 });
 }
 
 /**
@@ -472,12 +489,31 @@ export function createBscReadClient(
     label: endpointLabelFor(url),
     client: createPublicClient({
       chain,
-      transport: transportFactory(url),
+      transport: transportFactory(url, { timeoutMs: pointReadTimeoutMs }),
     }),
   }));
   const aggregate: ViemClient = createPublicClient({
     chain,
-    transport: fallback(config.rpcUrls.map((url) => transportFactory(url))),
+    transport: fallback(
+      config.rpcUrls.map((url) =>
+        transportFactory(url, { timeoutMs: requestTimeoutMs }),
+      ),
+    ),
+  });
+  /**
+   * The interactive lane (Decision 0063): the same endpoints in the same
+   * order, but a short per-endpoint budget and no whole-chain retry, so one
+   * stalled endpoint costs one budget instead of multiplying it. It reads the
+   * same chain as `aggregate` and never returns a different fact.
+   */
+  const pointReadAggregate: ViemClient = createPublicClient({
+    chain,
+    transport: fallback(
+      config.rpcUrls.map((url) =>
+        transportFactory(url, { timeoutMs: pointReadTimeoutMs }),
+      ),
+      { retryCount: 0 },
+    ),
   });
 
   let verification: ChainVerificationState = "unknown";
@@ -485,7 +521,7 @@ export function createBscReadClient(
 
   async function probeVerification(): Promise<ChainVerificationState> {
     try {
-      const chainId = await aggregate.getChainId();
+      const chainId = await pointReadAggregate.getChainId();
       return chainId === config.chainReference ? "verified" : "mismatched";
     } catch {
       return "unreachable";
@@ -604,13 +640,13 @@ export function createBscReadClient(
 
     async getHead(): Promise<BscChainHead> {
       await requireVerifiedChain();
-      return readHead(aggregate);
+      return readHead(pointReadAggregate);
     },
 
     async getBlockHash(blockNumber: bigint): Promise<string | null> {
       await requireVerifiedChain();
       try {
-        const block = await aggregate.getBlock({ blockNumber });
+        const block = await pointReadAggregate.getBlock({ blockNumber });
         return normalizeHex(block.hash);
       } catch {
         return null;
@@ -660,70 +696,74 @@ export function createBscReadClient(
       items: readonly BscBalanceRequestItem[],
     ): Promise<BscBalanceReadResult> {
       await requireVerifiedChain();
-      const head = await readHead(aggregate);
+      const head = await readHead(pointReadAggregate);
       const ownerAddress = asAddress(owner);
       const tokenItems = items.filter((item) => item.address !== null);
       const nativeItems = items.filter((item) => item.address === null);
 
-      const tokenResults =
-        tokenItems.length === 0
-          ? []
-          : await aggregate.multicall({
-              allowFailure: true,
-              blockNumber: head.blockNumber,
-              contracts: tokenItems.map((item) => ({
-                address: asAddress(item.address as string),
-                abi: erc20BalanceAbi,
-                functionName: "balanceOf" as const,
-                args: [ownerAddress] as const,
-              })),
-            });
-
-      const balances: BscBalanceResult[] = [];
-      for (const [index, item] of tokenItems.entries()) {
-        const result = tokenResults[index];
-        if (result === undefined || result.status === "failure") {
-          balances.push(
-            Object.freeze({
+      // The token multicall and the native read are two independent calls
+      // pinned to the same block, so they are issued together. Concurrency
+      // changes when the answers arrive, never which block answered.
+      const readTokenBalances = async (): Promise<
+        readonly BscBalanceResult[]
+      > => {
+        if (tokenItems.length === 0) {
+          return [];
+        }
+        const results = await pointReadAggregate.multicall({
+          allowFailure: true,
+          blockNumber: head.blockNumber,
+          contracts: tokenItems.map((item) => ({
+            address: asAddress(item.address as string),
+            abi: erc20BalanceAbi,
+            functionName: "balanceOf" as const,
+            args: [ownerAddress] as const,
+          })),
+        });
+        return tokenItems.map((item, index) => {
+          const result = results[index];
+          if (result === undefined || result.status === "failure") {
+            return Object.freeze({
               assetId: item.assetId,
               rawValue: null,
               reasonCode: "BSC_BALANCE_CALL_FAILED",
-            }),
-          );
-          continue;
-        }
-        balances.push(
-          Object.freeze({
+            });
+          }
+          return Object.freeze({
             assetId: item.assetId,
             rawValue: result.result,
             reasonCode: null,
-          }),
-        );
-      }
-
-      for (const item of nativeItems) {
-        try {
-          const rawValue = await aggregate.getBalance({
-            address: ownerAddress,
-            blockNumber: head.blockNumber,
           });
-          balances.push(
-            Object.freeze({
-              assetId: item.assetId,
-              rawValue,
-              reasonCode: null,
-            }),
-          );
-        } catch {
-          balances.push(
-            Object.freeze({
-              assetId: item.assetId,
-              rawValue: null,
-              reasonCode: "BSC_BALANCE_CALL_FAILED",
-            }),
-          );
-        }
-      }
+        });
+      };
+      const [tokenResults, nativeResults] = await Promise.all([
+        readTokenBalances(),
+        Promise.all(
+          nativeItems.map(async (item) => {
+            try {
+              return Object.freeze({
+                assetId: item.assetId,
+                rawValue: await pointReadAggregate.getBalance({
+                  address: ownerAddress,
+                  blockNumber: head.blockNumber,
+                }),
+                reasonCode: null,
+              });
+            } catch {
+              return Object.freeze({
+                assetId: item.assetId,
+                rawValue: null,
+                reasonCode: "BSC_BALANCE_CALL_FAILED",
+              });
+            }
+          }),
+        ),
+      ]);
+
+      const balances: readonly BscBalanceResult[] = [
+        ...tokenResults,
+        ...nativeResults,
+      ];
 
       return Object.freeze({
         head,

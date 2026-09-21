@@ -307,6 +307,19 @@ false`. Native
 transfers and cross-chain activity stay `unavailable` in this step. Nothing is
 served from a stored balance snapshot when the chain is unreadable.
 
+Latency (Decision 0063): the legs of the balances read that share no input run
+together — the launch slot, the Privy balance view, and the per-asset prices are
+all in flight while the chain read is — and every published amount still comes
+from the one block the chain read observed. Per-asset prices are read four at a
+time through the same single-token Provider endpoint and the same cache rows,
+never the batch endpoint. A point read (head, balances) is given 2500 ms per RPC
+endpoint before the next endpoint is tried; scans and estimates keep 6000 ms. A
+launch slot that has not answered in 3000 ms is published as
+`LAUNCH_CHAIN_RPC_UNREACHABLE` and never gates the primary balances. `GET
+/v2/wallets` reuses one Privy inventory observation for 30 s and reports in
+`source.observedAt` when Privy was actually read; the list itself is rebuilt
+from the database every call, so an active-wallet switch is immediate.
+
 ### V2 market module (Decision 0034, `V2_MODULES_ENABLED=market`)
 
 | Method and path                           | Request                                       | Success projection                                                                                                                                                                                                                                                         | Interface     | Capability                                                                                                                                                                                            |

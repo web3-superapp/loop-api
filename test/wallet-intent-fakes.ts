@@ -384,6 +384,10 @@ export function marketFactsFake(
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
     readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice: vi.fn(readAssetPrice),
+    readAssetPrices: vi.fn(
+      (assets: readonly { readonly address: string | null }[]) =>
+        Promise.all(assets.map(readAssetPrice)),
+    ),
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
     readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),

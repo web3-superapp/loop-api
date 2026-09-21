@@ -161,6 +161,12 @@ export interface PrivyBalanceClient {
     walletId: string,
     query: {
       readonly chain: "bsc";
+      /**
+       * Privy answers a balance query only when it names both a chain and an
+       * asset; a chain alone is rejected as `invalid_data`. The cross-check
+       * compares the native coin, so it asks for that one asset by name.
+       */
+      readonly asset: "bnb";
       readonly include_archived: false;
     },
     options: {
@@ -192,7 +198,7 @@ export function createPrivyBalanceReader(
     }): Promise<readonly PrivyBalanceObservation[]> {
       const response = await balance.get(
         input.providerWalletId,
-        { chain: "bsc", include_archived: false },
+        { chain: "bsc", asset: "bnb", include_archived: false },
         { signal: input.signal, timeout: 4_000, maxRetries: 0 },
       );
       const parsed = balanceResponseSchema.safeParse(response);

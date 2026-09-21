@@ -488,6 +488,63 @@ describe("market fact service", () => {
     expect(blocked.fact.reasonCode).toBe("ASSET_BLOCKED");
   });
 
+  it("reads many asset prices at once, in order, and never more than four at a time (Decision 0063)", async () => {
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const addresses = Array.from(
+      { length: 9 },
+      (_unused, index) => `0x${String(index).repeat(40)}`,
+    );
+    const release: (() => void)[] = [];
+    const provider: MarketPairsProvider = {
+      source: "dexscreener",
+      readTokenPairs: (tokenAddress) => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        return new Promise((resolve) => {
+          release.push(() => {
+            inFlight -= 1;
+            resolve({
+              value: { tokenAddress, pairs: [], unrepresentablePairCount: 0 },
+              source: "dexscreener" as const,
+              fetchedAt: "2026-09-08T00:00:00.000Z",
+              rawDigest: "a".repeat(64),
+            });
+          });
+        });
+      },
+      readTokenPairsBatch: () => Promise.reject(new Error("not used")),
+      readPair: () => Promise.reject(new Error("not used")),
+    };
+    const service = createMarketFactService({
+      config,
+      cache: cacheFake().repository,
+      pairsProvider: provider,
+      securityProvider: null,
+      candlesProvider: null,
+    });
+
+    const pending = service.readAssetPrices(
+      addresses.map((address) => ({ address, status: "verified" as const })),
+    );
+    // Drain the queue a wave at a time; the bound must hold throughout. Nine
+    // reads four at a time is three waves, and a few spare turns let the last
+    // one settle.
+    for (let turn = 0; turn < 8; turn += 1) {
+      for (const next of release.splice(0, release.length)) {
+        next();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const facts = await pending;
+
+    expect(peakInFlight).toBe(4);
+    expect(facts).toHaveLength(addresses.length);
+    expect(facts.map((entry) => entry.fact.value?.tokenAddress)).toEqual(
+      addresses,
+    );
+  });
+
   it("caches one declared pair under its own subject key and is unavailable without the Provider (Decision 0059)", async () => {
     const provider = providerFake(() => snapshot("747.39"));
     const cache = cacheFake();

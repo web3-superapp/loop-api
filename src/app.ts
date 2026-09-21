@@ -1298,6 +1298,7 @@ export async function buildApp(
       chainName: "BNB Smart Chain",
       chainReference: bscChainReference,
       launchChainReadClient,
+      logger: app.log,
     });
   const marketReadService =
     options.marketReadService ??

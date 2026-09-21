@@ -204,6 +204,13 @@ X-Loop-Client-Version: 1.0.0
 - `address` 是完整小写地址（主代理裁决 2026-09-08）。`wallets` 页的截断显示
   由前端处理；不要把地址当 key 或路由参数。
 - Privy 不可达 → `503 PROVIDER_DISCONNECTED`（可重试），不要显示"没有钱包"。
+- **`source.observedAt` 是"后端真正读到 Privy 的时刻"，不是本次响应时刻**
+  （决策 0063）。后端对同一个 Privy 用户的钱包清单做 30s 复用：窗口内再次调用
+  不打 Privy，`observedAt` 原样返回上一次的观测时刻（实测 694ms → 4–21ms）。
+  钱包列表本身每次都从数据库重建，所以 `PUT /v2/wallets/active` 之后立刻调用
+  `GET /v2/wallets` 一定能看到新的 `activeWalletId`；只有"账号下有哪些钱包"
+  这件事最多滞后 30s。用户在 Privy 新绑一个钱包后，前端若需要立即看到，
+  可提示用户稍后重试，不要轮询。
 
 切换活跃钱包：
 
@@ -319,6 +326,9 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   `blockDelta` 为两次观测的区块差，来源不上报区块时为 `null`。
   **任何 crossCheck 结果都不改变 `balance` 里的 RPC 数值**，UI 最多给一个
   "数据源尚未对齐"的提示。
+  2026-09-21 起（决策 0063）后端修正了 Privy 余额查询（此前缺 `asset` 参数，
+  Privy 一律返回 400），原生行因此可能第一次出现 `matched`。非原生行仍然是
+  `unavailable` + `PRIVY_ASSET_MAPPING_UNAVAILABLE`，不变。
 - `valuation`（每行）：只用该资产自己的 DexScreener 价格（以其为 base 的最深
   交易对），`quality: fresh|stale`（stale 透传 `reasonCode`），
   `valueUsd = displayBalance × priceUsd`（精确十进制字符串）。原生 BNB 行用 WBNB
@@ -374,7 +384,7 @@ optional 键 `launchChain`：
 | reasonCode                        | 含义                                           |
 | --------------------------------- | ---------------------------------------------- |
 | `LAUNCH_CHAIN_RPC_NOT_CONFIGURED` | 后端配置了 97 但没有测试网 RPC                 |
-| `LAUNCH_CHAIN_RPC_UNREACHABLE`    | 测试网端点全部不可达                           |
+| `LAUNCH_CHAIN_RPC_UNREACHABLE`    | 测试网端点全部不可达，**或 3s 内未答**（0063） |
 | `LAUNCH_CHAIN_ID_MISMATCH`        | 端点返回的不是 chain 97——Launch 区块整块不可用 |
 | `BSC_BALANCE_CALL_FAILED`         | 链已校验但 `eth_getBalance` 本身失败           |
 
@@ -388,6 +398,9 @@ optional 键 `launchChain`：
 
 - 测试网槽位失败**不会**让主链 balances 变成 503：`balances[]`、`snapshot`、
   `netWorth` 照常下发。钱包页 Launch 区块单独显示 unavailable。
+- 决策 0063 起测试网槽位与主链读取**并行**，并有 3000ms 上限：超时按
+  `LAUNCH_CHAIN_RPC_UNREACHABLE` 下发（不会编造数值，也不会拖慢整页）。
+  这一格偶发 unavailable 属正常，UI 不要因此阻塞或重试整页。
 - 行情、Watchlist、Swap、Send 页面永远不显示 97 的任何数据；`walletRead` /
   `bscRead` capability 只描述主链。
 

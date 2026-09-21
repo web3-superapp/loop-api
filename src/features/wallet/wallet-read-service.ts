@@ -23,6 +23,7 @@ import {
 } from "../../integrations/bsc/rpc-client.js";
 import type {
   PrivyBalanceReader,
+  PrivyWalletAccount,
   PrivyWalletReader,
 } from "../../integrations/privy/wallet-reader.js";
 import type { AssetRegistryService } from "../chain/asset-registry-service.js";
@@ -44,7 +45,10 @@ import {
   multiplyDecimalStrings,
   type MarketSource,
 } from "../market/market-contract.js";
-import type { MarketFactService } from "../market/market-fact-service.js";
+import type {
+  AssetPriceFact,
+  MarketFactService,
+} from "../market/market-fact-service.js";
 
 /**
  * Read-only wallet projections for D12 (Decision 0033).
@@ -310,6 +314,15 @@ export interface WalletReadService {
   }): Promise<WalletReceiveResource>;
 }
 
+/**
+ * The one log line the balances read writes: how long each leg took. It
+ * carries durations and counts only — never an address, an amount, a wallet
+ * ID, a user ID, or an endpoint URL.
+ */
+export interface WalletReadServiceLogger {
+  debug(context: Record<string, unknown>, message: string): void;
+}
+
 export interface CreateWalletReadServiceInput {
   readonly repository: AccountWalletRepository;
   readonly indexerRepository: BscIndexerRepository;
@@ -327,7 +340,67 @@ export interface CreateWalletReadServiceInput {
   readonly chainReference: number;
   /** The launch slot's own read client, or `null` when shared with primary. */
   readonly launchChainReadClient: BscReadClient | null;
+  /** Absent means the segment timings are not logged (tests, scripts). */
+  readonly logger?: WalletReadServiceLogger;
+  /**
+   * How long one Privy wallet inventory observation may be reused before the
+   * Provider is asked again (Decision 0063). Zero disables the reuse.
+   */
+  readonly walletInventoryTtlMs?: number;
   readonly now?: () => Date;
+}
+
+/** Default reuse window for the Privy wallet inventory observation. */
+export const defaultWalletInventoryTtlMs = 30_000;
+
+/**
+ * Per-request leg timings for one balances read. `measure` starts the clock
+ * when the leg is started, not when it is awaited, so a leg that runs
+ * alongside another is reported with its own wall-clock duration.
+ */
+interface SegmentTimings {
+  measure<T>(segment: string, run: () => Promise<T>): Promise<T>;
+  report(
+    logger: WalletReadServiceLogger | undefined,
+    context: Record<string, unknown>,
+  ): void;
+}
+
+function createSegmentTimings(
+  monotonicMs: () => number = (): number => performance.now(),
+): SegmentTimings {
+  const startedAtMs = monotonicMs();
+  const durations = new Map<string, number>();
+  return Object.freeze({
+    async measure<T>(segment: string, run: () => Promise<T>): Promise<T> {
+      const legStartedAtMs = monotonicMs();
+      try {
+        return await run();
+      } finally {
+        durations.set(
+          segment,
+          Math.round(monotonicMs() - legStartedAtMs) +
+            (durations.get(segment) ?? 0),
+        );
+      }
+    },
+    report(
+      logger: WalletReadServiceLogger | undefined,
+      context: Record<string, unknown>,
+    ): void {
+      if (logger === undefined) {
+        return;
+      }
+      logger.debug(
+        {
+          ...context,
+          totalMs: Math.round(monotonicMs() - startedAtMs),
+          segmentsMs: Object.fromEntries([...durations.entries()].sort()),
+        },
+        "Wallet balances read segment timings",
+      );
+    },
+  });
 }
 
 function projectWallet(record: AccountWalletRecord): WalletProjection {
@@ -369,6 +442,46 @@ function chainUnavailable(error: unknown): never {
   throw error as Error;
 }
 
+/** A read that did not answer inside its own budget, never a chain fact. */
+class ReadDeadlineExceededError extends Error {
+  constructor() {
+    super("The read did not complete inside its deadline");
+    this.name = "ReadDeadlineExceededError";
+  }
+}
+
+/**
+ * Stops waiting for `pending` after `deadlineMs`. The underlying read is left
+ * to finish or fail on its own — its rejection is absorbed here so an
+ * abandoned read never surfaces as an unhandled rejection — and no partial or
+ * substituted value is ever produced.
+ */
+async function withDeadline<T>(
+  pending: Promise<T>,
+  deadlineMs: number,
+): Promise<T> {
+  if (deadlineMs <= 0) {
+    return pending;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new ReadDeadlineExceededError());
+        }, deadlineMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    void pending.catch(() => undefined);
+  }
+}
+
 function unavailableLaunchChain(
   chainId: LaunchChainId,
   reasonCode: string,
@@ -382,6 +495,13 @@ function unavailableLaunchChain(
 }
 
 /**
+ * How long the launch slot may hold up the wallet page before its balance is
+ * reported unreadable (Decision 0063). The read keeps running to completion
+ * inside its own client; the page simply stops waiting for it.
+ */
+export const launchChainReadDeadlineMs = 3_000;
+
+/**
  * Reads the native balance on the launch slot. A failure here is reported
  * inside the projection and never fails the primary balances: the launch
  * chain is a secondary fact of the wallet page, not its gate.
@@ -390,6 +510,7 @@ async function projectLaunchChainBalance(
   client: BscReadClient | null,
   address: string,
   gasReserveRawWei: bigint,
+  deadlineMs: number = launchChainReadDeadlineMs,
 ): Promise<LaunchChainBalanceProjection | null> {
   if (client === null) {
     return null;
@@ -404,8 +525,17 @@ async function projectLaunchChainBalance(
   const assetId = nativeAssetId(chainId);
   let read: BscBalanceReadResult;
   try {
-    read = await client.readBalances(address, [{ assetId, address: null }]);
+    read = await withDeadline(
+      client.readBalances(address, [{ assetId, address: null }]),
+      deadlineMs,
+    );
   } catch (error) {
+    if (error instanceof ReadDeadlineExceededError) {
+      return unavailableLaunchChain(
+        chainId,
+        launchChainReasonCodes.unreachable,
+      );
+    }
     if (error instanceof BscChainMismatchError) {
       return unavailableLaunchChain(chainId, launchChainReasonCodes.mismatched);
     }
@@ -455,10 +585,49 @@ async function projectLaunchChainBalance(
   });
 }
 
+/**
+ * One Privy wallet inventory observation, kept per process. The cap bounds
+ * the memory a many-user process can hold; going over it drops the expired
+ * entries first and, failing that, the whole map, which only costs one extra
+ * Provider read per user.
+ */
+interface WalletInventoryObservation {
+  readonly wallets: readonly PrivyWalletAccount[];
+  readonly observedAt: string;
+  readonly expiresAtMs: number;
+}
+
+const walletInventoryCacheMaxEntries = 1_000;
+
 export function createWalletReadService(
   input: CreateWalletReadServiceInput,
 ): WalletReadService {
   const now = input.now ?? ((): Date => new Date());
+  const walletInventoryTtlMs =
+    input.walletInventoryTtlMs ?? defaultWalletInventoryTtlMs;
+  const walletInventoryCache = new Map<string, WalletInventoryObservation>();
+
+  function rememberInventory(
+    privyUserId: string,
+    observation: WalletInventoryObservation,
+  ): void {
+    if (walletInventoryTtlMs <= 0) {
+      return;
+    }
+    walletInventoryCache.set(privyUserId, observation);
+    if (walletInventoryCache.size <= walletInventoryCacheMaxEntries) {
+      return;
+    }
+    const nowMs = now().getTime();
+    for (const [key, entry] of walletInventoryCache) {
+      if (entry.expiresAtMs <= nowMs) {
+        walletInventoryCache.delete(key);
+      }
+    }
+    if (walletInventoryCache.size > walletInventoryCacheMaxEntries) {
+      walletInventoryCache.clear();
+    }
+  }
 
   async function requireWallet(
     principal: AuthenticatedLoopPrincipal,
@@ -501,16 +670,63 @@ export function createWalletReadService(
     return value % divisor === 0n ? value / divisor : null;
   }
 
-  async function crossCheckNative(
+  /**
+   * The Provider leg of the native cross-check. It asks Privy what it thinks
+   * the wallet holds; it needs nothing from the chain read, so it is started
+   * alongside it. A failure here is carried as a reason code and decided by
+   * `compareNative`: the Provider never gates the authoritative RPC value.
+   */
+  async function readPrivyNativeObservation(
     wallet: AccountWalletRecord,
+    signal: AbortSignal,
+  ): Promise<
+    | { readonly rawValue: string; readonly decimals: number }
+    | { readonly reasonCode: string }
+  > {
+    if (wallet.providerWalletId === null) {
+      return Object.freeze({
+        reasonCode: walletReasonCodes.privyWalletIdMissing,
+      });
+    }
+    try {
+      const observations = await input.balanceReader.readBscBalances({
+        providerWalletId: wallet.providerWalletId,
+        signal,
+      });
+      const native = observations.find(
+        (observation) => observation.asset === "bnb",
+      );
+      if (native === undefined) {
+        return Object.freeze({
+          reasonCode: walletReasonCodes.privyAssetMappingMissing,
+        });
+      }
+      return Object.freeze({
+        rawValue: native.rawValue,
+        decimals: native.decimals,
+      });
+    } catch {
+      return Object.freeze({
+        reasonCode: walletReasonCodes.privyCrossCheckFailed,
+      });
+    }
+  }
+
+  /**
+   * Decides the cross-check from the two observations. The RPC value is the
+   * published fact either way: a disagreement is reported, never resolved.
+   */
+  function compareNative(
+    observation:
+      | { readonly rawValue: string; readonly decimals: number }
+      | { readonly reasonCode: string },
     nativeRaw: bigint | null,
     nativeDecimals: number,
-    signal: AbortSignal,
-  ): Promise<{
+  ): {
     readonly status: WalletCrossCheckStatus;
     readonly reasonCode: string | null;
     readonly blockDelta: number | null;
-  }> {
+  } {
     const unavailableCrossCheck = (
       reasonCode: string,
     ): {
@@ -524,50 +740,43 @@ export function createWalletReadService(
         blockDelta: null,
       });
 
-    if (wallet.providerWalletId === null) {
-      return unavailableCrossCheck(walletReasonCodes.privyWalletIdMissing);
+    // The reasons keep the order they had when the Provider was asked only
+    // after the chain read: a wallet Privy cannot address is reported first,
+    // then a chain value that is missing, and only then a Provider failure.
+    if (
+      "reasonCode" in observation &&
+      observation.reasonCode === walletReasonCodes.privyWalletIdMissing
+    ) {
+      return unavailableCrossCheck(observation.reasonCode);
     }
     if (nativeRaw === null) {
       return unavailableCrossCheck(walletReasonCodes.balanceCallFailed);
     }
-    try {
-      const observations = await input.balanceReader.readBscBalances({
-        providerWalletId: wallet.providerWalletId,
-        signal,
-      });
-      const native = observations.find(
-        (observation) => observation.asset === "bnb",
-      );
-      if (native === undefined) {
-        return unavailableCrossCheck(
-          walletReasonCodes.privyAssetMappingMissing,
-        );
-      }
-      const rescaled = rescaleObservation(
-        native.rawValue,
-        native.decimals,
-        nativeDecimals,
-      );
-      if (rescaled === null) {
-        return unavailableCrossCheck(walletReasonCodes.privyScaleMismatch);
-      }
-      if (rescaled === nativeRaw) {
-        return Object.freeze({
-          status: "matched" as const,
-          reasonCode: null,
-          blockDelta: null,
-        });
-      }
-      // Privy does not report the block it read, so a difference cannot be
-      // attributed to a real disagreement rather than to a later block.
+    if ("reasonCode" in observation) {
+      return unavailableCrossCheck(observation.reasonCode);
+    }
+    const rescaled = rescaleObservation(
+      observation.rawValue,
+      observation.decimals,
+      nativeDecimals,
+    );
+    if (rescaled === null) {
+      return unavailableCrossCheck(walletReasonCodes.privyScaleMismatch);
+    }
+    if (rescaled === nativeRaw) {
       return Object.freeze({
-        status: "unaligned" as const,
-        reasonCode: walletReasonCodes.privyBlockUnaligned,
+        status: "matched" as const,
+        reasonCode: null,
         blockDelta: null,
       });
-    } catch {
-      return unavailableCrossCheck(walletReasonCodes.privyCrossCheckFailed);
     }
+    // Privy does not report the block it read, so a difference cannot be
+    // attributed to a real disagreement rather than to a later block.
+    return Object.freeze({
+      status: "unaligned" as const,
+      reasonCode: walletReasonCodes.privyBlockUnaligned,
+      blockDelta: null,
+    });
   }
 
   return Object.freeze({
@@ -578,20 +787,39 @@ export function createWalletReadService(
       readonly principal: AuthenticatedLoopPrincipal;
       readonly signal: AbortSignal;
     }): Promise<WalletListResource> {
-      let observed;
-      try {
-        observed = await input.walletReader.listEthereumWallets({
-          privyUserId: principal.privyUserId,
-          signal,
+      // Privy stays authoritative for which wallets exist; one observation is
+      // reused for a short window instead of being re-asked on every screen
+      // that lists wallets (Decision 0063). `source.observedAt` reports when
+      // Privy was actually read, so a reused observation never claims to be
+      // newer than it is. The projection itself is always rebuilt from the
+      // database, so an active-wallet switch is visible immediately.
+      const nowMs = now().getTime();
+      const cached = walletInventoryCache.get(principal.privyUserId);
+      let observation: WalletInventoryObservation;
+      if (cached !== undefined && cached.expiresAtMs > nowMs) {
+        observation = cached;
+      } else {
+        let observed: readonly PrivyWalletAccount[];
+        try {
+          observed = await input.walletReader.listEthereumWallets({
+            privyUserId: principal.privyUserId,
+            signal,
+          });
+        } catch {
+          throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
+        }
+        observation = Object.freeze({
+          wallets: observed,
+          observedAt: now().toISOString(),
+          expiresAtMs: nowMs + walletInventoryTtlMs,
         });
-      } catch {
-        throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
+        rememberInventory(principal.privyUserId, observation);
       }
       let records;
       try {
         records = await input.repository.sync({
           ownerUserId: principal.userId,
-          observed,
+          observed: observation.wallets,
         });
       } catch (error) {
         if (error instanceof AccountWalletObservationEmptyError) {
@@ -602,7 +830,7 @@ export function createWalletReadService(
         }
         throw error;
       }
-      return projectWalletList(records, now().toISOString());
+      return projectWalletList(records, observation.observedAt);
     },
 
     async setActiveWallet({
@@ -654,19 +882,64 @@ export function createWalletReadService(
       readonly walletId: string;
       readonly signal: AbortSignal;
     }): Promise<WalletBalancesResource> {
-      const wallet = await requireWallet(principal, walletId);
-      const assets = await input.assetRegistry.listReadableAssets();
+      // Every leg below is timed and reported once, at debug level, with no
+      // address, no amount, and no endpoint URL in the line.
+      const timings = createSegmentTimings();
+      const [wallet, assets] = await Promise.all([
+        timings.measure("walletRecord", () =>
+          requireWallet(principal, walletId),
+        ),
+        timings.measure("assetRegistry", () =>
+          input.assetRegistry.listReadableAssets(),
+        ),
+      ]);
+
+      // The launch slot is a secondary fact of the same page and shares no
+      // input with the primary read beyond the address, so it runs alongside
+      // it instead of after it (Decision 0063).
+      const launchChainPending = timings.measure("launchChain", () =>
+        projectLaunchChainBalance(
+          input.launchChainReadClient,
+          wallet.address,
+          input.gasReserveRawWei,
+        ),
+      );
+      const checkpointPending = timings.measure("indexerCheckpoint", () =>
+        input.indexerRepository.getCheckpoint("erc20_transfer", input.chainId),
+      );
+      // Privy's own balance view needs nothing from the chain read: it is
+      // asked now and compared once both observations are in hand.
+      const privyObservationPending = timings.measure("privyCrossCheck", () =>
+        readPrivyNativeObservation(wallet, signal),
+      );
+      // A price is a fact about the asset, not about this wallet, so it is
+      // read while the chain read is in flight (Decision 0063). The balance
+      // still decides whether a row is valued at all, and a row whose balance
+      // could not be read is reported unvalued, price in hand or not.
+      const marketFacts = input.marketFacts;
+      const pricesPending =
+        marketFacts === null
+          ? Promise.resolve(null)
+          : timings.measure("assetPrices", () =>
+              marketFacts.readAssetPrices(assets, { signal }),
+            );
 
       let read: BscBalanceReadResult;
       try {
-        read = await input.readClient.readBalances(
-          wallet.address,
-          assets.map((asset) => ({
-            assetId: asset.assetId,
-            address: asset.address,
-          })),
+        read = await timings.measure("chainBalances", () =>
+          input.readClient.readBalances(
+            wallet.address,
+            assets.map((asset) => ({
+              assetId: asset.assetId,
+              address: asset.address,
+            })),
+          ),
         );
       } catch (error) {
+        void launchChainPending.catch(() => undefined);
+        void checkpointPending.catch(() => undefined);
+        void pricesPending.catch(() => undefined);
+        void privyObservationPending.catch(() => undefined);
         return chainUnavailable(error);
       }
 
@@ -674,20 +947,6 @@ export function createWalletReadService(
         read.head.blockNumber,
         BigInt(input.readClient.confirmations),
       );
-      const checkpoint = await input.indexerRepository.getCheckpoint(
-        "erc20_transfer",
-        input.chainId,
-      );
-      const pendingTotals =
-        checkpoint === null
-          ? null
-          : await input.indexerRepository.sumPendingIncoming({
-              chainId: input.chainId,
-              address: wallet.address,
-              assetIds: assets.map((asset) => asset.assetId),
-              confirmedThroughBlockNumber: confirmedThrough.toString(10),
-            });
-
       const nativeAsset = assets.find((asset) => asset.address === null);
       const nativeRaw =
         nativeAsset === undefined
@@ -695,57 +954,102 @@ export function createWalletReadService(
           : (read.balances.find(
               (balance) => balance.assetId === nativeAsset.assetId,
             )?.rawValue ?? null);
-      const crossCheck = await crossCheckNative(
-        wallet,
-        nativeRaw,
-        nativeAsset?.decimals ?? bscNativeDecimals,
-        signal,
-      );
 
-      const balances: WalletBalanceProjection[] = [];
-      const valuations: WalletValuationProjection[] = [];
-      for (const asset of assets) {
+      // One amounts projection per registry asset, computed once from the one
+      // block that was read and reused by the row, the valuation, and the
+      // audit snapshot.
+      const rowBalances: readonly (
+        WalletBalanceAmounts | UnavailableProjection
+      )[] = assets.map((asset) => {
         const observed = read.balances.find(
           (balance) => balance.assetId === asset.assetId,
         );
         const rawValue = observed?.rawValue ?? null;
-        const isNative = asset.address === null;
-        const gasReserve = isNative ? input.gasReserveRawWei : 0n;
-        const pendingRaw = pendingTotals?.find(
-          (total) => total.assetId === asset.assetId,
-        );
-
-        let balance: WalletBalanceAmounts | UnavailableProjection;
         if (rawValue === null) {
-          balance = unavailable(
+          return unavailable(
             observed?.reasonCode ?? walletReasonCodes.balanceCallFailed,
           );
-        } else {
-          await recordSnapshot(asset, rawValue);
-          balance = Object.freeze({
-            status: "available" as const,
-            rawValue: rawValue.toString(10),
-            displayBalance: formatDecimalAmount(rawValue, asset.decimals),
-            // Nothing locks a balance in this step, so available equals
-            // display. Spendable additionally holds back the native gas
-            // reserve, which is configured in wei.
-            availableBalance: formatDecimalAmount(rawValue, asset.decimals),
-            spendableBalance: formatDecimalAmount(
-              subtractFloorZero(rawValue, gasReserve),
-              asset.decimals,
-            ),
-            gasReserve: formatDecimalAmount(gasReserve, bscNativeDecimals),
-          });
         }
+        const gasReserve = asset.address === null ? input.gasReserveRawWei : 0n;
+        return Object.freeze({
+          status: "available" as const,
+          rawValue: rawValue.toString(10),
+          displayBalance: formatDecimalAmount(rawValue, asset.decimals),
+          // Nothing locks a balance in this step, so available equals
+          // display. Spendable additionally holds back the native gas
+          // reserve, which is configured in wei.
+          availableBalance: formatDecimalAmount(rawValue, asset.decimals),
+          spendableBalance: formatDecimalAmount(
+            subtractFloorZero(rawValue, gasReserve),
+            asset.decimals,
+          ),
+          gasReserve: formatDecimalAmount(gasReserve, bscNativeDecimals),
+        });
+      });
 
-        balances.push(
-          Object.freeze({
+      const pendingPending = checkpointPending.then((checkpoint) =>
+        checkpoint === null
+          ? null
+          : timings.measure("pendingIncoming", () =>
+              input.indexerRepository.sumPendingIncoming({
+                chainId: input.chainId,
+                address: wallet.address,
+                assetIds: assets.map((asset) => asset.assetId),
+                confirmedThroughBlockNumber: confirmedThrough.toString(10),
+              }),
+            ),
+      );
+      // The cross-check, the pending totals, the per-asset prices, and the
+      // audit snapshots all depend only on the one block already read, so
+      // they observe the same facts whether they run in sequence or together.
+      const [pendingTotals, crossCheck, rowValuations, , launchChain] =
+        await Promise.all([
+          pendingPending,
+          privyObservationPending.then((observation) =>
+            compareNative(
+              observation,
+              nativeRaw,
+              nativeAsset?.decimals ?? bscNativeDecimals,
+            ),
+          ),
+          pricesPending.then((prices) =>
+            assets.map((_asset, index) =>
+              valueRow(
+                prices?.[index] ?? null,
+                rowBalances[index] ??
+                  unavailable(walletReasonCodes.balanceCallFailed),
+              ),
+            ),
+          ),
+          timings.measure("snapshots", () =>
+            Promise.all(
+              assets.map(async (asset, index) => {
+                const amounts = rowBalances[index];
+                if (amounts === undefined || amounts.status !== "available") {
+                  return;
+                }
+                await recordSnapshot(asset, BigInt(amounts.rawValue));
+              }),
+            ),
+          ),
+          launchChainPending,
+        ]);
+
+      const balances: readonly WalletBalanceProjection[] = assets.map(
+        (asset, index) => {
+          const isNative = asset.address === null;
+          const pendingRaw = pendingTotals?.find(
+            (total) => total.assetId === asset.assetId,
+          );
+          return Object.freeze({
             assetId: asset.assetId,
             symbol: asset.symbol,
             name: asset.name,
             decimals: asset.decimals,
             address: asset.address,
-            balance,
+            balance:
+              rowBalances[index] ??
+              unavailable(walletReasonCodes.balanceCallFailed),
             pending:
               pendingTotals === null
                 ? unavailable(walletReasonCodes.indexerNotStarted)
@@ -757,7 +1061,9 @@ export function createWalletReadService(
                       asset.decimals,
                     ),
                   }),
-            valuation: await valueRow(asset, balance, signal),
+            valuation:
+              rowValuations[index] ??
+              unavailable(walletReasonCodes.balanceUnavailable),
             crossCheck: Object.freeze({
               source: "privy" as const,
               status: isNative ? crossCheck.status : ("unavailable" as const),
@@ -766,15 +1072,18 @@ export function createWalletReadService(
                 : walletReasonCodes.privyAssetMappingMissing,
               blockDelta: isNative ? crossCheck.blockDelta : null,
             }),
-          }),
-        );
-      }
-
-      const launchChain = await projectLaunchChainBalance(
-        input.launchChainReadClient,
-        wallet.address,
-        input.gasReserveRawWei,
+          });
+        },
       );
+      const valuations: readonly WalletValuationProjection[] =
+        rowValuations.filter(
+          (valuation): valuation is WalletValuationProjection =>
+            valuation.status === "available",
+        );
+      timings.report(input.logger, {
+        assetCount: assets.length,
+        valuedCount: valuations.length,
+      });
       return Object.freeze({
         walletId: wallet.walletId,
         snapshot: Object.freeze({
@@ -802,21 +1111,17 @@ export function createWalletReadService(
        * asset itself; the native asset has no token address and is never
        * priced through WBNB or any other proxy.
        */
-      async function valueRow(
-        asset: AssetRecord,
+      function valueRow(
+        price: AssetPriceFact | null,
         balance: WalletBalanceAmounts | UnavailableProjection,
-        abortSignal: AbortSignal,
-      ): Promise<WalletValuationProjection | UnavailableProjection> {
-        if (input.marketFacts === null) {
+      ): WalletValuationProjection | UnavailableProjection {
+        if (price === null) {
           return unavailable(walletReasonCodes.marketRuntimeMissing);
         }
         if (balance.status !== "available") {
           return unavailable(walletReasonCodes.balanceUnavailable);
         }
-        const { fact, pair, proxyAsset } =
-          await input.marketFacts.readAssetPrice(asset, {
-            signal: abortSignal,
-          });
+        const { fact, pair, proxyAsset } = price;
         if (
           fact.value === null ||
           fact.fetchedAt === null ||
@@ -829,7 +1134,7 @@ export function createWalletReadService(
         if (pair === null || pair.priceUsd === null) {
           return unavailable(marketReasonCodes.pairNotFound);
         }
-        const valuation: WalletValuationProjection = Object.freeze({
+        return Object.freeze({
           status: "available" as const,
           priceSource: fact.source,
           fetchedAt: fact.fetchedAt,
@@ -842,8 +1147,6 @@ export function createWalletReadService(
             pair.priceUsd,
           ),
         });
-        valuations.push(valuation);
-        return valuation;
       }
 
       function projectNetWorth():

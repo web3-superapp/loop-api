@@ -287,6 +287,126 @@ describe("BSC read client", () => {
     ]);
   });
 
+  it("issues the token multicall and the native read together, at the head block", async () => {
+    const started: string[] = [];
+    let releaseBalance: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseBalance = resolve;
+    });
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () =>
+        custom({
+          request: async (request: RpcRequest): Promise<unknown> => {
+            started.push(request.method);
+            switch (request.method) {
+              case "eth_chainId": {
+                return "0x38";
+              }
+              case "eth_getBlockByNumber": {
+                return blockResponse(headNumber, headHash);
+              }
+              case "eth_getBalance": {
+                // The native read is answered only once the multicall has
+                // also been issued, which one after the other cannot do.
+                await held;
+                return numberToHex(7_000_000_000_000_000_000n);
+              }
+              case "eth_call": {
+                releaseBalance?.();
+                const params = request.params as readonly [
+                  { readonly data: `0x${string}` },
+                ];
+                return answerMulticall(params[0].data);
+              }
+              default: {
+                throw new Error(`unmocked ${request.method}`);
+              }
+            }
+          },
+        }),
+    });
+
+    const result = await client.readBalances(owner, [
+      { assetId: `eip155:56:${wbnb}`, address: wbnb },
+      { assetId: "eip155:56:native", address: null },
+    ]);
+
+    expect(result.balances.map((balance) => balance.rawValue)).toEqual([
+      123_456_789_000_000_000n,
+      7_000_000_000_000_000_000n,
+    ]);
+    expect(
+      started.filter((method) => method === "eth_getBlockByNumber"),
+    ).toHaveLength(1);
+  });
+
+  it("gives point reads a shorter per-endpoint budget than range scans", async () => {
+    const budgets: { readonly url: string; readonly timeoutMs: number }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: (url, options) => {
+        budgets.push({ url, timeoutMs: options.timeoutMs });
+        return chainTransport({});
+      },
+    });
+
+    await client.getHead();
+
+    const distinct = [...new Set(budgets.map((entry) => entry.timeoutMs))];
+    expect(distinct.sort((left, right) => left - right)).toEqual([
+      2_500, 6_000,
+    ]);
+    // Both lanes carry every configured endpoint, in the configured order.
+    for (const timeoutMs of distinct) {
+      const urls = budgets
+        .filter((entry) => entry.timeoutMs === timeoutMs)
+        .map((entry) => entry.url);
+      expect([...new Set(urls)]).toEqual([
+        "https://rpc-a.example/",
+        "https://rpc-b.example/",
+      ]);
+    }
+  });
+
+  it("hands a failed point read to the next endpoint without retrying the chain", async () => {
+    const attempts: string[] = [];
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: (url) =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            attempts.push(`${url}|${request.method}`);
+            if (url === "https://rpc-a.example/") {
+              return Promise.reject(new Error("endpoint unavailable"));
+            }
+            switch (request.method) {
+              case "eth_chainId": {
+                return Promise.resolve("0x38");
+              }
+              case "eth_getBlockByNumber": {
+                return Promise.resolve(blockResponse(headNumber, headHash));
+              }
+              default: {
+                return Promise.reject(new Error(`unmocked ${request.method}`));
+              }
+            }
+          },
+        }),
+    });
+
+    const head = await client.getHead();
+
+    expect(head.blockNumber).toBe(headNumber);
+    // One attempt per endpoint per method: the chain is walked once, never
+    // four times over.
+    expect(
+      attempts.filter(
+        (attempt) => attempt === "https://rpc-a.example/|eth_getBlockByNumber",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("refuses a log range wider than one segment", async () => {
     const client = createBscReadClient({
       config: chainConfig(),

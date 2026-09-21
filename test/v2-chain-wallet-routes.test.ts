@@ -1289,16 +1289,20 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       reasonCode: quality === "fresh" ? null : "MARKET_PROVIDER_RATE_LIMITED",
       rawDigest: null,
     };
+    const assetPrice = (asset: { readonly address: string | null }) =>
+      Promise.resolve({
+        fact,
+        pair: fact.value?.pairs[0] ?? null,
+        proxyAsset: asset.address === null ? wbnbAssetId : null,
+      });
     return {
       readTokenPairs: vi.fn(() => Promise.resolve(fact)),
       readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
       readPair: vi.fn(() => Promise.reject(new Error("not used"))),
-      readAssetPrice: vi.fn((asset: { readonly address: string | null }) =>
-        Promise.resolve({
-          fact,
-          pair: fact.value?.pairs[0] ?? null,
-          proxyAsset: asset.address === null ? wbnbAssetId : null,
-        }),
+      readAssetPrice: vi.fn(assetPrice),
+      readAssetPrices: vi.fn(
+        (assets: readonly { readonly address: string | null }[]) =>
+          Promise.all(assets.map(assetPrice)),
       ),
       readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
       readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),

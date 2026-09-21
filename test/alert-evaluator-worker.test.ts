@@ -195,6 +195,10 @@ function harness(options: {
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
     readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice,
+    readAssetPrices: vi.fn(
+      (targets: readonly { readonly address: string | null }[]) =>
+        Promise.all(targets.map(readAssetPrice)),
+    ),
     readTokenSecurity: vi.fn(() => Promise.reject(new Error("not used"))),
     readPoolOhlcv: vi.fn(() => Promise.reject(new Error("not used"))),
     readNewPools: vi.fn(() => Promise.reject(new Error("not used"))),
