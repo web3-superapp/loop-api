@@ -278,6 +278,7 @@ import { registerDiscoveryRoutes } from "./routes/discovery.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerWellKnownRoutes } from "./routes/well-known.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
 import { registerPerpWalletBindingRoutes } from "./routes/perp-wallet-binding.js";
@@ -1550,6 +1551,10 @@ export async function buildApp(
   });
 
   registerHealthRoutes(app, config, database);
+  // Passkey relying-party discovery (Decision 0063). Registered on every
+  // contract surface: the platform credential managers fetch these files from
+  // the API origin itself, and they are neither a V1 nor a V2 business route.
+  registerWellKnownRoutes(app, config);
   if (includeV1) {
     registerBootstrapRoute(
       app,

@@ -576,6 +576,21 @@ claims a connected Stream client.
 `GET /openapi.json` is a conditional Development documentation endpoint when
 `API_DOCS_ENABLED=true`; it is not a mobile business route.
 
+## Passkey relying-party discovery (Decision 0063)
+
+The API origin is the relying party for LOOP passkeys, so it publishes the two
+static association files the platform credential managers fetch. Both are
+unauthenticated, carry no user or session fact, are excluded from the OpenAPI
+artifacts (`hide: true`), and are the only LOOP responses that are not
+`Cache-Control: no-store`. An unconfigured file is absent (`404`), never an
+empty document: an empty statement list would make a broken association look
+configured.
+
+| Method and path                               | Request  | Success projection                                                                                                                                     | Interface     | Capability                                                                                                                    |
+| --------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/assetlinks.json`            | No input | One `android_app` statement with `package_name` and `sha256_cert_fingerprints`; `Content-Type: application/json`, `Cache-Control: public, max-age=300` | `implemented` | published only when `PASSKEY_ANDROID_CERT_SHA256` is set, otherwise `404`; platform acceptance on a real device is unverified |
+| `GET /.well-known/apple-app-site-association` | No input | `{webcredentials:{apps:["<TEAMID>.<BUNDLEID>"]}}`; same headers                                                                                        | `implemented` | `404` today: LOOP has no `PASSKEY_IOS_TEAM_ID`                                                                                |
+
 ## Personalization and inactive alert routes
 
 LOOP PostgreSQL is the system of record for the authenticated owner's local

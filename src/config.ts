@@ -262,6 +262,10 @@ const environmentSchema = z
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
+    PASSKEY_ANDROID_PACKAGE: optionalCredential(255),
+    PASSKEY_ANDROID_CERT_SHA256: optionalCredential(4_096),
+    PASSKEY_IOS_TEAM_ID: optionalCredential(32),
+    PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
@@ -697,6 +701,37 @@ export interface WalletGasReserveConfig {
   readonly rawWei: string;
 }
 
+/**
+ * Passkey relying-party association (Decision 0063). The API origin is the
+ * relying party for LOOP passkeys, so it must publish the two static files the
+ * platform credential managers fetch before they will bind a credential
+ * created under this origin to the app.
+ *
+ * The two halves are independent and both are fail-closed: without signing
+ * fingerprints there is no `assetlinks.json`, and without an Apple Team ID
+ * there is no `apple-app-site-association`. An empty or placeholder file would
+ * let a wrong association look configured, which is worse than a 404.
+ */
+export interface PasskeyRelyingPartyConfig {
+  readonly android: PasskeyAndroidConfig | null;
+  readonly ios: PasskeyIosConfig | null;
+}
+
+export interface PasskeyAndroidConfig {
+  readonly packageName: string;
+  /**
+   * Signing-certificate SHA-256 fingerprints, uppercase hex byte pairs joined
+   * by colons, in configuration order. Every keystore that signs a build which
+   * must reach these credentials needs an entry (debug, profile, release).
+   */
+  readonly certificateFingerprints: readonly string[];
+}
+
+export interface PasskeyIosConfig {
+  /** `<TEAMID>.<BUNDLEID>`, the value Apple calls an application identifier. */
+  readonly appId: string;
+}
+
 export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
 }
@@ -818,6 +853,8 @@ export interface AppConfig {
    */
   readonly miningMockHoldingsEnabled: boolean;
   readonly walletGasReserve: WalletGasReserveConfig;
+  /** Passkey association files published at `/.well-known` (Decision 0063). */
+  readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
   readonly market: MarketConfig;
@@ -1242,6 +1279,88 @@ function parseWalletGasReserve(value: string): WalletGasReserveConfig {
   });
 }
 
+export const defaultPasskeyAndroidPackage = "com.cywd.loop";
+export const defaultPasskeyIosBundleId = "com.cywd.loop";
+
+const passkeyAndroidPackagePattern =
+  /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+const passkeyIosBundleIdPattern = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const passkeyIosTeamIdPattern = /^[A-Z0-9]{10}$/;
+/** 32 uppercase hex byte pairs joined by colons: one SHA-256 fingerprint. */
+const passkeySha256FingerprintPattern = /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/;
+const maximumPasskeyFingerprints = 10;
+
+/**
+ * Both association files are published only from values an operator typed in
+ * full. Nothing here is derived, normalized upward, or defaulted into
+ * existence: a malformed fingerprint or Team ID stops the process instead of
+ * publishing a file that would advertise an association nobody verified.
+ */
+function parsePasskeyRelyingPartyConfig(data: {
+  readonly PASSKEY_ANDROID_PACKAGE?: string | undefined;
+  readonly PASSKEY_ANDROID_CERT_SHA256?: string | undefined;
+  readonly PASSKEY_IOS_TEAM_ID?: string | undefined;
+  readonly PASSKEY_IOS_BUNDLE_ID?: string | undefined;
+}): PasskeyRelyingPartyConfig {
+  const packageName =
+    data.PASSKEY_ANDROID_PACKAGE ?? defaultPasskeyAndroidPackage;
+  if (!passkeyAndroidPackagePattern.test(packageName)) {
+    throw new ConfigurationError([
+      "PASSKEY_ANDROID_PACKAGE: must be a dotted Android package name",
+    ]);
+  }
+  const fingerprints: string[] = [];
+  for (const rawEntry of (data.PASSKEY_ANDROID_CERT_SHA256 ?? "").split(",")) {
+    const entry = rawEntry.trim().toUpperCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!passkeySha256FingerprintPattern.test(entry)) {
+      throw new ConfigurationError([
+        "PASSKEY_ANDROID_CERT_SHA256: every entry must be 32 colon-separated uppercase hex byte pairs",
+      ]);
+    }
+    if (fingerprints.includes(entry)) {
+      throw new ConfigurationError([
+        "PASSKEY_ANDROID_CERT_SHA256: entries must be unique",
+      ]);
+    }
+    fingerprints.push(entry);
+  }
+  if (fingerprints.length > maximumPasskeyFingerprints) {
+    throw new ConfigurationError([
+      `PASSKEY_ANDROID_CERT_SHA256: at most ${maximumPasskeyFingerprints.toString(10)} fingerprints are accepted`,
+    ]);
+  }
+
+  const bundleId = data.PASSKEY_IOS_BUNDLE_ID ?? defaultPasskeyIosBundleId;
+  if (!passkeyIosBundleIdPattern.test(bundleId)) {
+    throw new ConfigurationError([
+      "PASSKEY_IOS_BUNDLE_ID: must be a dotted bundle identifier",
+    ]);
+  }
+  const teamId = data.PASSKEY_IOS_TEAM_ID?.toUpperCase();
+  if (teamId !== undefined && !passkeyIosTeamIdPattern.test(teamId)) {
+    throw new ConfigurationError([
+      "PASSKEY_IOS_TEAM_ID: must be a ten-character Apple Team ID",
+    ]);
+  }
+
+  return Object.freeze({
+    android:
+      fingerprints.length === 0
+        ? null
+        : Object.freeze({
+            packageName,
+            certificateFingerprints: Object.freeze(fingerprints),
+          }),
+    ios:
+      teamId === undefined
+        ? null
+        : Object.freeze({ appId: `${teamId}.${bundleId}` }),
+  });
+}
+
 const canaryAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$/;
 const canaryMaxUsdPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/;
 
@@ -1450,6 +1569,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
     MINING_MOCK_HOLDINGS_ENABLED:
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
+    PASSKEY_ANDROID_PACKAGE:
+      environment["PASSKEY_ANDROID_PACKAGE"] ?? defaultPasskeyAndroidPackage,
+    PASSKEY_ANDROID_CERT_SHA256: environment["PASSKEY_ANDROID_CERT_SHA256"],
+    PASSKEY_IOS_TEAM_ID: environment["PASSKEY_IOS_TEAM_ID"],
+    PASSKEY_IOS_BUNDLE_ID:
+      environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
@@ -1584,6 +1709,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
+    passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     serviceName: "loop-api",
