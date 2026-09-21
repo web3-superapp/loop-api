@@ -101,6 +101,22 @@ export const miningSnapshotStatuses = [
 ] as const;
 export type MiningSnapshotStatus = (typeof miningSnapshotStatuses)[number];
 
+/**
+ * Where the observed balances behind a number came from (Decision 0061).
+ * `chain` is an RPC observation of a real address — the only kind a
+ * production stack can ever produce. `mock_seed` is a Development holding
+ * written by `ops/seed-mock.sh --holdings` so the formula can be checked
+ * against holdings nobody has to buy; `mixed` is a snapshot that counted
+ * both. It is published so a client can say a number includes
+ * demonstration holdings instead of presenting it as an on-chain fact.
+ */
+export const miningHoldingsSources = ["chain", "mock_seed", "mixed"] as const;
+export type MiningHoldingsSource = (typeof miningHoldingsSources)[number];
+
+/** Where one observed balance row came from; `mixed` is a snapshot-level word. */
+export const walletBalanceSources = ["chain", "mock_seed"] as const;
+export type WalletBalanceSource = (typeof walletBalanceSources)[number];
+
 /** One holding a run could not value: the asset and the price reason. */
 export interface MiningUnreadInput {
   readonly assetId: string;

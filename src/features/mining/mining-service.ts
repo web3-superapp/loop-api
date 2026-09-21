@@ -27,6 +27,7 @@ import {
   type MiningDailyOutputDocument,
   type MiningFormulaScope,
   type MiningFormulaStatus,
+  type MiningHoldingsSource,
   type MiningPriceGuardRule,
   type MiningRankScope,
   type MiningReferencePriceQuality,
@@ -106,6 +107,13 @@ export interface MiningSnapshotProjection {
    */
   readonly stale: boolean;
   readonly latestAttempt: MiningSnapshotAttemptProjection;
+  /**
+   * Which kinds of observed balance produced the numbers on this page
+   * (Decision 0061). `chain` is the only value a production stack can
+   * publish; `mock_seed` or `mixed` means the Development seed's holdings
+   * were counted and the client says so on screen.
+   */
+  readonly holdingsSource: MiningHoldingsSource;
 }
 
 /** No complete snapshot; `latestAttempt` explains the newest run when there is one. */
@@ -426,6 +434,7 @@ function snapshotProjection(
     computedAt: record.computedAt,
     stale: resolution.stale,
     latestAttempt: attemptProjection(resolution.latestAttempt),
+    holdingsSource: record.holdingsSource,
   });
 }
 

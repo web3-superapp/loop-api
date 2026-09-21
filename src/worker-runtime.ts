@@ -436,6 +436,9 @@ export async function runReconciliationWorker(
         : miningSnapshotWorkerFactory({
             repository: database.mining,
             registry: database.chainRegistry,
+            // Decision 0061: off unless the Development stack asked for the
+            // seeded holdings; the configuration refuses it in production.
+            includeMockSeedHoldings: options.config.miningMockHoldingsEnabled,
             prices: createMarketFactService({
               config: options.config.market,
               cache: database.marketFacts,

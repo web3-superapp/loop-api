@@ -20,6 +20,10 @@ import {
   type AliasSearchQuota,
 } from "../identity/alias-search-quota.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import {
+  miningReasonCodes,
+  type MiningFormulaScope,
+} from "../mining/mining-contract.js";
 import type {
   CommunityMiningPowerReader,
   MiningPowerProjection,
@@ -52,6 +56,9 @@ import {
   parseSendMessageRequest,
   parseOpaqueUuid,
   parseRoleChangeRequest,
+  communityActivityObservationMaxAgeSeconds,
+  communityActivityWindowDays,
+  communitySortValues,
   parseUpdateCommunityRequest,
   searchFilter,
   updateCommunityDigestParts,
@@ -258,9 +265,71 @@ export interface CommunityRecommendationProjection {
   readonly ruleVersion: typeof communityRecommendationRuleVersion;
 }
 
+/**
+ * What a discover page was actually ordered by (Decision 0061). `members`
+ * and `newest` order by a stored column and say so; `miningPower` names the
+ * snapshot behind the ranking; `activity` names the window and the newest
+ * observation in it. When the fact does not exist the ordering is
+ * `unavailable` with the reason, the page carries no items, and no other
+ * ordering is substituted — a list ordered by something the client did not
+ * ask for is worse than an empty one.
+ */
+export type CommunityOrderingBasis =
+  | { readonly kind: "stored" }
+  | {
+      readonly kind: "miningSnapshot";
+      readonly snapshotId: string;
+      readonly formulaVersion: string;
+      readonly computedAt: string;
+      readonly scope: MiningFormulaScope | null;
+      readonly stale: boolean;
+    }
+  | {
+      readonly kind: "channelActivity";
+      readonly windowDays: number;
+      readonly observedCommunityCount: number;
+      readonly observedAt: string;
+    };
+
+export type CommunityOrderingProjection =
+  | {
+      readonly status: "available";
+      readonly sort: CommunitySort;
+      readonly basis: CommunityOrderingBasis;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly sort: CommunitySort;
+      readonly reasonCode: string;
+    };
+
+/** A community's observed channel activity over the discover window. */
+export type CommunityActivityProjection =
+  | {
+      readonly status: "available";
+      readonly messageCount: number;
+      readonly windowDays: number;
+      /** True when more messages exist than the observation could count. */
+      readonly bounded: boolean;
+      readonly observedAt: string;
+    }
+  | UnavailableProjection;
+
+/**
+ * A discover row. The two ordering sorts attach the fact they ranked by, so
+ * the card can show the number it was sorted on; the two stored sorts
+ * attach neither, rather than a zero nobody measured.
+ */
+export interface CommunityDiscoverItem extends CommunitySummary {
+  readonly miningPower?: MiningPowerProjection;
+  readonly activity?: CommunityActivityProjection;
+}
+
 export interface CommunityListResource {
-  readonly items: readonly CommunitySummary[];
+  readonly items: readonly CommunityDiscoverItem[];
   readonly nextCursor: string | null;
+  /** The ordering the page was produced under (Decision 0061). */
+  readonly ordering: CommunityOrderingProjection;
   readonly recommendation: CommunityRecommendationProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -534,6 +603,111 @@ function summary(record: CommunityRecord): CommunitySummary {
 }
 
 /**
+ * The cursor value of the last row under each ordering (Decision 0061).
+ * `-1` is the sentinel for a community the ordering fact does not cover,
+ * which is exactly how the keyset query sorts it, so paging past the
+ * ranked communities into the unranked ones is continuous.
+ */
+function discoverSortValue(
+  record: CommunityRecord,
+  sort: CommunitySort,
+): string {
+  if (sort === "members") {
+    return String(record.memberCount);
+  }
+  if (sort === "newest") {
+    return record.createdAt;
+  }
+  if (sort === "miningPower") {
+    return record.ordering?.miningPower ?? "-1";
+  }
+  const count = record.ordering?.activityMessageCount;
+  return count === null || count === undefined ? "-1" : String(count);
+}
+
+/**
+ * A discover row with the fact it was ordered by. A community the ordering
+ * fact does not cover is listed with an unavailable projection naming why
+ * (no approved weight or no fresh observation) — never with a zero.
+ */
+function discoverItem(
+  record: CommunityRecord,
+  sort: CommunitySort,
+  basis: CommunityOrderingBasis,
+): CommunityDiscoverItem {
+  const base = summary(record);
+  if (sort === "miningPower" && basis.kind === "miningSnapshot") {
+    const ordering = record.ordering;
+    if (
+      ordering === undefined ||
+      ordering.miningPower === null ||
+      ordering.miningWeight === null ||
+      ordering.miningWeightConfigVersion === null ||
+      ordering.miningWeightReviewedAt === null
+    ) {
+      return Object.freeze({
+        ...base,
+        miningPower: unavailable(
+          record.boundAssetKey === null
+            ? miningReasonCodes.communityAssetNotBound
+            : miningReasonCodes.communityWeightPendingReview,
+        ),
+      });
+    }
+    return Object.freeze({
+      ...base,
+      miningPower: Object.freeze({
+        status: "available" as const,
+        subject: "community" as const,
+        power: ordering.miningPower,
+        snapshotId: basis.snapshotId,
+        formulaVersion: basis.formulaVersion,
+        computedAt: basis.computedAt,
+        scope: basis.scope,
+        stale: basis.stale,
+        weight: Object.freeze({
+          status: "approved" as const,
+          value: ordering.miningWeight,
+          configVersion: ordering.miningWeightConfigVersion,
+          reviewedAt: ordering.miningWeightReviewedAt,
+        }),
+        participants: Object.freeze({
+          status: "available" as const,
+          count: ordering.miningParticipantCount ?? 0,
+        }),
+      }),
+    });
+  }
+  if (sort === "activity" && basis.kind === "channelActivity") {
+    const ordering = record.ordering;
+    if (
+      ordering === undefined ||
+      ordering.activityMessageCount === null ||
+      ordering.activityBounded === null ||
+      ordering.activityObservedAt === null
+    ) {
+      return Object.freeze({
+        ...base,
+        activity: unavailable(
+          communityUnavailableReasonCodes.activityChannelNotObserved,
+        ),
+      });
+    }
+    return Object.freeze({
+      ...base,
+      activity: Object.freeze({
+        status: "available" as const,
+        messageCount: ordering.activityMessageCount,
+        windowDays: basis.windowDays,
+        bounded: ordering.activityBounded,
+        observedAt: ordering.activityObservedAt,
+      }),
+    });
+  }
+  return base;
+}
+
+/**
  * Member-directory identity. A membership without a profile row keeps its
  * LOOP ID (always present on the account) and reports a null public profile
  * ID, so the page and the server counts stay consistent.
@@ -794,6 +968,88 @@ export function createCommunityService(
       return Promise.resolve(miningPowerUnavailable);
     }
     return miningPowerReader.readCommunityPower(communityId);
+  }
+
+  /**
+   * The fact the requested ordering needs, resolved once per page
+   * (Decision 0061). `members` and `newest` need none. `miningPower` needs
+   * a complete snapshot under the version in force — the same baseline
+   * every mining read resolves, so the discover ranking and the mining
+   * pages can never disagree. `activity` needs at least one community with
+   * a fresh channel observation. Either missing fact yields `unavailable`
+   * with the reason, never a silent fallback to another order.
+   */
+  async function orderingBasis(sort: CommunitySort): Promise<
+    | {
+        readonly status: "available";
+        readonly basis: CommunityOrderingBasis;
+        readonly configVersion: string;
+      }
+    | {
+        readonly status: "unavailable";
+        readonly sort: CommunitySort;
+        readonly reasonCode: string;
+      }
+  > {
+    if (sort === "members" || sort === "newest") {
+      return Object.freeze({
+        status: "available" as const,
+        basis: Object.freeze({ kind: "stored" as const }),
+        configVersion: "",
+      });
+    }
+    if (sort === "miningPower") {
+      const baseline =
+        miningPowerReader === null
+          ? ({
+              status: "unavailable" as const,
+              reasonCode: communityUnavailableReasonCodes.mining,
+            } as const)
+          : await miningPowerReader.readOrderingBaseline();
+      if (baseline.status === "unavailable") {
+        return Object.freeze({
+          status: "unavailable" as const,
+          sort,
+          reasonCode: baseline.reasonCode,
+        });
+      }
+      return Object.freeze({
+        status: "available" as const,
+        configVersion: baseline.configVersion,
+        basis: Object.freeze({
+          kind: "miningSnapshot" as const,
+          snapshotId: baseline.snapshotId,
+          formulaVersion: baseline.formulaVersion,
+          computedAt: baseline.computedAt,
+          scope: baseline.scope,
+          stale: baseline.stale,
+        }),
+      });
+    }
+    const observation =
+      await options.repository.getCommunityActivityObservation({
+        maxAgeSeconds: communityActivityObservationMaxAgeSeconds,
+      });
+    if (
+      observation.observedCommunityCount === 0 ||
+      observation.latestObservedAt === null
+    ) {
+      return Object.freeze({
+        status: "unavailable" as const,
+        sort,
+        reasonCode: communityUnavailableReasonCodes.activityNotObserved,
+      });
+    }
+    return Object.freeze({
+      status: "available" as const,
+      configVersion: "",
+      basis: Object.freeze({
+        kind: "channelActivity" as const,
+        windowDays: communityActivityWindowDays,
+        observedCommunityCount: observation.observedCommunityCount,
+        observedAt: observation.latestObservedAt,
+      }),
+    });
   }
 
   /** Powers keyed by public profile ID; a missing key reads unavailable. */
@@ -1079,7 +1335,7 @@ export function createCommunityService(
       try {
         const sort = parseEnumValue<CommunitySort>(
           input.sort,
-          ["members", "newest"],
+          [...communitySortValues],
           "members",
         );
         const verification = parseEnumValue<CommunityVerificationFilter>(
@@ -1105,6 +1361,19 @@ export function createCommunityService(
           input.limit,
           communityListLimits,
         );
+        // The ordering fact is resolved before the page is read, so a sort
+        // with nothing behind it answers `unavailable` and an empty page
+        // instead of quietly falling back to another order.
+        const basis = await orderingBasis(sort);
+        if (basis.status === "unavailable") {
+          return Object.freeze({
+            items: Object.freeze([]),
+            nextCursor: null,
+            ordering: basis,
+            recommendation: recommendation(),
+            contractVersion: v2ContractVersion,
+          });
+        }
         const lastSortValue = readString(request.continuation, "sortValue");
         const lastCommunityId = readString(request.continuation, "communityId");
         const records = await options.repository.listCommunities({
@@ -1116,12 +1385,28 @@ export function createCommunityService(
           ...(lastSortValue === undefined || lastCommunityId === undefined
             ? {}
             : { after: { lastSortValue, lastCommunityId } }),
+          ...(basis.basis.kind === "miningSnapshot"
+            ? {
+                miningOrdering: {
+                  snapshotId: basis.basis.snapshotId,
+                  configVersion: basis.configVersion,
+                },
+              }
+            : {}),
+          ...(basis.basis.kind === "channelActivity"
+            ? {
+                activityMaxAgeSeconds:
+                  communityActivityObservationMaxAgeSeconds,
+              }
+            : {}),
         });
         const hasMore = records.length > request.limit;
         const items = records.slice(0, request.limit);
         const last = items.at(-1);
         return Object.freeze({
-          items: Object.freeze(items.map(summary)),
+          items: Object.freeze(
+            items.map((record) => discoverItem(record, sort, basis.basis)),
+          ),
           nextCursor:
             last === undefined
               ? null
@@ -1133,12 +1418,14 @@ export function createCommunityService(
                   Object.freeze({
                     communityId: last.communityId,
                     limit: request.limit,
-                    sortValue:
-                      sort === "members"
-                        ? String(last.memberCount)
-                        : last.createdAt,
+                    sortValue: discoverSortValue(last, sort),
                   }),
                 ),
+          ordering: Object.freeze({
+            status: "available" as const,
+            sort,
+            basis: basis.basis,
+          }),
           recommendation: recommendation(),
           contractVersion: v2ContractVersion,
         });

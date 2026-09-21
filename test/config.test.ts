@@ -120,6 +120,23 @@ describe("loadConfig", () => {
     expect(Object.isFrozen(config.streamTokenQuota)).toBe(true);
   });
 
+  it("keeps the Development mock holdings off by default and refuses them in production (Decision 0061)", () => {
+    expect(loadConfig(validEnvironment()).miningMockHoldingsEnabled).toBe(
+      false,
+    );
+
+    const development = validEnvironment();
+    development["NODE_ENV"] = "development";
+    development["MINING_MOCK_HOLDINGS_ENABLED"] = "true";
+    expect(loadConfig(development).miningMockHoldingsEnabled).toBe(true);
+
+    const production = validEnvironment();
+    production["NODE_ENV"] = "production";
+    production["PUBLIC_BASE_URL"] = "https://api.example.test";
+    production["MINING_MOCK_HOLDINGS_ENABLED"] = "true";
+    expect(() => loadConfig(production)).toThrow(ConfigurationError);
+  });
+
   it("rejects a weak Stream token quota secret without echoing it", () => {
     const environment = validEnvironment();
     environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"] = "weak-secret";

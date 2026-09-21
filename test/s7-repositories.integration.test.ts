@@ -646,7 +646,9 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           values: [walletId, block, `0x${"c".repeat(64)}`, value],
         });
       }
-      const inputs = await mining.listBalanceInputs();
+      const inputs = await mining.listBalanceInputs({
+        includeMockSeedHoldings: false,
+      });
       const mine = inputs.filter((row) => row.ownerUserId === owner);
       expect(mine).toEqual([
         {
@@ -657,8 +659,60 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           rawValue: "2000000000000000000",
           blockNumber: "120",
           blockHash: `0x${"c".repeat(64)}`,
+          source: "chain",
         },
       ]);
+    });
+
+    it("hides a seeded holding from the lane unless it is asked for (Decision 0061)", async () => {
+      const owner = await createUser(true, true);
+      const wallet = await pool.query<{ wallet_id: string }>({
+        text: `select wallet_id from public.account_wallets where owner_user_id = $1`,
+        values: [owner],
+      });
+      const walletId = wallet.rows[0]?.wallet_id ?? "";
+      await pool.query({
+        text: `
+          insert into public.wallet_balance_snapshots (
+            wallet_id, asset_id, block_number, block_hash, raw_value, source
+          )
+          values ($1, 'eip155:56:native', 200, $2, '7000000000000000000', 'mock_seed')
+        `,
+        values: [walletId, `0x${"c".repeat(64)}`],
+      });
+
+      const chainOnly = await mining.listBalanceInputs({
+        includeMockSeedHoldings: false,
+      });
+      expect(
+        chainOnly.filter((row) => row.walletId === walletId),
+      ).not.toContainEqual(expect.objectContaining({ source: "mock_seed" }));
+
+      const withSeed = await mining.listBalanceInputs({
+        includeMockSeedHoldings: true,
+      });
+      expect(withSeed).toContainEqual(
+        expect.objectContaining({
+          walletId,
+          rawValue: "7000000000000000000",
+          blockNumber: "200",
+          source: "mock_seed",
+        }),
+      );
+
+      // The column refuses a third kind: there are two ways a balance can
+      // be observed and no others.
+      await expect(
+        pool.query({
+          text: `
+            insert into public.wallet_balance_snapshots (
+              wallet_id, asset_id, block_number, block_hash, raw_value, source
+            )
+            values ($1, 'eip155:56:native', 300, $2, '1', 'guessed')
+          `,
+          values: [walletId, `0x${"c".repeat(64)}`],
+        }),
+      ).rejects.toThrow();
     });
 
     it("writes a snapshot with per-account powers only under an approved formula, and approve is single and one-way", async () => {
@@ -692,6 +746,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           priceVersion: "dexscreener:2026-09-08T00:00:00.000Z",
           totalPower: "0",
           powers: [],
+          holdingsSource: "chain",
         }),
       ).rejects.toThrow();
       const approved = await mining.approveFormula({
@@ -732,6 +787,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             blockNumber: "120",
           },
         ],
+        holdingsSource: "chain",
       });
       expect(written).toMatchObject({
         snapshotId,
@@ -885,7 +941,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         requestId: randomUUID(),
       });
       expect(created).toMatchObject({
-        configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+        configVersion: documents.configVersion,
         status: "pending_approval",
         effectiveAt: null,
         formula: {
@@ -1096,6 +1152,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             blockNumber: "122037728",
           },
         ],
+        holdingsSource: "chain",
       });
       expect(
         await mining.getAccountStanding({ snapshotId, ownerUserId: alice }),
@@ -1302,6 +1359,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             blockNumber,
           },
         ],
+        holdingsSource: "chain" as const,
       };
     }
 
@@ -1335,7 +1393,12 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         completeInput(complete, "122998659"),
       );
       expect(written.snapshotId).toBe(complete);
-      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(complete);
+      // Decision 0061: the snapshot says what kind of balances it counted.
+      expect(written.holdingsSource).toBe("chain");
+      expect(await mining.getLatestSnapshot()).toMatchObject({
+        snapshotId: complete,
+        holdingsSource: "chain",
+      });
       expect(await mining.getLatestSnapshotAttempt(version)).toMatchObject({
         snapshotId: complete,
         status: "complete",
@@ -1600,6 +1663,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
             blockNumber: "123001455",
           },
         ],
+        holdingsSource: "chain",
       });
       expect(
         await mining.listAccountPowers({

@@ -170,6 +170,12 @@ function communityRepositoryFake() {
   );
   const repository: CommunityRepository = {
     listCommunities: listCommunitiesMock,
+    getCommunityActivityObservation: vi.fn(() =>
+      Promise.resolve({
+        observedCommunityCount: 0,
+        latestObservedAt: null,
+      }),
+    ),
     getCommunityHome: vi.fn(() =>
       Promise.resolve({
         joined: [{ community, viewerMembership: ownerMembership }],
@@ -1489,6 +1495,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
             totalPower: "4000",
             accountCount: 3,
             computedAt: "2026-09-15T13:30:00.000Z",
+            holdingsSource: "chain" as const,
           }),
         ),
         getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
@@ -1607,14 +1614,14 @@ describe("LOOP API V2 community, social, and search modules", () => {
       subject: "community",
       power: "230.5",
       snapshotId,
-      formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+      formulaVersion: documents.configVersion,
       computedAt: "2026-09-15T13:30:00.000Z",
       scope: "development_baseline",
       stale: false,
       weight: {
         status: "approved",
         value: "1.5",
-        configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+        configVersion: documents.configVersion,
         reviewedAt: "2026-09-15T09:00:00.000Z",
       },
       participants: { status: "available", count: 2 },
@@ -1627,7 +1634,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
         subject: "account",
         power,
         snapshotId,
-        formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+        formulaVersion: documents.configVersion,
         computedAt: "2026-09-15T13:30:00.000Z",
         scope: "development_baseline",
         stale: false,
@@ -1957,6 +1964,321 @@ describe("LOOP API V2 community, social, and search modules", () => {
         status: "unavailable",
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
       });
+    });
+  });
+
+  describe("Discover orderings that need a fact (Decision 0061)", () => {
+    const documents = buildMiningDevBaselineDocuments(["eip155:56:native"]);
+    const approvedAt = "2026-09-15T08:00:00.000Z";
+    const snapshotId = "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+
+    function miningRepository(overrides: Partial<MiningRepository> = {}) {
+      return {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: vi.fn(() =>
+          Promise.resolve({
+            configVersion: documents.configVersion,
+            formula: documents.formula,
+            weightRange: documents.weightRange,
+            priceGuardRules: documents.priceGuardRules,
+            status: "approved" as const,
+            effectiveAt: approvedAt,
+            approvedAt,
+            createdAt: approvedAt,
+          }),
+        ),
+        getLatestSnapshot: vi.fn(() =>
+          Promise.resolve({
+            snapshotId,
+            blockNumber: "122037728",
+            blockHash: `0x${"c".repeat(64)}`,
+            formulaVersion: documents.configVersion,
+            priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
+            totalPower: "4000",
+            accountCount: 3,
+            computedAt: "2026-09-15T13:30:00.000Z",
+            holdingsSource: "chain" as const,
+          }),
+        ),
+        getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+        ...overrides,
+      } satisfies MiningRepository;
+    }
+
+    /** A ranked community and one the version does not weight. */
+    const rankedCommunity = {
+      ...community,
+      ordering: {
+        miningPower: "230.5",
+        miningParticipantCount: 2,
+        miningWeight: "1.5",
+        miningWeightConfigVersion: documents.configVersion,
+        miningWeightReviewedAt: "2026-09-15T09:00:00.000Z",
+        activityMessageCount: null,
+        activityBounded: null,
+        activityObservedAt: null,
+      },
+    };
+    const unweightedCommunity = {
+      ...community,
+      communityId: "7d0f1e2a-3b4c-4d5e-8f90-a1b2c3d4e5f6",
+      slug: "quiet-holders",
+      boundAssetKey: "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      ordering: {
+        miningPower: null,
+        miningParticipantCount: null,
+        miningWeight: null,
+        miningWeightConfigVersion: null,
+        miningWeightReviewedAt: null,
+        activityMessageCount: null,
+        activityBounded: null,
+        activityObservedAt: null,
+      },
+    };
+
+    it("orders by the mining snapshot and attaches the power that produced the order", async () => {
+      const dependencies = fakes();
+      const listCommunities = vi.fn(() =>
+        Promise.resolve([rankedCommunity, unweightedCommunity]),
+      );
+      dependencies.communityRepository.listCommunities = listCommunities;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: { ...dependencies.database, mining: miningRepository() },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=miningPower",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "miningPower",
+        basis: {
+          kind: "miningSnapshot",
+          snapshotId,
+          formulaVersion: documents.configVersion,
+          computedAt: "2026-09-15T13:30:00.000Z",
+          scope: "development_baseline",
+          stale: false,
+        },
+      });
+      expect(body.items[0]?.["miningPower"]).toEqual({
+        status: "available",
+        subject: "community",
+        power: "230.5",
+        snapshotId,
+        formulaVersion: documents.configVersion,
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+        stale: false,
+        weight: {
+          status: "approved",
+          value: "1.5",
+          configVersion: documents.configVersion,
+          reviewedAt: "2026-09-15T09:00:00.000Z",
+        },
+        participants: { status: "available", count: 2 },
+      });
+      // A community the version does not weight is listed, never zeroed.
+      expect(body.items[1]?.["miningPower"]).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+      });
+      expect(listCommunities).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sort: "miningPower",
+          miningOrdering: {
+            snapshotId,
+            configVersion: documents.configVersion,
+          },
+        }),
+      );
+    });
+
+    it("publishes sort=miningPower as unavailable, with no items, while no snapshot carries numbers", async () => {
+      const dependencies = fakes();
+      const listCommunities = dependencies.listCommunitiesMock;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningRepository({
+              getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=miningPower",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [],
+        nextCursor: null,
+        ordering: {
+          status: "unavailable",
+          sort: "miningPower",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+        },
+      });
+      // The page was never read: an ordering nobody can apply reads nothing.
+      expect(listCommunities).not.toHaveBeenCalled();
+    });
+
+    it("orders by observed channel activity and says what the count is worth", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityActivityObservation = vi.fn(
+        () =>
+          Promise.resolve({
+            observedCommunityCount: 2,
+            latestObservedAt: "2026-09-21T09:15:00.000Z",
+          }),
+      );
+      dependencies.communityRepository.listCommunities = vi.fn(() =>
+        Promise.resolve([
+          {
+            ...community,
+            ordering: {
+              ...unweightedCommunity.ordering,
+              activityMessageCount: 41,
+              activityBounded: false,
+              activityObservedAt: "2026-09-21T09:15:00.000Z",
+            },
+          },
+          {
+            ...unweightedCommunity,
+            ordering: { ...unweightedCommunity.ordering },
+          },
+        ]),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "activity",
+        basis: {
+          kind: "channelActivity",
+          windowDays: 7,
+          observedCommunityCount: 2,
+          observedAt: "2026-09-21T09:15:00.000Z",
+        },
+      });
+      expect(body.items[0]?.["activity"]).toEqual({
+        status: "available",
+        messageCount: 41,
+        windowDays: 7,
+        bounded: false,
+        observedAt: "2026-09-21T09:15:00.000Z",
+      });
+      expect(body.items[1]?.["activity"]).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED",
+      });
+    });
+
+    it("publishes sort=activity as unavailable while nothing was observed", async () => {
+      const dependencies = fakes();
+      const listCommunities = dependencies.listCommunitiesMock;
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [],
+        nextCursor: null,
+        ordering: {
+          status: "unavailable",
+          sort: "activity",
+          reasonCode: "COMMUNITY_ACTIVITY_NOT_OBSERVED",
+        },
+      });
+      expect(listCommunities).not.toHaveBeenCalled();
+    });
+
+    it("names the ordering of the two stored sorts and attaches no ordering fact to their rows", async () => {
+      const { app } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=members",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "members",
+        basis: { kind: "stored" },
+      });
+      expect(body.items[0]).not.toHaveProperty("miningPower");
+      expect(body.items[0]).not.toHaveProperty("activity");
+    });
+
+    it("refuses a cursor issued under another ordering", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityActivityObservation = vi.fn(
+        () =>
+          Promise.resolve({
+            observedCommunityCount: 1,
+            latestObservedAt: "2026-09-21T09:15:00.000Z",
+          }),
+      );
+      dependencies.communityRepository.listCommunities = vi.fn(() =>
+        Promise.resolve(
+          Array.from({ length: 21 }, (_value, index) => ({
+            ...community,
+            communityId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+            ordering: {
+              ...unweightedCommunity.ordering,
+              activityMessageCount: 100 - index,
+              activityBounded: false,
+              activityObservedAt: "2026-09-21T09:15:00.000Z",
+            },
+          })),
+        ),
+      );
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+      expect(cursor).not.toBeNull();
+      const crossed = await app.inject({
+        method: "GET",
+        url: `/v2/communities?sort=members&cursor=${encodeURIComponent(cursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(crossed.statusCode).toBe(400);
+      expect(crossed.json()).toMatchObject({ code: "INVALID_REQUEST" });
     });
   });
 

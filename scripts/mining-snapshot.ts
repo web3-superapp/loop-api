@@ -83,6 +83,10 @@ function defaultCreateDependencies(
         securityProvider: null,
         candlesProvider: null,
       }),
+      // Decision 0061: the Development seed's holdings enter a snapshot only
+      // when the operator's environment says so; the config refuses the flag
+      // in production and this script refuses production outright.
+      includeMockSeedHoldings: config.miningMockHoldingsEnabled,
     },
     close: () => pool.end(),
   };
@@ -161,7 +165,7 @@ export async function runMiningSnapshot(
       result.skipped.length === 0 ? "" : `; skipped ${list(result.skipped)}`;
     options.stdout.write(
       result.kind === "snapshotted"
-        ? `Mining snapshot ${result.snapshotId ?? "?"} written with ${result.powerRowCount} power row(s)${skipped}\n`
+        ? `Mining snapshot ${result.snapshotId ?? "?"} written with ${result.powerRowCount} power row(s); holdings ${result.holdingsSource ?? "chain"}${skipped}\n`
         : result.kind === "incomplete"
           ? `Mining snapshot attempt ${result.snapshotId ?? "?"} incomplete (${result.reasonCode ?? "n/a"}); nothing published; unread ${list(result.unread)}${skipped}\n`
           : `Mining snapshot lane ${result.kind} (${result.reasonCode ?? "n/a"})${skipped}\n`,

@@ -56,6 +56,7 @@ const snapshot: MiningSnapshotRecord = {
   totalPower: "4000",
   accountCount: 2,
   computedAt: "2026-09-15T13:30:00.000Z",
+  holdingsSource: "chain",
 };
 const now = new Date("2026-09-15T12:00:00.000Z");
 
@@ -63,7 +64,7 @@ describe("development baseline documents", () => {
   it("names itself, weighs every registered asset at 1, and carries the placeholder budget inside the version", () => {
     assertMiningDevBaselineConstants();
     expect(miningDevBaselineConfigVersion).toBe(
-      "miningFormula-devBaseline-2026-09-15-r3",
+      "miningFormula-devBaseline-2026-09-21-r4",
     );
     expect(miningDevBaselineConfigVersion).toMatch(/devBaseline/);
     expect(miningDevBaselineConfigVersion).not.toMatch(/V1\b/);
@@ -284,7 +285,7 @@ describe("baseline resolution", () => {
   const incompleteAttempt: MiningSnapshotAttemptRecord = {
     snapshotId: "537e93ea-1c9f-43f8-b29a-c6eb4a8e7dee",
     status: "incomplete",
-    formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+    formulaVersion: miningDevBaselineConfigVersion,
     blockNumber: "123000110",
     computedAt: "2026-09-20T13:51:26.116Z",
     unreadInputs: [
@@ -441,7 +442,7 @@ describe("baseline resolution", () => {
       )(),
     ).toEqual({
       status: "approved",
-      configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+      configVersion: miningDevBaselineConfigVersion,
       effectiveAt: approvedAt,
       scope: "development_baseline",
     });

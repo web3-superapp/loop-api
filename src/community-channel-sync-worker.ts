@@ -7,10 +7,12 @@ import {
 } from "./features/communication/communication-repository.js";
 import type { CommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
+  communityActivityChannelBatch,
   StreamChannelProjectionMismatchError,
   StreamChannelRequestRejectedError,
   type StreamCommunityChannelGateway,
 } from "./integrations/stream/channel-gateway.js";
+import { communityActivityWindowDays } from "./features/community/community-contract.js";
 
 export const COMMUNITY_CHANNEL_SYNC_BATCH_LIMIT = 20;
 export const COMMUNITY_CHANNEL_SYNC_INTERVAL_MS = 5_000;
@@ -18,6 +20,13 @@ export const COMMUNITY_CHANNEL_SYNC_LEASE_SECONDS = 30;
 export const COMMUNITY_CHANNEL_SYNC_MAX_ATTEMPTS = 10;
 export const COMMUNITY_CHANNEL_SYNC_RETRY_BASE_SECONDS = 5;
 export const COMMUNITY_CHANNEL_SYNC_RETRY_MAX_SECONDS = 300;
+/**
+ * Activity observation (Decision 0061). The sweep is not the membership
+ * lane: it reads at most one `queryChannels` per tick, and a community is
+ * re-observed only after its last observation is this old.
+ */
+export const COMMUNITY_ACTIVITY_OBSERVATION_INTERVAL_SECONDS = 900;
+export const COMMUNITY_ACTIVITY_BATCH_LIMIT = communityActivityChannelBatch;
 const COMMUNITY_CHANNEL_SYNC_RETRY_BASE_DELAY_MS = 1_000;
 const COMMUNITY_CHANNEL_SYNC_RETRY_MAX_DELAY_MS = 30_000;
 
@@ -37,6 +46,12 @@ export type CommunityChannelSyncRunResult = Readonly<{
   personaClaimedCount: number;
   personaConfirmedCount: number;
   personaDeferredCount: number;
+  /**
+   * Decision 0061 activity sweep: channels observed and recorded this tick.
+   * Zero when nothing was due, when no channel is provisioned, or when the
+   * provider read failed — a failed read records nothing.
+   */
+  activityObservedCount: number;
 }>;
 
 export interface CommunityChannelSyncWorker {
@@ -61,12 +76,13 @@ export interface CreateCommunityChannelSyncWorkerOptions {
 }
 
 export type CommunityChannelSyncWorkerLogMessage =
-  "Community persona bookkeeping failed after a completed sync job";
+  | "Community persona bookkeeping failed after a completed sync job"
+  | "Community channel activity could not be observed; no observation was recorded";
 
 export interface CommunityChannelSyncWorkerLogContext {
   readonly communityId: string;
   readonly ownerUserId: string;
-  readonly write: "confirm" | "request" | "reset";
+  readonly write: "confirm" | "observe" | "request" | "reset";
   readonly errorName: string;
 }
 
@@ -336,6 +352,85 @@ export function createCommunityChannelSyncWorker(
     }
   }
 
+  /**
+   * One activity sweep (Decision 0061): the channels whose observation is
+   * missing or older than the interval, read in a single `queryChannels`
+   * call and written back with the time they were observed. A channel
+   * Stream did not answer for is left as it was — an unobserved channel is
+   * not an inactive one.
+   */
+  async function observeActivity(signal: AbortSignal): Promise<number> {
+    if (isAborted(signal)) {
+      return 0;
+    }
+    let due: readonly { communityId: string; streamChannelId: string }[];
+    try {
+      due = await options.repository.listChannelsDueForActivity({
+        staleAfterSeconds: COMMUNITY_ACTIVITY_OBSERVATION_INTERVAL_SECONDS,
+        limit: COMMUNITY_ACTIVITY_BATCH_LIMIT,
+      });
+    } catch {
+      return 0;
+    }
+    if (due.length === 0) {
+      return 0;
+    }
+    const observedAt = new Date();
+    const since = new Date(
+      observedAt.getTime() - communityActivityWindowDays * 86_400_000,
+    );
+    let observations: readonly {
+      channelId: string;
+      messageCount: number;
+      bounded: boolean;
+      totalMessageCount: number | null;
+      lastMessageAt: string | null;
+    }[];
+    try {
+      observations = await options.gateway.readCommunityChannelActivity({
+        channelIds: due.map((target) => target.streamChannelId),
+        since,
+        signal,
+      });
+    } catch {
+      options.logger?.warn(
+        {
+          communityId: due[0]?.communityId ?? "",
+          ownerUserId: "",
+          write: "observe",
+          errorName: "activity_read_failed",
+        },
+        "Community channel activity could not be observed; no observation was recorded",
+      );
+      return 0;
+    }
+    let recorded = 0;
+    for (const target of due) {
+      const observation = observations.find(
+        (candidate) => candidate.channelId === target.streamChannelId,
+      );
+      if (observation === undefined) {
+        continue;
+      }
+      try {
+        await options.repository.recordChannelActivity({
+          communityId: target.communityId,
+          streamChannelId: target.streamChannelId,
+          windowDays: communityActivityWindowDays,
+          messageCount: observation.messageCount,
+          bounded: observation.bounded,
+          totalMessageCount: observation.totalMessageCount,
+          lastMessageAt: observation.lastMessageAt,
+          observedAt: observedAt.toISOString(),
+        });
+        recorded += 1;
+      } catch {
+        // The next sweep tries again; nothing else depends on this write.
+      }
+    }
+    return recorded;
+  }
+
   async function performRunOnce(
     signal?: AbortSignal,
   ): Promise<CommunityChannelSyncRunResult> {
@@ -349,6 +444,7 @@ export function createCommunityChannelSyncWorker(
         personaClaimedCount: 0,
         personaConfirmedCount: 0,
         personaDeferredCount: 0,
+        activityObservedCount: 0,
       });
     }
     const abortSignal = signal ?? new AbortController().signal;
@@ -377,6 +473,7 @@ export function createCommunityChannelSyncWorker(
           personaClaimedCount: 0,
           personaConfirmedCount: 0,
           personaDeferredCount: 0,
+          activityObservedCount: 0,
         });
       }
       let outcome: "succeeded" | "retried" | "failed";
@@ -403,6 +500,7 @@ export function createCommunityChannelSyncWorker(
         personaClaimedCount: 0,
         personaConfirmedCount: 0,
         personaDeferredCount: 0,
+        activityObservedCount: 0,
       });
     }
     // Persona lane (Decision 0055): re-project pending personas of members
@@ -428,10 +526,17 @@ export function createCommunityChannelSyncWorker(
           personaClaimedCount: 0,
           personaConfirmedCount: 0,
           personaDeferredCount: 0,
+          activityObservedCount: 0,
         });
       }
       throw new CommunityChannelSyncUnavailableError();
     }
+    // Activity sweep (Decision 0061). It is deliberately last and
+    // deliberately soft: nothing about the membership projection depends on
+    // it, and a provider or database failure here records no observation
+    // and fails no job. An observation that was not made stays absent, and
+    // the discover sort that reads it says so.
+    const activityObservedCount = await observeActivity(abortSignal);
     return Object.freeze({
       kind: "completed" as const,
       claimedCount: jobs.length,
@@ -441,6 +546,7 @@ export function createCommunityChannelSyncWorker(
       personaClaimedCount: personaResult.claimedCount,
       personaConfirmedCount: personaResult.confirmedCount,
       personaDeferredCount: personaResult.deferredCount,
+      activityObservedCount,
     });
   }
 

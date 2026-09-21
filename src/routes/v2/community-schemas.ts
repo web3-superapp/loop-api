@@ -4,6 +4,7 @@ import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { V2ApiError, v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   blockKinds,
+  communityActivityWindowDays,
   communityListLimits,
   communityLogoRefPatternSource,
   communityMembershipFilters,
@@ -470,18 +471,156 @@ export const communityResourceSchema = {
   },
 } as const;
 
+/**
+ * A community's observed channel activity (Decision 0061): the messages the
+ * lane counted in the official Stream channel over `windowDays`, with the
+ * time it observed them. `bounded` says the page it counted from was full,
+ * so the number is a floor. Present only on `sort=activity` rows.
+ */
+export const communityActivitySchema = {
+  anyOf: [
+    unavailableSchema,
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "messageCount",
+        "windowDays",
+        "bounded",
+        "observedAt",
+      ],
+      properties: {
+        status: { type: "string", const: "available" },
+        messageCount: { type: "integer", minimum: 0 },
+        windowDays: { type: "integer", const: communityActivityWindowDays },
+        bounded: { type: "boolean" },
+        observedAt: { type: "string", format: "date-time" },
+      },
+    },
+  ],
+} as const;
+
+/**
+ * A discover row (Decision 0061). It is the community summary plus, on the
+ * two ordering sorts only, the fact the page was ordered by:
+ * `sort=miningPower` attaches `miningPower`, `sort=activity` attaches
+ * `activity`. Neither is emitted by `sort=members` or `sort=newest`.
+ */
+export const communityDiscoverItemSchema = {
+  ...communitySummarySchema,
+  properties: {
+    ...communitySummarySchema.properties,
+    miningPower: miningPowerSchema,
+    activity: communityActivitySchema,
+  },
+} as const;
+
+/**
+ * What the page was ordered by (Decision 0061). `available` names the basis:
+ * `stored` for the two column sorts, `miningSnapshot` for `sort=miningPower`
+ * (the snapshot the ranking comes from, which is the same one every mining
+ * read uses), `channelActivity` for `sort=activity` (the window and the
+ * newest observation in it). `unavailable` means the ordering fact does not
+ * exist: the page is empty, carries no cursor, and no other ordering was
+ * substituted.
+ */
+export const communityOrderingSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "sort", "reasonCode"],
+      properties: {
+        status: { type: "string", const: "unavailable" },
+        sort: { type: "string", enum: [...communitySortValues] },
+        reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "sort", "basis"],
+      properties: {
+        status: { type: "string", const: "available" },
+        sort: { type: "string", enum: [...communitySortValues] },
+        basis: {
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["kind"],
+              properties: { kind: { type: "string", const: "stored" } },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "kind",
+                "snapshotId",
+                "formulaVersion",
+                "computedAt",
+                "scope",
+                "stale",
+              ],
+              properties: {
+                kind: { type: "string", const: "miningSnapshot" },
+                snapshotId: { type: "string", pattern: opaqueIdPatternSource },
+                formulaVersion: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 128,
+                },
+                computedAt: { type: "string", format: "date-time" },
+                scope: miningScopeSchema,
+                stale: { type: "boolean" },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "kind",
+                "windowDays",
+                "observedCommunityCount",
+                "observedAt",
+              ],
+              properties: {
+                kind: { type: "string", const: "channelActivity" },
+                windowDays: {
+                  type: "integer",
+                  const: communityActivityWindowDays,
+                },
+                observedCommunityCount: { type: "integer", minimum: 1 },
+                observedAt: { type: "string", format: "date-time" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  ],
+} as const;
+
 export const communityListResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["items", "nextCursor", "recommendation", "contractVersion"],
+  required: [
+    "items",
+    "nextCursor",
+    "ordering",
+    "recommendation",
+    "contractVersion",
+  ],
   properties: {
     items: {
       type: "array",
       maxItems: communityListLimits.maximum,
-      items: communitySummarySchema,
+      items: communityDiscoverItemSchema,
     },
     nextCursor: nullableCursorSchema,
+    ordering: communityOrderingSchema,
     recommendation: recommendationSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
@@ -996,7 +1135,12 @@ export const communityListQuerySchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    sort: { type: "string", enum: [...communitySortValues] },
+    sort: {
+      type: "string",
+      enum: [...communitySortValues],
+      description:
+        "members and newest order by a stored column and are always available. miningPower orders by the community's power under the latest complete Mining snapshot, activity by the messages the community-channel lane observed in the official channel over the last 7 days (Decision 0061). When that fact does not exist the response is 200 with ordering.status = unavailable, an empty items array and a null cursor; the client shows the unavailable state for that segment and must not treat the empty page as 'no communities'.",
+    },
     verification: { type: "string", enum: [...communityVerificationFilters] },
     membership: {
       type: "string",

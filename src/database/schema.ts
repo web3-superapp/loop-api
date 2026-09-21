@@ -1,4 +1,4 @@
-export const latestMigrationName = "000034_v2_mining_derived_reference_price";
+export const latestMigrationName = "000035_v2_discover_sorts_and_mock_holdings";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -16,6 +16,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.community_channel_members",
   "public.community_channel_sync_jobs",
   "public.community_channel_personas",
+  "public.community_channel_activity",
   "public.voice_rooms",
   "public.voice_room_members",
   "public.voice_room_hand_raises",

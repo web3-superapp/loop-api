@@ -68,8 +68,32 @@ export const communityVerificationStatuses = [
 export type CommunityVerificationStatus =
   (typeof communityVerificationStatuses)[number];
 
-export const communitySortValues = ["members", "newest"] as const;
+/**
+ * Discover orderings (Decision 0061). `members` and `newest` order by a
+ * stored community column. `miningPower` orders by the community's power
+ * under the latest complete Mining snapshot, and `activity` by the messages
+ * the community-channel lane observed in its official channel over the last
+ * seven days. The last two depend on a fact that may not exist yet, so the
+ * response says which ordering it actually applied and, when it could not,
+ * why — it never falls back to another ordering silently.
+ */
+export const communitySortValues = [
+  "members",
+  "newest",
+  "miningPower",
+  "activity",
+] as const;
 export type CommunitySort = (typeof communitySortValues)[number];
+
+/** The window `sort=activity` counts over; also published to the client. */
+export const communityActivityWindowDays = 7;
+
+/**
+ * How old an activity observation may be and still order the discover list.
+ * Past it the row is treated as not observed, so a lane that stopped
+ * running degrades to `unavailable` instead of ordering by stale counts.
+ */
+export const communityActivityObservationMaxAgeSeconds = 6 * 60 * 60;
 export const communityVerificationFilters = ["verified", "all"] as const;
 export type CommunityVerificationFilter =
   (typeof communityVerificationFilters)[number];
@@ -277,6 +301,16 @@ export const communityUnavailableReasonCodes = Object.freeze({
   searchDapps: "DAPP_DIRECTORY_DEFERRED",
   referralEdges: "REFERRAL_GRAPH_DEFERRED",
   inviteCode: "INVITE_CODE_DEFERRED",
+  /**
+   * No community has a fresh `community_channel_activity` observation, so
+   * there is nothing to order `sort=activity` by (Decision 0061). The lane
+   * has not run, has no provisioned channel to read, or Stream refused the
+   * read; in every case the list is empty rather than ordered by a number
+   * nobody measured.
+   */
+  activityNotObserved: "COMMUNITY_ACTIVITY_NOT_OBSERVED",
+  /** One community's channel has no fresh observation while others do. */
+  activityChannelNotObserved: "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED",
 } as const);
 
 export function parseCreateCommunityRequest(

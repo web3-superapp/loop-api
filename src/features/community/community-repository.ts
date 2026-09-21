@@ -36,6 +36,8 @@ export interface CommunityRecord {
   readonly memberCount: number;
   readonly createdAt: string;
   readonly configVersion: string;
+  /** Only set by the two ordering sorts of Decision 0061. */
+  readonly ordering?: CommunityOrderingFacts | undefined;
 }
 
 export interface MembershipRecord {
@@ -68,9 +70,25 @@ export interface CommunityDetailRecord {
 }
 
 export interface CommunityListCursor {
-  /** `memberCount` for `sort=members`, `createdAt` for `sort=newest`. */
+  /**
+   * `memberCount` for `sort=members`, `createdAt` for `sort=newest`, the
+   * community's power for `sort=miningPower` and its seven-day message
+   * count for `sort=activity` — `-1` in the last two for a community that
+   * has no such fact and therefore sorts after every community that does.
+   */
   readonly lastSortValue: string;
   readonly lastCommunityId: string;
+}
+
+/**
+ * The snapshot `sort=miningPower` orders by (Decision 0061). The caller
+ * resolves the Mining baseline; the repository only joins what it is given,
+ * so the discover list can never order by a snapshot the mining reads
+ * consider stale, incomplete, or withdrawn.
+ */
+export interface CommunityMiningOrderingInput {
+  readonly snapshotId: string;
+  readonly configVersion: string;
 }
 
 export interface ListCommunitiesInput {
@@ -80,6 +98,34 @@ export interface ListCommunitiesInput {
   readonly membership: CommunityMembershipFilter;
   readonly limit: number;
   readonly after?: CommunityListCursor | undefined;
+  /** Required for `sort=miningPower`; ignored by every other sort. */
+  readonly miningOrdering?: CommunityMiningOrderingInput | undefined;
+  /** Observations older than this do not order `sort=activity`. */
+  readonly activityMaxAgeSeconds?: number | undefined;
+}
+
+/**
+ * A community's standing on the ordering fact of the sort that produced it
+ * (Decision 0061). Present only on the rows of `sort=miningPower` and
+ * `sort=activity`; every other sort leaves both null, and the service then
+ * publishes no such projection at all.
+ */
+export interface CommunityOrderingFacts {
+  /**
+   * The community's power on its bound asset under the ordering snapshot,
+   * null when it binds no asset or carries no approved weight under the
+   * version. A community without power is listed after every community with
+   * one, never omitted.
+   */
+  readonly miningPower: string | null;
+  readonly miningParticipantCount: number | null;
+  readonly miningWeight: string | null;
+  readonly miningWeightConfigVersion: string | null;
+  readonly miningWeightReviewedAt: string | null;
+  /** Messages observed in the official channel over the activity window. */
+  readonly activityMessageCount: number | null;
+  readonly activityBounded: boolean | null;
+  readonly activityObservedAt: string | null;
 }
 
 export interface CommunityHomeRecord {
@@ -292,10 +338,26 @@ export interface SearchCommunityRecord {
   readonly viewerJoined: boolean;
 }
 
+/**
+ * What the lane has observed about community channels as a whole
+ * (Decision 0061). `observedCommunityCount` counts communities with an
+ * observation no older than the caller's window; `latestObservedAt` is the
+ * newest of those. Zero communities means `sort=activity` has nothing to
+ * order by and is published as unavailable.
+ */
+export interface CommunityActivityObservationRecord {
+  readonly observedCommunityCount: number;
+  readonly latestObservedAt: string | null;
+}
+
 export interface CommunityRepository {
   listCommunities(
     input: ListCommunitiesInput,
   ): Promise<readonly CommunityRecord[]>;
+  /** Whether `sort=activity` has any fresh observation to order by. */
+  getCommunityActivityObservation(input: {
+    readonly maxAgeSeconds: number;
+  }): Promise<CommunityActivityObservationRecord>;
   getCommunityHome(input: {
     readonly viewerUserId: string;
     readonly joinedLimit: number;
@@ -431,6 +493,7 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     Promise.reject(new CommunityRepositoryUnavailableError());
   return Object.freeze({
     listCommunities: unavailable,
+    getCommunityActivityObservation: unavailable,
     getCommunityHome: unavailable,
     getCommunity: unavailable,
     createCommunity: unavailable,

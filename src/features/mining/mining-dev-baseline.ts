@@ -33,8 +33,17 @@ import {
  * development_baseline` so a product path can refuse it by inspection.
  */
 
+/**
+ * r4 (Decision 0061): the registry gained the real BSC tokens the seeded
+ * communities bind, and a version's `assetWeights` are fixed when it is
+ * written — an asset registered after a version exists is not weighted by
+ * it and every holding of it is a policy exclusion. The revision is
+ * therefore not cosmetic: it is how the new assets enter the formula.
+ * Community weights are recorded per version, so every community weight is
+ * re-approved under r4 (`pnpm mining:community-weight … --confirm`).
+ */
 export const miningDevBaselineConfigVersion =
-  "miningFormula-devBaseline-2026-09-15-r3" as const;
+  "miningFormula-devBaseline-2026-09-21-r4" as const;
 
 /** Every registered, non-blocked asset weighs exactly one. */
 export const miningDevBaselineAssetWeight = "1" as const;

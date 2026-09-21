@@ -82,6 +82,7 @@ function repositoryFake(
           rawValue: "4000000000000000000",
           blockNumber: "500",
           blockHash: hash,
+          source: "chain" as const,
         },
       ]),
     ),
@@ -109,6 +110,7 @@ function repositoryFake(
         totalPower: input.totalPower,
         accountCount: 1,
         computedAt: "2026-09-08T00:05:00.000Z",
+        holdingsSource: input.holdingsSource,
       }),
     ),
     writeIncompleteSnapshot: vi.fn(
@@ -221,6 +223,7 @@ describe("mining-snapshot lane", () => {
     const result = await worker.runOnce();
     expect(result).toEqual({
       kind: "idle",
+      holdingsSource: null,
       reasonCode: "MINING_FORMULA_BASELINE_PENDING",
       snapshotId: null,
       powerRowCount: 0,
@@ -279,6 +282,7 @@ describe("mining-snapshot lane", () => {
             rawValue: "1000000000000000000",
             blockNumber: "500",
             blockHash: hash,
+            source: "chain" as const,
           },
         ]),
       ),
@@ -329,6 +333,7 @@ describe("mining-snapshot lane", () => {
       const result = await worker.runOnce();
       expect(result).toEqual({
         kind: "incomplete",
+        holdingsSource: null,
         reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
         snapshotId: "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
         powerRowCount: 0,
@@ -397,6 +402,7 @@ describe("mining-snapshot lane", () => {
             rawValue: "0",
             blockNumber: "500",
             blockHash: hash,
+            source: "chain" as const,
           },
         ]),
       ),
@@ -770,5 +776,55 @@ describe("mining-snapshot lane", () => {
       consecutiveFailureCount: 1,
       retryDelayMs: 1_000,
     });
+  });
+
+  it("excludes the Development seed's holdings unless the lane was told to include them (Decision 0061)", async () => {
+    const repository = repositoryFake({
+      getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+    });
+    const worker = createMiningSnapshotWorker({
+      repository,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: priceReader("fresh"),
+    });
+    await worker.runOnce();
+    expect(calls(repository, "listBalanceInputs")).toHaveBeenCalledWith({
+      includeMockSeedHoldings: false,
+    });
+
+    const opted = repositoryFake({
+      getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+      listBalanceInputs: vi.fn(() =>
+        Promise.resolve([
+          {
+            ownerUserId: alice,
+            walletId: "d64786bb-408d-415d-8a69-6277d56c921b",
+            assetId: loopAssetId,
+            decimals: 18,
+            rawValue: "4000000000000000000",
+            blockNumber: "500",
+            blockHash: hash,
+            source: "mock_seed" as const,
+          },
+        ]),
+      ),
+    });
+    const optedWorker = createMiningSnapshotWorker({
+      repository: opted,
+      registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+      prices: priceReader("fresh"),
+      includeMockSeedHoldings: true,
+    });
+    const result = await optedWorker.runOnce();
+    expect(calls(opted, "listBalanceInputs")).toHaveBeenCalledWith({
+      includeMockSeedHoldings: true,
+    });
+    expect(result).toMatchObject({
+      kind: "snapshotted",
+      holdingsSource: "mock_seed",
+    });
+    expect(calls(opted, "writeSnapshot")).toHaveBeenCalledWith(
+      expect.objectContaining({ holdingsSource: "mock_seed" }),
+    );
   });
 });

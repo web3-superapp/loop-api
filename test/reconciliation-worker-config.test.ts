@@ -65,6 +65,7 @@ describe("loadReconciliationWorkerConfig", () => {
       alertEvaluator: null,
       walletIntentReconcile: null,
       miningSnapshotEnabled: false,
+      miningMockHoldingsEnabled: false,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });
@@ -255,5 +256,19 @@ describe("loadReconciliationWorkerConfig", () => {
     expect(() => loadReconciliationWorkerConfig(shared)).toThrow(
       ConfigurationError,
     );
+  });
+
+  it("keeps the Development mock holdings off by default and refuses them in production (Decision 0061)", () => {
+    const environment = validEnvironment();
+    environment["MINING_MOCK_HOLDINGS_ENABLED"] = "true";
+    environment["NODE_ENV"] = "development";
+    expect(
+      loadReconciliationWorkerConfig(environment).miningMockHoldingsEnabled,
+    ).toBe(true);
+
+    const production = validEnvironment();
+    production["NODE_ENV"] = "production";
+    production["MINING_MOCK_HOLDINGS_ENABLED"] = "true";
+    expect(() => loadReconciliationWorkerConfig(production)).toThrow();
   });
 });

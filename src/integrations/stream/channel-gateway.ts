@@ -599,6 +599,33 @@ export type StreamCommunityChannelPresenceResult =
       memberBound: number;
     }>;
 
+export interface ReadStreamCommunityChannelActivityInput {
+  /** Community channel IDs to observe in one query; at most the batch size. */
+  readonly channelIds: readonly string[];
+  /** Start of the window; messages at or after it are counted. */
+  readonly since: Date;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * One channel's activity as a server may observe it (Decision 0061).
+ *
+ * Stream publishes no "messages in the last seven days" number, so the
+ * window is counted from the newest messages `queryChannels` returns for
+ * the channel. `bounded` is true when that page came back full and its
+ * oldest message is still inside the window: more messages exist than were
+ * counted, so `messageCount` is a floor and is published as one.
+ * `totalMessageCount` is Stream's own lifetime count when it publishes one,
+ * kept for operators and never used for ordering.
+ */
+export interface StreamCommunityChannelActivity {
+  readonly channelId: string;
+  readonly messageCount: number;
+  readonly bounded: boolean;
+  readonly totalMessageCount: number | null;
+  readonly lastMessageAt: string | null;
+}
+
 export interface StreamCommunityChannelGateway {
   upsertCommunityChannel(
     input: UpsertStreamCommunityChannelInput,
@@ -621,6 +648,15 @@ export interface StreamCommunityChannelGateway {
   readCommunityChannelPresence(
     input: ReadStreamCommunityChannelPresenceInput,
   ): Promise<StreamCommunityChannelPresenceResult>;
+  /**
+   * Observes the recent message activity of several community channels in
+   * one `queryChannels` call (Decision 0061). A channel Stream does not
+   * return is simply absent from the result: nothing is assumed about a
+   * channel that was not observed.
+   */
+  readCommunityChannelActivity(
+    input: ReadStreamCommunityChannelActivityInput,
+  ): Promise<readonly StreamCommunityChannelActivity[]>;
 }
 
 const maximumCommunityChannelMemberBatch = 100;
@@ -1034,6 +1070,108 @@ function reduceMemberPage(value: unknown): {
   return { pageSize: (value["members"] as unknown[]).length, online };
 }
 
+/**
+ * Channels one activity sweep reads in a single `queryChannels` call, and
+ * the messages it asks for per channel. The message page is the whole
+ * evidence for the window count: when it comes back full and still starts
+ * inside the window, the count is published as a floor (`bounded`).
+ */
+export const communityActivityChannelBatch = 25;
+export const communityActivityMessagePage = 100;
+
+function parseActivityInput(
+  value: unknown,
+): ReadStreamCommunityChannelActivityInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["channelIds", "since", "signal"]) ||
+    !Array.isArray(value["channelIds"]) ||
+    value["channelIds"].length === 0 ||
+    value["channelIds"].length > communityActivityChannelBatch ||
+    !(value["channelIds"] as unknown[]).every(isCommunityChannelId) ||
+    !(value["since"] instanceof Date) ||
+    Number.isNaN(value["since"].getTime()) ||
+    !(value["signal"] instanceof AbortSignal)
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelIds: Object.freeze([...(value["channelIds"] as string[])]),
+    since: value["since"],
+    signal: value["signal"],
+  });
+}
+
+function readDateValue(value: unknown): string | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+  }
+  return null;
+}
+
+/**
+ * One channel of the `queryChannels` answer, reduced to the activity
+ * observation. A channel whose `messages` is not an array, or whose channel
+ * object carries no usable `id`, is a projection mismatch: the lane records
+ * nothing rather than a count it cannot justify. A message without a
+ * readable `created_at` is not counted — it is evidence of nothing.
+ */
+function reduceActivityChannel(
+  value: unknown,
+  since: Date,
+  requested: readonly string[],
+): StreamCommunityChannelActivity | null {
+  if (!isRecord(value) || !Array.isArray(value["messages"])) {
+    return projectionMismatch();
+  }
+  const channel = value["channel"];
+  if (!isRecord(channel) || typeof channel["id"] !== "string") {
+    return projectionMismatch();
+  }
+  const channelId = channel["id"];
+  if (!requested.includes(channelId)) {
+    return null;
+  }
+  const messages = value["messages"] as unknown[];
+  let messageCount = 0;
+  let oldest: number | null = null;
+  for (const message of messages) {
+    const createdAt = isRecord(message)
+      ? readDateValue(message["created_at"])
+      : null;
+    if (createdAt === null) {
+      continue;
+    }
+    const time = Date.parse(createdAt);
+    oldest = oldest === null || time < oldest ? time : oldest;
+    if (time >= since.getTime()) {
+      messageCount += 1;
+    }
+  }
+  const totalMessageCount =
+    typeof channel["message_count"] === "number" &&
+    Number.isInteger(channel["message_count"]) &&
+    channel["message_count"] >= 0
+      ? channel["message_count"]
+      : null;
+  return Object.freeze({
+    channelId,
+    messageCount,
+    // A full page whose oldest message is still inside the window means the
+    // window is not covered: the count is a floor.
+    bounded:
+      messages.length >= communityActivityMessagePage &&
+      oldest !== null &&
+      oldest >= since.getTime(),
+    totalMessageCount,
+    lastMessageAt: readDateValue(channel["last_message_at"]),
+  });
+}
+
 export function createUnavailableStreamCommunityChannelGateway(): StreamCommunityChannelGateway {
   return Object.freeze({
     upsertCommunityChannel: unavailablePromise,
@@ -1041,6 +1179,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     removeMembers: unavailablePromise,
     projectMemberPersona: unavailablePromise,
     readCommunityChannelPresence: unavailablePromise,
+    readCommunityChannelActivity: unavailablePromise,
   });
 }
 
@@ -1243,6 +1382,51 @@ export function createStreamCommunityChannelGateway(
           channelId: input.channelId,
           memberBound: communityPresenceMemberBound,
         });
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async readCommunityChannelActivity(
+      rawInput: ReadStreamCommunityChannelActivityInput,
+    ): Promise<readonly StreamCommunityChannelActivity[]> {
+      const input = parseActivityInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        // Read-only: the query neither creates a channel nor joins one. The
+        // message page is what the window count is measured from; Stream
+        // publishes no per-window count of its own.
+        const response = await client.chat.queryChannels({
+          filter_conditions: {
+            type: streamChannelType,
+            id: { $in: [...input.channelIds] },
+          },
+          sort: [{ field: "last_message_at", direction: -1 }],
+          limit: input.channelIds.length,
+          message_limit: communityActivityMessagePage,
+          member_limit: 0,
+          state: true,
+        });
+        input.signal.throwIfAborted();
+        const channels: unknown = isRecord(response)
+          ? response["channels"]
+          : undefined;
+        if (!Array.isArray(channels)) {
+          return projectionMismatch();
+        }
+        return Object.freeze(
+          (channels as unknown[]).flatMap((channel) => {
+            const reduced = reduceActivityChannel(
+              channel,
+              input.since,
+              input.channelIds,
+            );
+            return reduced === null ? [] : [reduced];
+          }),
+        );
       } catch (error) {
         if (error instanceof StreamChannelProjectionMismatchError) {
           throw error;

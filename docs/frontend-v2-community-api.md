@@ -186,23 +186,126 @@ Privy ID、Stream ID**：
 
 ### 4.2 `GET /v2/communities` — `community-discover` 页
 
-| query          | 取值                  | 默认       |
-| -------------- | --------------------- | ---------- |
-| `sort`         | `members` \| `newest` | `members`  |
-| `verification` | `verified` \| `all`   | `verified` |
-| `membership`   | `all` \| `joined`     | `all`      |
-| `limit`        | 1–50                  | 20         |
-| `cursor`       | 上一页 `nextCursor`   | —          |
+| query          | 取值                                                 | 默认       |
+| -------------- | ---------------------------------------------------- | ---------- |
+| `sort`         | `members` \| `newest` \| `miningPower` \| `activity` | `members`  |
+| `verification` | `verified` \| `all`                                  | `verified` |
+| `membership`   | `all` \| `joined`                                    | `all`      |
+| `limit`        | 1–50                                                 | 20         |
+| `cursor`       | 上一页 `nextCursor`                                  | —          |
 
-四个 seg 只有"成员最多"（`sort=members`）与"新社区"（`sort=newest`）可用；
-"算力最高""增长最快""讨论最多"没有后端，seg 置灰并解释原因（D19/D7）。
+四个 seg 现在有四个排序（决策 0061）：「成员最多」`members`、「新社区」`newest`、
+「算力最高」`miningPower`、「讨论最多」`activity`。**没有「增长最快」**——没有任何
+可观测来源，不要加这个 seg。
 `verification=all` 额外包含调用者自己创建或已加入的非 verified 社区；
 `membership=joined` 把结果收窄到调用者自己的社区，供 `community` 首页
 "查看全部已加入"使用。
 
-响应 `{ items[], nextCursor, recommendation, contractVersion }`。
+响应 `{ items[], nextCursor, ordering, recommendation, contractVersion }`。
 `recommendation.ruleVersion` 固定 `rule:verified-members-v1`，前端如展示"推荐
 依据"必须引用它，不得自称算法推荐。
+
+#### `ordering`：这一页到底按什么排的（**新增必读字段**）
+
+```jsonc
+// members / newest
+{ "status": "available", "sort": "members", "basis": { "kind": "stored" } }
+
+// miningPower：排序依据是哪一份快照
+{ "status": "available", "sort": "miningPower",
+  "basis": { "kind": "miningSnapshot", "snapshotId": "…",
+             "formulaVersion": "miningFormula-devBaseline-2026-09-21-r4",
+             "computedAt": "2026-09-21T09:00:00.000Z",
+             "scope": "development_baseline", "stale": false } }
+
+// activity：窗口 + 最新一次观测时间 + 有观测的社区数
+{ "status": "available", "sort": "activity",
+  "basis": { "kind": "channelActivity", "windowDays": 7,
+             "observedCommunityCount": 26,
+             "observedAt": "2026-09-21T09:15:00.000Z" } }
+
+// 排序依据不存在：200，但 items 为空、没有游标
+{ "items": [], "nextCursor": null,
+  "ordering": { "status": "unavailable", "sort": "activity",
+                "reasonCode": "COMMUNITY_ACTIVITY_NOT_OBSERVED" } }
+```
+
+**`items: []` 不等于「没有社区」。** 先读 `ordering.status`：`unavailable` 时渲染
+该 seg 的 unavailable 态（可引导切回「成员最多」），**不要**渲染空列表文案。
+`reasonCode` 取值：
+
+| `reasonCode`                      | 含义                                         |
+| --------------------------------- | -------------------------------------------- |
+| `COMMUNITY_ACTIVITY_NOT_OBSERVED` | 没有任何社区有新鲜的频道活跃度观测           |
+| `MINING_FORMULA_BASELINE_PENDING` | 没有生效中的挖矿公式版本                     |
+| `MINING_SNAPSHOT_NOT_AVAILABLE`   | 该版本下还没有完整快照                       |
+| `MINING_SNAPSHOT_INCOMPLETE`      | 最新一次快照没能给所有持仓定价，什么都没发布 |
+| `MINING_SNAPSHOT_STALE`           | 最新完整快照属于另一个版本                   |
+| `MINING_RUNTIME_UNAVAILABLE`      | 挖矿读路径本身不可用                         |
+
+`basis.stale === true`（miningPower）表示排序用的是上一份完整快照，更新的那次
+运行没完成——和挖矿页的 `snapshot.stale` 同一个意思，文案要一致。
+
+#### 排序字段回带到每一条 item（**新增可选字段**）
+
+`sort=miningPower` 时每条 item 多一个 `miningPower`，形状与
+`GET /v2/communities/{id}.miningPower` 完全一致（`subject: "community"`，带
+`weight`/`participants`/`stale`/`scope`）：
+
+```jsonc
+{
+  "communityId": "…",
+  "name": "…",
+  "memberCount": 311,
+  "miningPower": {
+    "status": "available",
+    "subject": "community",
+    "power": "230.5",
+    "snapshotId": "…",
+    "formulaVersion": "…",
+    "computedAt": "…",
+    "scope": "development_baseline",
+    "stale": false,
+    "weight": {
+      "status": "approved",
+      "value": "1.5",
+      "configVersion": "…",
+      "reviewedAt": "…",
+    },
+    "participants": { "status": "available", "count": 2 },
+  },
+}
+```
+
+没有获批权重的社区**仍然在列表里**（排在所有有算力的社区之后），
+`miningPower` 是 `{ "status": "unavailable", "reasonCode": "COMMUNITY_ASSET_NOT_BOUND" }`
+或 `COMMUNITY_WEIGHT_PENDING_REVIEW`。`power: "0"` 是「观测到的零」，
+和「不可用」是两件事，不要渲染成同一个样子。
+
+`sort=activity` 时每条 item 多一个 `activity`：
+
+```jsonc
+{
+  "activity": {
+    "status": "available",
+    "messageCount": 41,
+    "windowDays": 7,
+    "bounded": false,
+    "observedAt": "2026-09-21T09:15:00.000Z",
+  },
+}
+```
+
+`bounded: true` 表示这一页消息被读满了、窗口没读完，`messageCount` 是**下界**，
+文案必须写成「≥ N 条」之类，不能写成精确值。没有新鲜观测的社区是
+`{ "status": "unavailable", "reasonCode": "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED" }`。
+
+`sort=members` / `sort=newest` 的 item **不带**这两个字段（不是 null，是不存在）。
+
+#### 游标
+
+游标绑定排序：在 `sort=activity` 下拿到的 `nextCursor` 用到 `sort=members` 上会
+`400 INVALID_REQUEST`。切 seg 必须重新从第一页拉。`limit` 与 `cursor` 互斥。
 
 ### 4.3 `POST /v2/communities` — 申请社区
 

@@ -34,6 +34,7 @@ import {
   type CommunityChannelPersonaRepository,
   type CommunityChannelSyncJobRecord,
   type CommunityChannelSyncRepository,
+  type RecordCommunityChannelActivityInput,
   type ChatGroupLeavePreparation,
   type CommunityChannelViewerRecord,
   type CreateVoiceRoomInput,
@@ -2174,6 +2175,110 @@ export function createPostgresCommunityChannelSyncRepository(
       } finally {
         client.release();
       }
+    },
+
+    /**
+     * Provisioned channels whose activity observation is missing or stale
+     * (Decision 0061), oldest observation first so every community is
+     * reached in turn. A community without a provisioned channel is not
+     * due: there is nothing to read.
+     */
+    async listChannelsDueForActivity(input: {
+      readonly staleAfterSeconds: number;
+      readonly limit: number;
+    }) {
+      const staleAfterSeconds = z
+        .number()
+        .int()
+        .min(1)
+        .max(604_800)
+        .parse(input.staleAfterSeconds);
+      const limit = limitSchema.parse(input.limit);
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select channel.community_id, channel.stream_channel_id
+          from public.community_channels as channel
+          left join public.community_channel_activity as activity
+            on activity.community_id = channel.community_id
+          where channel.provisioned_at is not null
+            and (
+              activity.observed_at is null
+              or activity.observed_at
+                <= clock_timestamp()
+                  - make_interval(secs => $1::double precision)
+            )
+          order by activity.observed_at asc nulls first,
+            channel.community_id asc
+          limit $2
+        `,
+        values: [staleAfterSeconds, limit],
+      });
+      return Object.freeze(
+        result.rows.map((row) =>
+          Object.freeze({
+            communityId: opaqueIdSchema.parse(row["community_id"]),
+            streamChannelId: z
+              .string()
+              .regex(/^loop_community_[0-9a-f]{32}$/)
+              .parse(row["stream_channel_id"]),
+          }),
+        ),
+      );
+    },
+
+    /**
+     * Replaces the community's observation. One row per community: an
+     * activity number is a current fact, not a history, and the window it
+     * was counted over travels with it.
+     */
+    async recordChannelActivity(
+      input: RecordCommunityChannelActivityInput,
+    ): Promise<void> {
+      const communityId = opaqueIdSchema.parse(input.communityId);
+      const streamChannelId = z
+        .string()
+        .regex(/^loop_community_[0-9a-f]{32}$/)
+        .parse(input.streamChannelId);
+      const windowDays = z.literal(7).parse(input.windowDays);
+      const messageCount = z.number().int().min(0).parse(input.messageCount);
+      const totalMessageCount =
+        input.totalMessageCount === null
+          ? null
+          : z.number().int().min(0).parse(input.totalMessageCount);
+      const observedAt = z.string().datetime().parse(input.observedAt);
+      const lastMessageAt =
+        input.lastMessageAt === null
+          ? null
+          : z.string().datetime().parse(input.lastMessageAt);
+      await pool.query({
+        text: `
+          insert into public.community_channel_activity (
+            community_id, stream_channel_id, window_days,
+            recent_message_count, recent_count_bounded, total_message_count,
+            last_message_at, observed_at
+          )
+          values ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8::timestamptz)
+          on conflict (community_id) do update set
+            stream_channel_id = excluded.stream_channel_id,
+            window_days = excluded.window_days,
+            recent_message_count = excluded.recent_message_count,
+            recent_count_bounded = excluded.recent_count_bounded,
+            total_message_count = excluded.total_message_count,
+            last_message_at = excluded.last_message_at,
+            observed_at = excluded.observed_at,
+            updated_at = clock_timestamp()
+        `,
+        values: [
+          communityId,
+          streamChannelId,
+          windowDays,
+          messageCount,
+          input.bounded,
+          totalMessageCount,
+          lastMessageAt,
+          observedAt,
+        ],
+      });
     },
   });
 }

@@ -7,6 +7,7 @@ import {
   isCommunityWeightWithinRange,
   miningFormulaDocumentSchema,
   miningFormulaStatuses,
+  miningHoldingsSources,
   miningPriceGuardRulesSchema,
   miningReferencePriceQualities,
   miningSnapshotStatuses,
@@ -14,6 +15,7 @@ import {
   miningWeightRangeDocumentSchema,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
+  walletBalanceSources,
 } from "../features/mining/mining-contract.js";
 import {
   MiningCommunityAssetNotBoundError,
@@ -114,6 +116,7 @@ const snapshotRowSchema = z
     total_power: decimalSchema,
     account_count: z.number().int().min(0),
     computed_at: dateSchema,
+    holdings_source: z.enum(miningHoldingsSources),
   })
   .strict();
 
@@ -224,6 +227,7 @@ const balanceRowSchema = z
     raw_value: z.string().regex(/^(0|[1-9][0-9]{0,77})$/),
     block_number: blockNumberSchema,
     block_hash: blockHashSchema,
+    source: z.enum(walletBalanceSources),
   })
   .strict();
 
@@ -257,6 +261,7 @@ function mapSnapshot(raw: unknown): MiningSnapshotRecord {
     totalPower: row.total_power,
     accountCount: row.account_count,
     computedAt: toIsoString(row.computed_at),
+    holdingsSource: row.holdings_source,
   });
 }
 
@@ -574,7 +579,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
           text: `
             select
               snapshot_id, block_number::text as block_number, block_hash,
-              formula_version, price_version, total_power, account_count, computed_at
+              formula_version, price_version, total_power, account_count,
+              computed_at, holdings_source
             from public.mining_snapshots
             where status = 'complete'
             order by computed_at desc, snapshot_id desc
@@ -761,12 +767,14 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             text: `
               insert into public.mining_snapshots (
                 snapshot_id, block_number, block_hash, formula_version,
-                price_version, total_power, account_count, status
+                price_version, total_power, account_count, status,
+                holdings_source
               )
-              values ($1, $2, $3, $4, $5, $6, $7, 'complete')
+              values ($1, $2, $3, $4, $5, $6, $7, 'complete', $8)
               returning
                 snapshot_id, block_number::text as block_number, block_hash,
-                formula_version, price_version, total_power, account_count, computed_at
+                formula_version, price_version, total_power, account_count,
+                computed_at, holdings_source
             `,
             values: [
               snapshotId,
@@ -776,6 +784,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               priceVersion,
               totalPower,
               accounts.size,
+              z.enum(miningHoldingsSources).parse(rawInput.holdingsSource),
             ],
           });
           for (const power of rawInput.powers) {
@@ -1215,8 +1224,16 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       }
     },
 
-    async listBalanceInputs() {
+    async listBalanceInputs(rawInput: {
+      readonly includeMockSeedHoldings: boolean;
+    }) {
       try {
+        const includeMockSeedHoldings = z
+          .boolean()
+          .parse(rawInput.includeMockSeedHoldings);
+        // The seeded holdings of Decision 0061 are a separate class of row,
+        // not a different value of the same one: unless the lane was told to
+        // include them the query cannot see them at all.
         const result = await pool.query({
           text: `
             select distinct on (s.wallet_id, s.asset_id)
@@ -1226,13 +1243,16 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               a.decimals,
               s.raw_value::text as raw_value,
               s.block_number::text as block_number,
-              s.block_hash
+              s.block_hash,
+              s.source
             from public.wallet_balance_snapshots as s
             join public.account_wallets as w on w.wallet_id = s.wallet_id
             join public.assets as a on a.asset_id = s.asset_id
             where w.status = 'active' and a.status <> 'blocked'
+              and ($1::boolean is true or s.source = 'chain')
             order by s.wallet_id, s.asset_id, s.block_number desc
           `,
+          values: [includeMockSeedHoldings],
         });
         return Object.freeze(
           result.rows.map((raw): MiningBalanceInput => {
@@ -1245,6 +1265,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               rawValue: row.raw_value,
               blockNumber: row.block_number,
               blockHash: row.block_hash,
+              source: row.source,
             });
           }),
         );

@@ -482,6 +482,7 @@ describe("LOOP API V2 mining module", () => {
       totalPower: "4000",
       accountCount: 3,
       computedAt: "2026-09-15T13:30:00.000Z",
+      holdingsSource: "chain",
     };
     const other = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
 
@@ -628,7 +629,7 @@ describe("LOOP API V2 mining module", () => {
           budget: "1000000",
           unitKey: "mining.rules.dailyOutput.unit.loopTokenPending",
           budgetStatus: "development_placeholder",
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          formulaVersion: documents.configVersion,
           scope: "development_baseline",
         },
         accumulated: {
@@ -647,7 +648,7 @@ describe("LOOP API V2 mining module", () => {
         },
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -655,9 +656,11 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          formulaVersion: documents.configVersion,
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
+          // Decision 0061: every balance behind it was observed on chain.
+          holdingsSource: "chain",
           // Decision 0057: the snapshot itself is the newest run.
           stale: false,
           latestAttempt: {
@@ -823,9 +826,10 @@ describe("LOOP API V2 mining module", () => {
           snapshotId,
           blockNumber: "122037728",
           blockHash: `0x${"c".repeat(64)}`,
-          formulaVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          formulaVersion: documents.configVersion,
           priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
           computedAt: "2026-09-15T13:30:00.000Z",
+          holdingsSource: "chain",
           stale: false,
           latestAttempt: {
             snapshotId,
@@ -841,7 +845,7 @@ describe("LOOP API V2 mining module", () => {
         },
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -970,7 +974,7 @@ describe("LOOP API V2 mining module", () => {
         // development-baseline label from one field (Decision 0046).
         formula: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
@@ -1149,7 +1153,7 @@ describe("LOOP API V2 mining module", () => {
         weight: {
           status: "approved",
           value: "0.5",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           reviewedAt: approvedAt,
         },
         communityPower: { status: "available", value: "230" },
@@ -1517,9 +1521,7 @@ describe("LOOP API V2 mining module", () => {
         // The pages that carry `formula`/`baseline` still name the version
         // in force (rewards has no such block and is out of scope).
         if (!url.endsWith("/rewards")) {
-          expect(response.body, url).toContain(
-            "miningFormula-devBaseline-2026-09-15-r3",
-          );
+          expect(response.body, url).toContain(documents.configVersion);
         }
       }
     });
@@ -1534,7 +1536,7 @@ describe("LOOP API V2 mining module", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         approved: {
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           status: "approved",
           scope: "development_baseline",
           assetWeights: {
@@ -1556,7 +1558,7 @@ describe("LOOP API V2 mining module", () => {
         pendingApproval: [{ configVersion: "miningFormulaV1-draft" }],
         baseline: {
           status: "approved",
-          configVersion: "miningFormula-devBaseline-2026-09-15-r3",
+          configVersion: documents.configVersion,
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },

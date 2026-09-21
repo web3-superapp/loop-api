@@ -1,7 +1,9 @@
 import type { Pool, PoolClient, QueryResult } from "pg";
 import { z } from "zod";
 
+import { normalizeDecimalString } from "../features/market/market-contract.js";
 import {
+  communityActivityObservationMaxAgeSeconds,
   communityCommandDigestVersion,
   communityCommandIdempotencyScope,
   communityConfigVersion,
@@ -43,6 +45,7 @@ import {
   type CommunityMemberPageRecord,
   type CommunityMemberRecord,
   type CommunityMembershipCommandInput,
+  type CommunityOrderingFacts,
   type CommunityRecord,
   type CommunityRepository,
   type ConnectionCountsRecord,
@@ -192,6 +195,111 @@ function toCommunityRecord(value: unknown): CommunityRecord {
     memberCount: row.member_count,
     createdAt: row.created_at.toISOString(),
     configVersion: row.config_version,
+  });
+}
+
+const miningOrderingRowSchema = z
+  .object({
+    mining_power: z.string().regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/),
+    mining_participant_count: z.number().int().min(0).nullable(),
+    mining_weight: z.string().min(1).nullable(),
+    mining_weight_config_version: z.string().min(1).nullable(),
+    mining_weight_reviewed_at: dateSchema.nullable(),
+  })
+  .strict();
+
+const activityOrderingRowSchema = z
+  .object({
+    activity_message_count: z
+      .string()
+      .regex(/^(0|[1-9][0-9]*)$/)
+      .nullable(),
+    activity_bounded: z.boolean().nullable(),
+    activity_observed_at: dateSchema.nullable(),
+  })
+  .strict();
+
+const emptyOrderingFacts: CommunityOrderingFacts = Object.freeze({
+  miningPower: null,
+  miningParticipantCount: null,
+  miningWeight: null,
+  miningWeightConfigVersion: null,
+  miningWeightReviewedAt: null,
+  activityMessageCount: null,
+  activityBounded: null,
+  activityObservedAt: null,
+});
+
+/**
+ * A discover row of an ordering sort (Decision 0061): the community itself
+ * plus the fact it was ordered by. A community the ordering fact does not
+ * cover keeps a null fact rather than a zero — "no approved weight" and "no
+ * observation" are not the number nought.
+ */
+function toOrderedCommunityRecord(
+  value: unknown,
+  sort: "activity" | "miningPower",
+): CommunityRecord {
+  const row = value as Record<string, unknown>;
+  const community = toCommunityRecord({
+    community_id: row["community_id"],
+    name: row["name"],
+    slug: row["slug"],
+    description: row["description"],
+    logo_ref: row["logo_ref"],
+    verification_status: row["verification_status"],
+    bound_asset_key: row["bound_asset_key"],
+    member_count: row["member_count"],
+    config_version: row["config_version"],
+    created_at: row["created_at"],
+  });
+  if (sort === "miningPower") {
+    const ordering = miningOrderingRowSchema.parse({
+      mining_power: row["mining_power"],
+      mining_participant_count: row["mining_participant_count"],
+      mining_weight: row["mining_weight"],
+      mining_weight_config_version: row["mining_weight_config_version"],
+      mining_weight_reviewed_at: row["mining_weight_reviewed_at"],
+    });
+    const weighted = ordering.mining_weight !== null;
+    return Object.freeze({
+      ...community,
+      ordering: Object.freeze({
+        ...emptyOrderingFacts,
+        miningPower: weighted
+          ? normalizeDecimalString(ordering.mining_power)
+          : null,
+        miningParticipantCount: weighted
+          ? (ordering.mining_participant_count ?? 0)
+          : null,
+        miningWeight: ordering.mining_weight,
+        miningWeightConfigVersion: ordering.mining_weight_config_version,
+        miningWeightReviewedAt:
+          ordering.mining_weight_reviewed_at === null
+            ? null
+            : ordering.mining_weight_reviewed_at.toISOString(),
+      }),
+    });
+  }
+  const ordering = activityOrderingRowSchema.parse({
+    activity_message_count: row["activity_message_count"],
+    activity_bounded: row["activity_bounded"],
+    activity_observed_at: row["activity_observed_at"],
+  });
+  return Object.freeze({
+    ...community,
+    ordering: Object.freeze({
+      ...emptyOrderingFacts,
+      activityMessageCount:
+        ordering.activity_message_count === null
+          ? null
+          : Number(ordering.activity_message_count),
+      activityBounded: ordering.activity_bounded,
+      activityObservedAt:
+        ordering.activity_observed_at === null
+          ? null
+          : ordering.activity_observed_at.toISOString(),
+    }),
   });
 }
 
@@ -969,6 +1077,15 @@ export function createPostgresCommunityRepository(
   const communityChannelMemberCap =
     options.communityChannelMemberCap ?? defaultCommunityChannelMemberCap;
 
+  /**
+   * Discover ordering (Decision 0061). `members` and `newest` order by a
+   * stored column; `miningPower` joins the caller's snapshot and orders by
+   * the community's power on its bound asset; `activity` joins the last
+   * observation of its official channel and orders by the messages of the
+   * window. A community that has no such fact is not hidden: it sorts after
+   * every community that does, on the sentinel `-1`, and carries a null
+   * ordering fact the service publishes as unavailable.
+   */
   async function listCommunitiesQuery(
     client: DatabaseClient,
     input: ListCommunitiesInput,
@@ -982,6 +1099,28 @@ export function createPostgresCommunityRepository(
       after?.lastCommunityId ?? null,
       input.membership,
     ];
+    if (input.sort === "miningPower") {
+      const ordering = input.miningOrdering;
+      if (ordering === undefined) {
+        // The caller resolves the baseline; without one there is no
+        // ordering to apply and the list must not silently fall back.
+        throw new CommunityRepositoryUnavailableError();
+      }
+      values.push(ordering.snapshotId, ordering.configVersion);
+    }
+    if (input.sort === "activity") {
+      values.push(
+        z
+          .number()
+          .int()
+          .min(1)
+          .max(604_800)
+          .parse(
+            input.activityMaxAgeSeconds ??
+              communityActivityObservationMaxAgeSeconds,
+          ),
+      );
+    }
     // The keyset bounds are always referenced (null before the first cursor)
     // so PostgreSQL can infer every parameter type in both branches.
     const keyset =
@@ -992,20 +1131,92 @@ export function createPostgresCommunityRepository(
             or (community.member_count = $4::integer
               and community.community_id > $5::uuid)
           )`
-        : `and (
+        : input.sort === "newest"
+          ? `and (
             $4::text is null
             or community.created_at < $4::timestamptz
             or (community.created_at = $4::timestamptz
               and community.community_id < $5::uuid)
+          )`
+          : input.sort === "miningPower"
+            ? `and (
+            $4::text is null
+            or coalesce(ordering.mining_power, -1) < $4::numeric
+            or (coalesce(ordering.mining_power, -1) = $4::numeric
+              and community.community_id > $5::uuid)
+          )`
+            : `and (
+            $4::text is null
+            or coalesce(activity.recent_message_count, -1) < $4::numeric
+            or (coalesce(activity.recent_message_count, -1) = $4::numeric
+              and community.community_id > $5::uuid)
           )`;
+    const orderingJoin =
+      input.sort === "miningPower"
+        ? `left join lateral (
+            select
+              -- A weighted community with no member power is a zero, not an
+              -- absence: it must order as 0 and project as "0", the same
+              -- number the cursor carries. Only a community without an
+              -- approved weight has no row here at all.
+              coalesce(sum(power.power::numeric), 0) as mining_power,
+              count(power.owner_user_id)
+                filter (where power.power::numeric > 0)::int
+                as mining_participant_count,
+              weight.weight::text as mining_weight,
+              weight.config_version as mining_weight_config_version,
+              weight.reviewed_at as mining_weight_reviewed_at
+            from public.community_mining_weights as weight
+            left join public.community_memberships as member
+              on member.community_id = weight.community_id
+              and member.status <> 'banned'
+            left join public.mining_snapshot_powers as power
+              on power.snapshot_id = $7::uuid
+              and power.owner_user_id = member.owner_user_id
+              and power.asset_id = community.bound_asset_key
+            where weight.community_id = community.community_id
+              and weight.status = 'approved'
+              and weight.config_version = $8::text
+              and community.bound_asset_key is not null
+            group by weight.weight, weight.config_version, weight.reviewed_at
+          ) as ordering on true`
+        : input.sort === "activity"
+          ? `left join public.community_channel_activity as activity
+            on activity.community_id = community.community_id
+            and activity.observed_at
+              >= clock_timestamp() - make_interval(secs => $7::double precision)`
+          : "";
+    const orderingColumns =
+      input.sort === "miningPower"
+        ? `,
+        coalesce(ordering.mining_power, 0)::text as mining_power,
+        ordering.mining_participant_count,
+        ordering.mining_weight,
+        ordering.mining_weight_config_version,
+        ordering.mining_weight_reviewed_at`
+        : input.sort === "activity"
+          ? `,
+        activity.recent_message_count::text as activity_message_count,
+        activity.recent_count_bounded as activity_bounded,
+        activity.observed_at as activity_observed_at`
+          : "";
+    const orderBy =
+      input.sort === "members"
+        ? "community.member_count desc, community.community_id asc"
+        : input.sort === "newest"
+          ? "community.created_at desc, community.community_id desc"
+          : input.sort === "miningPower"
+            ? "coalesce(ordering.mining_power, -1) desc, community.community_id asc"
+            : "coalesce(activity.recent_message_count, -1) desc, community.community_id asc";
     // `verification=verified` narrows to verified only; `all` additionally
     // shows what the shared visibility predicate already allows (the viewer's
     // own applications and the communities they joined). `membership=joined`
     // restricts the page to the viewer's own memberships.
     const result = await client.query<Record<string, unknown>>({
       text: `
-        select ${communityColumns}
+        select ${communityColumns}${orderingColumns}
         from public.communities as community
+        ${orderingJoin}
         where ${communityVisibleToViewerSql}
         and (
           $3::text = 'all'
@@ -1022,16 +1233,18 @@ export function createPostgresCommunityRepository(
           )
         )
         ${keyset}
-        order by ${
-          input.sort === "members"
-            ? "community.member_count desc, community.community_id asc"
-            : "community.created_at desc, community.community_id desc"
-        }
+        order by ${orderBy}
         limit $2
       `,
       values,
     });
-    return Object.freeze(result.rows.map(toCommunityRecord));
+    return Object.freeze(
+      result.rows.map((row) =>
+        input.sort === "miningPower" || input.sort === "activity"
+          ? toOrderedCommunityRecord(row, input.sort)
+          : toCommunityRecord(row),
+      ),
+    );
   }
 
   return Object.freeze({
@@ -1040,6 +1253,50 @@ export function createPostgresCommunityRepository(
         userIdSchema.parse(rawInput.viewerUserId);
         limitSchema.parse(rawInput.limit);
         return await listCommunitiesQuery(pool, rawInput);
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    /**
+     * Whether `sort=activity` has anything to order by (Decision 0061).
+     * Counted over the same freshness window the list query applies, so the
+     * two can never disagree about which observations exist.
+     */
+    async getCommunityActivityObservation(rawInput: {
+      readonly maxAgeSeconds: number;
+    }) {
+      try {
+        const maxAgeSeconds = z
+          .number()
+          .int()
+          .min(1)
+          .max(604_800)
+          .parse(rawInput.maxAgeSeconds);
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              count(*)::int as observed_community_count,
+              max(activity.observed_at) as latest_observed_at
+            from public.community_channel_activity as activity
+            where activity.observed_at
+              >= clock_timestamp() - make_interval(secs => $1::double precision)
+          `,
+          values: [maxAgeSeconds],
+        });
+        const row = result.rows[0] ?? {};
+        const latest = row["latest_observed_at"];
+        return Object.freeze({
+          observedCommunityCount: z
+            .number()
+            .int()
+            .min(0)
+            .parse(row["observed_community_count"]),
+          latestObservedAt:
+            latest === null || latest === undefined
+              ? null
+              : dateSchema.parse(latest).toISOString(),
+        });
       } catch (error) {
         return translateRepositoryError(error);
       }

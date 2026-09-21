@@ -41,13 +41,21 @@ function job(
   });
 }
 
-function repositoryFake(jobs: readonly CommunityChannelSyncJobRecord[]): {
+function repositoryFake(
+  jobs: readonly CommunityChannelSyncJobRecord[],
+  activityTargets: readonly {
+    readonly communityId: string;
+    readonly streamChannelId: string;
+  }[] = [],
+): {
   readonly repository: CommunityChannelSyncRepository;
   readonly claimDueJobs: ReturnType<typeof vi.fn>;
   readonly markChannelProvisioned: ReturnType<typeof vi.fn>;
   readonly completeJob: ReturnType<typeof vi.fn>;
   readonly retryJob: ReturnType<typeof vi.fn>;
   readonly failJob: ReturnType<typeof vi.fn>;
+  readonly listChannelsDueForActivity: ReturnType<typeof vi.fn>;
+  readonly recordChannelActivity: ReturnType<typeof vi.fn>;
 } {
   let served = false;
   const claimDueJobs = vi.fn(() => {
@@ -61,6 +69,10 @@ function repositoryFake(jobs: readonly CommunityChannelSyncJobRecord[]): {
   const completeJob = vi.fn(() => Promise.resolve());
   const retryJob = vi.fn(() => Promise.resolve());
   const failJob = vi.fn(() => Promise.resolve());
+  const listChannelsDueForActivity = vi.fn(() =>
+    Promise.resolve(activityTargets),
+  );
+  const recordChannelActivity = vi.fn(() => Promise.resolve());
   return {
     repository: {
       claimDueJobs,
@@ -68,12 +80,16 @@ function repositoryFake(jobs: readonly CommunityChannelSyncJobRecord[]): {
       completeJob,
       retryJob,
       failJob,
+      listChannelsDueForActivity,
+      recordChannelActivity,
     },
     claimDueJobs,
     markChannelProvisioned,
     completeJob,
     retryJob,
     failJob,
+    listChannelsDueForActivity,
+    recordChannelActivity,
   };
 }
 
@@ -144,12 +160,14 @@ function gatewayMocks(
     readonly upsertCommunityChannel?: ChannelMock;
     readonly addMembers?: ChannelMock;
     readonly removeMembers?: ChannelMock;
+    readonly readCommunityChannelActivity?: ChannelMock;
   } = {},
 ): {
   readonly gateway: StreamCommunityChannelGateway;
   readonly upsertCommunityChannel: ChannelMock;
   readonly addMembers: ChannelMock;
   readonly removeMembers: ChannelMock;
+  readonly readCommunityChannelActivity: ChannelMock;
 } {
   const upsertCommunityChannel =
     overrides.upsertCommunityChannel ??
@@ -158,15 +176,19 @@ function gatewayMocks(
     overrides.addMembers ?? vi.fn(() => Promise.resolve(projection()));
   const removeMembers =
     overrides.removeMembers ?? vi.fn(() => Promise.resolve(projection()));
+  const readCommunityChannelActivity =
+    overrides.readCommunityChannelActivity ?? vi.fn(() => Promise.resolve([]));
   return {
     gateway: {
       upsertCommunityChannel,
       addMembers,
       removeMembers,
+      readCommunityChannelActivity,
     } as unknown as StreamCommunityChannelGateway,
     upsertCommunityChannel,
     addMembers,
     removeMembers,
+    readCommunityChannelActivity,
   };
 }
 
@@ -704,5 +726,126 @@ describe("community channel sync worker lane", () => {
     await expect(worker.runOnce()).rejects.toMatchObject({
       code: "community_channel_sync_unavailable",
     });
+  });
+
+  it("observes the activity of the channels that are due and records what it saw (Decision 0061)", async () => {
+    const { repository, recordChannelActivity } = repositoryFake(
+      [],
+      [{ communityId, streamChannelId }],
+    );
+    const { gateway, readCommunityChannelActivity } = gatewayMocks({
+      readCommunityChannelActivity: vi.fn(() =>
+        Promise.resolve([
+          {
+            channelId: streamChannelId,
+            messageCount: 12,
+            bounded: false,
+            totalMessageCount: 240,
+            lastMessageAt: "2026-09-21T08:00:00.000Z",
+          },
+        ]),
+      ),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      activityObservedCount: 1,
+    });
+    expect(readCommunityChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ channelIds: [streamChannelId] }),
+    );
+    expect(recordChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        communityId,
+        streamChannelId,
+        windowDays: 7,
+        messageCount: 12,
+        bounded: false,
+        totalMessageCount: 240,
+        lastMessageAt: "2026-09-21T08:00:00.000Z",
+      }),
+    );
+    const recorded = recordChannelActivity.mock.calls[0]?.[0] as {
+      readonly observedAt: string;
+    };
+    expect(Number.isNaN(Date.parse(recorded.observedAt))).toBe(false);
+  });
+
+  it("records nothing when the activity read fails, and the failure does not fail a job", async () => {
+    const { repository, recordChannelActivity } = repositoryFake(
+      [job()],
+      [{ communityId, streamChannelId }],
+    );
+    const warn = vi.fn();
+    const { gateway } = gatewayMocks({
+      readCommunityChannelActivity: vi.fn(() =>
+        Promise.reject(new Error("stream down")),
+      ),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+      logger: { warn },
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      succeededCount: 1,
+      failedCount: 0,
+      activityObservedCount: 0,
+    });
+    expect(recordChannelActivity).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ write: "observe" }),
+      "Community channel activity could not be observed; no observation was recorded",
+    );
+  });
+
+  it("leaves a channel Stream did not answer for untouched", async () => {
+    const otherCommunityId = "7d0f1e2a-3b4c-4d5e-8f90-a1b2c3d4e5f6";
+    const otherChannelId = `loop_community_${otherCommunityId.replaceAll("-", "")}`;
+    const { repository, recordChannelActivity } = repositoryFake(
+      [],
+      [
+        { communityId, streamChannelId },
+        { communityId: otherCommunityId, streamChannelId: otherChannelId },
+      ],
+    );
+    const { gateway } = gatewayMocks({
+      readCommunityChannelActivity: vi.fn(() =>
+        Promise.resolve([
+          {
+            channelId: streamChannelId,
+            messageCount: 0,
+            bounded: false,
+            totalMessageCount: null,
+            lastMessageAt: null,
+          },
+        ]),
+      ),
+    });
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personasFake().personas,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ activityObservedCount: 1 });
+    expect(recordChannelActivity).toHaveBeenCalledTimes(1);
+    expect(recordChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ communityId, messageCount: 0 }),
+    );
   });
 });

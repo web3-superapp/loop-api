@@ -116,13 +116,28 @@ base 对时允许用"该资产为 quote 的最深交易对"反推 `priceUsd / pr
 `communityMining.available` 只说明"本部署有一个生效的 configVersion"，是否产品口径看
 `GET /v2/mining/rules.baseline.scope`。未启用模块时对应路径 `404 NOT_FOUND`。capability 总数仍为 **31**。
 
+**S60（决策 0061）对本契约的加法——一个数字说清它数的是链上持仓还是演示持仓**
+（只加一个可选字段，不改路径、不删字段）：
+
+1. `snapshot` / `source` 的 `available` 分支多了 `holdingsSource: "chain" | "mock_seed" | "mixed"`
+   （服务端总是给，schema 里为可选以兼容旧客户端）。
+   - `chain`：所有算力行都来自链上观测到的余额。**生产环境只可能是这个值。**
+   - `mock_seed`：全部来自开发环境 seed 写入的演示持仓（`ops/seed-mock.sh --holdings`）。
+   - `mixed`：两者都有。
+2. **客户端口径**：`holdingsSource !== "chain"` 时，页面上必须有一处明确说明「含演示持仓」
+   （例如快照信息行加一句），不能把它当成链上事实展示。它不改变任何数字的真假：
+   演示持仓是真实写入的行、走真实价格与真实公式，只是没人在链上持有它们。
+3. 钱包页与本字段无关：钱包只读链，演示持仓在钱包里永远看不到。
+4. 开发基线版本号变为 `miningFormula-devBaseline-2026-09-21-r4`（注册了 10 个真实 BSC 代币，
+   资产权重在版本写入时固定，所以必须换版本；社区权重按版本重新批准）。
+
 ## 2. 通用投影
 
 - 数字一律为无符号 decimal 字符串（`^(0|[1-9][0-9]{0,77})(\.[0-9]{1,60})?$`），用等宽字体。
 - `{status: "available", value}` 与 `{status: "unavailable", reasonCode}` 二选一；前端对 unavailable 显示 `—`
   并按 reasonCode 给文案。
 - `snapshot` 有值时为 `{snapshotId, blockNumber, blockHash, formulaVersion, priceVersion, computedAt, stale,
-latestAttempt}`（后两个是 S51 加法，见 §0）。它永远是**最新的完整快照**；`stale: true` 表示之后还有一次未完成
+latestAttempt, holdingsSource}`（`stale`/`latestAttempt` 是 S51 加法，`holdingsSource` 是 S60 加法，见 §0）。它永远是**最新的完整快照**；`stale: true` 表示之后还有一次未完成
   或已作废的尝试，`latestAttempt` 就是那次尝试。`unavailable` 分支为 `{status, reasonCode}`，在生效版本下有尝试但
   没有完整快照时另带可选 `latestAttempt`。
 

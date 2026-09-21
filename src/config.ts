@@ -261,6 +261,7 @@ const environmentSchema = z
     BSC_WRITE_CANARY_MAX_USD: z.string().trim().min(1).max(32),
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
+    MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
@@ -271,6 +272,17 @@ const environmentSchema = z
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
+    // Decision 0061: the seeded holdings are a Development instrument. A
+    // production process refuses to start rather than compute a number from
+    // a balance nobody observed on chain.
+    if (value.MINING_MOCK_HOLDINGS_ENABLED && value.NODE_ENV === "production") {
+      context.addIssue({
+        code: "custom",
+        message:
+          "MINING_MOCK_HOLDINGS_ENABLED must not be set under NODE_ENV=production",
+        path: ["MINING_MOCK_HOLDINGS_ENABLED"],
+      });
+    }
     if (value.BSC_WRITES_ENABLED) {
       if (value.BSC_RPC_URLS === undefined) {
         context.addIssue({
@@ -477,6 +489,7 @@ const reconciliationWorkerEnvironmentSchema = z
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
     MINING_SNAPSHOT_ENABLED: booleanString,
+    MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     ...launchChainEnvironmentShape,
@@ -489,6 +502,17 @@ const reconciliationWorkerEnvironmentSchema = z
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
+    // Decision 0061: the seeded holdings are a Development instrument. A
+    // production process refuses to start rather than compute a number from
+    // a balance nobody observed on chain.
+    if (value.MINING_MOCK_HOLDINGS_ENABLED && value.NODE_ENV === "production") {
+      context.addIssue({
+        code: "custom",
+        message:
+          "MINING_MOCK_HOLDINGS_ENABLED must not be set under NODE_ENV=production",
+        path: ["MINING_MOCK_HOLDINGS_ENABLED"],
+      });
+    }
     // Privy credentials only matter to this process when the wallet-intent
     // lane is on; a partial pair is then an error, otherwise it is ignored.
     if (
@@ -786,6 +810,13 @@ export interface AppConfig {
   readonly bscReorgDepthBlocks: number;
   /** The `launch` chain slot (Decision 0038); never null. */
   readonly launchChain: LaunchChainConfig;
+  /**
+   * Decision 0061: whether the `mining-snapshot` lane counts the
+   * Development seed's `mock_seed` balances. Default false; the schema
+   * refuses it under `NODE_ENV=production`. Only `pnpm mining:snapshot`
+   * reads it out of this config; the API process never computes a snapshot.
+   */
+  readonly miningMockHoldingsEnabled: boolean;
   readonly walletGasReserve: WalletGasReserveConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
@@ -838,6 +869,12 @@ export interface ReconciliationWorkerConfig {
    * the operator script can do outside production.
    */
   readonly miningSnapshotEnabled: boolean;
+  /**
+   * Decision 0061: whether that lane counts the Development seed's
+   * `mock_seed` balances. Default false; refused under
+   * `NODE_ENV=production`.
+   */
+  readonly miningMockHoldingsEnabled: boolean;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -1411,6 +1448,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_WRITE_CANARY_MAX_USD: environment["BSC_WRITE_CANARY_MAX_USD"] ?? "20",
     LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
+    MINING_MOCK_HOLDINGS_ENABLED:
+      environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
@@ -1543,6 +1582,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       confirmations: parsed.data.BSC_CONFIRMATIONS,
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     }),
+    miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
@@ -1589,6 +1629,8 @@ export function loadReconciliationWorkerConfig(
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
+    MINING_MOCK_HOLDINGS_ENABLED:
+      environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     ...launchChainEnvironmentDefaults(environment),
@@ -1693,6 +1735,7 @@ export function loadReconciliationWorkerConfig(
         })
       : null,
     miningSnapshotEnabled: parsed.data.MINING_SNAPSHOT_ENABLED,
+    miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

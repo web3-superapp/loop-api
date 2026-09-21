@@ -3975,10 +3975,14 @@
         "description": "Ordering uses only checkable facts: member count or creation time. Highest mining power, fastest growing, and most discussed have no backend and are not offered. `verification=all` additionally shows communities the caller created or joined.",
         "parameters": [
           {
-            "schema": { "type": "string", "enum": ["members", "newest"] },
+            "schema": {
+              "type": "string",
+              "enum": ["members", "newest", "miningPower", "activity"]
+            },
             "in": "query",
             "name": "sort",
-            "required": false
+            "required": false,
+            "description": "members and newest order by a stored column and are always available. miningPower orders by the community's power under the latest complete Mining snapshot, activity by the messages the community-channel lane observed in the official channel over the last 7 days (Decision 0061). When that fact does not exist the response is 200 with ordering.status = unavailable, an empty items array and a null cursor; the client shows the unavailable state for that segment and must not treat the empty page as 'no communities'."
           },
           {
             "schema": { "type": "string", "enum": ["verified", "all"] },
@@ -4051,6 +4055,7 @@
                   "required": [
                     "items",
                     "nextCursor",
+                    "ordering",
                     "recommendation",
                     "contractVersion"
                   ],
@@ -4132,6 +4137,278 @@
                           "configVersion": {
                             "type": "string",
                             "enum": ["communityV1"]
+                          },
+                          "miningPower": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope",
+                                  "weight",
+                                  "participants"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "stale": {
+                                    "type": "boolean",
+                                    "description": "True when a newer run under the same version did not complete (Decision 0057): the number is the last complete snapshot's and is older than that run. Always emitted; optional for older clients."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["community"]
+                                  },
+                                  "weight": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "value",
+                                          "configVersion",
+                                          "reviewedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["approved"]
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "configVersion": {
+                                            "type": "string",
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                          },
+                                          "reviewedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "reasonCode",
+                                          "reviewStatus"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                            "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
+                                          },
+                                          "reviewStatus": {
+                                            "type": "string",
+                                            "enum": [
+                                              "pending_review",
+                                              "not_applicable"
+                                            ],
+                                            "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "participants": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "count"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "subject",
+                                  "power",
+                                  "snapshotId",
+                                  "formulaVersion",
+                                  "computedAt",
+                                  "scope"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "power": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "snapshotId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "formulaVersion": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                  },
+                                  "computedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "scope": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["development_baseline"]
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                  },
+                                  "stale": {
+                                    "type": "boolean",
+                                    "description": "True when a newer run under the same version did not complete (Decision 0057): the number is the last complete snapshot's and is older than that run. Always emitted; optional for older clients."
+                                  },
+                                  "subject": {
+                                    "type": "string",
+                                    "enum": ["account"]
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "activity": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                    "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "messageCount",
+                                  "windowDays",
+                                  "bounded",
+                                  "observedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "messageCount": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "windowDays": {
+                                    "type": "integer",
+                                    "enum": [7]
+                                  },
+                                  "bounded": { "type": "boolean" },
+                                  "observedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              }
+                            ]
                           }
                         }
                       }
@@ -4146,6 +4423,139 @@
                           "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
                         },
                         { "type": "null" }
+                      ]
+                    },
+                    "ordering": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "sort", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "sort": {
+                              "type": "string",
+                              "enum": [
+                                "members",
+                                "newest",
+                                "miningPower",
+                                "activity"
+                              ]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "sort", "basis"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "sort": {
+                              "type": "string",
+                              "enum": [
+                                "members",
+                                "newest",
+                                "miningPower",
+                                "activity"
+                              ]
+                            },
+                            "basis": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["kind"],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["stored"]
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "snapshotId",
+                                    "formulaVersion",
+                                    "computedAt",
+                                    "scope",
+                                    "stale"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["miningSnapshot"]
+                                    },
+                                    "snapshotId": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                    },
+                                    "formulaVersion": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 128
+                                    },
+                                    "computedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "scope": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": ["development_baseline"]
+                                        },
+                                        { "type": "null" }
+                                      ],
+                                      "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                                    },
+                                    "stale": { "type": "boolean" }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "windowDays",
+                                    "observedCommunityCount",
+                                    "observedAt"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["channelActivity"]
+                                    },
+                                    "windowDays": {
+                                      "type": "integer",
+                                      "enum": [7]
+                                    },
+                                    "observedCommunityCount": {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    },
+                                    "observedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
                       ]
                     },
                     "recommendation": {
@@ -89567,6 +89977,11 @@
                                 }
                               },
                               "description": "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients."
+                            },
+                            "holdingsSource": {
+                              "type": "string",
+                              "enum": ["chain", "mock_seed", "mixed"],
+                              "description": "Decision 0061: which kinds of observed balance produced the numbers — chain (RPC observations of real addresses, the only value a production stack publishes), mock_seed (Development seed holdings), or mixed. A client renders a demonstration marker for anything other than chain. Always emitted; optional for older clients."
                             }
                           }
                         }
@@ -90398,6 +90813,11 @@
                                 }
                               },
                               "description": "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients."
+                            },
+                            "holdingsSource": {
+                              "type": "string",
+                              "enum": ["chain", "mock_seed", "mixed"],
+                              "description": "Decision 0061: which kinds of observed balance produced the numbers — chain (RPC observations of real addresses, the only value a production stack publishes), mock_seed (Development seed holdings), or mixed. A client renders a demonstration marker for anything other than chain. Always emitted; optional for older clients."
                             }
                           }
                         }
@@ -92054,6 +92474,11 @@
                                 }
                               },
                               "description": "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients."
+                            },
+                            "holdingsSource": {
+                              "type": "string",
+                              "enum": ["chain", "mock_seed", "mixed"],
+                              "description": "Decision 0061: which kinds of observed balance produced the numbers — chain (RPC observations of real addresses, the only value a production stack publishes), mock_seed (Development seed holdings), or mixed. A client renders a demonstration marker for anything other than chain. Always emitted; optional for older clients."
                             }
                           }
                         }
@@ -93053,6 +93478,11 @@
                                 }
                               },
                               "description": "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients."
+                            },
+                            "holdingsSource": {
+                              "type": "string",
+                              "enum": ["chain", "mock_seed", "mixed"],
+                              "description": "Decision 0061: which kinds of observed balance produced the numbers — chain (RPC observations of real addresses, the only value a production stack publishes), mock_seed (Development seed holdings), or mixed. A client renders a demonstration marker for anything other than chain. Always emitted; optional for older clients."
                             }
                           }
                         }

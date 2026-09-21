@@ -3,6 +3,7 @@ import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
   configVersionPatternSource,
   miningDailyOutputUnitKey,
+  miningHoldingsSources,
   miningReferencePriceQualities,
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
@@ -123,6 +124,12 @@ const snapshotProjectionSchema = {
       ...snapshotAttemptSchema,
       description:
         "The newest run under the version in force: this snapshot when stale is false. Always emitted; optional for older clients.",
+    },
+    holdingsSource: {
+      type: "string",
+      enum: [...miningHoldingsSources],
+      description:
+        "Decision 0061: which kinds of observed balance produced the numbers — chain (RPC observations of real addresses, the only value a production stack publishes), mock_seed (Development seed holdings), or mixed. A client renders a demonstration marker for anything other than chain. Always emitted; optional for older clients.",
     },
   },
 } as const;

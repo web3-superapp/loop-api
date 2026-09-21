@@ -12,6 +12,7 @@ import type { PairSnapshot } from "./integrations/market/market-data-provider.js
 import {
   miningReasonCodes,
   type MiningFormulaDocument,
+  type MiningHoldingsSource,
 } from "./features/mining/mining-contract.js";
 import {
   deriveDeclaredPairReferencePrice,
@@ -68,6 +69,11 @@ export interface MiningSnapshotRunResult {
   readonly skipped: readonly MiningSnapshotSkip[];
   /** Positive weighted holdings without a usable price; non-empty exactly when `incomplete`. */
   readonly unread: readonly MiningSnapshotSkip[];
+  /**
+   * The kinds of observed balance the written snapshot counted
+   * (Decision 0061); null for a run that published nothing.
+   */
+  readonly holdingsSource: MiningHoldingsSource | null;
 }
 
 export interface MiningSnapshotInfrastructureBackoff {
@@ -100,6 +106,13 @@ export interface CreateMiningSnapshotWorkerOptions {
   readonly repository: MiningRepository;
   readonly registry: Pick<ChainRegistryRepository, "listAssets">;
   readonly prices: MiningPriceReader;
+  /**
+   * Include the Development seed's `mock_seed` balances (Decision 0061).
+   * Default false: without it the lane sees only chain observations, which
+   * is the only thing a production stack may ever compute from. The
+   * configuration refuses to set it under `NODE_ENV=production`.
+   */
+  readonly includeMockSeedHoldings?: boolean;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
     event: MiningSnapshotInfrastructureBackoff,
@@ -144,6 +157,7 @@ function idle(reasonCode: string, skipped: readonly MiningSnapshotSkip[] = []) {
     powerRowCount: 0,
     skipped: Object.freeze([...skipped]),
     unread: Object.freeze([]),
+    holdingsSource: null,
   });
 }
 
@@ -268,10 +282,13 @@ export function createMiningSnapshotWorker(
         powerRowCount: 0,
         skipped: Object.freeze([]),
         unread: Object.freeze([]),
+        holdingsSource: null,
       });
     }
     const [balances, communityWeights] = await Promise.all([
-      options.repository.listBalanceInputs(),
+      options.repository.listBalanceInputs({
+        includeMockSeedHoldings: options.includeMockSeedHoldings ?? false,
+      }),
       options.repository.listCommunityWeightInputs(formula.configVersion),
     ]);
     if (balances.length === 0) {
@@ -318,6 +335,7 @@ export function createMiningSnapshotWorker(
         powerRowCount: 0,
         skipped: computation.skipped,
         unread: computation.unread,
+        holdingsSource: null,
       });
     }
     const snapshot = await options.repository.writeSnapshot({
@@ -328,6 +346,7 @@ export function createMiningSnapshotWorker(
       priceVersion: computation.priceVersion,
       totalPower: computation.totalPower,
       powers: computation.powers,
+      holdingsSource: computation.holdingsSource,
     });
     return Object.freeze({
       kind: "snapshotted" as const,
@@ -336,6 +355,7 @@ export function createMiningSnapshotWorker(
       powerRowCount: computation.powers.length,
       skipped: computation.skipped,
       unread: Object.freeze([]),
+      holdingsSource: computation.holdingsSource,
     });
   }
 

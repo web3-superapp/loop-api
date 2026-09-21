@@ -404,12 +404,15 @@ export function createPostgresAccountWalletRepository(
       await pool.query<Record<string, unknown>>({
         text: `
           insert into public.wallet_balance_snapshots (
-            wallet_id, asset_id, block_number, block_hash, raw_value
+            wallet_id, asset_id, block_number, block_hash, raw_value, source
           )
-          values ($1, $2, $3::numeric, $4, $5::numeric)
+          values ($1, $2, $3::numeric, $4, $5::numeric, 'chain')
           on conflict (wallet_id, asset_id, block_number) do update set
             raw_value = excluded.raw_value,
             block_hash = excluded.block_hash,
+            -- A chain observation is authoritative over anything a seed
+            -- left at the same block (Decision 0061); it never inherits.
+            source = 'chain',
             observed_at = clock_timestamp()
         `,
         values: [

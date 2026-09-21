@@ -409,6 +409,7 @@ describe("selectMiningPrice with a derived price (Decisions 0057 and 0059)", () 
       rawValue: "2990000000000000000",
       blockNumber: "123001455",
       blockHash: `0x${"a".repeat(64)}`,
+      source: "chain",
     };
     const result = computeMiningSnapshot(
       { balances: [balance], prices: [derivedPrice], communityWeights: [] },
@@ -447,6 +448,7 @@ describe("selectMiningPrice with a derived price (Decisions 0057 and 0059)", () 
             rawValue: "2990000000000000000",
             blockNumber: "123001455",
             blockHash: `0x${"a".repeat(64)}`,
+            source: "chain",
           },
         ],
         prices: [{ ...derivedPrice, priceUsd: "1.2" }],

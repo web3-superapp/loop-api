@@ -2161,4 +2161,118 @@ describe("PostgreSQL V2 communication repository", () => {
       ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
     });
   });
+
+  describe("community channel activity observations (Decision 0061)", () => {
+    it("lists only provisioned channels that are due, and records what the lane observed", async () => {
+      const owner = await createAccount();
+      const communityId = await createCommunity(owner.userId);
+      await verifyCommunity(communityId);
+      const channelId = deriveCommunityChannelId(communityId);
+
+      // Not provisioned yet: there is no channel to read, so it is not due.
+      const beforeProvisioning = await sync.listChannelsDueForActivity({
+        staleAfterSeconds: 900,
+        limit: 25,
+      });
+      expect(
+        beforeProvisioning.map((target) => target.communityId),
+      ).not.toContain(communityId);
+
+      const workerId = randomUUID();
+      await sync.claimDueJobs({ workerId, leaseSeconds: 30, limit: 10 });
+      await sync.markChannelProvisioned({ communityId, workerId });
+
+      const due = await sync.listChannelsDueForActivity({
+        staleAfterSeconds: 900,
+        limit: 25,
+      });
+      expect(due).toContainEqual({
+        communityId,
+        streamChannelId: channelId,
+      });
+
+      const observedAt = new Date().toISOString();
+      await sync.recordChannelActivity({
+        communityId,
+        streamChannelId: channelId,
+        windowDays: 7,
+        messageCount: 12,
+        bounded: true,
+        totalMessageCount: 240,
+        lastMessageAt: "2026-09-21T08:00:00.000Z",
+        observedAt,
+      });
+
+      const row = await pool.query<Record<string, unknown>>({
+        text: `select * from public.community_channel_activity where community_id = $1`,
+        values: [communityId],
+      });
+      expect(row.rows[0]).toMatchObject({
+        stream_channel_id: channelId,
+        window_days: 7,
+        recent_message_count: "12",
+        recent_count_bounded: true,
+        total_message_count: "240",
+      });
+
+      // A fresh observation takes the community out of the due list.
+      const afterObservation = await sync.listChannelsDueForActivity({
+        staleAfterSeconds: 900,
+        limit: 25,
+      });
+      expect(
+        afterObservation.map((target) => target.communityId),
+      ).not.toContain(communityId);
+
+      // The newest observation replaces the previous one; there is one row.
+      await sync.recordChannelActivity({
+        communityId,
+        streamChannelId: channelId,
+        windowDays: 7,
+        messageCount: 3,
+        bounded: false,
+        totalMessageCount: null,
+        lastMessageAt: null,
+        observedAt: new Date().toISOString(),
+      });
+      const replaced = await pool.query<Record<string, unknown>>({
+        text: `select count(*)::int as rows, max(recent_message_count) as count
+               from public.community_channel_activity where community_id = $1`,
+        values: [communityId],
+      });
+      expect(replaced.rows[0]).toMatchObject({ rows: 1, count: "3" });
+    });
+
+    it("refuses an observation that names another window or a negative count", async () => {
+      const owner = await createAccount();
+      const communityId = await createCommunity(owner.userId);
+      await verifyCommunity(communityId);
+      const channelId = deriveCommunityChannelId(communityId);
+      const observedAt = new Date().toISOString();
+      await expect(
+        sync.recordChannelActivity({
+          communityId,
+          streamChannelId: channelId,
+          windowDays: 30,
+          messageCount: 1,
+          bounded: false,
+          totalMessageCount: null,
+          lastMessageAt: null,
+          observedAt,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        sync.recordChannelActivity({
+          communityId,
+          streamChannelId: channelId,
+          windowDays: 7,
+          messageCount: -1,
+          bounded: false,
+          totalMessageCount: null,
+          lastMessageAt: null,
+          observedAt,
+        }),
+      ).rejects.toThrow();
+    });
+  });
 });

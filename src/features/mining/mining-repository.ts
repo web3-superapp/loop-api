@@ -1,6 +1,7 @@
 import type {
   CommunityWeightStatus,
   MiningFormulaDocument,
+  MiningHoldingsSource,
   MiningFormulaStatus,
   MiningPriceGuardRule,
   MiningSnapshotStatus,
@@ -50,6 +51,8 @@ export interface MiningSnapshotRecord {
   readonly totalPower: string;
   readonly accountCount: number;
   readonly computedAt: string;
+  /** Which kinds of observed balance produced its numbers (Decision 0061). */
+  readonly holdingsSource: MiningHoldingsSource;
 }
 
 /**
@@ -168,6 +171,7 @@ export interface WriteMiningSnapshotInput {
   readonly priceVersion: string;
   readonly totalPower: string;
   readonly powers: readonly MiningSnapshotPower[];
+  readonly holdingsSource: MiningHoldingsSource;
 }
 
 export interface MiningRepository {
@@ -208,8 +212,15 @@ export interface MiningRepository {
   invalidateSnapshots(
     input: InvalidateMiningSnapshotsInput,
   ): Promise<InvalidateMiningSnapshotsResult>;
-  /** Latest observed balance per active wallet and readable asset. */
-  listBalanceInputs(): Promise<readonly MiningBalanceInput[]>;
+  /**
+   * Latest observed balance per active wallet and readable asset. Rows
+   * written by the Development seed (`source = 'mock_seed'`, Decision 0061)
+   * are excluded unless the caller asks for them; the repository never
+   * decides that on its own.
+   */
+  listBalanceInputs(input: {
+    readonly includeMockSeedHoldings: boolean;
+  }): Promise<readonly MiningBalanceInput[]>;
   /** Operator path (Decision 0043): inserts a new `pending_approval` version. */
   createFormulaVersion(
     input: CreateMiningFormulaVersionInput,

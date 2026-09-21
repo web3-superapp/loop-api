@@ -27,6 +27,7 @@ import {
   CommunityNotFoundError,
   CommunityPermissionDeniedError,
   CommunityProfileRequiredError,
+  CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
   type CommunityRepository,
@@ -1856,5 +1857,299 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         communityId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
       }),
     ).rejects.toBeInstanceOf(CommunityNotFoundError);
+  });
+
+  describe("discover orderings that need a fact (Decision 0061)", () => {
+    const boundAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const configVersion = "miningFormulaOrderingTestOnly";
+
+    async function seedMiningSnapshot(rows: {
+      readonly snapshotId: string;
+      readonly powers: readonly {
+        readonly ownerUserId: string;
+        readonly power: string;
+      }[];
+    }): Promise<void> {
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values (
+            $1, 'eip155:56', '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82',
+            'Cake', 'PancakeSwap Token', 18, 'pending', 'chain_call',
+            122037728, now()
+          )
+          on conflict (asset_id) do nothing
+        `,
+        values: [boundAsset],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_formula_versions (
+            config_version, formula, weight_range, price_guard_rules, status,
+            effective_at, approved_at
+          )
+          values ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, 'approved', now(), now())
+          on conflict (config_version) do nothing
+        `,
+        values: [
+          configVersion,
+          JSON.stringify({
+            kind: "holding_times_reference_price_times_weight",
+            expressionKey: "k",
+            dailyOutputKey: "k",
+            assetWeights: { [boundAsset]: "1" },
+            referralBoost: { status: "pending_approval" },
+          }),
+          JSON.stringify({
+            loop: { status: "approved", descriptionKey: "k" },
+            community: { status: "pending_approval", descriptionKey: "k" },
+            reviewFactorKeys: [],
+          }),
+        ],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_snapshots (
+            snapshot_id, block_number, block_hash, formula_version,
+            price_version, total_power, account_count, status, holdings_source
+          )
+          values ($1, 100, $2, $3, 'dexscreener:2026-09-21T00:00:00.000Z',
+            '0', $4, 'complete', 'chain')
+          on conflict (snapshot_id) do nothing
+        `,
+        values: [
+          rows.snapshotId,
+          `0x${"e".repeat(64)}`,
+          configVersion,
+          rows.powers.length,
+        ],
+      });
+      for (const power of rows.powers) {
+        await pool.query({
+          text: `
+            insert into public.mining_snapshot_powers (
+              snapshot_id, owner_user_id, asset_id, holding,
+              reference_price_usd, reference_price_quality, weight, power,
+              block_number
+            )
+            values ($1, $2, $3, '1', '1', 'fresh', '1', $4, 100)
+            on conflict do nothing
+          `,
+          values: [rows.snapshotId, power.ownerUserId, boundAsset, power.power],
+        });
+      }
+    }
+
+    it("orders by the community's power under the snapshot and lists the unweighted after it", async () => {
+      const owner = await createAccount("ordering-owner");
+      const member = await createAccount("ordering-member");
+      const snapshotId = randomUUID();
+      const strong = await createCommunity(
+        owner.userId,
+        `order-strong-${randomUUID().slice(0, 6)}`,
+        "Strong",
+      );
+      const weak = await createCommunity(
+        owner.userId,
+        `order-weak-${randomUUID().slice(0, 6)}`,
+        "Weak",
+      );
+      const unweighted = await createCommunity(
+        owner.userId,
+        `order-none-${randomUUID().slice(0, 6)}`,
+        "Unweighted",
+      );
+      for (const communityId of [strong, weak, unweighted]) {
+        await repository.verifyCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+        });
+        await pool.query({
+          text: `update public.communities set bound_asset_key = $2 where community_id = $1`,
+          values: [communityId, boundAsset],
+        });
+      }
+      // Only the stronger community has the second member, so its sum is
+      // larger; the stored power already carries each community's weight.
+      await join(member.userId, strong);
+      await seedMiningSnapshot({
+        snapshotId,
+        powers: [
+          { ownerUserId: owner.userId, power: "10" },
+          { ownerUserId: member.userId, power: "5" },
+        ],
+      });
+      // Only the two weighted communities carry an approved weight; the
+      // stronger one weights its members' power higher.
+      await pool.query({
+        text: `
+          insert into public.community_mining_weights (
+            community_id, status, weight, config_version, reviewed_at
+          )
+          values ($1, 'approved', '2', $3, now()), ($2, 'approved', '0.5', $3, now())
+          on conflict (community_id) do update set
+            status = excluded.status, weight = excluded.weight,
+            config_version = excluded.config_version,
+            reviewed_at = excluded.reviewed_at
+        `,
+        values: [strong, weak, configVersion],
+      });
+      // The stronger community keeps both members' power; the weaker one
+      // keeps only the member's, so the order is strong, weak, unweighted.
+      await pool.query({
+        text: `delete from public.mining_snapshot_powers where snapshot_id = $1 and owner_user_id = $2`,
+        values: [snapshotId, owner.userId],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_snapshot_powers (
+            snapshot_id, owner_user_id, asset_id, holding,
+            reference_price_usd, reference_price_quality, weight, power,
+            block_number
+          )
+          values ($1, $2, $3, '1', '1', 'fresh', '1', '30', 100)
+        `,
+        values: [snapshotId, owner.userId, boundAsset],
+      });
+
+      const page = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "miningPower",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        miningOrdering: { snapshotId, configVersion },
+      });
+      const ordered = page
+        .map((item) => item.communityId)
+        .filter((id) => [strong, weak, unweighted].includes(id));
+      expect(ordered).toEqual([strong, weak, unweighted]);
+      const strongRow = page.find((item) => item.communityId === strong);
+      expect(strongRow?.ordering).toMatchObject({
+        miningPower: "35",
+        miningParticipantCount: 2,
+        miningWeight: "2",
+        miningWeightConfigVersion: configVersion,
+      });
+      // A community without an approved weight carries no number at all.
+      expect(
+        page.find((item) => item.communityId === unweighted)?.ordering,
+      ).toMatchObject({ miningPower: null, miningWeight: null });
+
+      // The keyset continues from the ranked rows into the unranked ones.
+      const head = page[0];
+      if (head === undefined) {
+        throw new Error("The mining ordering page is empty");
+      }
+      const second = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "miningPower",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        miningOrdering: { snapshotId, configVersion },
+        after: {
+          lastSortValue: head.ordering?.miningPower ?? "-1",
+          lastCommunityId: head.communityId,
+        },
+      });
+      expect(second.map((item) => item.communityId)).not.toContain(
+        head.communityId,
+      );
+    });
+
+    it("orders by the observed activity, ignores a stale observation, and reports whether anything is observed", async () => {
+      const owner = await createAccount("activity-owner");
+      const loud = await createCommunity(
+        owner.userId,
+        `act-loud-${randomUUID().slice(0, 6)}`,
+        "Loud",
+      );
+      const quiet = await createCommunity(
+        owner.userId,
+        `act-quiet-${randomUUID().slice(0, 6)}`,
+        "Quiet",
+      );
+      const stale = await createCommunity(
+        owner.userId,
+        `act-stale-${randomUUID().slice(0, 6)}`,
+        "Stale",
+      );
+      for (const communityId of [loud, quiet, stale]) {
+        await repository.verifyCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+        });
+      }
+      const channelId = (communityId: string): string =>
+        `loop_community_${communityId.replaceAll("-", "")}`;
+      await pool.query({
+        text: `
+          insert into public.community_channel_activity (
+            community_id, stream_channel_id, window_days,
+            recent_message_count, recent_count_bounded, total_message_count,
+            last_message_at, observed_at
+          )
+          values
+            ($1, $4, 7, 90, false, 900, now(), now()),
+            ($2, $5, 7, 3, false, null, null, now()),
+            ($3, $6, 7, 5000, true, null, null, now() - interval '2 days')
+        `,
+        values: [
+          loud,
+          quiet,
+          stale,
+          channelId(loud),
+          channelId(quiet),
+          channelId(stale),
+        ],
+      });
+
+      const observation = await repository.getCommunityActivityObservation({
+        maxAgeSeconds: 21_600,
+      });
+      expect(observation.observedCommunityCount).toBeGreaterThanOrEqual(2);
+      expect(observation.latestObservedAt).not.toBeNull();
+
+      const page = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "activity",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        activityMaxAgeSeconds: 21_600,
+      });
+      const ordered = page
+        .map((item) => item.communityId)
+        .filter((id) => [loud, quiet, stale].includes(id));
+      // The stale observation does not order anything: its community sorts
+      // with the unobserved ones, behind both fresh counts.
+      expect(ordered.slice(0, 2)).toEqual([loud, quiet]);
+      expect(ordered).toContain(stale);
+      expect(
+        page.find((item) => item.communityId === loud)?.ordering,
+      ).toMatchObject({ activityMessageCount: 90, activityBounded: false });
+      expect(
+        page.find((item) => item.communityId === stale)?.ordering,
+      ).toMatchObject({ activityMessageCount: null });
+    });
+
+    it("refuses a mining ordering the caller did not resolve", async () => {
+      const owner = await createAccount("ordering-refusal");
+      await expect(
+        repository.listCommunities({
+          viewerUserId: owner.userId,
+          sort: "miningPower",
+          verification: "verified",
+          membership: "all",
+          limit: 10,
+        }),
+      ).rejects.toBeInstanceOf(CommunityRepositoryUnavailableError);
+    });
   });
 });

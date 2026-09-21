@@ -64,8 +64,29 @@ export type AvailableMiningPowerProjection =
 export type MiningPowerProjection =
   AvailableMiningPowerProjection | UnavailableProjection;
 
+/**
+ * The snapshot another module may order by (Decision 0061). It is the same
+ * baseline every mining read resolves, so the discover list's
+ * `sort=miningPower` can never rank by a snapshot the mining pages consider
+ * incomplete, stale, or withdrawn. `unavailable` carries the reason the
+ * pages would show for the same state.
+ */
+export type MiningOrderingBaseline =
+  | {
+      readonly status: "available";
+      readonly snapshotId: string;
+      readonly configVersion: string;
+      readonly formulaVersion: string;
+      readonly computedAt: string;
+      readonly scope: MiningFormulaScope | null;
+      readonly stale: boolean;
+    }
+  | { readonly status: "unavailable"; readonly reasonCode: string };
+
 export interface CommunityMiningPowerReader {
   readCommunityPower(communityId: string): Promise<MiningPowerProjection>;
+  /** The snapshot a caller may order a list by; never a partial one. */
+  readOrderingBaseline(): Promise<MiningOrderingBaseline>;
   /**
    * Keyed by public profile ID. A profile absent from the result had no
    * `user_profiles` row; the caller projects it as not in the snapshot.
@@ -84,6 +105,38 @@ export function createMiningPowerReader(dependencies: {
   const now = dependencies.now ?? (() => new Date());
 
   const reader: CommunityMiningPowerReader = {
+    async readOrderingBaseline() {
+      try {
+        const baseline = await resolveMiningBaseline(repository, now());
+        if (baseline.status === "pending") {
+          return Object.freeze({
+            status: "unavailable" as const,
+            reasonCode: miningReasonCodes.formulaBaselinePending,
+          });
+        }
+        if (baseline.snapshot === null) {
+          return Object.freeze({
+            status: "unavailable" as const,
+            reasonCode: baseline.snapshotReasonCode,
+          });
+        }
+        return Object.freeze({
+          status: "available" as const,
+          snapshotId: baseline.snapshot.snapshotId,
+          configVersion: baseline.formula.configVersion,
+          formulaVersion: baseline.snapshot.formulaVersion,
+          computedAt: baseline.snapshot.computedAt,
+          scope: baseline.formula.formula.scope ?? null,
+          stale: baseline.stale,
+        });
+      } catch {
+        return Object.freeze({
+          status: "unavailable" as const,
+          reasonCode: miningReasonCodes.runtimeUnavailable,
+        });
+      }
+    },
+
     async readCommunityPower(communityId) {
       try {
         const baseline = await resolveMiningBaseline(repository, now());
@@ -208,6 +261,10 @@ export function createUnavailableMiningPowerReader(
   reasonCode: string = miningReasonCodes.runtimeUnavailable,
 ): CommunityMiningPowerReader {
   const reader: CommunityMiningPowerReader = {
+    readOrderingBaseline: () =>
+      Promise.resolve(
+        Object.freeze({ status: "unavailable" as const, reasonCode }),
+      ),
     readCommunityPower: () => Promise.resolve(unavailable(reasonCode)),
     readMemberPowers: (input) =>
       Promise.resolve(

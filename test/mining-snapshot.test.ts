@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { MiningFormulaDocument } from "../src/features/mining/mining-contract.js";
-import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
+import {
+  buildMiningDevBaselineDocuments,
+  miningDevBaselineConfigVersion,
+} from "../src/features/mining/mining-dev-baseline.js";
 import {
   computeMiningSnapshot,
   scaleRawHolding,
@@ -44,6 +47,7 @@ function balance(
   assetId: string,
   rawValue: string,
   blockNumber = "100",
+  source: MiningBalanceInput["source"] = "chain",
 ): MiningBalanceInput {
   return {
     ownerUserId,
@@ -53,6 +57,7 @@ function balance(
     rawValue,
     blockNumber,
     blockHash: hash,
+    source,
   };
 }
 
@@ -300,9 +305,7 @@ describe("computeMiningSnapshot (pure)", () => {
     if (result.kind !== "computed") {
       return;
     }
-    expect(result.formulaVersion).toBe(
-      "miningFormula-devBaseline-2026-09-15-r3",
-    );
+    expect(result.formulaVersion).toBe(miningDevBaselineConfigVersion);
     expect(
       result.powers.map((row) => [row.ownerUserId, row.assetId, row.power]),
     ).toEqual([
@@ -587,5 +590,70 @@ describe("computeMiningSnapshot (pure)", () => {
         blockNumber: "12",
       },
     ]);
+  });
+
+  it("says which kinds of observed balance produced the numbers (Decision 0061)", () => {
+    const chainOnly = computeMiningSnapshot(
+      {
+        balances: [balance(alice, loopAsset, "1000000000000000000")],
+        prices: [price(loopAsset, "2")],
+        communityWeights: [],
+      },
+      testOnlyFormula,
+    );
+    expect(chainOnly).toMatchObject({
+      kind: "computed",
+      holdingsSource: "chain",
+    });
+
+    const seedOnly = computeMiningSnapshot(
+      {
+        balances: [
+          balance(alice, loopAsset, "1000000000000000000", "100", "mock_seed"),
+        ],
+        prices: [price(loopAsset, "2")],
+        communityWeights: [],
+      },
+      testOnlyFormula,
+    );
+    expect(seedOnly).toMatchObject({
+      kind: "computed",
+      holdingsSource: "mock_seed",
+    });
+
+    const both = computeMiningSnapshot(
+      {
+        balances: [
+          balance(alice, loopAsset, "1000000000000000000"),
+          balance(bob, loopAsset, "5000000000000000000", "100", "mock_seed"),
+        ],
+        prices: [price(loopAsset, "2")],
+        communityWeights: [],
+      },
+      testOnlyFormula,
+    );
+    expect(both).toMatchObject({ kind: "computed", holdingsSource: "mixed" });
+  });
+
+  it("does not call a snapshot a demonstration because an unweighted asset was seeded", () => {
+    const result = computeMiningSnapshot(
+      {
+        balances: [
+          balance(alice, loopAsset, "1000000000000000000"),
+          balance(
+            bob,
+            unweightedAsset,
+            "9000000000000000000",
+            "100",
+            "mock_seed",
+          ),
+        ],
+        prices: [price(loopAsset, "2")],
+        communityWeights: [],
+      },
+      testOnlyFormula,
+    );
+    // The seeded row produced no power row, so it colours nothing.
+    expect(result).toMatchObject({ kind: "computed", holdingsSource: "chain" });
   });
 });

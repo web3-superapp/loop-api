@@ -424,6 +424,28 @@ export interface CommunityChannelSyncJobRecord {
  * Worker-side outbox port. `claimDueJobs` takes a fenced lease under
  * `for update skip locked`, so replicas never claim the same row.
  */
+/**
+ * A provisioned official channel due for an activity observation
+ * (Decision 0061): the channel the lane reads and the community the
+ * observation belongs to.
+ */
+export interface CommunityChannelActivityTarget {
+  readonly communityId: string;
+  readonly streamChannelId: string;
+}
+
+export interface RecordCommunityChannelActivityInput {
+  readonly communityId: string;
+  readonly streamChannelId: string;
+  readonly windowDays: number;
+  readonly messageCount: number;
+  /** True when more messages exist in the window than were counted. */
+  readonly bounded: boolean;
+  readonly totalMessageCount: number | null;
+  readonly lastMessageAt: string | null;
+  readonly observedAt: string;
+}
+
 export interface CommunityChannelSyncRepository {
   claimDueJobs(input: {
     readonly workerId: string;
@@ -454,6 +476,21 @@ export interface CommunityChannelSyncRepository {
     readonly workerId: string;
     readonly errorCode: string;
   }): Promise<void>;
+  /**
+   * Provisioned channels whose activity observation is missing or older
+   * than `staleAfterSeconds`, oldest first (Decision 0061). Unlike the job
+   * claim there is no lease: a second replica would at worst spend one
+   * duplicate provider read, and the write is an idempotent replacement of
+   * the newest observation.
+   */
+  listChannelsDueForActivity(input: {
+    readonly staleAfterSeconds: number;
+    readonly limit: number;
+  }): Promise<readonly CommunityChannelActivityTarget[]>;
+  /** Replaces the community's observation with the one just made. */
+  recordChannelActivity(
+    input: RecordCommunityChannelActivityInput,
+  ): Promise<void>;
 }
 
 export class CommunicationRepositoryUnavailableError extends Error {

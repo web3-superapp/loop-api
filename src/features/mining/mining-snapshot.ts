@@ -8,7 +8,9 @@ import {
   isUnsignedDecimalString,
   miningReasonCodes,
   type MiningFormulaDocument,
+  type MiningHoldingsSource,
   type MiningReferencePriceQuality,
+  type WalletBalanceSource,
 } from "./mining-contract.js";
 import { isDerivedPriceAllowed } from "./mining-reference-pricing.js";
 
@@ -45,6 +47,12 @@ export interface MiningBalanceInput {
   readonly rawValue: string;
   readonly blockNumber: string;
   readonly blockHash: string;
+  /**
+   * Where the balance was observed (Decision 0061). `mock_seed` rows reach
+   * this function only when the lane was configured to include them; the
+   * computation never decides that, it only reports what it counted.
+   */
+  readonly source: WalletBalanceSource;
 }
 
 export interface MiningPriceInput {
@@ -104,6 +112,8 @@ export type MiningSnapshotComputation =
       readonly priceVersion: string;
       readonly totalPower: string;
       readonly powers: readonly MiningSnapshotPower[];
+      /** The kinds of observed balance the published numbers count. */
+      readonly holdingsSource: MiningHoldingsSource;
       readonly skipped: readonly MiningSnapshotSkip[];
     }
   | {
@@ -292,6 +302,22 @@ export function selectMiningPrice(
   };
 }
 
+/**
+ * The snapshot-level word for the kinds of observed balance a set of rows
+ * counted (Decision 0061). Two kinds together are `mixed`; a single kind
+ * keeps its own name. Nothing is ever reported as `chain` because it is
+ * the default — the value is derived from the rows that produced power.
+ */
+function mergeHoldingsSource(
+  left: MiningHoldingsSource | null,
+  right: WalletBalanceSource,
+): MiningHoldingsSource {
+  if (left === null) {
+    return right;
+  }
+  return left === right ? left : "mixed";
+}
+
 function compareBlocks(left: string, right: string): number {
   const a = BigInt(left);
   const b = BigInt(right);
@@ -327,6 +353,7 @@ export function computeMiningSnapshot(
     null;
   let latestPriceFetchedAt: string | null = null;
   let priceSource: string | null = null;
+  let snapshotHoldingsSource: MiningHoldingsSource | null = null;
 
   for (const balance of inputs.balances) {
     if (
@@ -390,6 +417,10 @@ export function computeMiningSnapshot(
     );
     const key = `${balance.ownerUserId}|${balance.assetId}`;
     const existing = perAccountAsset.get(key);
+    snapshotHoldingsSource = mergeHoldingsSource(
+      snapshotHoldingsSource,
+      balance.source,
+    );
     perAccountAsset.set(
       key,
       Object.freeze({
@@ -477,6 +508,10 @@ export function computeMiningSnapshot(
     priceVersion: `${priceSource}:${latestPriceFetchedAt}`,
     totalPower,
     powers: Object.freeze(powers),
+    // Only the rows that produced power decide the word: a mock balance of
+    // an asset the version does not weight changes no number and does not
+    // make the snapshot a demonstration.
+    holdingsSource: snapshotHoldingsSource ?? "chain",
     skipped: Object.freeze(skipped),
   });
 }
