@@ -175,6 +175,12 @@ export interface VoiceRoomRecord {
   readonly endedAt: string | null;
 }
 
+export type VoiceRoomLeaveOutcome = "left" | "no_op";
+
+export interface VoiceRoomLeaveRecord extends VoiceRoomViewerRecord {
+  readonly outcome: VoiceRoomLeaveOutcome;
+}
+
 export interface VoiceRoomViewerRecord {
   readonly room: VoiceRoomRecord;
   readonly viewerRole: VoiceRoomRole | null;
@@ -347,7 +353,13 @@ export interface CommunicationRepository {
     readonly viewerUserId: string;
   }): Promise<VoiceRoomViewerRecord>;
   joinVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
-  leaveVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  /**
+   * `outcome: "left"` when this command (or its same-key replay) moved the
+   * member out and the service must attempt the Stream removal;
+   * `"no_op"` when the caller was already out of the live room (Decision
+   * 0069 §2.4): nothing was written and there is no provider write to make.
+   */
+  leaveVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomLeaveRecord>;
   raiseHand(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   cancelHandRaise(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   /** The pending queue in sequence order, with the viewer's room record. */

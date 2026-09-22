@@ -981,6 +981,127 @@ describe("PostgreSQL V2 communication repository", () => {
     ).rejects.toBeInstanceOf(CommunicationNotFoundError);
   });
 
+  it("shows a member who just joined on the roster and in the counts on the very next read (Decision 0069 §2)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const listener = await createAccount();
+    await join(listener.userId, communityId);
+
+    const before = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+    });
+    expect(before.items).toEqual([]);
+
+    await joinRoom(listener.userId, voiceRoomId);
+
+    // No other write in between: the join committed before it answered, and
+    // every read goes to PostgreSQL, so the host's next read has the member.
+    const roster = await communication.listVoiceRoomMembers({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+      role: "listener",
+      limit: 10,
+    });
+    expect(roster.items.map((item) => item.publicProfileId)).toEqual([
+      listener.publicProfileId,
+    ]);
+    expect(roster.room).toMatchObject({
+      viewerRole: "host",
+      listenerCount: 1,
+      joinedCount: 2,
+    });
+    const hostView = await communication.getVoiceRoom({
+      voiceRoomId,
+      viewerUserId: owner.userId,
+    });
+    expect(hostView).toMatchObject({ listenerCount: 1, joinedCount: 2 });
+  });
+
+  it("treats leave by an account not in the live room as a no-op, keeps the host refusal, and keeps the ended room stale (Decision 0069 §4)", async () => {
+    const owner = await createAccount();
+    const communityId = await createCommunity(owner.userId);
+    const voiceRoomId = await createVoiceRoom(owner.userId, communityId);
+    await provision(voiceRoomId);
+    const member = await createAccount();
+    await join(member.userId, communityId);
+
+    async function leftAudits(): Promise<number> {
+      const result = await pool.query<{ total: string }>({
+        text: `
+          select count(*)::text as total from public.voice_room_events
+          where voice_room_id = $1 and event_type = 'member_left'
+        `,
+        values: [voiceRoomId],
+      });
+      return Number.parseInt(result.rows[0]?.total ?? "0", 10);
+    }
+
+    // Outside the community: refused before any room state is read, and
+    // no room resource is handed out as a "no-op" (F1).
+    const outsider = await createAccount();
+    await expect(
+      leaveRoom(outsider.userId, voiceRoomId),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+    expect(await leftAudits()).toBe(0);
+
+    // A community member that never joined: the end state already holds.
+    const neverJoined = await leaveRoom(member.userId, voiceRoomId);
+    expect(neverJoined).toMatchObject({
+      outcome: "no_op",
+      viewerRole: null,
+      joinedCount: 1,
+    });
+    expect(await leftAudits()).toBe(0);
+
+    await joinRoom(member.userId, voiceRoomId);
+    const left = await leaveRoom(member.userId, voiceRoomId);
+    expect(left).toMatchObject({
+      outcome: "left",
+      viewerRole: null,
+      joinedCount: 1,
+    });
+    expect(await leftAudits()).toBe(1);
+
+    // Already left, a fresh key: still the same end state, no second audit.
+    const leftAgain = await leaveRoom(member.userId, voiceRoomId);
+    expect(leftAgain).toMatchObject({
+      outcome: "no_op",
+      viewerRole: null,
+      joinedCount: 1,
+    });
+    expect(await leftAudits()).toBe(1);
+    expect(await memberJoinedAt(voiceRoomId, member.userId)).toMatchObject({
+      state: "left",
+    });
+
+    // The host is refused, not ignored: it ends the room instead.
+    await expect(leaveRoom(owner.userId, voiceRoomId)).rejects.toBeInstanceOf(
+      CommunicationPermissionDeniedError,
+    );
+
+    await joinRoom(member.userId, voiceRoomId);
+    await communication.endVoiceRoom({
+      actorUserId: owner.userId,
+      voiceRoomId,
+      idempotencyKey: randomUUID(),
+      requestSha256: communicationCommandDigest("voiceRoomEnd", [voiceRoomId]),
+      requestId: randomUUID(),
+    });
+    // Every write on an ended room stays DATA_STALE (Decision 0032), a
+    // member's leave included; an outsider is still refused first.
+    await expect(leaveRoom(member.userId, voiceRoomId)).rejects.toBeInstanceOf(
+      CommunicationDataStaleError,
+    );
+    await expect(
+      leaveRoom(outsider.userId, voiceRoomId),
+    ).rejects.toBeInstanceOf(CommunicationPermissionDeniedError);
+  });
+
   it("refreshes joined_at when a member re-joins after leaving, and keeps it on an idempotent re-join (R4-6)", async () => {
     const owner = await createAccount();
     const communityId = await createCommunity(owner.userId);

@@ -175,7 +175,49 @@ export const voiceRoomProviderSyncReasonCodes = Object.freeze({
   permission: "STREAM_CALL_PERMISSION_UNCONFIRMED",
   mute: "STREAM_CALL_MUTE_UNCONFIRMED",
   end: "STREAM_CALL_END_UNCONFIRMED",
+  /** The hand-raise custom call event (Decision 0069) was not confirmed. */
+  event: "STREAM_CALL_EVENT_UNCONFIRMED",
 } as const);
+
+/**
+ * The one custom Stream call event LOOP sends (Decision 0069). A hand raise
+ * is a LOOP queue fact with no Stream counterpart, so nothing in the call
+ * tells the host's device that the queue changed; this event does. It
+ * travels on the call every connected device already listens to, is sent
+ * by the host's Stream user (the queue's owner), and names the queue entry
+ * only: no alias, no profile, no raiser identity, so the roster's anonymous
+ * display rule is not undone by an event. Keys are snake_case like the
+ * `loop_call_kind` custom on the same call object.
+ */
+export const voiceRoomCallEventKind = "voiceRoomHandRaise" as const;
+export const voiceRoomCallEventSchemaVersion = 1;
+
+/** A type alias, not an interface, so it satisfies the gateway's flat map. */
+export type VoiceRoomHandRaiseCallEvent = Readonly<{
+  loop_event_kind: typeof voiceRoomCallEventKind;
+  loop_event_schema_version: typeof voiceRoomCallEventSchemaVersion;
+  voice_room_id: string;
+  hand_raise_id: string;
+  /** The decimal queue position string, never a JS number. */
+  sequence: string;
+  state: HandRaiseState;
+}>;
+
+export function voiceRoomHandRaiseCallEvent(input: {
+  readonly voiceRoomId: string;
+  readonly handRaiseId: string;
+  readonly sequence: string;
+  readonly state: HandRaiseState;
+}): VoiceRoomHandRaiseCallEvent {
+  return Object.freeze({
+    loop_event_kind: voiceRoomCallEventKind,
+    loop_event_schema_version: voiceRoomCallEventSchemaVersion,
+    voice_room_id: input.voiceRoomId,
+    hand_raise_id: input.handRaiseId,
+    sequence: input.sequence,
+    state: input.state,
+  });
+}
 
 /**
  * The 0005 pre-condition: Stream Dashboard evidence that the `user` role of

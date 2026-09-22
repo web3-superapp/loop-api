@@ -380,9 +380,18 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   `STREAM_CALL_GO_LIVE_UNCONFIRMED`）；`join` 失败则 `503 CAPABILITY_UNAVAILABLE`
   且 `detailsSafe.reasonCode = "VOICE_ROOM_BACKSTAGE_NOT_LIVE"`，不写任何
   成员行。页面看到 `backstage: true` 就显示「语音房尚未开播，请刷新重试」，
-  不要显示「连接失败」。建房响应本身若是 `reconciling` +
-  `STREAM_CALL_GO_LIVE_UNCONFIRMED`，房间存在但不可加入，host 重试即再走一次
-  两步写。
+  不要显示「连接失败」。
+- **建房 201 不等于能进（决策 0069）**：`POST …/voice-rooms` 只要 LOOP 行提交
+  就是 201，Stream 那两步写的结果在响应体里。**只有
+  `room.provisionState === "provisioned" && room.backstage === false` 才
+  `call.join()`**；否则（`reconciling` + `providerSync.unconfirmed`，
+  `reasonCode` 是 `STREAM_CALL_CREATE_UNCONFIRMED` 或
+  `STREAM_CALL_GO_LIVE_UNCONFIRMED`）房间存在但 call 不可用，页面要显示可定位
+  的原因文案，不要静默进房失败。恢复只有两条路：**用同一个 `Idempotency-Key`
+  重试建房**（后端跳过本地写、重走 create → go_live），或 host 先 `POST …/end`
+  再新建。**换一个 key 重建会 `409 RESOURCE_CONFLICT`**——`reconciling` 的房在
+  DB 里仍是 `live`，占着"一社区一 live 房"的位置。后端对每一次未确认的 Stream
+  写都会记一条 warn（`requestId` = 响应头 `x-request-id`），把它带进反馈。
 - **`join` 幂等**：已在房间内会返回当前角色，不会报错，`joinedAt` 不变；
   `leave` 之后再 `join`，名单里的 `joinedAt` 刷新为这次加入的时间（决策
   0054 §2.3，R4-6）。`expiresAt` 是本次入场授权到期时间；到期前用
@@ -392,6 +401,48 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   重复举手返回 `409 DATA_STALE`。host 邀请发言会把该用户的 pending 举手置为
   `invited`。队列条目的身份投影与名单同一套（决策 0053，见下一节末尾）；
   **`profile` 已删除**。
+- **举手通知走 Stream 自定义 call event（决策 0069）**：`POST …/hand-raise`
+  与 `DELETE …/hand-raise` 在 LOOP 队列提交后，用 **host 的 Stream 用户**向
+  这个 call 发一次自定义事件，房内所有已连接设备都会收到：
+
+  ```json
+  {
+    "loop_event_kind": "voiceRoomHandRaise",
+    "loop_event_schema_version": 1,
+    "voice_room_id": "<uuid>",
+    "hand_raise_id": "<uuid>",
+    "sequence": "7",
+    "state": "pending"
+  }
+  ```
+
+  `state` 是 `pending`（举手）或 `cancelled`（取消）。事件**只说队列变了**，
+  不含 alias / publicProfileId / loopId / Stream 用户 ID（否则匿名举手者会被对应
+  到某个 participant tile）。host 端做法：`call.on("custom", e)`，
+  `e.custom.loop_event_kind === "voiceRoomHandRaise"` 时重读
+  `GET …/hand-raises`（身份、顺序、`invite_speaker` 命令都从那里来），不要从
+  事件里拼状态；兜底轮询 ≥ 15 s、只在 host 视角开。举手响应的 `providerSync`
+  报的就是这一次发送：`unconfirmed` + `STREAM_CALL_EVENT_UNCONFIRMED` 表示
+  **举手已经记上了**，但没有设备被告知——给举手者提示"主持人可能稍后才看到"。
+  `state` 只会是本命令产生的状态：同一个 `Idempotency-Key` 重放时，若这条举手
+  已被 host 置为 `invited`（或已有更新的一条），后端不再发事件、响应
+  `confirmed`；事件永远不会带 `invited`。
+
+- **join 之后名单与人数立即包含新成员（决策 0069 §2.3）**：`join` 在一个事务
+  里提交，`GET …/members`、`GET …/voice-rooms/{id}` 每次读 PostgreSQL、没有缓存，
+  所以 join 200 之后的下一次读就有这个人（`listenerCount` / `joinedCount` 已加一、
+  名单有其行）。主持人端"房内人数"用 `participants.joinedCount`；如果要显示
+  "在线 N 人"用 `observed.participantCount`，它要等对方设备真正 `call.join()`
+  之后才含该人——在 Stream 的 `call.session_participant_joined|left`、
+  `call.member_added|removed` 事件上重读房间资源即可。
+- **`leave` 幂等（决策 0069 §2.4）**：在 live 房里，**社区成员**从未加入或已经
+  离开时调 `POST …/leave` 得 **`200`**、`viewer.role: null`、
+  `providerSync: confirmed`、`participants.observed: unavailable`（后端什么都
+  没写、没做 Stream 移除、也没观测——不要把 observed 显示成 0）；不再是
+  `409 DATA_STALE`。拒绝顺序与 join 相同：`404` → `403 PERMISSION_DENIED`
+  （非社区成员 / 被 ban，不看房间状态；host 调 leave 也是 403，host 只能
+  `end`）→ `409 DATA_STALE`（房间已结束，所有写都是），客户端收到 409 就导航
+  回社区页。
 - **人数（决策 0051，三个口径三个字段，不要混）**：
   - `speakerCount` / `listenerCount`：LOOP 的**角色意图**（`voice_room_members`
     中 `joined` 的 speaker / listener）。**都不含 host**，所以只有主持人的房间是
@@ -418,7 +469,8 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   `unconfirmed` 表示 LOOP 侧已提交但 Provider 事实未确认（`reasonCode` 取值：
   `STREAM_CALL_CREATE_UNCONFIRMED`、`STREAM_CALL_GO_LIVE_UNCONFIRMED`、
   `STREAM_CALL_MEMBER_UNCONFIRMED`、`STREAM_CALL_PERMISSION_UNCONFIRMED`、
-  `STREAM_CALL_MUTE_UNCONFIRMED`、`STREAM_CALL_END_UNCONFIRMED`）。读路径
+  `STREAM_CALL_MUTE_UNCONFIRMED`、`STREAM_CALL_END_UNCONFIRMED`、
+  `STREAM_CALL_EVENT_UNCONFIRMED`（举手事件，决策 0069））。读路径
   只会出现 `STREAM_CALL_GO_LIVE_UNCONFIRMED`（自愈失败）。**不要把 LOOP 提交
   当成 Provider 事实。**
   用同一个 `Idempotency-Key` 重放会跳过本地变更、只重试那一次 Provider 调用。
@@ -694,9 +746,9 @@ pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
 | ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400  | `INVALID_REQUEST`                | header/query/body 违规，`Idempotency-Key` 不是规范 UUIDv4                                                                                             |
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺少或无效 Privy Bearer                                                                                                                               |
-| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、非成员读房、创建者退群、非 owner/admin 开房                                                                                       |
+| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、host 调 `leave`、非成员读房、创建者退群、非 owner/admin 开房                                                                      |
 | 404  | `NOT_FOUND`                      | 模块未启用、房间/群/操作不存在或不属于调用者、非好友目标                                                                                              |
-| 409  | `DATA_STALE`                     | 已结束房间的写操作、重复举手、取消不存在的举手、非法角色迁移                                                                                          |
+| 409  | `DATA_STALE`                     | 已结束房间的写操作（含 `leave`）、重复举手、取消不存在的举手、非法角色迁移；live 房里"不在房间内"的 `leave` 不再是它（200，决策 0069）                |
 | 409  | `IDEMPOTENCY_CONFLICT`           | 同一 key 配不同请求内容                                                                                                                               |
 | 409  | `PROFILE_ACTIVATION_REQUIRED`    | 账号没有激活的 V2 profile                                                                                                                             |
 | 409  | `RESOURCE_CONFLICT`              | 社区已有 `live` 语音房                                                                                                                                |

@@ -50,6 +50,7 @@ import {
   type VoiceRoomRecord,
   type VoiceRoomTargetCommandInput,
   type VoiceRoomTargetRecord,
+  type VoiceRoomLeaveRecord,
   type VoiceRoomViewerRecord,
 } from "../features/communication/communication-repository.js";
 import { generateOpaqueId } from "../core/ids/opaque-id.js";
@@ -1114,7 +1115,7 @@ export function createPostgresCommunicationRepository(
 
     async leaveVoiceRoom(
       rawInput: VoiceRoomCommandInput,
-    ): Promise<VoiceRoomViewerRecord> {
+    ): Promise<VoiceRoomLeaveRecord> {
       try {
         const actorUserId = userIdSchema.parse(rawInput.actorUserId);
         const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
@@ -1129,9 +1130,20 @@ export function createPostgresCommunicationRepository(
           });
           if ((await findVoiceRoomAudit(client, recordId)) !== null) {
             const room = await readVoiceRoom(client, voiceRoomId);
-            return readViewerRecord(client, room, actorUserId);
+            return Object.freeze({
+              ...(await readViewerRecord(client, room, actorUserId)),
+              outcome: "left" as const,
+            });
           }
-          const room = await requireLiveRoom(client, voiceRoomId);
+          // The join refusal order (Decision 0054 §2.2): NOT_FOUND, then
+          // PERMISSION_DENIED for anyone outside the community regardless
+          // of room state, then DATA_STALE for an ended room. A room
+          // resource is never handed to a non-member, not even as a no-op.
+          const room = await readVoiceRoom(client, voiceRoomId, true);
+          await requireCommunityStanding(client, room.communityId, actorUserId);
+          if (room.state !== "live") {
+            throw new CommunicationDataStaleError();
+          }
           const currentRow = await client.query<{
             role: string;
             state: string;
@@ -1145,7 +1157,15 @@ export function createPostgresCommunicationRepository(
           });
           const current = currentRow.rows[0];
           if (current === undefined || current.state !== "joined") {
-            throw new CommunicationDataStaleError();
+            // Leave asks for one end state: "I am not in this room". A
+            // community member that never joined or already left is there
+            // already, so the command is a no-op that reports the room as
+            // it is (Decision 0069 §2.4): no member row, no audit, no role
+            // change, and the caller makes no Stream write either.
+            return Object.freeze({
+              ...(await readViewerRecord(client, room, actorUserId)),
+              outcome: "no_op" as const,
+            });
           }
           if (current.role === "host") {
             // The host owns the room lifecycle; it ends the room instead.
@@ -1180,7 +1200,10 @@ export function createPostgresCommunicationRepository(
             idempotencyRecordId: recordId,
             requestId,
           });
-          return readViewerRecord(client, room, actorUserId);
+          return Object.freeze({
+            ...(await readViewerRecord(client, room, actorUserId)),
+            outcome: "left" as const,
+          });
         });
       } catch (error) {
         return translateRepositoryError(error);

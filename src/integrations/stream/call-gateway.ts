@@ -122,6 +122,23 @@ export interface StreamCallEndInput {
   readonly signal: AbortSignal;
 }
 
+/** A custom value Stream carries verbatim: flat, no nesting, no undefined. */
+export type StreamCallEventValue = string | number | boolean | null;
+
+/**
+ * One custom call event (Decision 0069). Stream requires a sending user; the
+ * caller names it explicitly so the service, not the gateway, decides whose
+ * name the event travels under. The payload is flat and bounded: a key is a
+ * snake_case identifier, a string value is at most 256 characters, and the
+ * whole map holds at most 16 entries.
+ */
+export interface StreamCallEventInput {
+  readonly callId: string;
+  readonly sentByStreamUserId: string;
+  readonly custom: Readonly<Record<string, StreamCallEventValue>>;
+  readonly signal: AbortSignal;
+}
+
 export interface StreamCallMemberObservation {
   readonly memberCount: number;
   readonly observedAt: string;
@@ -166,18 +183,37 @@ export interface StreamCallGateway {
    */
   goLive(input: StreamCallEndInput): Promise<StreamCallProjection>;
   endCall(input: StreamCallEndInput): Promise<void>;
+  /**
+   * Send one custom event to every device connected to the call (Decision
+   * 0069): `POST /video/call/{type}/{id}/event`. Fire-and-forget on the
+   * provider side; a resolved promise means Stream accepted the event, not
+   * that any device received it.
+   */
+  sendCallEvent(input: StreamCallEventInput): Promise<void>;
   queryMembers(input: StreamCallEndInput): Promise<StreamCallMemberObservation>;
   observeSession(
     input: StreamCallEndInput,
   ): Promise<StreamCallSessionObservation>;
 }
 
+/**
+ * Coarse, log-safe classification of why a call to Stream did not confirm
+ * (Decision 0069 §2.2): the SDK's 3s budget elapsed (`timeout`), Stream or
+ * the network answered with a failure (`rejected`), or the input never
+ * reached the provider (`invalid_input`). An aborted request signal is not
+ * one of these: it is rethrown as the abort itself, never sanitized.
+ */
+export type StreamCallGatewayUnavailableReason =
+  "timeout" | "rejected" | "invalid_input";
+
 export class StreamCallGatewayUnavailableError extends Error {
   readonly code = "stream_call_gateway_unavailable";
+  readonly reason: StreamCallGatewayUnavailableReason;
 
-  constructor() {
+  constructor(reason: StreamCallGatewayUnavailableReason = "rejected") {
     super("The Stream call gateway is unavailable");
     this.name = "StreamCallGatewayUnavailableError";
+    this.reason = reason;
   }
 }
 
@@ -191,7 +227,7 @@ export class StreamCallProjectionMismatchError extends Error {
 }
 
 function unavailable(): never {
-  throw new StreamCallGatewayUnavailableError();
+  throw new StreamCallGatewayUnavailableError("invalid_input");
 }
 
 function projectionMismatch(): never {
@@ -242,6 +278,32 @@ function isCallMemberRole(value: unknown): value is StreamCallMemberRole {
   return value === "host" || value === "speaker" || value === "listener";
 }
 
+const maximumCallEventEntries = 16;
+const maximumCallEventStringLength = 256;
+const callEventKeyPattern = /^[a-z][a-z0-9_]{0,63}$/;
+
+function isCallEventCustom(
+  value: unknown,
+): value is Readonly<Record<string, StreamCallEventValue>> {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const entries = Object.entries(value);
+  return (
+    entries.length >= 1 &&
+    entries.length <= maximumCallEventEntries &&
+    entries.every(
+      ([key, entry]) =>
+        callEventKeyPattern.test(key) &&
+        (entry === null ||
+          typeof entry === "boolean" ||
+          (typeof entry === "number" && Number.isFinite(entry)) ||
+          (typeof entry === "string" &&
+            entry.length <= maximumCallEventStringLength)),
+    )
+  );
+}
+
 function isPermissionList(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
@@ -262,10 +324,32 @@ function parseSignal(value: unknown): AbortSignal {
   return value;
 }
 
+/**
+ * The SDK's per-request `AbortSignal.timeout` fires as a TimeoutError, which
+ * the SDK re-throws as its own error with no provider `code`, a message that
+ * names the timeout, and the original not kept as `cause`. Both shapes are
+ * a timeout; a provider answer always carries a `code` or a response status.
+ */
+function isTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === "TimeoutError" || error.name === "AbortError") {
+    return true;
+  }
+  const wrapped = error as Error & { readonly code?: unknown };
+  return (
+    isRecord((wrapped as { metadata?: unknown }).metadata) &&
+    wrapped.code === undefined &&
+    /timeout/i.test(error.message)
+  );
+}
+
 function sanitizeProviderFailure(error: unknown, signal: AbortSignal): never {
   signal.throwIfAborted();
-  void error;
-  return unavailable();
+  throw new StreamCallGatewayUnavailableError(
+    isTimeout(error) ? "timeout" : "rejected",
+  );
 }
 
 function validateCallResponse(
@@ -384,6 +468,7 @@ export function createUnavailableStreamCallGateway(): StreamCallGateway {
     muteUser: unavailablePromise,
     goLive: unavailablePromise,
     endCall: unavailablePromise,
+    sendCallEvent: unavailablePromise,
     queryMembers: unavailablePromise,
     observeSession: unavailablePromise,
   });
@@ -677,6 +762,37 @@ export function createStreamCallGateway(
       try {
         signal.throwIfAborted();
         await client.video.call(streamCallType, callId).end();
+        signal.throwIfAborted();
+      } catch (error) {
+        return sanitizeProviderFailure(error, signal);
+      }
+    },
+
+    async sendCallEvent(rawInput: StreamCallEventInput): Promise<void> {
+      if (
+        !isRecord(rawInput) ||
+        !hasExactKeys(rawInput, [
+          "callId",
+          "sentByStreamUserId",
+          "custom",
+          "signal",
+        ]) ||
+        !isCallId(rawInput["callId"]) ||
+        !isStreamUserId(rawInput["sentByStreamUserId"]) ||
+        !isCallEventCustom(rawInput["custom"])
+      ) {
+        return unavailable();
+      }
+      const callId = rawInput["callId"];
+      const sentByStreamUserId = rawInput["sentByStreamUserId"];
+      const custom = { ...rawInput["custom"] };
+      const signal = parseSignal(rawInput["signal"]);
+      try {
+        signal.throwIfAborted();
+        await client.video.call(streamCallType, callId).sendCallEvent({
+          user_id: sentByStreamUserId,
+          custom,
+        });
         signal.throwIfAborted();
       } catch (error) {
         return sanitizeProviderFailure(error, signal);
