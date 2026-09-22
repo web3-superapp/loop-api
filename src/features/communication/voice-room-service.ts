@@ -20,6 +20,7 @@ import {
   parseCommunicationPublicProfileId,
   voiceCallCid,
   voiceRoomCursorRoutes,
+  voiceRoomHandRaiseCallEvent,
   voiceRoomMemberAnonymousKey,
   voiceRoomMemberDisplayRuleKey,
   voiceRoomMemberListLimits,
@@ -314,7 +315,12 @@ async function repositoryCall<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The one log line this service writes: a go-live that was not confirmed. */
+/**
+ * The two log lines this service writes: a go-live that was not confirmed,
+ * and any other Stream write that was not confirmed (Decision 0069). Both
+ * carry identifiers, the request ID, and an error class name; never a
+ * provider response body.
+ */
 export interface VoiceRoomServiceLogger {
   warn(context: Record<string, unknown>, message: string): void;
 }
@@ -617,8 +623,39 @@ export function createVoiceRoomService(
     };
   }
 
+  /**
+   * One sanitized warning per unconfirmed Stream write (Decision 0069): the
+   * response already says `providerSync.unconfirmed`, this makes the same
+   * fact findable in the API log by `requestId` (= `x-request-id`).
+   */
+  function warnUnconfirmedWrite(
+    context: {
+      readonly voiceRoomId: string;
+      readonly callId: string;
+      readonly requestId: string;
+    },
+    reasonCode: string,
+    error: unknown,
+  ): void {
+    options.logger?.warn(
+      {
+        voiceRoomId: context.voiceRoomId,
+        callId: context.callId,
+        requestId: context.requestId,
+        reasonCode,
+        errorName: error instanceof Error ? error.name : "unknown",
+      },
+      "Voice room provider write was not confirmed",
+    );
+  }
+
   /** Attempt exactly one Stream write and classify its outcome. */
   async function attemptProviderWrite(
+    context: {
+      readonly voiceRoomId: string;
+      readonly callId: string;
+      readonly requestId: string;
+    },
     operation: () => Promise<void>,
     signal: AbortSignal,
     reasonCode: string,
@@ -629,9 +666,63 @@ export function createVoiceRoomService(
       return confirmedSync;
     } catch (error) {
       signal.throwIfAborted();
-      void error;
+      warnUnconfirmedWrite(context, reasonCode, error);
       return unconfirmedSync(reasonCode);
     }
+  }
+
+  function writeContext(
+    record: VoiceRoomViewerRecord,
+    requestId: string,
+  ): {
+    readonly voiceRoomId: string;
+    readonly callId: string;
+    readonly requestId: string;
+  } {
+    return {
+      voiceRoomId: record.room.voiceRoomId,
+      callId: record.room.callId,
+      requestId,
+    };
+  }
+
+  /**
+   * The hand-raise custom call event (Decision 0069). The queue entry is
+   * already committed; this tells every connected device (the host's above
+   * all) that the queue changed, so it can re-read `GET …/hand-raises`. Sent
+   * under the host's Stream user, the queue's owner; carries the entry, not
+   * the raiser. Only a provisioned live room has a call to send it on; a
+   * room without one has no provider write to confirm.
+   */
+  async function announceHandRaise(
+    record: VoiceRoomViewerRecord,
+    input: VoiceRoomCommandInput,
+  ): Promise<VoiceRoomProviderSync> {
+    const handRaise = record.viewerHandRaise;
+    if (
+      handRaise === null ||
+      record.room.provisionState !== "provisioned" ||
+      record.room.state !== "live"
+    ) {
+      return confirmedSync;
+    }
+    return attemptProviderWrite(
+      writeContext(record, input.requestId),
+      () =>
+        options.callGateway.sendCallEvent({
+          callId: record.room.callId,
+          sentByStreamUserId: record.hostStreamUserId,
+          custom: voiceRoomHandRaiseCallEvent({
+            voiceRoomId: record.room.voiceRoomId,
+            handRaiseId: handRaise.handRaiseId,
+            sequence: handRaise.sequence,
+            state: handRaise.state,
+          }),
+          signal: input.signal,
+        }),
+      input.signal,
+      voiceRoomProviderSyncReasonCodes.event,
+    );
   }
 
   function commandInputs(input: {
@@ -818,7 +909,11 @@ export function createVoiceRoomService(
         input.signal.throwIfAborted();
       } catch (error) {
         input.signal.throwIfAborted();
-        void error;
+        warnUnconfirmedWrite(
+          writeContext(record, input.requestId),
+          voiceRoomProviderSyncReasonCodes.create,
+          error,
+        );
         const updated = await repositoryCall(() =>
           options.repository.recordVoiceRoomProvisioning({
             voiceRoomId: record.room.voiceRoomId,
@@ -948,6 +1043,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record, input.requestId),
         () =>
           options.callGateway.updateCallMembers({
             callId: record.room.callId,
@@ -982,6 +1078,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record, input.requestId),
         () =>
           options.callGateway.updateCallMembers({
             callId: record.room.callId,
@@ -1015,10 +1112,11 @@ export function createVoiceRoomService(
           requestId: input.requestId,
         }),
       );
-      // Raising a hand is a LOOP queue fact only; it makes no Stream write.
+      // Raising a hand is a LOOP queue fact; the one Stream write that
+      // follows is the custom event that tells the host the queue changed.
       return resource(
         record,
-        confirmedSync,
+        await announceHandRaise(record, input),
         await observeAfterCommand(record, input.signal),
       );
     },
@@ -1041,7 +1139,7 @@ export function createVoiceRoomService(
       );
       return resource(
         record,
-        confirmedSync,
+        await announceHandRaise(record, input),
         await observeAfterCommand(record, input.signal),
       );
     },
@@ -1171,6 +1269,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record.room, input.requestId),
         () =>
           options.callGateway.muteUser({
             callId: record.room.room.callId,
@@ -1239,6 +1338,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record.room, input.requestId),
         async () => {
           await options.callGateway.updateCallMembers({
             callId: record.room.room.callId,
@@ -1286,6 +1386,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record.room, input.requestId),
         async () => {
           await options.callGateway.updateUserPermissions({
             callId: record.room.room.callId,
@@ -1326,6 +1427,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record, input.requestId),
         () =>
           options.callGateway.muteUsers({
             callId: record.room.callId,
@@ -1356,6 +1458,7 @@ export function createVoiceRoomService(
         }),
       );
       const providerSync = await attemptProviderWrite(
+        writeContext(record, input.requestId),
         () =>
           options.callGateway.endCall({
             callId: record.room.callId,

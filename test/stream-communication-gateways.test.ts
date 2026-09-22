@@ -1001,6 +1001,94 @@ describe("Stream audio_room call gateway", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  describe("sendCallEvent (Decision 0069)", () => {
+    const custom = {
+      loop_event_kind: "voiceRoomHandRaise",
+      loop_event_schema_version: 1,
+      voice_room_id: "8c7b6a59-4d3e-4f21-8a0b-1c2d3e4f5a6b",
+      hand_raise_id: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+      sequence: "7",
+      state: "pending",
+    };
+
+    it("sends one custom event on the call under the named user", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await gateway.sendCallEvent({
+        callId,
+        sentByStreamUserId: hostUserId,
+        custom,
+        signal: signal(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        requestedUrl(fetchMock, 0).pathname.endsWith(
+          `/video/call/audio_room/${callId}/event`,
+        ),
+      ).toBe(true);
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        custom,
+      });
+    });
+
+    it("refuses a nested, empty, or oversized payload and a foreign sender before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      for (const input of [
+        { custom: { nested: { inner: 1 } } },
+        { custom: {} },
+        { custom: { text: "x".repeat(257) } },
+        { custom: { "Bad-Key": 1 } },
+        { custom: { ok: 1 }, sentByStreamUserId: "not-a-loop-user" },
+        { custom: { ok: 1 }, callId: "default" },
+      ]) {
+        await expect(
+          gateway.sendCallEvent({
+            callId,
+            sentByStreamUserId: hostUserId,
+            signal: signal(),
+            ...input,
+          } as never),
+        ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("sanitizes a provider rejection into the unavailable error", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ code: 16, message: "not allowed" }, 403),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      await expect(
+        gateway.sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        createUnavailableStreamCallGateway().sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    });
+  });
+
   it("projects an observed member count with its own observedAt", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       jsonResponse({

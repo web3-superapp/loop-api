@@ -262,7 +262,7 @@ export function registerV2VoiceRoomRoutes(
       "leave",
       "leaveV2VoiceRoom",
       "Leave a voice room",
-      "The host cannot leave; it ends the room instead. Leaving cancels any pending hand raise.",
+      "The host cannot leave (PERMISSION_DENIED); it ends the room instead. Leaving cancels any pending hand raise. Idempotent on a live room: an account that never joined or already left gets 200 with `viewer.role: null` and no row, audit, or Stream write (Decision 0069). A leave on an ended room stays DATA_STALE like every other write.",
       "leave",
     ],
     [
@@ -270,7 +270,7 @@ export function registerV2VoiceRoomRoutes(
       "hand-raise",
       "raiseV2VoiceRoomHand",
       "Raise a hand to request the microphone",
-      "Only a joined listener may raise a hand, and only one raise may be pending per account. A second raise while one is pending is DATA_STALE.",
+      'Only a joined listener may raise a hand, and only one raise may be pending per account. A second raise while one is pending is DATA_STALE. After the queue entry commits, one custom Stream call event (`custom.loop_event_kind: "voiceRoomHandRaise"`, `state: "pending"`) is sent on the call under the host\'s Stream user so every connected device, the host\'s above all, learns the queue changed and re-reads GET …/hand-raises; the event names the entry, never the raiser (Decision 0069). `providerSync` reports that one send: STREAM_CALL_EVENT_UNCONFIRMED means the raise committed but no device was told.',
       "raiseHand",
     ],
     [
@@ -278,7 +278,7 @@ export function registerV2VoiceRoomRoutes(
       "hand-raise",
       "cancelV2VoiceRoomHandRaise",
       "Cancel a pending hand raise",
-      "Cancelling when nothing is pending is DATA_STALE.",
+      'Cancelling when nothing is pending is DATA_STALE. Sends the same custom call event as the raise with `state: "cancelled"` (Decision 0069); `providerSync` reports that send.',
       "cancelHandRaise",
     ],
     [

@@ -340,6 +340,7 @@ function callGatewayFake(overrides: Partial<StreamCallGateway> = {}): {
     muteUsers: vi.fn(() => Promise.resolve()),
     muteUser: vi.fn(() => Promise.resolve()),
     endCall: vi.fn(() => Promise.resolve()),
+    sendCallEvent: vi.fn(() => Promise.resolve()),
     queryMembers: vi.fn(() =>
       Promise.resolve({
         memberCount: 5,
@@ -1852,6 +1853,252 @@ describe("LOOP API V2 communication module", () => {
         retryable: false,
       });
     }
+  });
+
+  describe("hand-raise custom call event (Decision 0069)", () => {
+    const hostStreamUserId = `loop_${accountId.replaceAll("-", "")}`;
+
+    it("sends the event as the host after the LOOP commit, naming the entry and not the raiser", async () => {
+      const order: string[] = [];
+      const callGateway = callGatewayFake({
+        sendCallEvent: vi.fn(() => {
+          order.push("sendCallEvent");
+          return Promise.resolve();
+        }),
+      });
+      const communication = communicationRepositoryFake({
+        raiseHand: vi.fn(() => {
+          order.push("raiseHand");
+          return Promise.resolve(
+            room({
+              viewerRole: "listener",
+              viewerHandRaise: {
+                handRaiseId: targetProfileId,
+                sequence: "7",
+                state: "pending",
+                createdAt,
+              },
+            }),
+          );
+        }),
+      });
+      const { app, callMocks } = await createApp(
+        fakes({ callGateway, communication }),
+      );
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/hand-raise`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        viewer: { role: "listener", handRaise: { state: "pending" } },
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(order).toEqual(["raiseHand", "sendCallEvent"]);
+      expect(callMocks["sendCallEvent"]).toHaveBeenCalledWith({
+        callId,
+        sentByStreamUserId: hostStreamUserId,
+        custom: {
+          loop_event_kind: "voiceRoomHandRaise",
+          loop_event_schema_version: 1,
+          voice_room_id: voiceRoomId,
+          hand_raise_id: targetProfileId,
+          sequence: "7",
+          state: "pending",
+        },
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+      // No Stream user ID and no alias travels in the payload: the entry is
+      // named, the raiser is not.
+      const sent = callMocks["sendCallEvent"]?.mock.calls[0] as [
+        { custom: Record<string, unknown> },
+      ];
+      const payload = JSON.stringify(sent[0].custom);
+      expect(payload).not.toContain(hostStreamUserId);
+      expect(payload).not.toMatch(/loop_[0-9a-f]{32}/);
+      expect(payload).not.toContain("frog_maxi");
+    });
+
+    it("carries the cancelled state on DELETE", async () => {
+      const communication = communicationRepositoryFake({
+        cancelHandRaise: vi.fn(() =>
+          Promise.resolve(
+            room({
+              viewerRole: "listener",
+              viewerHandRaise: {
+                handRaiseId: targetProfileId,
+                sequence: "7",
+                state: "cancelled",
+                createdAt,
+              },
+            }),
+          ),
+        ),
+      });
+      const { app, callMocks } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/hand-raise`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(callMocks["sendCallEvent"]).toHaveBeenCalledTimes(1);
+      const [sent] = callMocks["sendCallEvent"]?.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      expect(sent).toMatchObject({
+        callId,
+        sentByStreamUserId: hostStreamUserId,
+        custom: { hand_raise_id: targetProfileId, state: "cancelled" },
+      });
+    });
+
+    it("reports an unconfirmed event without failing the raise, and logs it once with the request ID", async () => {
+      const warn = vi.fn();
+      const dependencies = fakes({
+        callGateway: callGatewayFake({
+          sendCallEvent: vi.fn(() => Promise.reject(new TypeError("provider"))),
+        }),
+      });
+      const app = await buildApp({
+        config: testConfig(),
+        contractSurface: "v2",
+        database: dependencies.database,
+        privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+        streamCallGateway: dependencies.callGateway,
+        streamCommunityChannelGateway: dependencies.channelGateway,
+        voiceRoomService: createVoiceRoomService({
+          repository: dependencies.communication,
+          callGateway: dependencies.callGateway,
+          cursorCodec: null,
+          logger: { warn },
+        }),
+        logger: false,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/hand-raise`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        viewer: { handRaise: { state: "pending", sequence: "7" } },
+        providerSync: {
+          status: "unconfirmed",
+          reasonCode: "STREAM_CALL_EVENT_UNCONFIRMED",
+        },
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [context, message] = warn.mock.calls[0] as [
+        Record<string, unknown>,
+        string,
+      ];
+      expect(message).toBe("Voice room provider write was not confirmed");
+      expect(context).toEqual({
+        voiceRoomId,
+        callId,
+        requestId: response.headers["x-request-id"],
+        reasonCode: "STREAM_CALL_EVENT_UNCONFIRMED",
+        errorName: "TypeError",
+      });
+      expect(JSON.stringify(context)).not.toContain("provider");
+    });
+
+    it("sends no event for a room whose call is not provisioned", async () => {
+      const communication = communicationRepositoryFake({
+        raiseHand: vi.fn(() =>
+          Promise.resolve(
+            room({
+              room: {
+                ...room().room,
+                provisionState: "reconciling",
+                backstage: true,
+              },
+              viewerRole: "listener",
+              viewerHandRaise: {
+                handRaiseId: targetProfileId,
+                sequence: "1",
+                state: "pending",
+                createdAt,
+              },
+            }),
+          ),
+        ),
+      });
+      const { app, callMocks } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/voice-rooms/${voiceRoomId}/hand-raise`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(callMocks["sendCallEvent"]).not.toHaveBeenCalled();
+    });
+  });
+
+  it("logs the unconfirmed create with the request ID, so a 201 that cannot be joined is findable (Decision 0069)", async () => {
+    const warn = vi.fn();
+    const dependencies = fakes({
+      callGateway: callGatewayFake({
+        createAudioRoom: vi.fn(() =>
+          Promise.reject(new RangeError("provider")),
+        ),
+      }),
+      communication: communicationRepositoryFake({
+        recordVoiceRoomProvisioning: vi.fn(() =>
+          Promise.resolve({
+            ...room().room,
+            provisionState: "reconciling" as const,
+            backstage: true,
+          }),
+        ),
+      }),
+    });
+    const app = await buildApp({
+      config: testConfig(),
+      contractSurface: "v2",
+      database: dependencies.database,
+      privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      streamCallGateway: dependencies.callGateway,
+      streamCommunityChannelGateway: dependencies.channelGateway,
+      voiceRoomService: createVoiceRoomService({
+        repository: dependencies.communication,
+        callGateway: dependencies.callGateway,
+        cursorCodec: null,
+        logger: { warn },
+      }),
+      logger: false,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/communities/${communityId}/voice-rooms`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      room: { provisionState: "reconciling", backstage: true },
+      providerSync: {
+        status: "unconfirmed",
+        reasonCode: "STREAM_CALL_CREATE_UNCONFIRMED",
+      },
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      {
+        voiceRoomId,
+        callId,
+        requestId: response.headers["x-request-id"],
+        reasonCode: "STREAM_CALL_CREATE_UNCONFIRMED",
+        errorName: "RangeError",
+      },
+      "Voice room provider write was not confirmed",
+    );
   });
 
   it("publishes the hand-raise queue in sequence order with the roster's identity projection (Decision 0053)", async () => {

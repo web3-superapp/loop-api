@@ -1145,7 +1145,11 @@ export function createPostgresCommunicationRepository(
           });
           const current = currentRow.rows[0];
           if (current === undefined || current.state !== "joined") {
-            throw new CommunicationDataStaleError();
+            // Leave asks for one end state: "I am not in this room". An
+            // account that never joined or already left is there already,
+            // so the command is a no-op that reports the room as it is
+            // (Decision 0069 §4): no member row, no audit, no role change.
+            return readViewerRecord(client, room, actorUserId);
           }
           if (current.role === "host") {
             // The host owns the room lifecycle; it ends the room instead.
