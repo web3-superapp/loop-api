@@ -90,6 +90,9 @@ describe("committed OpenAPI artifact", () => {
       "/v2/chat/token",
       "/v2/communities",
       "/v2/communities/{communityId}",
+      "/v2/communities/{communityId}/ai/answers/{answerId}/report",
+      "/v2/communities/{communityId}/ai/ask",
+      "/v2/communities/{communityId}/ai/overview",
       "/v2/communities/{communityId}/join",
       "/v2/communities/{communityId}/members",
       "/v2/communities/{communityId}/members/{publicProfileId}/ban",
@@ -181,7 +184,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(129);
+    expect(operationIds).toHaveLength(132);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

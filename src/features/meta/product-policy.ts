@@ -224,6 +224,13 @@ export interface V2ProductPolicyRuntime {
   readonly settingsRuntimeAvailable: boolean;
   /** `support` module enabled with the support-ticket repository and cursor codec composed. */
   readonly supportRuntimeAvailable: boolean;
+  /**
+   * Community AI (Decision 0066): the `community` module is registered, the
+   * Community AI repository is composed, and `ANTHROPIC_API_KEY` is present.
+   * Without the key the capability stays `deferred` — it is not "unavailable",
+   * because no Provider was ever asked to answer.
+   */
+  readonly communityAiRuntimeAvailable: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -1028,7 +1035,17 @@ export async function createV2CapabilitiesProjection(
     deferredCapability("pay", "PAY_RUNTIME_DEFERRED"),
     deferredCapability("bridge", "BRIDGE_RUNTIME_DEFERRED"),
     deferredCapability("dappExecution", "DAPP_EXECUTION_RUNTIME_DEFERRED"),
-    deferredCapability("communityAi", "COMMUNITY_AI_RUNTIME_DEFERRED"),
+    runtime.communityAiRuntimeAvailable
+      ? Object.freeze({
+          capabilityId: "communityAi",
+          availability: "available" as const,
+          reasonCode: null,
+          evidence: Object.freeze({
+            status: "notApplicable" as const,
+            reasonCode: null,
+          }),
+        })
+      : deferredCapability("communityAi", "COMMUNITY_AI_RUNTIME_DEFERRED"),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

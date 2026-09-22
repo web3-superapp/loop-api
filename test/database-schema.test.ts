@@ -127,6 +127,9 @@ describe("database schema readiness contract", () => {
       "public.invite_codes",
       "public.referral_edges",
       "public.referral_events",
+      "public.community_ai_usage",
+      "public.community_ai_answers",
+      "public.community_ai_answer_reports",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

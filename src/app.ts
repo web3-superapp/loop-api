@@ -121,6 +121,17 @@ import {
   type PrivyBalanceReader,
   type PrivyWalletReader,
 } from "./integrations/privy/wallet-reader.js";
+import {
+  createAnthropicCommunityAiGateway,
+  type CommunityAiGateway,
+} from "./integrations/ai/anthropic-adapter.js";
+import { communityAiDefaultQuota } from "./features/community-ai/community-ai-contract.js";
+import { createUnavailableCommunityAiRepository } from "./features/community-ai/community-ai-repository.js";
+import {
+  createCommunityAiService,
+  createUnavailableCommunityAiService,
+  type CommunityAiService,
+} from "./features/community-ai/community-ai-service.js";
 import { createUnavailableCommunityRepository } from "./features/community/community-repository.js";
 import {
   createCommunityService,
@@ -398,6 +409,8 @@ export interface BuildAppOptions {
   readonly profileService?: ProfileService;
   readonly profileV2Service?: ProfileV2Service;
   readonly communityService?: CommunityService;
+  readonly communityAiService?: CommunityAiService;
+  readonly communityAiGateway?: CommunityAiGateway;
   readonly chatService?: V2ChatService;
   readonly voiceRoomService?: VoiceRoomService;
   readonly streamCommunityChannelGateway?: StreamCommunityChannelGateway;
@@ -1444,6 +1457,62 @@ export async function buildApp(
             database.referral ?? createUnavailableReferralRepository(),
         })
       : createUnavailableReferralService());
+  // Community AI (Decision 0066). The capability opens on one fact: an
+  // Anthropic API key. Without it the composed service is the closed one,
+  // every AI route answers CAPABILITY_UNAVAILABLE, and the capability stays
+  // `deferred` - no fixture answer exists anywhere in this module.
+  const communityAiGateway =
+    options.communityAiGateway ??
+    (config.communityAi === null
+      ? null
+      : createAnthropicCommunityAiGateway({
+          apiKey: config.communityAi.anthropicApiKey,
+          model: config.communityAi.model,
+          timeoutMs: config.communityAi.timeoutMs,
+          maximumOutputTokens: config.communityAi.maximumOutputTokens,
+        }));
+  const communityAiRepository =
+    database.communityAi ?? createUnavailableCommunityAiRepository();
+  const communityAiRuntimeAvailable =
+    registeredModuleIds.includes("community") &&
+    communityRuntimeAvailable &&
+    (options.communityAiService !== undefined ||
+      (communityAiGateway !== null && database.communityAi !== undefined));
+  const communityAiService =
+    options.communityAiService ??
+    (communityAiRuntimeAvailable && communityAiGateway !== null
+      ? createCommunityAiService({
+          gateway: communityAiGateway,
+          repository: communityAiRepository,
+          readers: {
+            communityService,
+            marketReadService: registeredModuleIds.includes("market")
+              ? marketReadService
+              : null,
+            miningService: miningRuntimeAvailable ? miningService : null,
+            voiceRoomService: communicationRuntimeAvailable
+              ? voiceRoomService
+              : null,
+            communicationRepository: communicationRuntimeAvailable
+              ? communicationRepository
+              : null,
+            channelGateway: communicationRuntimeAvailable
+              ? streamCommunityChannelGateway
+              : null,
+            repository: communityAiRepository,
+          },
+          userRateLimitPerMinute:
+            config.communityAi?.userRateLimitPerMinute ??
+            communityAiDefaultQuota.userRateLimitPerMinute,
+          communityDailyLimit:
+            config.communityAi?.communityDailyLimit ??
+            communityAiDefaultQuota.communityDailyLimit,
+          briefCacheSeconds:
+            config.communityAi?.briefCacheSeconds ??
+            communityAiDefaultQuota.briefCacheSeconds,
+        })
+      : createUnavailableCommunityAiService());
+
   // D20 (Decision 0037): security reuses the device-session projection and
   // composes the approvals summary only when that module is registered;
   // settings and support have their own repositories.
@@ -1678,12 +1747,14 @@ export async function buildApp(
         securityRuntimeAvailable,
         settingsRuntimeAvailable,
         supportRuntimeAvailable,
+        communityAiRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
       profileService: profileV2Service,
       communityService,
+      communityAiService,
       chainStatusService,
       assetRegistryService,
       walletReadService,

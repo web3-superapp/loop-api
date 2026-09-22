@@ -1,4 +1,4 @@
-export const latestMigrationName = "000035_v2_discover_sorts_and_mock_holdings";
+export const latestMigrationName = "000036_v2_community_ai";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -103,4 +103,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.invite_codes",
   "public.referral_edges",
   "public.referral_events",
+  "public.community_ai_usage",
+  "public.community_ai_answers",
+  "public.community_ai_answer_reports",
 ] as const);

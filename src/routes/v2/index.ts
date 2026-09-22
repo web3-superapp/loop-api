@@ -4,6 +4,7 @@ import { v2ModuleIds, type AppConfig, type V2ModuleId } from "../../config.js";
 import type { V2CursorCodec } from "../../core/http/v2-cursor.js";
 import type { AssetRegistryService } from "../../features/chain/asset-registry-service.js";
 import type { ChainStatusService } from "../../features/chain/chain-status-service.js";
+import type { CommunityAiService } from "../../features/community-ai/community-ai-service.js";
 import type { CommunityService } from "../../features/community/community-service.js";
 import type { V2ChatService } from "../../features/communication/v2-chat-service.js";
 import type { VoiceRoomService } from "../../features/communication/voice-room-service.js";
@@ -61,6 +62,7 @@ export interface V2RouteDependencies {
   readonly sessionService: V2SessionService;
   readonly profileService: ProfileV2Service;
   readonly communityService: CommunityService;
+  readonly communityAiService: CommunityAiService;
   readonly chainStatusService: ChainStatusService;
   readonly assetRegistryService: AssetRegistryService;
   readonly walletReadService: WalletReadService;

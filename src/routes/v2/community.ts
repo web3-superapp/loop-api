@@ -28,6 +28,7 @@ import {
   validateCommandHeaders,
   validateCommonHeaders,
 } from "./community-schemas.js";
+import { registerV2CommunityAiRoutes } from "./community-ai.js";
 import type { V2RouteDependencies } from "./index.js";
 import { registerV2SocialRoutes } from "./social.js";
 
@@ -423,5 +424,6 @@ export function registerV2CommunityRoutes(
     );
   }
 
+  registerV2CommunityAiRoutes(app, dependencies);
   registerV2SocialRoutes(app, dependencies);
 }

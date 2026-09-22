@@ -172,6 +172,63 @@ const marketEnvironmentShape = {
   GOPLUS_APP_SECRET: optionalOpaqueSecret(1, 4_096),
 } as const;
 
+/**
+ * Community AI Provider keys (Decision 0066). Without `ANTHROPIC_API_KEY`
+ * the whole module is `null` here, the `communityAi` capability stays
+ * `deferred`, and every AI route answers CAPABILITY_UNAVAILABLE. There is no
+ * fixture answer and no second Provider.
+ */
+const communityAiEnvironmentShape = {
+  ANTHROPIC_API_KEY: optionalOpaqueSecret(8, 512),
+  COMMUNITY_AI_MODEL: z.string().trim().min(1).max(128),
+  COMMUNITY_AI_TIMEOUT_MS: positiveIntegerString(1_000, 60_000),
+  COMMUNITY_AI_MAX_OUTPUT_TOKENS: positiveIntegerString(64, 4_096),
+  COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 60),
+  COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: positiveIntegerString(1, 10_000),
+  COMMUNITY_AI_BRIEF_CACHE_SECONDS: positiveIntegerString(60, 86_400),
+} as const;
+
+function communityAiEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof communityAiEnvironmentShape, string | undefined> {
+  return {
+    ANTHROPIC_API_KEY: environment["ANTHROPIC_API_KEY"],
+    COMMUNITY_AI_MODEL: environment["COMMUNITY_AI_MODEL"] ?? "claude-sonnet-5",
+    COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "20000",
+    COMMUNITY_AI_MAX_OUTPUT_TOKENS:
+      environment["COMMUNITY_AI_MAX_OUTPUT_TOKENS"] ?? "800",
+    COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE:
+      environment["COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE"] ?? "6",
+    COMMUNITY_AI_COMMUNITY_DAILY_LIMIT:
+      environment["COMMUNITY_AI_COMMUNITY_DAILY_LIMIT"] ?? "200",
+    COMMUNITY_AI_BRIEF_CACHE_SECONDS:
+      environment["COMMUNITY_AI_BRIEF_CACHE_SECONDS"] ?? "3600",
+  };
+}
+
+function parseCommunityAiConfig(data: {
+  readonly ANTHROPIC_API_KEY?: string | undefined;
+  readonly COMMUNITY_AI_MODEL: string;
+  readonly COMMUNITY_AI_TIMEOUT_MS: number;
+  readonly COMMUNITY_AI_MAX_OUTPUT_TOKENS: number;
+  readonly COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: number;
+  readonly COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: number;
+  readonly COMMUNITY_AI_BRIEF_CACHE_SECONDS: number;
+}): CommunityAiConfig | null {
+  if (data.ANTHROPIC_API_KEY === undefined) {
+    return null;
+  }
+  return Object.freeze({
+    anthropicApiKey: data.ANTHROPIC_API_KEY,
+    model: data.COMMUNITY_AI_MODEL,
+    timeoutMs: data.COMMUNITY_AI_TIMEOUT_MS,
+    maximumOutputTokens: data.COMMUNITY_AI_MAX_OUTPUT_TOKENS,
+    userRateLimitPerMinute: data.COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE,
+    communityDailyLimit: data.COMMUNITY_AI_COMMUNITY_DAILY_LIMIT,
+    briefCacheSeconds: data.COMMUNITY_AI_BRIEF_CACHE_SECONDS,
+  });
+}
+
 function refineMarketEnvironment(
   value: {
     readonly GOPLUS_APP_KEY?: string | undefined;
@@ -270,6 +327,7 @@ const environmentSchema = z
     PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
+    ...communityAiEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -801,6 +859,21 @@ export interface MarketConfig {
   readonly unlistedMetadataTtlSeconds: number;
 }
 
+/**
+ * Community AI runtime (Decision 0066). `null` means no API key was supplied:
+ * the capability is `deferred` and no answer is ever produced.
+ */
+export interface CommunityAiConfig {
+  /** Never logged, never echoed, never part of an error body. */
+  readonly anthropicApiKey: string;
+  readonly model: string;
+  readonly timeoutMs: number;
+  readonly maximumOutputTokens: number;
+  readonly userRateLimitPerMinute: number;
+  readonly communityDailyLimit: number;
+  readonly briefCacheSeconds: number;
+}
+
 export interface AlertEvaluatorConfig {
   readonly notificationDedupeSeconds: number;
 }
@@ -871,6 +944,8 @@ export interface AppConfig {
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
   readonly market: MarketConfig;
+  /** Community AI Provider (Decision 0066); null keeps `communityAi` deferred. */
+  readonly communityAi: CommunityAiConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -1629,6 +1704,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
+    ...communityAiEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -1764,6 +1840,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
+    communityAi: parseCommunityAiConfig(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });

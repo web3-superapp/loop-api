@@ -626,6 +626,29 @@ export interface StreamCommunityChannelActivity {
   readonly lastMessageAt: string | null;
 }
 
+export interface ReadStreamCommunityChannelMessagesInput {
+  readonly channelId: string;
+  /** Only messages at or after this instant are returned. */
+  readonly since: Date;
+  /** Upper bound on returned messages; never more than the Stream page. */
+  readonly limit: number;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * One readable community message (Decision 0066). `authorUserId` is the
+ * internal LOOP account UUID recovered from the server-derived Stream user
+ * ID; the Stream ID itself never leaves this gateway, and an author whose ID
+ * is not a LOOP-derived one is published as `null` rather than guessed at.
+ * The caller resolves the account to its community persona: no alias, no
+ * profile ID, and no Stream identity travels with the text.
+ */
+export interface StreamCommunityMessage {
+  readonly authorUserId: string | null;
+  readonly text: string;
+  readonly createdAt: string;
+}
+
 export interface StreamCommunityChannelGateway {
   upsertCommunityChannel(
     input: UpsertStreamCommunityChannelInput,
@@ -657,6 +680,15 @@ export interface StreamCommunityChannelGateway {
   readCommunityChannelActivity(
     input: ReadStreamCommunityChannelActivityInput,
   ): Promise<readonly StreamCommunityChannelActivity[]>;
+  /**
+   * The recent readable messages of one community channel (Decision 0066),
+   * newest-page first, in one read-only `queryChannels`. Only the text, the
+   * time, and the LOOP account behind the message are returned; a deleted,
+   * system, or empty message is not returned at all.
+   */
+  readCommunityChannelMessages(
+    input: ReadStreamCommunityChannelMessagesInput,
+  ): Promise<readonly StreamCommunityMessage[]>;
 }
 
 const maximumCommunityChannelMemberBatch = 100;
@@ -1172,6 +1204,96 @@ function reduceActivityChannel(
   });
 }
 
+/** The maximum messages one Community AI read may take from a channel. */
+export const communityMessageReadPage = 100;
+
+const loopStreamUserIdPattern = /^loop_([0-9a-f]{32})$/;
+
+/**
+ * The internal LOOP account UUID behind a server-derived Stream user ID.
+ * Anything else — an operator ID, a webhook actor, a system author — is
+ * `null`: the gateway never invents an owner for a message.
+ */
+function internalUserIdFromStreamUserId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = loopStreamUserIdPattern.exec(value);
+  const hex = match?.[1];
+  if (hex === undefined) {
+    return null;
+  }
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+function parseMessagesInput(
+  value: unknown,
+): ReadStreamCommunityChannelMessagesInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["channelId", "since", "limit", "signal"]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !(value["since"] instanceof Date) ||
+    Number.isNaN(value["since"].getTime()) ||
+    typeof value["limit"] !== "number" ||
+    !Number.isInteger(value["limit"]) ||
+    value["limit"] < 1 ||
+    value["limit"] > communityMessageReadPage ||
+    !(value["signal"] instanceof AbortSignal)
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    since: value["since"],
+    limit: value["limit"],
+    signal: value["signal"],
+  });
+}
+
+/**
+ * One message of the `queryChannels` answer, reduced to what an answer may
+ * quote. A deleted message, a message of a non-regular type, a message with
+ * no readable `created_at`, and a message with no text are all dropped: the
+ * read publishes nothing it cannot justify.
+ */
+function reduceCommunityMessage(
+  value: unknown,
+  since: Date,
+): StreamCommunityMessage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value["deleted_at"] !== undefined && value["deleted_at"] !== null) {
+    return null;
+  }
+  if (value["type"] !== undefined && value["type"] !== "regular") {
+    return null;
+  }
+  const createdAt = readDateValue(value["created_at"]);
+  if (createdAt === null || Date.parse(createdAt) < since.getTime()) {
+    return null;
+  }
+  const text = typeof value["text"] === "string" ? value["text"].trim() : "";
+  if (text === "") {
+    return null;
+  }
+  const user = value["user"];
+  return Object.freeze({
+    authorUserId: isRecord(user)
+      ? internalUserIdFromStreamUserId(user["id"])
+      : null,
+    text,
+    createdAt,
+  });
+}
+
 export function createUnavailableStreamCommunityChannelGateway(): StreamCommunityChannelGateway {
   return Object.freeze({
     upsertCommunityChannel: unavailablePromise,
@@ -1180,6 +1302,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     projectMemberPersona: unavailablePromise,
     readCommunityChannelPresence: unavailablePromise,
     readCommunityChannelActivity: unavailablePromise,
+    readCommunityChannelMessages: unavailablePromise,
   });
 }
 
@@ -1426,6 +1549,54 @@ export function createStreamCommunityChannelGateway(
             );
             return reduced === null ? [] : [reduced];
           }),
+        );
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async readCommunityChannelMessages(
+      rawInput: ReadStreamCommunityChannelMessagesInput,
+    ): Promise<readonly StreamCommunityMessage[]> {
+      const input = parseMessagesInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        // Read-only, one channel, no membership change and no member page:
+        // the answer needs the text and the author account, nothing else.
+        const response = await client.chat.queryChannels({
+          filter_conditions: {
+            type: streamChannelType,
+            id: { $eq: input.channelId },
+          },
+          limit: 1,
+          message_limit: input.limit,
+          member_limit: 0,
+          state: true,
+        });
+        input.signal.throwIfAborted();
+        const channels: unknown = isRecord(response)
+          ? response["channels"]
+          : undefined;
+        if (!Array.isArray(channels)) {
+          return projectionMismatch();
+        }
+        const first = (channels as unknown[])[0];
+        if (first === undefined) {
+          return Object.freeze([]);
+        }
+        if (!isRecord(first) || !Array.isArray(first["messages"])) {
+          return projectionMismatch();
+        }
+        return Object.freeze(
+          (first["messages"] as unknown[])
+            .flatMap((message) => {
+              const reduced = reduceCommunityMessage(message, input.since);
+              return reduced === null ? [] : [reduced];
+            })
+            .slice(-input.limit),
         );
       } catch (error) {
         if (error instanceof StreamChannelProjectionMismatchError) {

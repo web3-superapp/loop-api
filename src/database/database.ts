@@ -11,6 +11,7 @@ import type { DeviceSessionRepository } from "../features/session/device-session
 import type { ChatChannelRepository } from "../features/communication/chat-channel-repository.js";
 import type { PerpReconciliationRepository } from "../features/perp/perp-reconciliation-contract.js";
 import type { SpotReconciliationRepository } from "../features/spot/spot-reconciliation-contract.js";
+import type { CommunityAiRepository } from "../features/community-ai/community-ai-repository.js";
 import type { CommunityRepository } from "../features/community/community-repository.js";
 import {
   createPostgresAccountWalletRepository,
@@ -60,6 +61,7 @@ import type {
   CommunityChannelSyncRepository,
 } from "../features/communication/communication-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
+import { createPostgresCommunityAiRepository } from "./community-ai-repository.js";
 import { createPostgresCommunityRepository } from "./community-repository.js";
 import {
   createPostgresCommunicationRepository,
@@ -137,6 +139,8 @@ export interface Database {
   readonly profilesV2?: ProfileV2Repository;
   /** V2 community, follow graph, blocks, and search (Decision 0031). */
   readonly community?: CommunityRepository;
+  /** Community AI answers, reports, and the quota ledger (Decision 0066). */
+  readonly communityAi?: CommunityAiRepository;
   /** V2 official community channels and voice rooms (Decision 0032). */
   readonly communication?: CommunicationRepository;
   readonly watchlists: WatchlistRepository;
@@ -302,6 +306,7 @@ export function createPostgresDatabase(
   const walletIntents = createPostgresWalletIntentRepository(pool);
   const accountSettings = createPostgresAccountSettingsRepository(pool);
   const supportTickets = createPostgresSupportTicketRepository(pool);
+  const communityAi = createPostgresCommunityAiRepository(pool);
   const launch = createPostgresLaunchRepository(
     pool,
     config.launchChain === undefined
@@ -357,6 +362,7 @@ export function createPostgresDatabase(
     walletIntents,
     accountSettings,
     supportTickets,
+    communityAi,
     launch,
     mining,
     referral,

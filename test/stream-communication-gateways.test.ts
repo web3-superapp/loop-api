@@ -1340,3 +1340,127 @@ describe("Stream audio_room call gateway", () => {
     });
   });
 });
+
+describe("community channel message read (Decision 0066)", () => {
+  const since = new Date("2026-09-15T00:00:00.000Z");
+
+  it("fails closed without credentials", async () => {
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().readCommunityChannelMessages(
+        {
+          channelId: communityChannelId,
+          since,
+          limit: 100,
+          signal: signal(),
+        },
+      ),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("returns the LOOP account behind each message and never the Stream ID", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          channels: [
+            {
+              channel: { id: communityChannelId, type: "messaging" },
+              messages: [
+                {
+                  id: "m1",
+                  type: "regular",
+                  text: "  今天的进展如何  ",
+                  created_at: "2026-09-20T10:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m2",
+                  type: "regular",
+                  text: "too old",
+                  created_at: "2026-09-01T10:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m3",
+                  type: "deleted",
+                  text: "gone",
+                  created_at: "2026-09-20T11:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m4",
+                  type: "regular",
+                  text: "   ",
+                  created_at: "2026-09-20T12:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m5",
+                  type: "regular",
+                  text: "系统播报",
+                  created_at: "2026-09-20T13:00:00.000Z",
+                  user: { id: "service_account" },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    const messages = await gateway.readCommunityChannelMessages({
+      channelId: communityChannelId,
+      since,
+      limit: 100,
+      signal: signal(),
+    });
+    expect(messages).toEqual([
+      {
+        authorUserId: "f7bf09f6-0171-46b9-9acd-5ad494f211bd",
+        text: "今天的进展如何",
+        createdAt: "2026-09-20T10:00:00.000Z",
+      },
+      {
+        authorUserId: null,
+        text: "系统播报",
+        createdAt: "2026-09-20T13:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(memberUserId);
+  });
+
+  it("refuses a channel ID that is not a community channel", async () => {
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.readCommunityChannelMessages({
+        channelId: groupChannelId,
+        since,
+        limit: 100,
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("treats a malformed channel answer as a projection mismatch", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          channels: [{ channel: { id: communityChannelId } }],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.readCommunityChannelMessages({
+        channelId: communityChannelId,
+        since,
+        limit: 100,
+        signal: signal(),
+      }),
+    ).rejects.toBeInstanceOf(StreamChannelProjectionMismatchError);
+  });
+});
