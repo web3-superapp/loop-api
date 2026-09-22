@@ -10,6 +10,8 @@ import { assetIdForAddress } from "./features/chain/chain-contract.js";
 import {
   BscChainMismatchError,
   BscReadUnavailableError,
+  bscLogQueryBudgetExhaustedReasonCode,
+  bscLogQueryRejectedReasonCode,
   bscMaximumLogRange,
   summarizeRpcError,
   type BscApprovalLog,
@@ -90,19 +92,71 @@ export interface BscIndexerLaneAvailabilityEvent {
   readonly method: string | null;
 }
 
+const emptySummary: BscRpcErrorSummary = Object.freeze({
+  errorClass: "Unknown",
+  rpcStatus: null,
+  rpcCode: null,
+  rpcUrlHost: null,
+  method: null,
+});
+
 export function infrastructureBackoffEvent(
   lane: BscIndexerLaneName,
   error: unknown,
   consecutiveFailureCount: number,
   retryDelayMs: number,
 ): BscIndexerInfrastructureBackoff {
+  // The classification runs inside the lane's catch: a hostile error object
+  // must never turn the backoff itself into a thrown TypeError, which would
+  // take every lane down with this one.
+  let summary: BscRpcErrorSummary;
+  try {
+    summary = summarizeRpcError(error);
+  } catch {
+    summary = emptySummary;
+  }
   return Object.freeze({
     reasonCode: "bsc_indexer_unavailable" as const,
     lane,
     consecutiveFailureCount,
     retryDelayMs,
-    ...summarizeRpcError(error),
+    ...summary,
   });
+}
+
+/**
+ * Reason codes for which an `unavailable` tick means the Provider refused
+ * the read: the lane backs off exponentially (same schedule as the retry
+ * loop) instead of re-issuing the whole narrowing walk every idle period.
+ */
+const refusalReasonCodes = new Set<string>([
+  bscLogQueryRejectedReasonCode,
+  bscLogQueryBudgetExhaustedReasonCode,
+]);
+
+export function unavailableDelayMs(
+  reasonCode: string | null,
+  consecutiveRefusals: number,
+): number {
+  return reasonCode !== null && refusalReasonCodes.has(reasonCode)
+    ? retryDelayMs(consecutiveRefusals)
+    : BSC_INDEXER_IDLE_DELAY_MS;
+}
+
+export function isRefusalReasonCode(reasonCode: string | null): boolean {
+  return reasonCode !== null && refusalReasonCodes.has(reasonCode);
+}
+
+/** Dedupe key for the once-per-transition availability log line. */
+export function availabilityKey(result: {
+  readonly reasonCode: string | null;
+  readonly rpcError?: BscRpcErrorSummary;
+}): string {
+  return [
+    result.reasonCode ?? "",
+    result.rpcError?.rpcUrlHost ?? "",
+    result.rpcError?.rpcCode ?? "",
+  ].join("|");
 }
 
 export function laneAvailabilityEvent(
@@ -225,7 +279,7 @@ function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted ?? false;
 }
 
-function retryDelayMs(consecutiveFailureCount: number): number {
+export function retryDelayMs(consecutiveFailureCount: number): number {
   return Math.min(
     BSC_INDEXER_RETRY_BASE_DELAY_MS * 2 ** (consecutiveFailureCount - 1),
     BSC_INDEXER_RETRY_MAX_DELAY_MS,
@@ -512,15 +566,17 @@ export function createBscIndexerWorker(
       }
       loopRunning = true;
       let consecutiveFailures = 0;
-      let unavailableReasonCode: string | null = null;
+      let consecutiveRefusals = 0;
+      let unavailableKey: string | null = null;
       try {
         while (!isAborted(signal)) {
           try {
             const result = await runOnce(signal);
             consecutiveFailures = 0;
             if (result.kind === "unavailable") {
-              if (result.reasonCode !== unavailableReasonCode) {
-                unavailableReasonCode = result.reasonCode;
+              const key = availabilityKey(result);
+              if (key !== unavailableKey) {
+                unavailableKey = key;
                 options.onLaneAvailability?.(
                   laneAvailabilityEvent(
                     BSC_INDEXER_LANE,
@@ -530,8 +586,18 @@ export function createBscIndexerWorker(
                   ),
                 );
               }
-            } else if (unavailableReasonCode !== null) {
-              unavailableReasonCode = null;
+              consecutiveRefusals = isRefusalReasonCode(result.reasonCode)
+                ? consecutiveRefusals + 1
+                : 0;
+              await waitFor(
+                unavailableDelayMs(result.reasonCode, consecutiveRefusals),
+                signal,
+              );
+              continue;
+            }
+            consecutiveRefusals = 0;
+            if (unavailableKey !== null) {
+              unavailableKey = null;
               options.onLaneAvailability?.(
                 laneAvailabilityEvent(
                   BSC_INDEXER_LANE,

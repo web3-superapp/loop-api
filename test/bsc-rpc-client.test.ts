@@ -6,6 +6,8 @@ import {
   LimitExceededRpcError,
   multicall3Abi,
   numberToHex,
+  ResourceNotFoundRpcError,
+  TimeoutError,
   type Transport,
 } from "viem";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +21,7 @@ import {
   BscChainMismatchError,
   BscReadUnavailableError,
   bscMaximumLogRequestsPerSegment,
+  classifyLogQueryError,
   createBscReadClient,
   createUnavailableBscReadClient,
   endpointLabelFor,
@@ -762,7 +765,78 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
     expect(serialised).not.toContain("Request blocked");
   });
 
-  it("classifies only refusals as splittable, never transport failures", () => {
+  it("splits only on a shape refusal; a throttle propagates to the lane backoff and a transport failure is neither", () => {
+    // Shape: the request itself is objected to.
+    expect(
+      classifyLogQueryError(requestBlocked({ method: "eth_getLogs" })),
+    ).toBe("shape");
+    expect(
+      classifyLogQueryError(
+        new LimitExceededRpcError(new Error("limit exceeded")),
+      ),
+    ).toBe("shape");
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 400,
+          url: keyedEndpointUrl,
+          details:
+            '{"code":-32000,"message":"query returned more than 10000 results"}',
+        }),
+      ),
+    ).toBe("shape");
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 413,
+          url: keyedEndpointUrl,
+        }),
+      ),
+    ).toBe("shape");
+    // Throttle: the rate is objected to; narrowing would multiply requests.
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({ status: 429, url: keyedEndpointUrl }),
+      ),
+    ).toBe("throttle");
+    expect(
+      classifyLogQueryError(
+        new ResourceNotFoundRpcError(
+          Object.assign(new Error("usage limit exceeded"), { code: -32001 }),
+        ),
+      ),
+    ).toBe("throttle");
+    expect(
+      classifyLogQueryError(new LimitExceededRpcError(new Error("quota"))),
+    ).toBe("throttle");
+    // -32001 is "resource not found" in EIP-1474; only a usage-limit text
+    // makes it a refusal.
+    expect(
+      classifyLogQueryError(
+        new ResourceNotFoundRpcError(
+          Object.assign(new Error("resource not found"), { code: -32001 }),
+        ),
+      ),
+    ).toBeNull();
+    // A 5xx body is never read: an outage page that says "blocked" is an
+    // outage.
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 503,
+          url: keyedEndpointUrl,
+          details: '{"code":-32602,"message":"Request blocked"}',
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({ status: 403, url: keyedEndpointUrl }),
+      ),
+    ).toBeNull();
+    expect(classifyLogQueryError(new Error("limit exceeded"))).toBeNull();
+    expect(classifyLogQueryError(new Error("endpoint unavailable"))).toBeNull();
+    expect(classifyLogQueryError(new BscReadUnavailableError("X"))).toBeNull();
     expect(isLogQueryRejection(requestBlocked({ method: "eth_getLogs" }))).toBe(
       true,
     );
@@ -770,27 +844,10 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       isLogQueryRejection(
         new HttpRequestError({ status: 429, url: keyedEndpointUrl }),
       ),
-    ).toBe(true);
-    expect(
-      isLogQueryRejection(new LimitExceededRpcError(new Error("quota"))),
-    ).toBe(true);
-    expect(
-      isLogQueryRejection(
-        new HttpRequestError({
-          status: 200,
-          url: keyedEndpointUrl,
-          details: '{"code":-32001,"message":"usage limit"}',
-        }),
-      ),
-    ).toBe(true);
-    expect(isLogQueryRejection(new Error("limit exceeded"))).toBe(true);
-    expect(isLogQueryRejection(new Error("endpoint unavailable"))).toBe(false);
-    expect(
-      isLogQueryRejection(
-        new HttpRequestError({ status: 503, url: keyedEndpointUrl }),
-      ),
     ).toBe(false);
-    expect(isLogQueryRejection(new BscReadUnavailableError("X"))).toBe(false);
+  });
+
+  it("summarises hostile error values without throwing", () => {
     expect(summarizeRpcError("not an object").errorClass).toBe("string");
     expect(summarizeRpcError(new Error("plain"))).toEqual({
       errorClass: "Error",
@@ -799,6 +856,197 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       rpcUrlHost: null,
       method: null,
     });
+    expect(summarizeRpcError(Object.create(null)).errorClass).toBe("Unknown");
+    expect(
+      summarizeRpcError({ constructor: { name: 42 }, status: 403 }),
+    ).toEqual({
+      errorClass: "Unknown",
+      rpcStatus: 403,
+      rpcCode: null,
+      rpcUrlHost: null,
+      method: null,
+    });
+    // An unparseable URL yields the opaque endpoint ref, never the text.
+    const unparseable = summarizeRpcError({
+      name: "line\nbreak",
+      url: "not a url",
+    });
+    expect(unparseable.errorClass).toBe("Unknown");
+    expect(unparseable.rpcUrlHost).toMatch(/^rpc-[0-9a-f]{12}$/);
+  });
+
+  it("does not split on a 5xx whose body happens to say blocked, and rethrows it unchanged", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            requestCount += 1;
+            return Promise.reject(
+              new HttpRequestError({
+                status: 502,
+                url: keyedEndpointUrl,
+                details: "upstream blocked: limit exceeded",
+              }),
+            );
+          },
+        }),
+    });
+    await expect(
+      client.readTransferLogs({
+        addresses: [tokenA, tokenB],
+        fromBlock: 1n,
+        toBlock: 8n,
+      }),
+    ).rejects.toBeInstanceOf(HttpRequestError);
+    // One client read (viem retries a 502 up to three times), no narrowing.
+    expect(requestCount).toBeLessThanOrEqual(4);
+  });
+
+  it("splits on a -32000 'query returned more than 10000 results' refusal", async () => {
+    const accepted: { from: bigint; to: bigint }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            const params = request.params as readonly [
+              { readonly fromBlock: string; readonly toBlock: string },
+            ];
+            const from = BigInt(params[0].fromBlock);
+            const to = BigInt(params[0].toBlock);
+            if (to - from + 1n > 500n) {
+              return Promise.reject(
+                Object.assign(
+                  new Error("query returned more than 10000 results"),
+                  { code: -32000 },
+                ),
+              );
+            }
+            accepted.push({ from, to });
+            return Promise.resolve([]);
+          },
+        }),
+    });
+    await client.readTransferLogs({
+      addresses: [tokenA],
+      fromBlock: 1n,
+      toBlock: 2_000n,
+    });
+    expect(accepted.length).toBeGreaterThanOrEqual(4);
+    expect(accepted[0]?.from).toBe(1n);
+    expect(accepted.at(-1)?.to).toBe(2_000n);
+  });
+
+  it("rejects the whole read when a later chunk times out, never a partial page", async () => {
+    const accepted: { from: bigint; to: bigint }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            const params = request.params as readonly [
+              { readonly fromBlock: string; readonly toBlock: string },
+            ];
+            const from = BigInt(params[0].fromBlock);
+            const to = BigInt(params[0].toBlock);
+            if (to - from + 1n > 2n) {
+              return Promise.reject(
+                Object.assign(new Error("Request blocked"), { code: -32602 }),
+              );
+            }
+            if (from >= 5n) {
+              return Promise.reject(
+                new TimeoutError({
+                  body: { method: "eth_getLogs" },
+                  url: keyedEndpointUrl,
+                }),
+              );
+            }
+            accepted.push({ from, to });
+            return Promise.resolve([rawTransferLog(tokenA, to, 0)]);
+          },
+        }),
+    });
+    const failure = await client
+      .readTransferLogs({ addresses: [tokenA], fromBlock: 1n, toBlock: 6n })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(TimeoutError);
+    expect(failure).not.toBeInstanceOf(BscReadUnavailableError);
+    // The first chunks were served; their logs are discarded with the read.
+    expect(accepted.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps a learned range limit across reads so the next segment is issued at the known width", async () => {
+    let rejectedCount = 0;
+    const accepted: { from: bigint; to: bigint }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            const params = request.params as readonly [
+              { readonly fromBlock: string; readonly toBlock: string },
+            ];
+            const from = BigInt(params[0].fromBlock);
+            const to = BigInt(params[0].toBlock);
+            if (to - from + 1n > 500n) {
+              rejectedCount += 1;
+              return Promise.reject(
+                Object.assign(new Error("Request blocked"), { code: -32602 }),
+              );
+            }
+            accepted.push({ from, to });
+            return Promise.resolve([]);
+          },
+        }),
+    });
+    await client.readTransferLogs({
+      addresses: [tokenA],
+      fromBlock: 1n,
+      toBlock: 2_000n,
+    });
+    expect(rejectedCount).toBeGreaterThan(0);
+    const learnedRejections = rejectedCount;
+    accepted.length = 0;
+    await client.readApprovalLogs({
+      addresses: [tokenA],
+      fromBlock: 2_001n,
+      toBlock: 4_000n,
+    });
+    // The second segment goes straight out at the learned width.
+    expect(rejectedCount).toBe(learnedRejections);
+    expect(accepted).toEqual([
+      { from: 2_001n, to: 2_500n },
+      { from: 2_501n, to: 3_000n },
+      { from: 3_001n, to: 3_500n },
+      { from: 3_501n, to: 4_000n },
+    ]);
+    // A clean read relaxes the limit one step, so a Provider that recovers
+    // is not pinned to the narrow width forever: the third segment probes
+    // 1000 blocks once and is refused once.
+    await client.readTransferLogs({
+      addresses: [tokenA],
+      fromBlock: 4_001n,
+      toBlock: 6_000n,
+    });
+    expect(rejectedCount).toBe(learnedRejections + 1);
   });
 
   it("splits a 403 multi-address query by address once the range is a single block, and learns the group size once", async () => {

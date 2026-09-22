@@ -352,10 +352,12 @@ export const bscMaximumLogRange = 2_000n;
  */
 const bscLogRangeSplitFloor = 1n;
 /**
- * Upper bound on `eth_getLogs` requests one segment read may issue while it
- * splits. Beyond it the endpoint policy is too restrictive to index through
- * and the read fails closed as `BSC_LOG_QUERY_BUDGET_EXHAUSTED` rather than
- * grinding thousands of requests per segment against a rationed Provider.
+ * Upper bound on client-side `eth_getLogs` reads one segment may issue while
+ * it splits (each read is at most endpoints × 4 HTTP attempts through viem's
+ * fallback and retry). Beyond it the endpoint policy is too restrictive to
+ * index through and the read fails closed as
+ * `BSC_LOG_QUERY_BUDGET_EXHAUSTED` rather than grinding thousands of
+ * requests per segment against a rationed Provider.
  */
 export const bscMaximumLogRequestsPerSegment = 512;
 export const bscLogQueryRejectedReasonCode = "BSC_LOG_QUERY_REJECTED";
@@ -582,12 +584,18 @@ function methodFromBody(body: unknown): string | null {
 export function summarizeRpcError(error: unknown): BscRpcErrorSummary {
   const chain = walkCauses(error);
   const first = chain[0];
+  const constructorName =
+    typeof first === "object" && first !== null
+      ? stringField(
+          (first as { readonly constructor?: unknown }).constructor ?? null,
+          "name",
+        )
+      : null;
   const rawName =
     stringField(first, "name") ??
-    (typeof first === "object" && first !== null
-      ? first.constructor.name
-      : typeof error);
-  const errorClass = safeNamePattern.test(rawName) ? rawName : "Error";
+    constructorName ??
+    (typeof first === "object" ? "Unknown" : typeof error);
+  const errorClass = safeNamePattern.test(rawName) ? rawName : "Unknown";
   let rpcStatus: number | null = null;
   let rpcCode: number | null = null;
   let rpcUrlHost: string | null = null;
@@ -615,47 +623,85 @@ export function summarizeRpcError(error: unknown): BscRpcErrorSummary {
   return Object.freeze({ errorClass, rpcStatus, rpcCode, rpcUrlHost, method });
 }
 
-const rejectionStatuses = new Set([403, 413, 429]);
-const rejectionCodes = new Set([
+/**
+ * Two kinds of refusal, treated differently (Decision 0068 as amended by the
+ * S71 review):
+ *
+ * - `shape`: the endpoint objects to the *request* — too many blocks,
+ *   addresses, or results, or a blanket "Request blocked". Narrowing helps,
+ *   so the range reader splits.
+ * - `throttle`: the endpoint objects to the *rate* — 429, "rate limit",
+ *   "too many requests", "quota", "usage limit". Narrowing would multiply
+ *   the requests against the same quota, so the error propagates unchanged
+ *   to the lane's exponential backoff.
+ */
+export type LogQueryRefusal = "shape" | "throttle";
+
+const shapeStatuses = new Set([413]);
+const shapeCodes = new Set<number>([
   InvalidParamsRpcError.code, // -32602: "Request blocked", range/address caps
-  -32001, // "usage limit" (1rpc-style quota)
-  LimitExceededRpcError.code, // -32005: quota / result cap
+  LimitExceededRpcError.code, // -32005: result cap
 ]);
-const rejectionMessagePattern =
-  /limit exceeded|request blocked|usage limit|rate limit|quota|too many|exceed|blocked/i;
+const throttleStatuses = new Set([429]);
+const throttlePattern = /rate limit|too many|quota|usage limit/i;
+const shapePattern =
+  /limit exceeded|request blocked|block range|more than|too wide|too large|exceed/i;
 
 /**
- * Whether a Provider refused an `eth_getLogs` request rather than failing to
- * serve it (Decision 0068): HTTP 403/413/429, JSON-RPC -32602/-32001/-32005,
- * or a refusal phrased only in text (`limit exceeded`, `Request blocked`).
- * A refusal is retried narrower; a transport failure or timeout is not.
+ * The refusal text a candidate error is allowed to contribute: the
+ * `details` of a JSON-RPC error (`RpcRequestError` and the typed errors
+ * viem builds on it) or of a 4xx `HttpRequestError`. A 5xx body is never
+ * read: a gateway page that happens to say "blocked" is an outage, not a
+ * refusal. Message text of plain errors is not consulted either.
  */
-export function isLogQueryRejection(error: unknown): boolean {
+function refusalText(candidate: unknown): string | null {
+  const details = stringField(candidate, "details");
+  if (details === null) {
+    return null;
+  }
+  const status = numberField(candidate, "status");
+  if (status !== null && (status < 400 || status >= 500)) {
+    return null;
+  }
+  return details;
+}
+
+export function classifyLogQueryError(error: unknown): LogQueryRefusal | null {
+  const summary = summarizeRpcError(error);
+  if (
+    summary.rpcStatus !== null &&
+    (summary.rpcStatus < 400 || summary.rpcStatus >= 500)
+  ) {
+    return null;
+  }
+  if (summary.rpcStatus !== null && throttleStatuses.has(summary.rpcStatus)) {
+    return "throttle";
+  }
+  const texts = walkCauses(error).flatMap((candidate) => {
+    const text = refusalText(candidate);
+    return text === null ? [] : [text];
+  });
+  if (texts.some((text) => throttlePattern.test(text))) {
+    return "throttle";
+  }
   if (
     error instanceof LimitExceededRpcError ||
     error instanceof InvalidParamsRpcError
   ) {
-    return true;
+    return "shape";
   }
-  const summary = summarizeRpcError(error);
-  if (summary.rpcStatus !== null && rejectionStatuses.has(summary.rpcStatus)) {
-    return true;
+  if (summary.rpcStatus !== null && shapeStatuses.has(summary.rpcStatus)) {
+    return "shape";
   }
-  if (summary.rpcCode !== null && rejectionCodes.has(summary.rpcCode)) {
-    return true;
+  if (summary.rpcCode !== null && shapeCodes.has(summary.rpcCode)) {
+    return "shape";
   }
-  return walkCauses(error).some((candidate) => {
-    const details = stringField(candidate, "details");
-    const shortMessage = stringField(candidate, "shortMessage");
-    const message = stringField(candidate, "message");
-    return (
-      (details !== null && rejectionMessagePattern.test(details)) ||
-      (shortMessage !== null && rejectionMessagePattern.test(shortMessage)) ||
-      (message !== null &&
-        !("walk" in (candidate as object)) &&
-        rejectionMessagePattern.test(message))
-    );
-  });
+  return texts.some((text) => shapePattern.test(text)) ? "shape" : null;
+}
+
+/** Whether narrowing the request can help: a `shape` refusal only. */
+export function isLogQueryRejection(error: unknown): boolean {
+  return classifyLogQueryError(error) === "shape";
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -716,6 +762,16 @@ export function createBscReadClient(
 
   let verification: ChainVerificationState = "unknown";
   let verificationInFlight: Promise<ChainVerificationState> | null = null;
+  /**
+   * Request shape the endpoints are known to accept, learned from shape
+   * refusals and kept across reads so the next segment is issued at the
+   * known-good width and group size instead of rediscovering them. A read
+   * that completes without any refusal relaxes both limits one step (up to
+   * the segment width and the full address list), so a transient refusal
+   * cannot pin the client to one-block reads forever.
+   */
+  let learnedRangeLimit: bigint = bscMaximumLogRange;
+  let learnedAddressGroupLimit: number = Number.MAX_SAFE_INTEGER;
 
   async function probeVerification(): Promise<ChainVerificationState> {
     try {
@@ -756,13 +812,14 @@ export function createBscReadClient(
   }
 
   /**
-   * Reads one segment, narrowing the request whenever the Provider refuses it
-   * (Decision 0068). The walk is iterative and bounded: the block range is
-   * halved down to one block, then the address list is halved down to one
-   * address, and the whole read fails closed — never a partial page — when a
-   * single-address, single-block request is still refused or when the request
-   * budget runs out. An address-count limit learned on one leaf is applied to
-   * every pending leaf so it is discovered once per read, not once per block.
+   * Reads one segment, narrowing the request whenever the Provider refuses
+   * its shape (Decision 0068). The walk is iterative and bounded: the block
+   * range is halved down to one block, then the address list is halved down
+   * to one address, and the whole read fails closed — never a partial page —
+   * when a single-address, single-block request is still refused or when the
+   * read budget runs out. Limits learned here are kept on the client (see
+   * `learnedRangeLimit`). A throttle refusal, a timeout, or a transport
+   * failure propagates unchanged after the first occurrence.
    * Collected logs are returned in block order regardless of split order.
    */
   async function readLogRangeWith<
@@ -786,15 +843,23 @@ export function createBscReadClient(
       readonly addresses: readonly Address[];
     }[] = [{ from: fromBlock, to: toBlock, addresses }];
     const collected: T[] = [];
-    let addressGroupLimit = addresses.length;
     let requestCount = 0;
+    let refused = false;
     while (pending.length > 0) {
       const request = pending.shift();
       if (request === undefined) {
         break;
       }
-      if (request.addresses.length > addressGroupLimit) {
-        pending.unshift(...splitAddresses(request, addressGroupLimit));
+      if (request.to - request.from + 1n > learnedRangeLimit) {
+        const middle = request.from + (request.to - request.from) / 2n;
+        pending.unshift(
+          { ...request, to: middle },
+          { ...request, from: middle + 1n },
+        );
+        continue;
+      }
+      if (request.addresses.length > learnedAddressGroupLimit) {
+        pending.unshift(...splitAddresses(request, learnedAddressGroupLimit));
         continue;
       }
       if (requestCount >= bscMaximumLogRequestsPerSegment) {
@@ -807,20 +872,21 @@ export function createBscReadClient(
         if (!isLogQueryRejection(error)) {
           throw error;
         }
-        if (request.to - request.from >= bscLogRangeSplitFloor) {
-          const middle = request.from + (request.to - request.from) / 2n;
-          pending.unshift(
-            { ...request, to: middle },
-            { ...request, from: middle + 1n },
-          );
+        refused = true;
+        const width = request.to - request.from + 1n;
+        if (width > bscLogRangeSplitFloor) {
+          const half = (width + 1n) / 2n;
+          learnedRangeLimit =
+            half < learnedRangeLimit ? half : learnedRangeLimit;
+          pending.unshift(request);
           continue;
         }
         if (request.addresses.length > 1) {
-          addressGroupLimit = Math.min(
-            addressGroupLimit,
+          learnedAddressGroupLimit = Math.min(
+            learnedAddressGroupLimit,
             Math.ceil(request.addresses.length / 2),
           );
-          pending.unshift(...splitAddresses(request, addressGroupLimit));
+          pending.unshift(request);
           continue;
         }
         throw new BscReadUnavailableError(bscLogQueryRejectedReasonCode, {
@@ -828,6 +894,15 @@ export function createBscReadClient(
           rpcError: summarizeRpcError(error),
         });
       }
+    }
+    if (!refused) {
+      const relaxedRange = learnedRangeLimit * 2n;
+      learnedRangeLimit =
+        relaxedRange < bscMaximumLogRange ? relaxedRange : bscMaximumLogRange;
+      learnedAddressGroupLimit =
+        learnedAddressGroupLimit >= Number.MAX_SAFE_INTEGER / 2
+          ? Number.MAX_SAFE_INTEGER
+          : learnedAddressGroupLimit * 2;
     }
     return collected.sort((left, right) => {
       const leftBlock = left.blockNumber ?? -1n;

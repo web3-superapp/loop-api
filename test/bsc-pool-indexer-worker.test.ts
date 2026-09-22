@@ -411,7 +411,7 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
     expect(storage.current()).toBeNull();
   });
 
-  it("advances through a 403 on multi-address eth_getLogs by reading one pool at a time", async () => {
+  it("advances through a real 403 HttpRequestError on multi-address eth_getLogs by reading one pool at a time", async () => {
     const storage = repositoryFake();
     const accepted: string[][] = [];
     const readClient = createBscReadClient({
@@ -446,11 +446,7 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
                   ? filter.address
                   : [filter.address];
                 if (addresses.length > 1) {
-                  return Promise.reject(
-                    Object.assign(new Error("Request blocked"), {
-                      code: -32602,
-                    }),
-                  );
+                  return Promise.reject(requestBlocked());
                 }
                 accepted.push([...addresses]);
                 return Promise.resolve([]);
@@ -467,12 +463,12 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
       registry: registryFake([pool, secondPool]),
       readClient,
       chainId: bscChainId,
-      startBlockNumber: 97,
+      startBlockNumber: 100,
     });
 
     await expect(worker.runOnce()).resolves.toMatchObject({
       kind: "seeded",
-      fromBlockNumber: "97",
+      fromBlockNumber: "100",
       toBlockNumber: "100",
       eventCount: 0,
       reasonCode: null,
@@ -483,17 +479,18 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
     expect(storage.transferCommits).toEqual([]);
   });
 
-  it("idles as unavailable, commits nothing, and reports the transition once when every split is still refused", async () => {
+  it("idles as unavailable, commits nothing, backs off exponentially, and reports the transition once when every split is still refused", async () => {
     const storage = repositoryFake();
     const availability: BscIndexerLaneAvailabilityEvent[] = [];
     let refuse = true;
+    let readCount = 0;
     const worker = createBscPoolIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
       readClient: {
         ...readClientFake({ head: 100n }),
         readPoolEventLogs: () =>
-          refuse
+          (readCount += 1) > 0 && refuse
             ? Promise.reject(
                 new BscReadUnavailableError("BSC_LOG_QUERY_REJECTED", {
                   cause: requestBlocked(),
@@ -527,12 +524,19 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
     expect(storage.current()).toBeNull();
 
     vi.useFakeTimers();
+    readCount = 0;
     const controller = new AbortController();
     const running = worker.run(controller.signal);
-    await vi.advanceTimersByTimeAsync(3_000);
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readCount).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readCount).toBe(3);
     refuse = false;
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     controller.abort();
     await vi.advanceTimersByTimeAsync(3_000);
     await running;

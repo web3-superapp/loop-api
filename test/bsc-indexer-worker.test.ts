@@ -603,7 +603,7 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     expect(storage.current()).toBeNull();
   });
 
-  it("advances through a 403 on multi-address eth_getLogs by reading one address at a time", async () => {
+  it("advances through a real 403 HttpRequestError on multi-address eth_getLogs by reading one address at a time", async () => {
     const storage = repositoryFake();
     const accepted: string[][] = [];
     const readClient = createBscReadClient({
@@ -638,11 +638,7 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
                   ? filter.address
                   : [filter.address];
                 if (addresses.length > 1) {
-                  return Promise.reject(
-                    Object.assign(new Error("Request blocked"), {
-                      code: -32602,
-                    }),
-                  );
+                  return Promise.reject(requestBlocked());
                 }
                 accepted.push([...addresses]);
                 return Promise.resolve([]);
@@ -659,12 +655,14 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
       registry: registryFake([wbnbAsset, cakeAsset]),
       readClient,
       chainId: bscChainId,
-      startBlockNumber: 97,
+      // One block: viem retries a 403 three times per refusal, so the
+      // narrowing walk here is one refusal (address split) and two reads.
+      startBlockNumber: 100,
     });
 
     await expect(worker.runOnce()).resolves.toMatchObject({
       kind: "seeded",
-      fromBlockNumber: "97",
+      fromBlockNumber: "100",
       toBlockNumber: "100",
       transferCount: 0,
       reasonCode: null,
@@ -677,17 +675,18 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     });
   });
 
-  it("idles as unavailable, commits nothing, and reports the transition once when every split is still refused", async () => {
+  it("idles as unavailable, commits nothing, backs off exponentially, and reports the transition once when every split is still refused", async () => {
     const storage = repositoryFake();
     const availability: BscIndexerLaneAvailabilityEvent[] = [];
     let refuse = true;
+    let readCount = 0;
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
       readClient: {
         ...readClientFake({ head: 100n }),
         readTransferLogs: () =>
-          refuse
+          (readCount += 1) > 0 && refuse
             ? Promise.reject(
                 new BscReadUnavailableError("BSC_LOG_QUERY_REJECTED", {
                   cause: requestBlocked(),
@@ -721,17 +720,28 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     expect(storage.current()).toBeNull();
 
     vi.useFakeTimers();
+    readCount = 0;
     const controller = new AbortController();
     const running = worker.run(controller.signal);
-    // Two unavailable ticks produce one transition; recovery produces one more.
-    await vi.advanceTimersByTimeAsync(3_000);
-    await vi.advanceTimersByTimeAsync(3_000);
+    // A refused tick waits 1 s, then 2 s, then 4 s (the retry-loop schedule),
+    // not the 3 s idle of an ordinary unavailable tick.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readCount).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readCount).toBe(3);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(readCount).toBe(4);
     refuse = false;
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     controller.abort();
     await vi.advanceTimersByTimeAsync(3_000);
     await running;
 
+    // Repeated refusals produce one transition; recovery produces one more.
     expect(availability).toEqual([
       {
         lane: "erc20_transfer",
@@ -755,5 +765,75 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
       },
     ]);
     expect(storage.current()).toMatchObject({ lastBlockNumber: "100" });
+  });
+});
+
+describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 0068)", () => {
+  it("keeps the 3 s idle for an unavailable tick that is not a refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      let readCount = 0;
+      const worker = createBscIndexerWorker({
+        repository: repositoryFake().repository,
+        registry: registryFake(),
+        readClient: {
+          ...readClientFake({ head: 100n }),
+          getHead: () => {
+            readCount += 1;
+            return Promise.reject(
+              new BscReadUnavailableError("BSC_RPC_UNREACHABLE"),
+            );
+          },
+        },
+        chainId: bscChainId,
+        startBlockNumber: 90,
+      });
+      const controller = new AbortController();
+      const running = worker.run(controller.signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(readCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readCount).toBe(2);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a hostile error value break the retry loop's backoff event", async () => {
+    const events: BscIndexerInfrastructureBackoff[] = [];
+    const controller = new AbortController();
+    // No prototype, a non-string constructor name: nothing to summarise.
+    const hostile = Object.create(null) as Error;
+    Object.defineProperty(hostile, "constructor", { value: { name: 42 } });
+    const worker = createBscIndexerWorker({
+      repository: repositoryFake().repository,
+      registry: registryFake(),
+      readClient: {
+        ...readClientFake({ head: 100n }),
+        readTransferLogs: () => Promise.reject(hostile),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+    await worker.run(controller.signal);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      reasonCode: "bsc_indexer_unavailable",
+      lane: "erc20_transfer",
+      errorClass: "Unknown",
+      rpcStatus: null,
+      rpcCode: null,
+      rpcUrlHost: null,
+      method: null,
+    });
   });
 });

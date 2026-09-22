@@ -302,12 +302,18 @@ never an API field): `BSC_RPC_UNREACHABLE`, `BSC_CHAIN_ID_MISMATCH`,
 Decision 0068 `BSC_LOG_QUERY_REJECTED` (every endpoint refused even a
 single-address, single-block `eth_getLogs`) and
 `BSC_LOG_QUERY_BUDGET_EXHAUSTED` (narrowing a segment would exceed 512
-requests). A refusal (HTTP 403/413/429, JSON-RPC -32602/-32001/-32005, or
-`limit exceeded`-class text) is narrowed by block range, then by address,
-before the lane idles as `unavailable`; the retry-loop warn line and the
-once-per-transition `LOOP BSC indexer lane is unavailable` line carry
-`lane`, `errorClass`, `rpcStatus`, `rpcCode`, `rpcUrlHost` (host name only),
-and `method`.
+client-side reads, each at most endpoints × 4 HTTP attempts). A _shape_
+refusal (HTTP 413, JSON-RPC -32602/-32005 typed or in a 4xx body, or
+`limit exceeded` / `Request blocked` / `block range` / `more than` text) is
+narrowed by block range, then by address, with the learned limits kept on
+the client for the next segment; a _throttle_ (HTTP 429, `rate limit` /
+`too many` / `quota` / `usage limit` text, which is the only reading of
+-32001) is not narrowed and goes to the retry loop's exponential backoff.
+A lane idling on either refusal code backs off 1 s → 30 s between ticks.
+The retry-loop warn line and the once-per-transition `LOOP BSC indexer lane
+is unavailable` line carry `lane`, `errorClass`, `rpcStatus`, `rpcCode`,
+`rpcUrlHost` (host name only), and `method`; on `BSC_RPC_UNREACHABLE` (from
+the chain-verification probe) these are `null`.
 
 ### V2 wallet module (Decision 0033, `V2_MODULES_ENABLED=wallet`)
 

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  availabilityKey,
   BSC_INDEXER_IDLE_DELAY_MS,
-  BSC_INDEXER_RETRY_BASE_DELAY_MS,
-  BSC_INDEXER_RETRY_MAX_DELAY_MS,
   infrastructureBackoffEvent,
+  isRefusalReasonCode,
   laneAvailabilityEvent,
+  retryDelayMs,
+  unavailableDelayMs,
   unavailableReasonFor,
   type BscIndexerInfrastructureBackoff,
   type BscIndexerLaneAvailabilityEvent,
@@ -104,13 +106,6 @@ async function waitFor(delayMs: number, signal: AbortSignal): Promise<void> {
 
 function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted ?? false;
-}
-
-function retryDelayMs(consecutiveFailureCount: number): number {
-  return Math.min(
-    BSC_INDEXER_RETRY_BASE_DELAY_MS * 2 ** (consecutiveFailureCount - 1),
-    BSC_INDEXER_RETRY_MAX_DELAY_MS,
-  );
 }
 
 function isSignedInteger(value: string | undefined): value is string {
@@ -329,15 +324,17 @@ export function createBscPoolIndexerWorker(
       }
       loopRunning = true;
       let consecutiveFailures = 0;
-      let unavailableReasonCode: string | null = null;
+      let consecutiveRefusals = 0;
+      let unavailableKey: string | null = null;
       try {
         while (!signal.aborted) {
           try {
             const result = await runOnce(signal);
             consecutiveFailures = 0;
             if (result.kind === "unavailable") {
-              if (result.reasonCode !== unavailableReasonCode) {
-                unavailableReasonCode = result.reasonCode;
+              const key = availabilityKey(result);
+              if (key !== unavailableKey) {
+                unavailableKey = key;
                 options.onLaneAvailability?.(
                   laneAvailabilityEvent(
                     BSC_POOL_INDEXER_LANE,
@@ -347,8 +344,18 @@ export function createBscPoolIndexerWorker(
                   ),
                 );
               }
-            } else if (unavailableReasonCode !== null) {
-              unavailableReasonCode = null;
+              consecutiveRefusals = isRefusalReasonCode(result.reasonCode)
+                ? consecutiveRefusals + 1
+                : 0;
+              await waitFor(
+                unavailableDelayMs(result.reasonCode, consecutiveRefusals),
+                signal,
+              );
+              continue;
+            }
+            consecutiveRefusals = 0;
+            if (unavailableKey !== null) {
+              unavailableKey = null;
               options.onLaneAvailability?.(
                 laneAvailabilityEvent(
                   BSC_POOL_INDEXER_LANE,
