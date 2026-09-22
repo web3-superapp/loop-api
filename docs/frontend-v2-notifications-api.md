@@ -268,7 +268,9 @@ DELETE /v2/devices/push-token
 
 可见文案由客户端用本地化 key 渲染（`push.priceAlertTriggered.title/body`、
 `push.securityEvent.*`、`push.communityVoiceRoomStarted.*`），服务端不下发任何
-展示文案。
+展示文案。iOS 下发的 `title-loc-key` / `loc-key` 是点号原样；Android 的
+`title_loc_key` / `body_loc_key` 是同一组键的下划线拼写（`push_priceAlertTriggered_title`
+等），因为 Android 资源名不允许点号。
 
 **点击处理**：重新认证 → 用 `contextRoute` 打开对应页面 → 重新读取
 `GET /v2/notifications/feed` 与该页面的权威接口。不得把 payload 当成结果。

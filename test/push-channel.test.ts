@@ -300,6 +300,11 @@ describe("FCM HTTP v1 sender", () => {
       readonly message: {
         readonly data: Record<string, string>;
         readonly android: { readonly notification: Record<string, string> };
+        readonly apns: {
+          readonly payload: {
+            readonly aps: { readonly alert: Record<string, string> };
+          };
+        };
       };
     };
     expect(Object.keys(message.message.data).sort()).toEqual([
@@ -309,8 +314,12 @@ describe("FCM HTTP v1 sender", () => {
       "type",
     ]);
     expect(message.message.android.notification).toEqual({
-      title_loc_key: "push.priceAlertTriggered.title",
-      body_loc_key: "push.priceAlertTriggered.body",
+      title_loc_key: "push_priceAlertTriggered_title",
+      body_loc_key: "push_priceAlertTriggered_body",
+    });
+    expect(message.message.apns.payload.aps.alert).toEqual({
+      "title-loc-key": "push.priceAlertTriggered.title",
+      "loc-key": "push.priceAlertTriggered.body",
     });
     expect(JSON.stringify(message)).not.toContain("747");
   });

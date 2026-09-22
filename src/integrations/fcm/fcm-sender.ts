@@ -123,6 +123,15 @@ export function createServiceAccountAssertion(input: {
 }
 
 /**
+ * Android looks `title_loc_key` up as a resource name, and `aapt2` refuses a
+ * `.` inside one, so the Android spelling of a localization key swaps the dots
+ * for underscores. iOS keeps the dotted key verbatim in `Localizable.strings`.
+ */
+export function androidLocKey(key: string): string {
+  return key.replaceAll(".", "_");
+}
+
+/**
  * Data-only keys plus localization keys. `data` values are strings by FCM
  * contract; the four keys are the closed payload set of Decision 0067.
  */
@@ -143,8 +152,8 @@ export function createFcmMessage(input: {
       android: {
         priority: definition.mandatory ? "high" : "normal",
         notification: {
-          title_loc_key: definition.titleLocKey,
-          body_loc_key: definition.bodyLocKey,
+          title_loc_key: androidLocKey(definition.titleLocKey),
+          body_loc_key: androidLocKey(definition.bodyLocKey),
         },
       },
       apns: {
