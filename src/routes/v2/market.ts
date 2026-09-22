@@ -122,7 +122,7 @@ export function registerV2MarketRoutes(
         operationId: "getV2MarketCandles",
         summary: "Get OHLCV candles for one asset",
         description:
-          "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An unregistered address (Decision 0058) is charted only through GeckoTerminal OHLCV of its lookup's primary pair (`pool.protocol` is then the Provider's dex id) and consumes the lookup quota; without GeckoTerminal it is `MARKET_POOL_NOT_REGISTERED`.",
+          "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An asset LOOP has no registered pool for — registered (Decision 0064) or not (Decision 0058) — is charted through GeckoTerminal OHLCV of the top pool the lookup reports, published as `pool.origin: provider` with the Provider's dex id as `pool.protocol`; only the unregistered address consumes the lookup quota. Without GeckoTerminal, or when the Provider knows no pool either, the block is `MARKET_POOL_NOT_REGISTERED`.",
         tags: ["market"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

@@ -66,7 +66,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `MARKET_PAIR_NOT_FOUND`                  | DexScreener 没有以该资产为 base 的交易对                                                                                                                                                                                                                                                                                                                                    |
 | `MARKET_FACT_NOT_REPORTED`               | Provider 返回了交易对但没报这个字段                                                                                                                                                                                                                                                                                                                                         |
 | `MARKET_NATIVE_ASSET_NOT_SUPPORTED`      | 原生 BNB 没有合约：安全事实/持有人/成交不可用（价格与 K 线走 `proxied`；WBNB 未登记时 K 线也是这个码）                                                                                                                                                                                                                                                                      |
-| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池                                                                                                                                                                                                                                                                                                                                        |
+| `MARKET_POOL_NOT_REGISTERED`             | 该资产没有已登记的 PancakeSwap V3 池，且（K 线）Provider 也没有可用顶池                                                                                                                                                                                                                                                                                                     |
 | `BSC_POOL_INDEXER_NOT_STARTED`           | `pool_event` lane 从未运行                                                                                                                                                                                                                                                                                                                                                  |
 | `MARKET_NO_SWAPS_IN_RANGE`               | 请求区间内无成交                                                                                                                                                                                                                                                                                                                                                            |
 | `ASSET_BLOCKED`                          | registry 标记为 blocked                                                                                                                                                                                                                                                                                                                                                     |
@@ -148,7 +148,9 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 - `capability.swappable` 恒 `false`；**Swap 入口不渲染**。`capability.value` 与
   `GET /v2/assets/{assetId}` 相同语义。
 - 价格类事实全部来自 `primaryPair`（以该资产为 base、流动性最深的 DexScreener 交易对）。
-  `primaryPair: null` 时价格块全是 unavailable，`reasonCode` 说明原因。
+  DexScreener 没有可用交易对时，整组事实改由 Provider 顶池查找提供（决策 0064，见 §4a
+  末条）：来源在每个事实的 `source` 里自述，不会一个字段来自一个 Provider。仍然没有 →
+  价格块全是 unavailable，`primaryPair: null`，`reasonCode` 说明原因。
 - `security.facts` 是**带来源与观察时间的事实列表**，键名固定：
   `openSource proxy mintable ownershipTakeBack ownerChangeBalance hiddenOwner selfDestruct externalCall honeypot transferPausable blacklist whitelist antiWhale tradingCooldown cannotSellAll listedOnDex`（值 `"true"/"false"`）与
   `buyTax sellTax`（小数字符串）。后端**不给评分、评级或结论**，页面只渲染
@@ -268,10 +270,18 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 - **K 线**：`GET /v2/market/assets/{assetId}/candles` 对未登记地址也可用（同样计配额）。
   只有 GeckoTerminal 路径：`source: geckoterminal`、`pool.address` = `primaryPair.pairAddress`、
   **`pool.protocol` 是 Provider 的 dex id 字符串**（如 `pancakeswap-v3-bsc`，不再是
-  `pancakeswap_v3` 常量——严格 codec 要改成字符串）、`quoteAssetId: null`、
-  `quoteSymbol: "USD"`、`priceUnit: "USD per ETH"`。GeckoTerminal 关闭 →
-  `MARKET_POOL_NOT_REGISTERED`（没有登记池，无法链上聚合）；无主交易对 →
+  `pancakeswap_v3` 常量——严格 codec 要改成字符串）、**`pool.origin: "provider"`**（决策
+  0064，见 §5）、`quoteAssetId: null`、`quoteSymbol: "USD"`、`priceUnit: "USD per ETH"`。
+  GeckoTerminal 关闭 → `MARKET_POOL_NOT_REGISTERED`（没有登记池，无法链上聚合）；无主交易对 →
   `MARKET_PAIR_NOT_FOUND`。`trades`/`holders` 对未登记地址仍是 `404`。
+- **已登记但没有登记池的资产走同一条 Provider 顶池路径（决策 0064）**：`asset.status` 仍是
+  `pending`/`verified`（身份永远来自 registry，不会变成 `unregistered`），K 线与 §4 的
+  `primaryPair`/价格类事实在本地没有 DexScreener 交易对时改由同一次 Provider 查找提供，
+  `pool.origin: "provider"`。**这条路径不计配额**（registry 资产是有界集合，不构成探测）。
+  Provider 也不知道任何池 → 仍是 `MARKET_POOL_NOT_REGISTERED`；Provider 不可达 → 该
+  Provider 的原因码（`MARKET_PROVIDER_UNREACHABLE` 等）。`trades` 仍是
+  `MARKET_POOL_NOT_REGISTERED`（那是 LOOP 自己的链上成交流水，Provider 的成交没有
+  log index/区块哈希/自有钱包归属，不会冒充）；`holders` 本来就不依赖池，照常可用。
 
 ## 5. `GET /v2/market/assets/{assetId}/candles?interval=15m|1h|4h|1d|1w[&limit=1..300]` → `token` 图表 / `chart-full`
 
@@ -289,6 +299,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "pool": {
       "address": "0x3669…",
       "protocol": "pancakeswap_v3",
+      "origin": "registry",
       "quoteAssetId": "eip155:56:0x55d3…",
       "quoteSymbol": "USDT"
     },
@@ -318,6 +329,13 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     （`priceUnit`），不是 USD；`volume` 是该资产一侧的成交量（资产自身单位）。
   - 都没有 → `candles.status: unavailable`（`MARKET_POOL_NOT_REGISTERED` /
     `BSC_POOL_INDEXER_NOT_STARTED` / `MARKET_NO_SWAPS_IN_RANGE` / `MARKET_PROVIDER_GECKOTERMINAL_DISABLED`）。
+- **`pool.origin`（决策 0064，必填）**：`"registry"` = LOOP 已登记并索引的池（同一个池
+  支撑 `/trades` 与派生 K 线）；`"provider"` = Provider 报的顶池，LOOP 没有索引它。
+  资产**没有登记池**时（不论是否已登记）就走 `"provider"`：`source: geckoterminal`、
+  `pool.protocol` 是 Provider 的 dex id、`quoteAssetId: null`、`quoteSymbol: "USD"`。
+  此时同一资产的 `/trades` 仍是 `MARKET_POOL_NOT_REGISTERED`——K 线有、成交流水没有，
+  是正常组合，不是矛盾。GeckoTerminal 关闭、或 Provider 也不知道任何池 →
+  `MARKET_POOL_NOT_REGISTERED`；Provider 不可达 → 该 Provider 的原因码。
 - **原生 BNB（`eip155:56:native`）走 WBNB 代理（决策 0050）**：K 线取 WBNB 的池，
   `quality: "proxied"`，`proxyAsset: "eip155:56:0xbb4c…"`；`source` 与 `labelKey`
   照旧说明是 GeckoTerminal OHLCV 还是链上聚合（派生时 `labelKey` 仍非空，两个标注都要显示）。

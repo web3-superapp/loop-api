@@ -27,6 +27,7 @@ import {
 } from "./market-contract.js";
 import type { BscReadClient } from "../../integrations/bsc/rpc-client.js";
 import type {
+  PoolOhlcvSnapshot,
   PoolRef,
   TokenPairSnapshot,
   TokenPairsSnapshot,
@@ -234,6 +235,9 @@ export interface CandleProjection {
   readonly isOpen: boolean;
 }
 
+/** Origin of the pool a candle series was read from (Decision 0064). */
+export type CandlePoolOrigin = "registry" | "provider";
+
 export interface MarketCandlesResource {
   readonly assetId: string;
   readonly interval: CandleInterval;
@@ -250,6 +254,13 @@ export interface MarketCandlesResource {
         readonly pool: {
           readonly address: string;
           readonly protocol: string;
+          /**
+           * Where the charted pool came from (Decision 0064): `registry` is a
+           * pool LOOP has registered and indexes; `provider` is the top pool
+           * the market Provider reports for the token, which LOOP does not
+           * index and cannot derive trades from.
+           */
+          readonly origin: CandlePoolOrigin;
           readonly quoteAssetId: string | null;
           readonly quoteSymbol: string;
         };
@@ -514,6 +525,83 @@ function pairFactsFromSnapshot(
       pairCreatedAt: pair.pairCreatedAt,
     }),
     volumeForOrdering: pair.volumeH24,
+  });
+}
+
+/**
+ * One Provider OHLCV fact projected as the candles block, for every surface
+ * that charts a token from a Provider pool: a registered pool, the top pool
+ * the Provider reports for a registered token LOOP has no pool for, and the
+ * top pool of an unregistered address (Decisions 0034, 0058, 0064). The pool
+ * is always named together with its `origin`, so a client can tell a pool
+ * LOOP knows from one only the Provider knows.
+ *
+ * `null` when the Provider fact carries no snapshot; the caller decides
+ * whether that falls through to another source or closes the block.
+ */
+function providerCandlesResource(input: {
+  readonly assetId: string;
+  readonly interval: CandleInterval;
+  readonly intervalSeconds: number;
+  readonly pageSize: number;
+  readonly fact: CachedFact<PoolOhlcvSnapshot>;
+  readonly pool: {
+    readonly address: string;
+    readonly protocol: string;
+    readonly origin: CandlePoolOrigin;
+  };
+  /** Asset whose pool produced the candles when it is not the asked asset. */
+  readonly proxyAsset: string | null;
+  /** Symbol the price is quoted for; the address when no symbol is known. */
+  readonly pricedSymbol: string;
+  readonly nowMs: number;
+}): MarketCandlesResource | null {
+  const { fact } = input;
+  if (fact.value === null || fact.fetchedAt === null) {
+    return null;
+  }
+  const closeTimeMs = (openTime: string): number =>
+    Date.parse(openTime) + input.intervalSeconds * 1_000;
+  return Object.freeze({
+    assetId: input.assetId,
+    interval: input.interval,
+    candles: Object.freeze({
+      status: "available" as const,
+      quality:
+        input.proxyAsset !== null
+          ? ("proxied" as const)
+          : fact.quality === "stale"
+            ? ("stale" as const)
+            : ("fresh" as const),
+      source: fact.source,
+      fetchedAt: fact.fetchedAt,
+      labelKey: null,
+      proxyAsset: input.proxyAsset,
+      pool: Object.freeze({
+        address: input.pool.address,
+        protocol: input.pool.protocol,
+        origin: input.pool.origin,
+        quoteAssetId: null,
+        quoteSymbol: "USD",
+      }),
+      priceUnit: `USD per ${input.pricedSymbol}`,
+      items: Object.freeze(
+        fact.value.candles.slice(-input.pageSize).map((candle) =>
+          Object.freeze({
+            openTime: candle.openTime,
+            closeTime: new Date(closeTimeMs(candle.openTime)).toISOString(),
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+            volume: candle.volume,
+            swapCount: null,
+            isOpen: closeTimeMs(candle.openTime) > input.nowMs,
+          }),
+        ),
+      ),
+    }),
+    contractVersion: v2ContractVersion,
   });
 }
 
@@ -792,6 +880,75 @@ export function createMarketReadService(
     }
   }
 
+  /**
+   * Chart a registered token LOOP has no registered pool for (Decision
+   * 0064), through the Provider top-pool path of Decision 0058: the token
+   * lookup names the deepest pool the Provider knows, and the OHLCV of that
+   * pool is the chart. The enumeration quota of Decision 0058 is not
+   * consumed — the registry is a bounded set the caller did not choose, so
+   * a registered asset id probes no Provider coverage.
+   *
+   * "The Provider knows no pool for it either" keeps the reason code
+   * `MARKET_POOL_NOT_REGISTERED`, so a client that already handles that
+   * block needs no new case; a Provider that could not answer keeps its own
+   * reason, because not knowing is not the same as there being nothing.
+   */
+  async function providerTopPoolCandles(args: {
+    readonly assetId: string;
+    readonly address: string;
+    readonly symbol: string;
+    readonly interval: CandleInterval;
+    readonly intervalSeconds: number;
+    readonly pageSize: number;
+    readonly proxyAsset: string | null;
+    readonly unavailable: (reasonCode: string) => MarketCandlesResource;
+    readonly signal: AbortSignal | undefined;
+  }): Promise<MarketCandlesResource> {
+    const options = args.signal === undefined ? {} : { signal: args.signal };
+    if (!input.facts.candlesProviderEnabled) {
+      return args.unavailable(marketReasonCodes.poolNotRegistered);
+    }
+    const lookup = await input.facts.readUnlistedToken(args.address, options);
+    const pair = lookup.market.value?.primaryPair ?? null;
+    if (pair === null) {
+      const reasonCode = lookup.market.reasonCode;
+      return args.unavailable(
+        lookup.market.value === null &&
+          reasonCode !== null &&
+          reasonCode !== marketReasonCodes.tokenNotFound
+          ? reasonCode
+          : marketReasonCodes.poolNotRegistered,
+      );
+    }
+    const fact = await input.facts.readPoolOhlcv(
+      {
+        poolAddress: pair.pairAddress,
+        timeframe: args.interval,
+        limit: args.pageSize,
+        tokenAddress: args.address,
+      },
+      options,
+    );
+    return (
+      providerCandlesResource({
+        assetId: args.assetId,
+        interval: args.interval,
+        intervalSeconds: args.intervalSeconds,
+        pageSize: args.pageSize,
+        fact,
+        pool: {
+          address: pair.pairAddress,
+          protocol: pair.dexId,
+          origin: "provider",
+        },
+        proxyAsset: args.proxyAsset,
+        pricedSymbol: args.symbol,
+        nowMs: now().getTime(),
+      }) ??
+      args.unavailable(fact.reasonCode ?? marketReasonCodes.providerUnreachable)
+    );
+  }
+
   function poolsForAsset(
     pools: readonly PoolRecord[],
     assetId: string,
@@ -995,7 +1152,29 @@ export function createMarketReadService(
       const asset = resolved.record;
       const chainReadable =
         (await input.readClient.verifyChain()) === "verified";
-      const facts = await pairFactsFor(asset, signal);
+      let facts = await pairFactsFor(asset, signal);
+      // The pairs Provider reported no usable pair for a registered token:
+      // fall back to the same Provider top-pool lookup an unregistered
+      // address uses (Decision 0064), so a token LOOP registered is never
+      // read worse than one it does not know. The fallback is taken whole —
+      // every fact then comes from that one snapshot with its own source,
+      // never one field from each Provider. The native asset is excluded:
+      // its facts must stay labelled `proxied` through WBNB (Decision 0050).
+      if (
+        facts.primaryPair === null &&
+        asset.address !== null &&
+        asset.status !== "blocked"
+      ) {
+        const fallback = unregisteredPairFacts(
+          await input.facts.readUnlistedToken(
+            asset.address,
+            signal === undefined ? {} : { signal },
+          ),
+        );
+        if (fallback.primaryPair !== null) {
+          facts = fallback;
+        }
+      }
 
       let community: MarketAssetResource["community"];
       try {
@@ -1145,54 +1324,24 @@ export function createMarketReadService(
           },
           signal === undefined ? {} : { signal },
         );
-        if (fact.value === null || fact.fetchedAt === null) {
-          return unavailable(
-            fact.reasonCode ?? marketReasonCodes.providerUnreachable,
-          );
-        }
-        const symbol = lookup.identity.value?.symbol ?? resolved.address;
-        return Object.freeze({
-          assetId: resolved.assetId,
-          interval,
-          candles: Object.freeze({
-            status: "available" as const,
-            quality:
-              fact.quality === "stale"
-                ? ("stale" as const)
-                : ("fresh" as const),
-            source: fact.source,
-            fetchedAt: fact.fetchedAt,
-            labelKey: null,
-            proxyAsset: null,
-            pool: Object.freeze({
+        return (
+          providerCandlesResource({
+            assetId: resolved.assetId,
+            interval,
+            intervalSeconds,
+            pageSize,
+            fact,
+            pool: {
               address: pair.pairAddress,
               protocol: pair.dexId,
-              quoteAssetId: null,
-              quoteSymbol: "USD",
-            }),
-            priceUnit: `USD per ${symbol}`,
-            items: Object.freeze(
-              fact.value.candles.slice(-pageSize).map((candle) =>
-                Object.freeze({
-                  openTime: candle.openTime,
-                  closeTime: new Date(
-                    Date.parse(candle.openTime) + intervalSeconds * 1_000,
-                  ).toISOString(),
-                  open: candle.open,
-                  high: candle.high,
-                  low: candle.low,
-                  close: candle.close,
-                  volume: candle.volume,
-                  swapCount: null,
-                  isOpen:
-                    Date.parse(candle.openTime) + intervalSeconds * 1_000 >
-                    now().getTime(),
-                }),
-              ),
-            ),
-          }),
-          contractVersion: v2ContractVersion,
-        });
+              origin: "provider",
+            },
+            proxyAsset: null,
+            pricedSymbol: lookup.identity.value?.symbol ?? resolved.address,
+            nowMs: now().getTime(),
+          }) ??
+          unavailable(fact.reasonCode ?? marketReasonCodes.providerUnreachable)
+        );
       }
       const asset = resolved.record;
       if (asset.status === "blocked") {
@@ -1224,7 +1373,23 @@ export function createMarketReadService(
         priced.assetId,
       );
       if (pools.length === 0) {
-        return unavailable(marketReasonCodes.poolNotRegistered);
+        // Registered, but LOOP has registered no pool for it. Registering a
+        // token must never make it less readable than leaving it out of the
+        // registry, so the chart comes from the same Provider top-pool read
+        // an unregistered address uses (Decision 0064): same adapter, same
+        // cache rows, same TTL. There is no derived path here — a pool LOOP
+        // does not index produces no swap aggregate.
+        return await providerTopPoolCandles({
+          assetId: asset.assetId,
+          address: pricedAddress,
+          symbol: priced.symbol,
+          interval,
+          intervalSeconds,
+          pageSize,
+          proxyAsset: proxyAssetId,
+          unavailable,
+          signal,
+        });
       }
 
       // Provider path first: GeckoTerminal OHLCV in USD for the asset.
@@ -1240,51 +1405,23 @@ export function createMarketReadService(
             },
             signal === undefined ? {} : { signal },
           );
-          if (fact.value !== null && fact.fetchedAt !== null) {
-            return Object.freeze({
-              assetId: asset.assetId,
-              interval,
-              candles: Object.freeze({
-                status: "available" as const,
-                quality:
-                  proxy !== null
-                    ? ("proxied" as const)
-                    : fact.quality === "stale"
-                      ? ("stale" as const)
-                      : ("fresh" as const),
-                source: fact.source,
-                fetchedAt: fact.fetchedAt,
-                labelKey: null,
-                proxyAsset: proxyAssetId,
-                pool: Object.freeze({
-                  address: pool.address,
-                  protocol: pool.protocol,
-                  quoteAssetId: null,
-                  quoteSymbol: "USD",
-                }),
-                priceUnit: `USD per ${priced.symbol}`,
-                items: Object.freeze(
-                  fact.value.candles.slice(-pageSize).map((candle) =>
-                    Object.freeze({
-                      openTime: candle.openTime,
-                      closeTime: new Date(
-                        Date.parse(candle.openTime) + intervalSeconds * 1_000,
-                      ).toISOString(),
-                      open: candle.open,
-                      high: candle.high,
-                      low: candle.low,
-                      close: candle.close,
-                      volume: candle.volume,
-                      swapCount: null,
-                      isOpen:
-                        Date.parse(candle.openTime) + intervalSeconds * 1_000 >
-                        now().getTime(),
-                    }),
-                  ),
-                ),
-              }),
-              contractVersion: v2ContractVersion,
-            });
+          const resource = providerCandlesResource({
+            assetId: asset.assetId,
+            interval,
+            intervalSeconds,
+            pageSize,
+            fact,
+            pool: {
+              address: pool.address,
+              protocol: pool.protocol,
+              origin: "registry",
+            },
+            proxyAsset: proxyAssetId,
+            pricedSymbol: priced.symbol,
+            nowMs: now().getTime(),
+          });
+          if (resource !== null) {
+            return resource;
           }
           // A Provider failure falls through to the indexer derivation, which
           // is labelled as such; the Provider reason is not silently dropped
@@ -1390,6 +1527,7 @@ export function createMarketReadService(
             pool: Object.freeze({
               address: pool.address,
               protocol: pool.protocol,
+              origin: "registry" as const,
               quoteAssetId: quote.assetId,
               quoteSymbol: quote.symbol,
             }),

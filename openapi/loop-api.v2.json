@@ -46206,7 +46206,7 @@
         "operationId": "getV2MarketCandles",
         "summary": "Get OHLCV candles for one asset",
         "tags": ["market"],
-        "description": "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An unregistered address (Decision 0058) is charted only through GeckoTerminal OHLCV of its lookup's primary pair (`pool.protocol` is then the Provider's dex id) and consumes the lookup quota; without GeckoTerminal it is `MARKET_POOL_NOT_REGISTERED`.",
+        "description": "GeckoTerminal OHLCV when that Provider is enabled; otherwise candles derived by LOOP from indexed PancakeSwap V3 Swap events of a registered pool (quality `derived`, labelled as an on-chain swap aggregate, priced in the pool's other token). Neither source is inferred from the other. An asset LOOP has no registered pool for — registered (Decision 0064) or not (Decision 0058) — is charted through GeckoTerminal OHLCV of the top pool the lookup reports, published as `pool.origin: provider` with the Provider's dex id as `pool.protocol`; only the unregistered address consumes the lookup quota. Without GeckoTerminal, or when the Provider knows no pool either, the block is `MARKET_POOL_NOT_REGISTERED`.",
         "parameters": [
           {
             "schema": {
@@ -46347,6 +46347,7 @@
                               "required": [
                                 "address",
                                 "protocol",
+                                "origin",
                                 "quoteAssetId",
                                 "quoteSymbol"
                               ],
@@ -46359,7 +46360,12 @@
                                   "type": "string",
                                   "minLength": 1,
                                   "maxLength": 64,
-                                  "description": "`pancakeswap_v3` for a registered pool; for an unregistered address the lookup Provider's dex id of the primary pair (e.g. `pancakeswap-v3-bsc`)."
+                                  "description": "`pancakeswap_v3` for a registered pool; otherwise the lookup Provider's dex id of the pool it charted (e.g. `pancakeswap-v3-bsc`)."
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "enum": ["registry", "provider"],
+                                  "description": "Where the charted pool came from (Decision 0064). `registry`: a pool LOOP has registered and indexes, so the same pool backs `/trades` and the derived candles. `provider`: the top pool the market Provider reports for the token, used when the asset has no registered pool (registered or not); LOOP does not index it, so `/trades` stays `MARKET_POOL_NOT_REGISTERED`."
                                 },
                                 "quoteAssetId": {
                                   "anyOf": [

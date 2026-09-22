@@ -491,7 +491,13 @@ export const marketCandlesResourceSchema = {
             pool: {
               type: "object",
               additionalProperties: false,
-              required: ["address", "protocol", "quoteAssetId", "quoteSymbol"],
+              required: [
+                "address",
+                "protocol",
+                "origin",
+                "quoteAssetId",
+                "quoteSymbol",
+              ],
               properties: {
                 address: { type: "string", pattern: evmAddressPatternSource },
                 protocol: {
@@ -499,7 +505,13 @@ export const marketCandlesResourceSchema = {
                   minLength: 1,
                   maxLength: 64,
                   description:
-                    "`pancakeswap_v3` for a registered pool; for an unregistered address the lookup Provider's dex id of the primary pair (e.g. `pancakeswap-v3-bsc`).",
+                    "`pancakeswap_v3` for a registered pool; otherwise the lookup Provider's dex id of the pool it charted (e.g. `pancakeswap-v3-bsc`).",
+                },
+                origin: {
+                  type: "string",
+                  enum: ["registry", "provider"],
+                  description:
+                    "Where the charted pool came from (Decision 0064). `registry`: a pool LOOP has registered and indexes, so the same pool backs `/trades` and the derived candles. `provider`: the top pool the market Provider reports for the token, used when the asset has no registered pool (registered or not); LOOP does not index it, so `/trades` stays `MARKET_POOL_NOT_REGISTERED`.",
                 },
                 quoteAssetId: {
                   anyOf: [

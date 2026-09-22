@@ -80,6 +80,8 @@ The identity row is written on every real Provider fetch. When no Provider answe
 
 `trades` and `holders` for an unregistered address remain `404 NOT_FOUND` (out of scope; the Token Card reads `holderCount` from the asset response).
 
+**Amended by Decision 0064 (2026-09-22).** This Provider top-pool path is no longer reserved for unregistered addresses: a _registered_ asset for which LOOP has no registered pool takes the same path (same adapter, same cache rows and TTLs), because registering a token must not make it less readable than not registering it. Two things stay as written above: the enumeration quota is consumed only for an address the registry does not know, and identity for a registry asset always comes from the registry (`asset.status` is never `unregistered` for a registered token). The candles block now names the pool's origin — `pool.origin: "provider"` on this path, `"registry"` for a registered pool.
+
 ### Reason codes added
 
 `MARKET_TOKEN_NOT_FOUND`, `ASSET_NOT_REGISTERED`, `MARKET_IDENTITY_FIELD_NOT_REPORTED` (reserved for the identity block), `MARKET_LOOKUP_PROVIDER_DISABLED`.

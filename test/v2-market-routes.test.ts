@@ -31,6 +31,7 @@ import { createUnavailableProfileRepository } from "../src/database/profile-repo
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
+import { candleLimits } from "../src/features/market/market-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { BscReadClient } from "../src/integrations/bsc/rpc-client.js";
@@ -1774,6 +1775,202 @@ describe("LOOP API V2 market module", () => {
           reasonCode: "MARKET_POOL_NOT_REGISTERED",
         },
       });
+    });
+  });
+
+  describe("registered asset without a registered pool (Decision 0064)", () => {
+    /** The top pool the Provider reports for the token; LOOP has not registered it. */
+    const providerTopPool = "0x36696169c63e42cd08ce11f5deebbcebae652051";
+
+    function topPoolLookupFake(
+      options: { readonly pools?: boolean } = {},
+    ): TokenLookupProvider & { readonly calls: () => number } {
+      let calls = 0;
+      return {
+        source: "geckoterminal",
+        calls: () => calls,
+        readToken: (tokenAddress: string) => {
+          calls += 1;
+          return Promise.resolve({
+            value: {
+              tokenAddress,
+              symbol: "WBNB",
+              name: "Wrapped BNB",
+              decimals: 18,
+              priceUsd: "747.39",
+              fdvUsd: "1222740159",
+              marketCapUsd: "1222740159",
+              volumeH24Usd: "219189066.89",
+              topPools:
+                options.pools === false
+                  ? []
+                  : [
+                      {
+                        poolAddress: providerTopPool,
+                        dexId: "pancakeswap-v3-bsc",
+                        name: "WBNB / USDT 0.05%",
+                        baseTokenAddress: tokenAddress,
+                        quoteTokenAddress: usdt,
+                        quoteTokenSymbol: "USDT",
+                        reserveUsd: "11937174.89",
+                        volumeH24Usd: "219189066.89",
+                        priceChangeH24: "0.27",
+                        createdAt: "2023-04-05T14:12:23.000Z",
+                      },
+                    ],
+            },
+            source: "geckoterminal" as const,
+            fetchedAt,
+            rawDigest: "9".repeat(64),
+          });
+        },
+      };
+    }
+
+    it("charts a registered token with no registered pool from the Provider top pool, without the lookup quota", async () => {
+      const candles = candlesProviderFake();
+      const lookup = topPoolLookupFake();
+      const { app, database } = await createApp(
+        fakes({
+          candlesProvider: candles.provider,
+          tokenLookupProvider: lookup,
+        }),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}/candles?interval=1h&limit=5`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        assetId: wbnbAssetId,
+        interval: "1h",
+        candles: {
+          status: "available",
+          quality: "fresh",
+          source: "geckoterminal",
+          labelKey: null,
+          proxyAsset: null,
+          pool: {
+            address: providerTopPool,
+            protocol: "pancakeswap-v3-bsc",
+            origin: "provider",
+            quoteAssetId: null,
+            quoteSymbol: "USD",
+          },
+          priceUnit: "USD per WBNB",
+          items: [{ open: "747.12", close: "747.48", swapCount: null }],
+        },
+      });
+      expect(candles.readPoolOhlcv).toHaveBeenCalledWith(
+        providerTopPool,
+        "1h",
+        5,
+        expect.objectContaining({ tokenAddress: wbnb }),
+      );
+      // A registered asset id probes no Provider coverage: no quota.
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(0);
+    });
+
+    it("keeps the registered pool and origin registry when LOOP has one", async () => {
+      const candles = candlesProviderFake();
+      const lookup = topPoolLookupFake();
+      const { app } = await createApp(
+        fakes({
+          pools: [pool],
+          candlesProvider: candles.provider,
+          tokenLookupProvider: lookup,
+        }),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}/candles?interval=1h`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        candles: {
+          status: "available",
+          source: "geckoterminal",
+          pool: {
+            address: poolAddress,
+            protocol: "pancakeswap_v3",
+            origin: "registry",
+            quoteSymbol: "USD",
+          },
+          priceUnit: "USD per WBNB",
+        },
+      });
+      expect(candles.readPoolOhlcv).toHaveBeenCalledWith(
+        poolAddress,
+        "1h",
+        candleLimits.default,
+        expect.objectContaining({ tokenAddress: wbnb }),
+      );
+      expect(lookup.calls()).toBe(0);
+    });
+
+    it("stays MARKET_POOL_NOT_REGISTERED when the Provider knows no pool either", async () => {
+      const candles = candlesProviderFake();
+      const lookup = topPoolLookupFake({ pools: false });
+      const { app } = await createApp({
+        ...fakes({
+          candlesProvider: candles.provider,
+          tokenLookupProvider: lookup,
+        }),
+        // DexScreener must not supply a pool for this token either.
+        pairsProvider: null,
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}/candles?interval=1h`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        candles: {
+          status: "unavailable",
+          reasonCode: "MARKET_POOL_NOT_REGISTERED",
+        },
+      });
+      expect(lookup.calls()).toBe(1);
+      expect(candles.readPoolOhlcv).not.toHaveBeenCalled();
+    });
+
+    it("prices a registered token from the Provider top pool when the pairs Provider reports no pair", async () => {
+      const lookup = topPoolLookupFake();
+      const { app, database } = await createApp(
+        fakes({ tokenLookupProvider: lookup }),
+      );
+      // The pairs fake answers the USDT token with an empty pair list.
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${usdtAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        // Identity stays the registry's; only the facts came from the lookup.
+        asset: { assetId: usdtAssetId, status: "pending", symbol: "USDT" },
+        price: { value: "747.39", source: "geckoterminal", quality: "fresh" },
+        liquidityUsd: { value: "11937174.89", source: "geckoterminal" },
+        primaryPair: {
+          pairAddress: providerTopPool,
+          dexId: "pancakeswap-v3-bsc",
+          quoteTokenAddress: usdt,
+          quoteTokenSymbol: "USDT",
+        },
+      });
+      expect(lookup.calls()).toBe(1);
+      expect(
+        (
+          database.controlPlane as ReturnType<typeof controlPlaneFake>
+        ).consumed(),
+      ).toBe(0);
     });
   });
 });
