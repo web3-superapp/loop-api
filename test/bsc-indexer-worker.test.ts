@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { custom, HttpRequestError, numberToHex } from "viem";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createBscIndexerWorker } from "../src/bsc-indexer-worker.js";
+import {
+  createBscIndexerWorker,
+  type BscIndexerInfrastructureBackoff,
+  type BscIndexerLaneAvailabilityEvent,
+} from "../src/bsc-indexer-worker.js";
 import type {
   BscIndexerRepository,
   CommitApprovalCoverageSegmentInput,
@@ -15,6 +20,7 @@ import type {
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import {
   BscReadUnavailableError,
+  createBscReadClient,
   type BscApprovalLog,
   type BscReadClient,
   type BscTransferLog,
@@ -152,6 +158,8 @@ function repositoryFake() {
 interface ReadClientOptions {
   readonly head: bigint;
   readonly logsFor?: (query: BscTransferLogQuery) => readonly BscTransferLog[];
+  /** Rejects every transfer-log read with this error. */
+  readonly transferLogsError?: () => Error;
   readonly approvalLogsFor?: (
     query: BscTransferLogQuery,
   ) => readonly BscApprovalLog[];
@@ -185,7 +193,9 @@ function readClientFake(options: ReadClientOptions): BscReadClient {
     readPoolIdentity: () => Promise.reject(new Error("not used")),
     readBalances: () => Promise.reject(new Error("not used")),
     readTransferLogs: (query) =>
-      Promise.resolve(options.logsFor?.(query) ?? []),
+      options.transferLogsError === undefined
+        ? Promise.resolve(options.logsFor?.(query) ?? [])
+        : Promise.reject(options.transferLogsError()),
     readPoolEventLogs: () => Promise.resolve([]),
     readApprovalLogs: (query) =>
       Promise.resolve(options.approvalLogsFor?.(query) ?? []),
@@ -493,6 +503,337 @@ describe("BSC ERC-20 indexer lane", () => {
     await expect(worker.runOnce()).resolves.toMatchObject({
       kind: "idle",
       reasonCode: null,
+    });
+  });
+});
+
+/**
+ * The refusal seen on the Development stack on 2026-09-22 (Decision 0068):
+ * HTTP 403 with a JSON-RPC-shaped body from a keyed endpoint URL.
+ */
+const keyedEndpointUrl =
+  "https://user:secret@bsc-rpc.publicnode.com/v1/provider-key?token=xyz";
+
+function requestBlocked(): HttpRequestError {
+  return new HttpRequestError({
+    body: { method: "eth_getLogs", params: [{ address: [wbnb] }] },
+    details: '{"code":-32602,"message":"Request blocked"}',
+    status: 403,
+    url: keyedEndpointUrl,
+  });
+}
+
+const cake = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+const cakeAsset: AssetRecord = Object.freeze({
+  ...wbnbAsset,
+  assetId: `eip155:56:${cake}`,
+  address: cake,
+  symbol: "CAKE",
+  name: "PancakeSwap Token",
+});
+
+function rpcBlock(blockNumber: bigint): unknown {
+  return {
+    number: numberToHex(blockNumber),
+    hash: blockHash(blockNumber),
+    parentHash: blockHash(blockNumber - 1n),
+    timestamp: numberToHex(1_760_000_000n + blockNumber),
+    gasLimit: "0x1c9c380",
+    gasUsed: "0x5208",
+    baseFeePerGas: "0x3b9aca00",
+    miner: "0x0000000000000000000000000000000000000001",
+    extraData: "0x",
+    size: "0x100",
+    difficulty: "0x0",
+    totalDifficulty: "0x0",
+    nonce: "0x0000000000000000",
+    logsBloom: `0x${"0".repeat(512)}`,
+    transactionsRoot: blockHash(0n, "b"),
+    stateRoot: blockHash(0n, "c"),
+    receiptsRoot: blockHash(0n, "d"),
+    sha3Uncles: blockHash(0n, "e"),
+    transactions: [],
+    uncles: [],
+  };
+}
+
+describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("carries the error class, HTTP status, JSON-RPC code, host, and method into the backoff event, and nothing else", async () => {
+    const storage = repositoryFake();
+    const events: BscIndexerInfrastructureBackoff[] = [];
+    const controller = new AbortController();
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      readClient: readClientFake({
+        head: 100n,
+        transferLogsError: requestBlocked,
+      }),
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+
+    await worker.run(controller.signal);
+
+    expect(events).toEqual([
+      {
+        reasonCode: "bsc_indexer_unavailable",
+        lane: "erc20_transfer",
+        consecutiveFailureCount: 1,
+        retryDelayMs: 1_000,
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+      },
+    ]);
+    const serialised = JSON.stringify(events);
+    expect(serialised).not.toContain("secret");
+    expect(serialised).not.toContain("provider-key");
+    expect(serialised).not.toContain(wbnb);
+    expect(storage.current()).toBeNull();
+  });
+
+  it("advances through a real 403 HttpRequestError on multi-address eth_getLogs by reading one address at a time", async () => {
+    const storage = repositoryFake();
+    const accepted: string[][] = [];
+    const readClient = createBscReadClient({
+      config: {
+        chainId: "eip155:56",
+        chainReference: 56,
+        rpcUrls: ["https://rpc-a.example/"],
+        confirmations: 15,
+        reorgDepthBlocks: 64,
+      },
+      transportFactory: () =>
+        custom({
+          request: (request: {
+            readonly method: string;
+            readonly params?: unknown;
+          }): Promise<unknown> => {
+            switch (request.method) {
+              case "eth_chainId": {
+                return Promise.resolve("0x38");
+              }
+              case "eth_getBlockByNumber": {
+                const [tag] = request.params as readonly [string];
+                return Promise.resolve(
+                  rpcBlock(tag === "latest" ? 100n : BigInt(tag)),
+                );
+              }
+              case "eth_getLogs": {
+                const [filter] = request.params as readonly [
+                  { readonly address: string | string[] },
+                ];
+                const addresses = Array.isArray(filter.address)
+                  ? filter.address
+                  : [filter.address];
+                if (addresses.length > 1) {
+                  return Promise.reject(requestBlocked());
+                }
+                accepted.push([...addresses]);
+                return Promise.resolve([]);
+              }
+              default: {
+                return Promise.reject(new Error(`unmocked ${request.method}`));
+              }
+            }
+          },
+        }),
+    });
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake([wbnbAsset, cakeAsset]),
+      readClient,
+      chainId: bscChainId,
+      // One block: viem retries a 403 three times per refusal, so the
+      // narrowing walk here is one refusal (address split) and two reads.
+      startBlockNumber: 100,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "seeded",
+      fromBlockNumber: "100",
+      toBlockNumber: "100",
+      transferCount: 0,
+      reasonCode: null,
+    });
+    expect(accepted.length).toBeGreaterThan(0);
+    expect(accepted.every((addresses) => addresses.length === 1)).toBe(true);
+    expect(storage.current()).toMatchObject({
+      lastBlockNumber: "100",
+      lastBlockHash: blockHash(100n),
+    });
+  });
+
+  it("idles as unavailable, commits nothing, backs off exponentially, and reports the transition once when every split is still refused", async () => {
+    const storage = repositoryFake();
+    const availability: BscIndexerLaneAvailabilityEvent[] = [];
+    let refuse = true;
+    let readCount = 0;
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      readClient: {
+        ...readClientFake({ head: 100n }),
+        readTransferLogs: () =>
+          (readCount += 1) > 0 && refuse
+            ? Promise.reject(
+                new BscReadUnavailableError("BSC_LOG_QUERY_REJECTED", {
+                  cause: requestBlocked(),
+                  rpcError: {
+                    errorClass: "HttpRequestError",
+                    rpcStatus: 403,
+                    rpcCode: -32602,
+                    rpcUrlHost: "bsc-rpc.publicnode.com",
+                    method: "eth_getLogs",
+                  },
+                }),
+              )
+            : Promise.resolve([]),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: () => {
+        throw new Error("a classified refusal must not reach the retry loop");
+      },
+      onLaneAvailability: (event) => {
+        availability.push(event);
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "unavailable",
+      reasonCode: "BSC_LOG_QUERY_REJECTED",
+      rpcError: { rpcStatus: 403, rpcUrlHost: "bsc-rpc.publicnode.com" },
+    });
+    expect(storage.commits).toEqual([]);
+    expect(storage.current()).toBeNull();
+
+    vi.useFakeTimers();
+    readCount = 0;
+    const controller = new AbortController();
+    const running = worker.run(controller.signal);
+    // A refused tick waits 1 s, then 2 s, then 4 s (the retry-loop schedule),
+    // not the 3 s idle of an ordinary unavailable tick.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(readCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readCount).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readCount).toBe(3);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(readCount).toBe(4);
+    refuse = false;
+    await vi.advanceTimersByTimeAsync(8_000);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await running;
+
+    // Repeated refusals produce one transition; recovery produces one more.
+    expect(availability).toEqual([
+      {
+        lane: "erc20_transfer",
+        state: "unavailable",
+        reasonCode: "BSC_LOG_QUERY_REJECTED",
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+      },
+      {
+        lane: "erc20_transfer",
+        state: "recovered",
+        reasonCode: null,
+        errorClass: null,
+        rpcStatus: null,
+        rpcCode: null,
+        rpcUrlHost: null,
+        method: null,
+      },
+    ]);
+    expect(storage.current()).toMatchObject({ lastBlockNumber: "100" });
+  });
+});
+
+describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 0068)", () => {
+  it("keeps the 3 s idle for an unavailable tick that is not a refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      let readCount = 0;
+      const worker = createBscIndexerWorker({
+        repository: repositoryFake().repository,
+        registry: registryFake(),
+        readClient: {
+          ...readClientFake({ head: 100n }),
+          getHead: () => {
+            readCount += 1;
+            return Promise.reject(
+              new BscReadUnavailableError("BSC_RPC_UNREACHABLE"),
+            );
+          },
+        },
+        chainId: bscChainId,
+        startBlockNumber: 90,
+      });
+      const controller = new AbortController();
+      const running = worker.run(controller.signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(readCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readCount).toBe(2);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a hostile error value break the retry loop's backoff event", async () => {
+    const events: BscIndexerInfrastructureBackoff[] = [];
+    const controller = new AbortController();
+    // No prototype, a non-string constructor name: nothing to summarise.
+    const hostile = Object.create(null) as Error;
+    Object.defineProperty(hostile, "constructor", { value: { name: 42 } });
+    const worker = createBscIndexerWorker({
+      repository: repositoryFake().repository,
+      registry: registryFake(),
+      readClient: {
+        ...readClientFake({ head: 100n }),
+        readTransferLogs: () => Promise.reject(hostile),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+    await worker.run(controller.signal);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      reasonCode: "bsc_indexer_unavailable",
+      lane: "erc20_transfer",
+      errorClass: "Unknown",
+      rpcStatus: null,
+      rpcCode: null,
+      rpcUrlHost: null,
+      method: null,
     });
   });
 });

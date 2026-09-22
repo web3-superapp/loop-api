@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  availabilityKey,
   BSC_INDEXER_IDLE_DELAY_MS,
-  BSC_INDEXER_RETRY_BASE_DELAY_MS,
-  BSC_INDEXER_RETRY_MAX_DELAY_MS,
+  infrastructureBackoffEvent,
+  isRefusalReasonCode,
+  laneAvailabilityEvent,
+  retryDelayMs,
+  unavailableDelayMs,
+  unavailableReasonFor,
   type BscIndexerInfrastructureBackoff,
+  type BscIndexerLaneAvailabilityEvent,
   type BscIndexerRunKind,
 } from "./bsc-indexer-worker.js";
 import type {
@@ -16,11 +22,10 @@ import type {
   PoolRecord,
 } from "./database/chain-registry-repository.js";
 import {
-  BscChainMismatchError,
-  BscReadUnavailableError,
   bscMaximumLogRange,
   type BscPoolEventLog,
   type BscReadClient,
+  type BscRpcErrorSummary,
 } from "./integrations/bsc/rpc-client.js";
 
 /**
@@ -41,6 +46,8 @@ export interface BscPoolIndexerRunResult {
   readonly toBlockNumber: string | null;
   readonly eventCount: number;
   readonly reasonCode: string | null;
+  /** Provider error classification behind an `unavailable` tick (Decision 0068). */
+  readonly rpcError?: BscRpcErrorSummary;
 }
 
 export interface BscPoolIndexerWorker {
@@ -60,11 +67,15 @@ export interface CreateBscPoolIndexerWorkerOptions {
   readonly onInfrastructureBackoff?: (
     event: BscIndexerInfrastructureBackoff,
   ) => void;
+  readonly onLaneAvailability?: (
+    event: BscIndexerLaneAvailabilityEvent,
+  ) => void;
 }
 
 function idleResult(
   kind: BscIndexerRunKind,
   reasonCode: string | null,
+  rpcError?: BscRpcErrorSummary,
 ): BscPoolIndexerRunResult {
   return Object.freeze({
     kind,
@@ -72,6 +83,7 @@ function idleResult(
     toBlockNumber: null,
     eventCount: 0,
     reasonCode,
+    ...(rpcError === undefined ? {} : { rpcError }),
   });
 }
 
@@ -94,13 +106,6 @@ async function waitFor(delayMs: number, signal: AbortSignal): Promise<void> {
 
 function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted ?? false;
-}
-
-function retryDelayMs(consecutiveFailureCount: number): number {
-  return Math.min(
-    BSC_INDEXER_RETRY_BASE_DELAY_MS * 2 ** (consecutiveFailureCount - 1),
-    BSC_INDEXER_RETRY_MAX_DELAY_MS,
-  );
 }
 
 function isSignedInteger(value: string | undefined): value is string {
@@ -172,15 +177,12 @@ export function createBscPoolIndexerWorker(
     try {
       head = await options.readClient.getHead();
     } catch (error) {
-      if (
-        error instanceof BscReadUnavailableError ||
-        error instanceof BscChainMismatchError
-      ) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
         return idleResult(
           "unavailable",
-          error instanceof BscChainMismatchError
-            ? "BSC_CHAIN_ID_MISMATCH"
-            : error.reasonCode,
+          unavailable.reasonCode,
+          unavailable.rpcError,
         );
       }
       throw error;
@@ -233,11 +235,26 @@ export function createBscPoolIndexerWorker(
     const toBlock =
       maximumToBlock < head.blockNumber ? maximumToBlock : head.blockNumber;
 
-    const logs = await options.readClient.readPoolEventLogs({
-      addresses: pools.map((pool) => pool.address),
-      fromBlock,
-      toBlock,
-    });
+    // A refused or unreachable read is the lane's `unavailable` outcome, not
+    // a retry-loop failure (Decision 0068); nothing is committed for it.
+    let logs;
+    try {
+      logs = await options.readClient.readPoolEventLogs({
+        addresses: pools.map((pool) => pool.address),
+        fromBlock,
+        toBlock,
+      });
+    } catch (error) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
+        return idleResult(
+          "unavailable",
+          unavailable.reasonCode,
+          unavailable.rpcError,
+        );
+      }
+      throw error;
+    }
     if (signal !== undefined && signal.aborted) {
       return idleResult("aborted", null);
     }
@@ -307,26 +324,63 @@ export function createBscPoolIndexerWorker(
       }
       loopRunning = true;
       let consecutiveFailures = 0;
+      let consecutiveRefusals = 0;
+      let unavailableKey: string | null = null;
       try {
         while (!signal.aborted) {
           try {
             const result = await runOnce(signal);
             consecutiveFailures = 0;
+            if (result.kind === "unavailable") {
+              const key = availabilityKey(result);
+              if (key !== unavailableKey) {
+                unavailableKey = key;
+                options.onLaneAvailability?.(
+                  laneAvailabilityEvent(
+                    BSC_POOL_INDEXER_LANE,
+                    "unavailable",
+                    result.reasonCode,
+                    result.rpcError,
+                  ),
+                );
+              }
+              consecutiveRefusals = isRefusalReasonCode(result.reasonCode)
+                ? consecutiveRefusals + 1
+                : 0;
+              await waitFor(
+                unavailableDelayMs(result.reasonCode, consecutiveRefusals),
+                signal,
+              );
+              continue;
+            }
+            consecutiveRefusals = 0;
+            if (unavailableKey !== null) {
+              unavailableKey = null;
+              options.onLaneAvailability?.(
+                laneAvailabilityEvent(
+                  BSC_POOL_INDEXER_LANE,
+                  "recovered",
+                  null,
+                  undefined,
+                ),
+              );
+            }
             if (result.kind !== "advanced" && result.kind !== "reorged") {
               await waitFor(BSC_INDEXER_IDLE_DELAY_MS, signal);
             }
-          } catch {
+          } catch (error) {
             if (isAborted(signal)) {
               break;
             }
             consecutiveFailures += 1;
             const delay = retryDelayMs(consecutiveFailures);
             options.onInfrastructureBackoff?.(
-              Object.freeze({
-                reasonCode: "bsc_indexer_unavailable",
-                consecutiveFailureCount: consecutiveFailures,
-                retryDelayMs: delay,
-              }),
+              infrastructureBackoffEvent(
+                BSC_POOL_INDEXER_LANE,
+                error,
+                consecutiveFailures,
+                delay,
+              ),
             );
             await waitFor(delay, signal);
           }
