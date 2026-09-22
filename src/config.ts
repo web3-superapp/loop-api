@@ -296,6 +296,7 @@ const environmentSchema = z
     V2_COMMUNITY_CHANNEL_MEMBER_CAP: positiveIntegerString(1, 200_000),
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
     STREAM_API_KEY: optionalCredential(255),
     STREAM_API_SECRET: optionalOpaqueSecret(1, 4_096),
     STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
@@ -556,6 +557,7 @@ const reconciliationWorkerEnvironmentSchema = z
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
@@ -883,6 +885,11 @@ export interface V2CursorConfig {
   readonly ttlSeconds: 600;
 }
 
+export interface PushConfig {
+  /** Absolute or process-relative path; never the credential itself. */
+  readonly serviceAccountJsonPath: string;
+}
+
 export interface AppConfig {
   readonly nodeEnv: "development" | "test" | "production";
   readonly host: string;
@@ -946,6 +953,13 @@ export interface AppConfig {
   readonly market: MarketConfig;
   /** Community AI Provider (Decision 0066); null keeps `communityAi` deferred. */
   readonly communityAi: CommunityAiConfig | null;
+  /**
+   * Push channel credential slot (Decision 0067): the path of the Firebase
+   * service-account JSON. `null` keeps `pushNotifications` unavailable with
+   * `PUSH_RUNTIME_DEFERRED` and refuses push-token registration. The file is
+   * read at composition time; its contents never enter this config.
+   */
+  readonly push: PushConfig | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -1000,6 +1014,12 @@ export interface ReconciliationWorkerConfig {
    * `NODE_ENV=production`.
    */
   readonly miningMockHoldingsEnabled: boolean;
+  /**
+   * Push channel credential slot (Decision 0067). The `alert_evaluator` lane
+   * sends `price_alert_triggered` only when it is configured; otherwise the
+   * trigger stays an in-app feed row.
+   */
+  readonly push: PushConfig | null;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -1609,6 +1629,15 @@ function parseMarketConfig(data: {
   });
 }
 
+function parsePushConfig(data: {
+  readonly FIREBASE_SERVICE_ACCOUNT_JSON_PATH?: string | undefined;
+}): PushConfig | null {
+  const path = data.FIREBASE_SERVICE_ACCOUNT_JSON_PATH;
+  return path === undefined
+    ? null
+    : Object.freeze({ serviceAccountJsonPath: path });
+}
+
 function assertDatabaseUrl(url: URL): void {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new ConfigurationError([
@@ -1661,6 +1690,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["V2_COMMUNITY_CHANNEL_MEMBER_CAP"] ?? "3000",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
+      environment["FIREBASE_SERVICE_ACCOUNT_JSON_PATH"],
     STREAM_API_KEY: environment["STREAM_API_KEY"],
     STREAM_API_SECRET: environment["STREAM_API_SECRET"],
     STREAM_TOKEN_QUOTA_HMAC_SECRET:
@@ -1841,6 +1872,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),
+    push: parsePushConfig(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });
@@ -1888,6 +1920,8 @@ export function loadReconciliationWorkerConfig(
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
+      environment["FIREBASE_SERVICE_ACCOUNT_JSON_PATH"],
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
@@ -1971,6 +2005,7 @@ export function loadReconciliationWorkerConfig(
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     }),
     market: parseMarketConfig(parsed.data),
+    push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
       ? Object.freeze({
           notificationDedupeSeconds:

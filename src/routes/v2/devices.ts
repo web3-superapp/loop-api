@@ -14,6 +14,13 @@ import {
   securityReasonCodes,
 } from "../../features/security/security-contract.js";
 import {
+  pushProviderId,
+  pushTokenMaximumLength,
+  pushTokenMinimumLength,
+  pushTokenPatternSource,
+  pushPlatforms,
+} from "../../features/push/push-contract.js";
+import {
   clientVersionMaximumLength,
   clientVersionMinimumLength,
   clientVersionSemver2PatternSource,
@@ -26,6 +33,7 @@ import {
 } from "../../features/session/session-contract.js";
 import {
   accountReadErrors,
+  assertNoQuery,
   dateTimeSchema,
   nullableDateTimeSchema,
   uuidPatternSource,
@@ -40,6 +48,11 @@ import type { V2RouteDependencies } from "./index.js";
  * is a durable idempotent command; revoking the caller's own session or every
  * session is a step-up operation that stays `AUTH_STEP_UP_REQUIRED` until an
  * MFA step exists.
+ *
+ * The push-token pair (Decision 0067) lives here because a token addresses a
+ * device session and dies with it: registration binds to the caller's
+ * `X-Loop-Session-ID`, and revoking or logging out of that session retires
+ * the token in the same transaction.
  */
 
 const uuidV4Pattern =
@@ -232,11 +245,108 @@ const revokeErrors = {
   429: v2ErrorResponseSchema(["RATE_LIMITED"]),
 } as const;
 
+const pushTokenRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["platform", "token", "appVersion"],
+  properties: {
+    platform: {
+      type: "string",
+      enum: [...pushPlatforms],
+      description:
+        "Must equal X-Loop-Platform: the session row already records the platform, and a body that disagrees is refused as INVALID_REQUEST.",
+    },
+    token: {
+      type: "string",
+      minLength: pushTokenMinimumLength,
+      maxLength: pushTokenMaximumLength,
+      pattern: pushTokenPatternSource,
+      description:
+        "FCM registration token. Android registers with FCM directly; iOS registers with FCM through the APNs key held by the same Firebase project. The value is stored for delivery only and is never returned by any endpoint or written to a log.",
+    },
+    appVersion: {
+      type: "string",
+      minLength: clientVersionMinimumLength,
+      maxLength: clientVersionMaximumLength,
+      pattern: clientVersionSemver2PatternSource,
+    },
+  },
+} as const;
+
+const pushTokenRegistrationSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "registered",
+    "pushTokenId",
+    "platform",
+    "provider",
+    "appVersion",
+    "observedAt",
+    "contractVersion",
+  ],
+  properties: {
+    registered: { type: "boolean", const: true },
+    pushTokenId: {
+      type: "string",
+      pattern: uuidPatternSource,
+      description:
+        "Opaque stable ID of the registration. Re-sending the same token on the same session keeps this ID; a new token replaces the row and issues a new one.",
+    },
+    platform: { type: "string", enum: [...pushPlatforms] },
+    provider: {
+      type: "string",
+      const: pushProviderId,
+      description: "The single delivery Provider: FCM HTTP v1.",
+    },
+    appVersion: {
+      type: "string",
+      minLength: clientVersionMinimumLength,
+      maxLength: clientVersionMaximumLength,
+      pattern: clientVersionSemver2PatternSource,
+    },
+    observedAt: {
+      ...dateTimeSchema,
+      description: "When the server last observed this token.",
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+const pushTokenRemovalSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["registered", "revokedAt", "observedAt", "contractVersion"],
+  properties: {
+    registered: { type: "boolean", const: false },
+    revokedAt: {
+      ...nullableDateTimeSchema,
+      description:
+        "When the active token was retired, or null when the session had none. Both are success: unregistering is idempotent.",
+    },
+    observedAt: dateTimeSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+const pushTokenErrors = {
+  ...accountReadErrors,
+  404: v2ErrorResponseSchema(["SESSION_NOT_FOUND"]),
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "IDEMPOTENCY_CONFLICT",
+    "VERSION_CONFLICT",
+  ]),
+} as const;
+
 export function registerV2DeviceRoutes(
   app: FastifyInstance,
   dependencies: V2RouteDependencies,
 ): void {
-  const { authenticateLoopBearer, deviceService } = dependencies;
+  const { authenticateLoopBearer, deviceService, pushTokenService } =
+    dependencies;
 
   app.get(
     "/v2/devices",
@@ -290,6 +400,66 @@ export function registerV2DeviceRoutes(
       const resource = await deviceService.revoke({
         principal: requireAuthenticatedLoopPrincipal(request),
         targetSessionId: params.sessionId,
+        metadata: parseV2SessionLogoutMetadata(request.raw.rawHeaders),
+        requestId: request.id,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/devices/push-token",
+    {
+      schema: {
+        operationId: "registerV2DevicePushToken",
+        summary: "Register this device session's push token",
+        description:
+          "Binds one FCM registration token to the caller's active device session (X-Loop-Session-ID). The header device and platform must match the stored session row, otherwise the session is reported as SESSION_NOT_FOUND. The write is refused with CAPABILITY_UNAVAILABLE while no Firebase credential is configured, so a client never holds a token the backend would never use. Idempotent: the same Idempotency-Key replays the first outcome, and re-sending the same token keeps the same pushTokenId.",
+        tags: ["security"],
+        security: [{ privyBearer: [] }],
+        headers: v2SessionLogoutHeadersSchema,
+        body: pushTokenRequestSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: pushTokenRegistrationSchema, ...pushTokenErrors },
+      },
+      onRequest: validateSessionCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await pushTokenService.register({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        metadata: parseV2SessionLogoutMetadata(request.raw.rawHeaders),
+        body: request.body,
+        requestId: request.id,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.delete(
+    "/v2/devices/push-token",
+    {
+      schema: {
+        operationId: "removeV2DevicePushToken",
+        summary: "Remove this device session's push token",
+        description:
+          "Retires the caller session's active token. Always available, including while push delivery is unavailable: taking an address back must never depend on the Provider. A session with no token answers 200 with revokedAt null.",
+        tags: ["security"],
+        security: [{ privyBearer: [] }],
+        headers: v2SessionLogoutHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: pushTokenRemovalSchema, ...pushTokenErrors },
+      },
+      onRequest: validateSessionCommandHeaders,
+      preValidation: assertNoBodyOrQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await pushTokenService.unregister({
+        principal: requireAuthenticatedLoopPrincipal(request),
         metadata: parseV2SessionLogoutMetadata(request.raw.rawHeaders),
         requestId: request.id,
       });

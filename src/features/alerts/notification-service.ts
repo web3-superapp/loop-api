@@ -30,7 +30,10 @@ import {
  *
  * There is no notification centre: the feed is the source the client reads
  * from inside the contexts that own its entries (Token page, alerts page).
- * Push delivery is always `unavailable` with `PUSH_RUNTIME_DEFERRED`.
+ * The `push` block reports whether the Decision 0067 channel is composed;
+ * with no Firebase credential it stays `unavailable` with
+ * `PUSH_RUNTIME_DEFERRED`, and the feed remains the authoritative record
+ * either way.
  */
 
 export interface NotificationProjection {
@@ -46,16 +49,16 @@ export interface NotificationProjection {
   readonly createdAt: string;
 }
 
-export interface UnavailableDelivery {
-  readonly status: "unavailable";
-  readonly reasonCode: string;
+export interface DeliveryProjection {
+  readonly status: "available" | "unavailable";
+  readonly reasonCode: string | null;
 }
 
 export interface NotificationFeedResource {
   readonly items: readonly NotificationProjection[];
   readonly nextCursor: string | null;
   readonly unreadCount: number;
-  readonly push: UnavailableDelivery;
+  readonly push: DeliveryProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -76,7 +79,7 @@ export interface NotificationPreferencesResource {
   readonly categories: Readonly<
     Record<NotificationCategory, NotificationPreferenceCategoryProjection>
   >;
-  readonly push: UnavailableDelivery;
+  readonly push: DeliveryProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -102,14 +105,21 @@ export interface NotificationService {
 export interface CreateNotificationServiceInput {
   readonly repository: NotificationRepository;
   readonly cursorCodec: V2CursorCodec | null;
+  /** Decision 0067; defaults to closed so an uncomposed app never claims it. */
+  readonly pushRuntimeAvailable?: boolean;
 }
 
 const feedCursorRoute = "notificationsFeed";
 const feedCursorFilter = "all";
 
-const pushUnavailable: UnavailableDelivery = Object.freeze({
+const pushUnavailable: DeliveryProjection = Object.freeze({
   status: "unavailable",
   reasonCode: notificationReasonCodes.pushDeferred,
+});
+
+const pushAvailable: DeliveryProjection = Object.freeze({
+  status: "available",
+  reasonCode: null,
 });
 
 function project(record: NotificationRecord): NotificationProjection {
@@ -127,11 +137,14 @@ function project(record: NotificationRecord): NotificationProjection {
   });
 }
 
-function projectPreferences(record: {
-  readonly recordVersion: number;
-  readonly updatedAt: string | null;
-  readonly values: NotificationPreferenceValues;
-}): NotificationPreferencesResource {
+function projectPreferences(
+  push: DeliveryProjection,
+  record: {
+    readonly recordVersion: number;
+    readonly updatedAt: string | null;
+    readonly values: NotificationPreferenceValues;
+  },
+): NotificationPreferencesResource {
   const categories: Record<string, NotificationPreferenceCategoryProjection> =
     {};
   for (const category of optionalNotificationCategories) {
@@ -148,7 +161,7 @@ function projectPreferences(record: {
     version: record.recordVersion,
     updatedAt: record.updatedAt,
     categories: Object.freeze(categories),
-    push: pushUnavailable,
+    push,
     contractVersion: v2ContractVersion,
   });
 }
@@ -218,6 +231,8 @@ export function parseNotificationPreferencesWrite(body: unknown): {
 export function createNotificationService(
   input: CreateNotificationServiceInput,
 ): NotificationService {
+  const push =
+    input.pushRuntimeAvailable === true ? pushAvailable : pushUnavailable;
   const service: NotificationService = {
     async listFeed({ principal, cursor, limit }) {
       const codec = input.cursorCodec;
@@ -298,7 +313,7 @@ export function createNotificationService(
               })
             : null,
         unreadCount: page.unreadCount,
-        push: pushUnavailable,
+        push,
         contractVersion: v2ContractVersion,
       });
     },
@@ -328,6 +343,7 @@ export function createNotificationService(
     async getPreferences({ principal }) {
       try {
         return projectPreferences(
+          push,
           await input.repository.getPreferences(principal.userId),
         );
       } catch (error) {
@@ -339,6 +355,7 @@ export function createNotificationService(
       const request = parseNotificationPreferencesWrite(body);
       try {
         return projectPreferences(
+          push,
           await input.repository.replacePreferences({
             ownerUserId: principal.userId,
             expectedVersion: request.expectedVersion,

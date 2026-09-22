@@ -88,6 +88,9 @@ describe("PostgreSQL V2 device-session migration and repository", () => {
   async function cleanFixtures(): Promise<void> {
     await pool.query(`
       truncate table
+        public.push_deliveries,
+        public.device_push_token_commands,
+        public.device_push_tokens,
         public.device_session_events,
         public.device_session_commands,
         public.device_sessions

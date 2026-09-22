@@ -740,6 +740,66 @@ describe("LOOP API V2 communication module", () => {
     });
   });
 
+  it("announces a live room to the community without blocking the host (Decision 0067)", async () => {
+    const dispatched: unknown[] = [];
+    let resolveDispatch: () => void = () => undefined;
+    const dispatchObserved = new Promise<void>((resolve) => {
+      resolveDispatch = resolve;
+    });
+    const dependencies = fakes();
+    const app = await buildApp({
+      config: testConfig(),
+      contractSurface: "v2",
+      database: dependencies.database,
+      privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      streamCallGateway: dependencies.callGateway,
+      streamCommunityChannelGateway: dependencies.channelGateway,
+      voiceRoomService: createVoiceRoomService({
+        repository: dependencies.communication,
+        callGateway: dependencies.callGateway,
+        cursorCodec: null,
+        push: {
+          available: true,
+          dispatchToOwner: () => Promise.reject(new Error("not used")),
+          dispatchToCommunity: (input) => {
+            dispatched.push(input);
+            resolveDispatch();
+            return Promise.resolve({
+              status: "delivered" as const,
+              reasonCode: null,
+              attemptedCount: 1,
+              sentCount: 1,
+              duplicateCount: 0,
+              rateLimitedCount: 0,
+              failedCount: 0,
+              invalidTokenCount: 0,
+              audienceTruncated: false,
+            });
+          },
+        },
+      }),
+      logger: false,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/communities/${communityId}/voice-rooms`,
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(201);
+    await dispatchObserved;
+    expect(dispatched).toEqual([
+      {
+        communityId,
+        excludeOwnerUserId: accountId,
+        eventType: "community_voice_room_started",
+        entityRef: `voiceRoom:${voiceRoomId}`,
+        contextRoute: "voice-room",
+        eventKey: `community_voice_room_started:voiceRoom:${voiceRoomId}`,
+      },
+    ]);
+  });
+
   it("keeps a room reconciling and unconfirmed when go-live is rejected", async () => {
     const callGateway = callGatewayFake({
       goLive: vi.fn(() => Promise.reject(new Error("provider"))),

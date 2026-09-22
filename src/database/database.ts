@@ -41,6 +41,8 @@ import {
   createPostgresNotificationRepository,
   type NotificationRepository,
 } from "./notification-repository.js";
+import { createPostgresPushRepository } from "./push-repository.js";
+import type { PushRepository } from "../features/push/push-repository.js";
 import {
   createPostgresWalletIntentRepository,
   type WalletIntentRepository,
@@ -159,6 +161,8 @@ export interface Database {
   readonly alertsV2?: AlertV2Repository;
   /** Context notification feed and V2 preferences (Decision 0034). */
   readonly notifications?: NotificationRepository;
+  /** Device push tokens and push delivery attempts (Decision 0067). */
+  readonly push?: PushRepository;
   /** Unified send/approve/revoke/swap intents (Decision 0035). */
   readonly walletIntents?: WalletIntentRepository;
   /** Decision 0037 account settings CAS slot. */
@@ -303,6 +307,7 @@ export function createPostgresDatabase(
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
   const alertsV2 = createPostgresAlertV2Repository(pool);
   const notifications = createPostgresNotificationRepository(pool);
+  const push = createPostgresPushRepository(pool);
   const walletIntents = createPostgresWalletIntentRepository(pool);
   const accountSettings = createPostgresAccountSettingsRepository(pool);
   const supportTickets = createPostgresSupportTicketRepository(pool);
@@ -359,6 +364,7 @@ export function createPostgresDatabase(
     marketFacts,
     alertsV2,
     notifications,
+    push,
     walletIntents,
     accountSettings,
     supportTickets,

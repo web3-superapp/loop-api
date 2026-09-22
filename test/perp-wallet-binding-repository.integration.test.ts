@@ -48,6 +48,9 @@ describe("PostgreSQL Perp wallet-binding repository", () => {
   async function cleanFixtures(): Promise<void> {
     await pool.query(`
       truncate table
+        public.push_deliveries,
+        public.device_push_token_commands,
+        public.device_push_tokens,
         public.perp_wallet_binding_events,
         public.perp_wallet_bindings,
         public.device_session_events,

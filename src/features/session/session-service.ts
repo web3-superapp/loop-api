@@ -13,6 +13,9 @@ import {
   type DeviceSessionRepository,
 } from "./device-session-repository.js";
 import type { VerifiedPrivyPrincipal } from "../../integrations/privy/access-token-verifier.js";
+import type { NotificationRepository } from "../../database/notification-repository.js";
+import { mandatoryNotificationCategory } from "../alerts/notification-contract.js";
+import type { PushDispatchService } from "../push/push-dispatch-service.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 
 export interface V2SessionBootstrapResult {
@@ -146,13 +149,100 @@ async function mapRepositoryFailure<T>(
   }
 }
 
+export interface V2SessionServiceLogger {
+  warn(context: Record<string, unknown>, message: string): void;
+}
+
+/**
+ * The `security.event` a first sign-in from a device raises (Decision 0067).
+ * Keyed by session so it can be written at most once per session, ever: a
+ * replayed bootstrap returns the same session and collapses onto the same
+ * dedupe key.
+ */
+export function newDeviceSignInNotification(input: {
+  readonly ownerUserId: string;
+  readonly session: DeviceSession;
+}) {
+  return Object.freeze({
+    ownerUserId: input.ownerUserId,
+    type: mandatoryNotificationCategory,
+    entityRef: `deviceSession:${input.session.sessionId}`,
+    contextRoute: "devices",
+    contextParams: Object.freeze({ sessionId: input.session.sessionId }),
+    payload: Object.freeze({
+      event: "new_device_sign_in",
+      sessionId: input.session.sessionId,
+      deviceId: input.session.deviceId,
+      platform: input.session.clientPlatform,
+      createdAt: input.session.createdAt,
+    }),
+    dedupeKey: `security.event:deviceSession:${input.session.sessionId}:new_device`,
+    source: "loop_session",
+    observedAt: input.session.createdAt,
+  });
+}
+
 export function createV2SessionService(options: {
   readonly enabled: boolean;
   readonly sessions: DeviceSessionRepository;
+  /** `null` when the notification repository is not composed. */
+  readonly notifications?: NotificationRepository | null;
+  /** Decision 0067; omitted keeps a new device feed-only. */
+  readonly push?: PushDispatchService;
+  readonly logger?: V2SessionServiceLogger;
 }): V2SessionService {
   function assertEnabled(): void {
     if (!options.enabled) {
       throw V2ApiError.capabilityUnavailable();
+    }
+  }
+
+  /**
+   * A device is new when the account already has another session and no
+   * other session — active or revoked — was ever created on this device.
+   * Both the feed row and the push are best effort: a failure here never
+   * undoes a sign-in the caller has already been granted.
+   */
+  async function announceNewDevice(
+    ownerUserId: string,
+    session: DeviceSession,
+  ): Promise<void> {
+    const notifications = options.notifications ?? null;
+    if (notifications === null) {
+      return;
+    }
+    try {
+      const sessions = await options.sessions.listByOwner(ownerUserId, 200);
+      const sameDevice = sessions.filter(
+        (candidate) =>
+          candidate.deviceId === session.deviceId &&
+          candidate.sessionId !== session.sessionId,
+      );
+      if (sessions.length < 2 || sameDevice.length > 0) {
+        return;
+      }
+      const recorded = await notifications.record(
+        newDeviceSignInNotification({ ownerUserId, session }),
+      );
+      if (recorded === null || options.push === undefined) {
+        return;
+      }
+      await options.push.dispatchToOwner({
+        ownerUserId,
+        eventType: "security_event",
+        entityRef: `deviceSession:${session.sessionId}`,
+        contextRoute: "devices",
+        eventKey: `security_event:deviceSession:${session.sessionId}:new_device`,
+      });
+    } catch (error) {
+      options.logger?.warn(
+        {
+          ownerUserId,
+          sessionId: session.sessionId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "New device security.event was not recorded",
+      );
     }
   }
 
@@ -170,6 +260,8 @@ export function createV2SessionService(options: {
           clientVersion: input.metadata.clientVersion,
         }),
       );
+
+      await announceNewDevice(account.id, session);
 
       return Object.freeze({
         account: Object.freeze({ accountId: account.id }),

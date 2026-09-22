@@ -5,18 +5,19 @@
 `docs/api-v2-conventions.md`。
 
 覆盖页面：`alerts`、`notif-settings`，以及 Token 页 / alerts 页内的上下文通知入口。
-**没有独立通知中心，没有推送。**
+**没有独立通知中心。** 推送通道见 §7（决策 0067）：推送只是"指针"，
+点击后必须重新认证并重新读取 feed，绝不能相信 payload 里的结论。
 
 ## 1. 启用条件与 capability
 
 - 后端 `V2_MODULES_ENABLED` 必须包含 `notifications`。未启用时所有路径 `404 NOT_FOUND`。
 - `GET /v2/meta/capabilities`：
 
-| capabilityId        | `available` 条件                                          | 说明                                                        |
-| ------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
-| `priceAlerts`       | 模块启用 + V2 alert 仓储 + registry + cursor 密钥         | `alerts` 页可用                                             |
-| `notificationsFeed` | 模块启用 + 通知仓储 + cursor 密钥                         | feed / 已读 / 通知设置可用                                  |
-| `pushNotifications` | **恒 `unavailable`**，`reasonCode: PUSH_RUNTIME_DEFERRED` | 没有 FCM/APNs；原型"需要系统通知权限"卡片改为"推送尚不可用" |
+| capabilityId        | `available` 条件                                         | 说明                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `priceAlerts`       | 模块启用 + V2 alert 仓储 + registry + cursor 密钥        | `alerts` 页可用                                                                                                                                                                              |
+| `notificationsFeed` | 模块启用 + 通知仓储 + cursor 密钥                        | feed / 已读 / 通知设置可用                                                                                                                                                                   |
+| `pushNotifications` | 模块启用 + push 仓储 + 已配置 Firebase 凭据（决策 0067） | `available` 时 `evidence.reasonCode = PUSH_DEVICE_DELIVERY_EVIDENCE_PENDING`（尚无真机送达证据）；否则 `unavailable` + `PUSH_RUNTIME_DEFERRED`，原型"需要系统通知权限"卡片显示"推送尚不可用" |
 
 ## 2. Headers
 
@@ -132,6 +133,10 @@
 }
 ```
 
+- `push`（以及 alert 资源里的 `delivery`）有两种状态：推送通道已组装时
+  `{"status": "available", "reasonCode": null}`，否则
+  `{"status": "unavailable", "reasonCode": "PUSH_RUNTIME_DEFERRED"}`。两种状态下
+  feed 都是权威记录。
 - 通知路由：`contextRoute` + `contextParams` 决定打开哪一页（新增 intent
   `priceAlertTriggered` → `token` 页，参数 `assetId`）。`entityRef` 用于在 alerts 页
   高亮对应提醒（`priceAlert:<alertId>`）。
@@ -178,8 +183,10 @@ PUT /v2/notification-preferences
   → `400 INVALID_REQUEST`，整个请求不写入。UI 上该开关不可交互，提交时始终带 `true`。
 - 少任何一个键 → `400`；`expectedVersion` 不符 → `409 VERSION_CONFLICT`；内容与当前
   完全一致的重试 → `200` 返回当前资源（不冲突）。
-- `enabled` 只是意图：目前只影响 `trade.priceAlert` 是否生成 feed 通知；其余类别的
-  生产者（挖矿、Launch、社区）尚未交付；推送恒不可用。
+- `enabled` 影响两件事：是否生成 feed 通知，以及（决策 0067）是否发送对应的推送。
+  目前有生产者的类别是 `trade.priceAlert`、`community.announcement`（语音房开播）与
+  `security.event`；其余类别（挖矿、Launch、trade.result、community.mention/all）
+  的生产者尚未交付。`security.event` 强制发送，不受偏好影响。
 
 ## 6. 错误码速查
 
@@ -193,3 +200,114 @@ PUT /v2/notification-preferences
 | 422  | `VALIDATION_FAILED`              | 资产不在 registry / blocked、阈值非正、过期时间不在未来                            |
 | 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56`                                                                     |
 | 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置 / 仓储不可用                                                     |
+
+## 7. 推送通道（决策 0067）
+
+### 7.1 注册与注销
+
+Base URL 与 headers 同 `docs/frontend-v2-session-api.md`。两个写接口都属于
+`security` 模块的 `/v2/devices` 家族，都要求**登出头集合**：Bearer、
+`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`、`X-Loop-Platform`、
+`X-Loop-Device-ID`、`X-Loop-Session-ID`、`Idempotency-Key`（UUIDv4）。
+
+```http
+POST /v2/devices/push-token
+{"platform": "ios", "token": "<FCM registration token>", "appVersion": "1.2.3"}
+```
+
+```json
+{
+  "registered": true,
+  "pushTokenId": "5a716283-…",
+  "platform": "ios",
+  "provider": "fcm",
+  "appVersion": "1.2.3",
+  "observedAt": "2026-09-22T02:00:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+```http
+DELETE /v2/devices/push-token
+```
+
+```json
+{
+  "registered": false,
+  "revokedAt": "2026-09-22T02:10:00.000Z",
+  "observedAt": "2026-09-22T02:10:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+规则：
+
+- **Android 与 iOS 都上报 FCM registration token**。iOS 不要上报 APNs device
+  token：APNs key 已上传到同一个 Firebase 项目，由 FCM 代发。
+- `platform` 必须与 `X-Loop-Platform` 一致，不一致 → `400 INVALID_REQUEST`。
+  `appVersion` 是 semver2（与 `X-Loop-Client-Version` 同格式）。
+- token 绑定当前 device session。**同一 session 重发同一 token → 同一
+  `pushTokenId`**（只刷新 `observedAt`）；换 token 或同一 token 换 session 会
+  作废旧行并返回新的 `pushTokenId`。
+- 登出、远程撤销该 session 时，token 在同一事务里失效，**不需要客户端再调
+  `DELETE`**。重新登录后必须重新注册。
+- token 永远不会被任何接口回显。
+- `DELETE` 是幂等的：该 session 没有 token 时也返回 `200`，`revokedAt: null`。
+  即使推送不可用，`DELETE` 也始终可用。
+
+### 7.2 推送 payload（data 字段）
+
+只有四个键，**没有金额、地址、ticker、余额、验证码、聊天正文、社区名**：
+
+| 键             | 值                                                                          |
+| -------------- | --------------------------------------------------------------------------- |
+| `type`         | `price_alert_triggered` / `security_event` / `community_voice_room_started` |
+| `entityRef`    | `<类型>:<UUID>`，如 `priceAlert:…`、`deviceSession:…`、`voiceRoom:…`        |
+| `contextRoute` | `token` / `devices` / `voice-room`                                          |
+| `eventVersion` | `"1"`                                                                       |
+
+可见文案由客户端用本地化 key 渲染（`push.priceAlertTriggered.title/body`、
+`push.securityEvent.*`、`push.communityVoiceRoomStarted.*`），服务端不下发任何
+展示文案。
+
+**点击处理**：重新认证 → 用 `contextRoute` 打开对应页面 → 重新读取
+`GET /v2/notifications/feed` 与该页面的权威接口。不得把 payload 当成结果。
+
+### 7.3 事件字典（第一批）
+
+| `type`                         | 触发                                   | 偏好类别                 | 可关 |
+| ------------------------------ | -------------------------------------- | ------------------------ | ---- |
+| `price_alert_triggered`        | 价格提醒被评估器触发且写入了 feed 通知 | `trade.priceAlert`       | 是   |
+| `security_event`               | 新设备登录、远程撤销设备会话           | `security.event`         | 否   |
+| `community_voice_room_started` | 社区语音房开播（房主自己不收）         | `community.announcement` | 是   |
+
+### 7.4 送达语义
+
+- **一个事件对一台设备最多一次**，永久去重；重复不会补发。
+- 每台设备每小时上限：可选类事件 20 条、强制类（安全）10 条，两个额度**分开计算**，
+  安全事件不会被其他推送挤掉。
+- 语音房开播的受众上限 200 台设备，超出会被截断（服务端记日志）。
+- Provider 判定 token 失效（`UNREGISTERED` / 400）时后端自动作废该 token 行；
+  客户端下次启动重新注册即可。
+- 瞬时失败不重试：feed 里已经有这条记录，**不会**出现同一事件推送两次。
+
+### 7.5 推送相关错误码
+
+| HTTP | code                             | 出现位置                                                                                                                            |
+| ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | body 缺键/多键、`platform` 与 header 不一致、token 太短或含非法字符、`appVersion` 非 semver、`DELETE` 带 body、缺 `Idempotency-Key` |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效；`X-Loop-Session-ID` 指向已撤销 session 时也是 `AUTH_INVALID`                                                     |
+| 404  | `SESSION_NOT_FOUND`              | `X-Loop-Session-ID` 不是本账号的活跃 session，或 header 里的设备/平台与该 session 记录不符                                          |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 尚未 bootstrap                                                                                                                      |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同 `Idempotency-Key` 换了 body                                                                                                      |
+| 409  | `VERSION_CONFLICT`               | `X-Loop-Contract-Version` 不是 `2.0`                                                                                                |
+| 503  | `CAPABILITY_UNAVAILABLE`         | **未配置 Firebase 凭据**（`detailsSafe.reasonCode = PUSH_RUNTIME_DEFERRED`）或 push 仓储不可用；只影响 `POST`，`DELETE` 不受影响    |
+
+### 7.6 unavailable 行为（前端必须实现）
+
+| 情况                              | 表现                                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `pushNotifications` ≠ `available` | 不调用 `POST /v2/devices/push-token`；`notif-settings` 顶部显示"推送尚不可用"，开关仍可改（只影响 feed） |
+| `POST` 返回 503                   | 不重试注册，不提示"已开启推送"；按 unavailable 处理                                                      |
+| 系统通知权限被拒                  | 不注册 token；引导系统设置，不伪造已注册状态                                                             |
+| 登出 / 会话被撤销                 | 本地丢弃 token，重新登录后重新注册                                                                       |

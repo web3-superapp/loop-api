@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import type { NotificationRepository } from "../../database/notification-repository.js";
+import type { PushDispatchService } from "../push/push-dispatch-service.js";
 import { mandatoryNotificationCategory } from "../alerts/notification-contract.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
@@ -116,6 +117,8 @@ export interface CreateDeviceServiceInput {
   readonly sessions: DeviceSessionRepository;
   /** `null` when the notification repository is not composed. */
   readonly notifications: NotificationRepository | null;
+  /** Decision 0067; omitted or unavailable keeps the revoke feed-only. */
+  readonly push?: PushDispatchService;
   readonly logger: DeviceServiceLogger;
   readonly now?: () => Date;
 }
@@ -320,6 +323,19 @@ export function createDeviceService(
             "Device revoke security.event notification was not recorded",
           );
         }
+      }
+      // Decision 0067: a mandatory `security_event` push to the owner's
+      // remaining devices. The payload is the pointer only — which session,
+      // where to look — and the summary is ignored: a push that did not go
+      // out never changes the revoke result the caller already holds.
+      if (input.push !== undefined) {
+        await input.push.dispatchToOwner({
+          ownerUserId: principal.userId,
+          eventType: "security_event",
+          entityRef: `deviceSession:${session.sessionId}`,
+          contextRoute: "devices",
+          eventKey: `security_event:deviceSession:${session.sessionId}:revoked`,
+        });
       }
       return Object.freeze({
         session: Object.freeze({

@@ -635,6 +635,20 @@ export function createPostgresDeviceSessionRepository(
           );
         }
 
+        // Decision 0067: a session that is gone must stop being a delivery
+        // address. Logout and remote revoke share this transaction, so the
+        // push token is retired by the same commit that retires the session.
+        await client.query({
+          text: `
+            update public.device_push_tokens
+            set status = 'revoked',
+                revoked_at = clock_timestamp(),
+                revoke_reason = 'session_revoked'
+            where session_id = $1 and status = 'active'
+          `,
+          values: [session.sessionId],
+        });
+
         await client.query({
           text: `
             insert into public.device_session_commands (

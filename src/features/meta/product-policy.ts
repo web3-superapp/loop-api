@@ -177,6 +177,12 @@ export interface V2ProductPolicyRuntime {
   /** `notifications` module enabled with the notification repository and cursor codec. */
   readonly notificationsFeedRuntimeAvailable: boolean;
   /**
+   * Decision 0067: an FCM credential, the push repository and the
+   * `notifications` module are all composed. Anything missing keeps
+   * `pushNotifications` unavailable with `PUSH_RUNTIME_DEFERRED`.
+   */
+  readonly pushRuntimeAvailable: boolean;
+  /**
    * `communication` module enabled with the PostgreSQL communication
    * repository, the delivered community runtime, and the complete Stream
    * credential pair (Decision 0032). Without Stream credentials the module
@@ -281,9 +287,12 @@ export const v2PriceAlertsRuntimeUnavailableReasonCode =
   "PRICE_ALERTS_RUNTIME_UNAVAILABLE" as const;
 export const v2NotificationsFeedRuntimeUnavailableReasonCode =
   "NOTIFICATIONS_RUNTIME_UNAVAILABLE" as const;
-/** Push delivery has no FCM/APNs runtime; the capability never opens here. */
+/** No Firebase credential, no push repository, or the module is off. */
 export const v2PushNotificationsUnavailableReasonCode =
   "PUSH_RUNTIME_DEFERRED" as const;
+/** No physical device has acknowledged a LOOP push yet (Decision 0067). */
+export const v2PushDeliveryEvidencePendingReasonCode =
+  "PUSH_DEVICE_DELIVERY_EVIDENCE_PENDING" as const;
 export const v2CommunicationModuleDeferredReasonCode =
   "V2_COMMUNICATION_RUNTIME_DEFERRED" as const;
 export const v2CommunicationRuntimeUnavailableReasonCode =
@@ -988,12 +997,25 @@ export async function createV2CapabilitiesProjection(
       v2NotificationsModuleDeferredReasonCode,
       v2NotificationsFeedRuntimeUnavailableReasonCode,
     ),
-    // Push delivery is never available in this step regardless of the module
-    // gate: there is no FCM/APNs runtime and no device-token lifecycle.
-    unavailableCapability(
-      v2ModuleCapabilityIds.notifications,
-      v2PushNotificationsUnavailableReasonCode,
-    ),
+    // Decision 0067: push delivery is available only with a Firebase
+    // credential, the push repository and the notifications module. Its
+    // evidence stays pending until a physical handset acknowledges a LOOP
+    // push, so an available capability still does not claim a proven
+    // delivery path.
+    runtime.pushRuntimeAvailable
+      ? Object.freeze({
+          capabilityId: v2ModuleCapabilityIds.notifications,
+          availability: "available" as const,
+          reasonCode: null,
+          evidence: Object.freeze({
+            status: "pending" as const,
+            reasonCode: v2PushDeliveryEvidencePendingReasonCode,
+          }),
+        })
+      : unavailableCapability(
+          v2ModuleCapabilityIds.notifications,
+          v2PushNotificationsUnavailableReasonCode,
+        ),
     profileCapability(config, runtime),
     deliveredModuleCapability(
       config,

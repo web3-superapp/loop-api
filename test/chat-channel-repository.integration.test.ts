@@ -29,6 +29,9 @@ describe("PostgreSQL Chat channel repository", () => {
   async function cleanup(): Promise<void> {
     await pool.query(`
       truncate table
+        public.push_deliveries,
+        public.device_push_token_commands,
+        public.device_push_tokens,
         public.chat_group_membership_events,
         public.chat_operation_events,
         public.communication_group_members,

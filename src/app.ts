@@ -34,6 +34,25 @@ import { createUnavailableWatchlistV2Repository } from "./database/watchlist-v2-
 import { createUnavailableMarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
 import { createUnavailableAlertV2Repository } from "./database/alert-v2-repository.js";
 import { createUnavailableNotificationRepository } from "./database/notification-repository.js";
+import { createUnavailablePushRepository } from "./features/push/push-repository.js";
+import {
+  createPushDispatchService,
+  createUnavailablePushDispatchService,
+  type PushDispatchService,
+} from "./features/push/push-dispatch-service.js";
+import {
+  createPushTokenService,
+  type PushTokenService,
+} from "./features/push/push-token-service.js";
+import {
+  createFcmSender,
+  nodeFcmFetch,
+  type FcmSender,
+} from "./integrations/fcm/fcm-sender.js";
+import {
+  FirebaseServiceAccountError,
+  loadFirebaseServiceAccount,
+} from "./integrations/fcm/service-account.js";
 import { createUnavailableWalletIntentRepository } from "./database/wallet-intent-repository.js";
 import {
   createApprovalService,
@@ -466,6 +485,10 @@ export interface BuildAppOptions {
   readonly referralService?: ReferralService;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
+  /** Test seam for the push channel (Decision 0067); `null` keeps it closed. */
+  readonly fcmSender?: FcmSender | null;
+  readonly pushTokenService?: PushTokenService;
+  readonly pushDispatchService?: PushDispatchService;
   readonly securityService?: SecurityService;
   readonly settingsService?: SettingsService;
   readonly supportService?: SupportService;
@@ -861,14 +884,9 @@ export async function buildApp(
     authenticationService,
   );
   const bootstrapService = createBootstrapService(database.internalUsers);
+  const registeredModuleIds = registeredV2ModuleIds(config);
   const v2SessionRuntimeAvailable =
     config.v2SessionEnabled && config.privy !== null;
-  const v2SessionService =
-    options.v2SessionService ??
-    createV2SessionService({
-      enabled: v2SessionRuntimeAvailable,
-      sessions: database.deviceSessions,
-    });
   const streamTokenIssuer =
     options.streamTokenIssuer ??
     (config.stream === null || config.streamTokenQuota === null
@@ -1128,6 +1146,79 @@ export async function buildApp(
           cursorCodec: v2CursorCodec,
         })
       : createUnavailableV2ChatService());
+  const securityNow = options.securityNow ?? ((): Date => new Date());
+
+  // Push channel (Decision 0067). The Firebase credential is a file path; a
+  // missing or unusable file is not fatal, it only keeps the capability
+  // deferred. The credential is never logged, and the log line below names
+  // the reason code only.
+  const fcmSender = ((): FcmSender | null => {
+    if (options.fcmSender !== undefined) {
+      return options.fcmSender;
+    }
+    if (config.push === null) {
+      return null;
+    }
+    try {
+      return createFcmSender({
+        account: loadFirebaseServiceAccount(config.push.serviceAccountJsonPath),
+        fetch: nodeFcmFetch,
+      });
+    } catch (error) {
+      app.log.warn(
+        {
+          reasonCode:
+            error instanceof FirebaseServiceAccountError
+              ? error.reasonCode
+              : "PUSH_CREDENTIAL_FILE_UNREADABLE",
+        },
+        "LOOP push channel stays deferred: the Firebase service account is unusable",
+      );
+      return null;
+    }
+  })();
+  const pushRepositoryComposed =
+    options.pushTokenService !== undefined ||
+    options.pushDispatchService !== undefined ||
+    database.push !== undefined;
+  const pushDispatchService =
+    options.pushDispatchService ??
+    (fcmSender === null
+      ? createUnavailablePushDispatchService()
+      : createPushDispatchService({
+          repository: database.push ?? createUnavailablePushRepository(),
+          sender: fcmSender,
+          logger: app.log,
+        }));
+  /**
+   * `pushNotifications` is available only when a credential, a repository and
+   * the notifications module all exist. Anything missing leaves it
+   * unavailable with `PUSH_RUNTIME_DEFERRED`; nothing here half-opens it.
+   */
+  const pushRuntimeAvailable =
+    registeredModuleIds.includes("notifications") &&
+    pushRepositoryComposed &&
+    (options.pushDispatchService !== undefined || fcmSender !== null);
+  const pushTokenService =
+    options.pushTokenService ??
+    createPushTokenService({
+      repository: database.push ?? createUnavailablePushRepository(),
+      deliveryRuntimeAvailable: pushRuntimeAvailable,
+      now: securityNow,
+    });
+
+  // Composed after the push channel so a bootstrap can raise the Decision
+  // 0067 `security_event` for a device this account has not signed in from
+  // before.
+  const v2SessionService =
+    options.v2SessionService ??
+    createV2SessionService({
+      enabled: v2SessionRuntimeAvailable,
+      sessions: database.deviceSessions,
+      notifications: database.notifications ?? null,
+      push: pushDispatchService,
+      logger: app.log,
+    });
   const voiceRoomService =
     options.voiceRoomService ??
     (communicationRuntimeAvailable
@@ -1135,6 +1226,7 @@ export async function buildApp(
           repository: communicationRepository,
           callGateway: streamCallGateway,
           cursorCodec: v2CursorCodec,
+          push: pushDispatchService,
           logger: app.log,
         })
       : createUnavailableVoiceRoomService());
@@ -1154,7 +1246,6 @@ export async function buildApp(
     options.spotAgentAuthorizationService ??
     createUnavailableSpotAgentAuthorizationService();
 
-  const registeredModuleIds = registeredV2ModuleIds(config);
   const bscReadClient =
     options.bscReadClient ??
     (config.bscChain === null
@@ -1338,6 +1429,7 @@ export async function buildApp(
           : null,
       cursorCodec: v2CursorCodec,
       chainId: bscChainId,
+      pushRuntimeAvailable,
     });
   const notificationService =
     options.notificationService ??
@@ -1345,6 +1437,7 @@ export async function buildApp(
       repository:
         database.notifications ?? createUnavailableNotificationRepository(),
       cursorCodec: v2CursorCodec,
+      pushRuntimeAvailable,
     });
   const priceAlertsRuntimeAvailable =
     registeredModuleIds.includes("notifications") &&
@@ -1529,12 +1622,12 @@ export async function buildApp(
     registeredModuleIds.includes("support") &&
     (options.supportService !== undefined ||
       (database.supportTickets !== undefined && v2CursorCodec !== null));
-  const securityNow = options.securityNow ?? ((): Date => new Date());
   const deviceService =
     options.deviceService ??
     createDeviceService({
       sessions: database.deviceSessions,
       notifications: database.notifications ?? null,
+      push: pushDispatchService,
       logger: app.log,
       now: securityNow,
     });
@@ -1748,6 +1841,7 @@ export async function buildApp(
         settingsRuntimeAvailable,
         supportRuntimeAvailable,
         communityAiRuntimeAvailable,
+        pushRuntimeAvailable,
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
@@ -1772,6 +1866,7 @@ export async function buildApp(
       miningService,
       referralService,
       deviceService,
+      pushTokenService,
       securityService,
       settingsService,
       supportService,

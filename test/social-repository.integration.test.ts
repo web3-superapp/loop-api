@@ -33,6 +33,9 @@ describe("PostgreSQL social repository", () => {
   async function cleanup(): Promise<void> {
     await pool.query(`
       truncate table
+        public.push_deliveries,
+        public.device_push_token_commands,
+        public.device_push_tokens,
         public.social_operation_events,
         public.social_operations,
         public.friendships,

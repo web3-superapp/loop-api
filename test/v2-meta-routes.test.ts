@@ -470,6 +470,7 @@ describe("LOOP API V2 meta policy gates", () => {
       settingsRuntimeAvailable: false,
       supportRuntimeAvailable: false,
       communityAiRuntimeAvailable: false,
+      pushRuntimeAvailable: false,
       launchChainId: "eip155:56",
     } as const;
     for (const moduleId of v2ModuleIds) {

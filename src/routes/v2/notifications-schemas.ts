@@ -25,12 +25,34 @@ import {
   parseV2CommonRequestMetadata,
   parseV2WriteRequestMetadata,
 } from "../../features/session/session-contract.js";
-import { unavailableSchema, v2CommonHeadersSchema } from "./chain-schemas.js";
+import { v2CommonHeadersSchema } from "./chain-schemas.js";
+import { reasonCodePatternSource } from "../../features/chain/chain-contract.js";
 
 /**
  * Route schemas for V2 price alerts, the notification feed, and the
  * ten-category preferences (Decision 0034).
  */
+
+/**
+ * Push delivery state (Decision 0067). `available` means a Firebase
+ * credential, the push repository and the notifications module are all
+ * composed; `unavailable` carries the reason code. The in-app feed is the
+ * authoritative record in both states.
+ */
+const pushDeliverySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "reasonCode"],
+  properties: {
+    status: { type: "string", enum: ["available", "unavailable"] },
+    reasonCode: {
+      anyOf: [
+        { type: "string", pattern: reasonCodePatternSource },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
 
 const dateTimeSchema = { type: "string", format: "date-time" } as const;
 const nullableDateTimeSchema = {
@@ -100,7 +122,7 @@ const priceAlertResourceSchema = {
     },
     triggeredAt: nullableDateTimeSchema,
     lastEvaluatedAt: nullableDateTimeSchema,
-    delivery: unavailableSchema,
+    delivery: pushDeliverySchema,
     version: { type: "integer", minimum: 1 },
     createdAt: dateTimeSchema,
     updatedAt: dateTimeSchema,
@@ -263,7 +285,7 @@ export const notificationFeedResourceSchema = {
     },
     nextCursor: { anyOf: [cursorSchema, { type: "null" }] },
     unreadCount: { type: "integer", minimum: 0 },
-    push: unavailableSchema,
+    push: pushDeliverySchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -327,7 +349,7 @@ export const notificationPreferencesResourceSchema = {
         ]),
       ),
     },
-    push: unavailableSchema,
+    push: pushDeliverySchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

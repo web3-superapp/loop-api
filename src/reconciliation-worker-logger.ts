@@ -29,7 +29,9 @@ export type ReconciliationWorkerLogMessage =
   | "Community channel activity could not be observed; no observation was recorded"
   | "Community persona projection lease was lost; outcome not recorded"
   | "Community persona projection was not confirmed"
-  | "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published";
+  | "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published"
+  | "LOOP push channel stays deferred: the Firebase service account is unusable"
+  | "LOOP push delivery was not confirmed";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {

@@ -34,6 +34,20 @@ import {
   type MiningSnapshotWorker,
 } from "./mining-snapshot-worker.js";
 import type { NotificationRepository } from "./database/notification-repository.js";
+import {
+  createPushDispatchService,
+  type PushDispatchLogger,
+  type PushDispatchService,
+} from "./features/push/push-dispatch-service.js";
+import type { PushRepository } from "./features/push/push-repository.js";
+import {
+  createFcmSender,
+  nodeFcmFetch,
+} from "./integrations/fcm/fcm-sender.js";
+import {
+  FirebaseServiceAccountError,
+  loadFirebaseServiceAccount,
+} from "./integrations/fcm/service-account.js";
 import { createMarketFactService } from "./features/market/market-fact-service.js";
 import { createMarketProviders } from "./integrations/market/provider-factory.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
@@ -111,6 +125,8 @@ export interface ReconciliationWorkerDatabase {
   readonly marketFacts?: MarketFactCacheRepository;
   readonly alertsV2?: AlertV2Repository;
   readonly notifications?: NotificationRepository;
+  /** Device push tokens and delivery attempts (Decision 0067). */
+  readonly push?: PushRepository;
   readonly accountWallets?: AccountWalletRepository;
   readonly walletIntents?: WalletIntentRepository;
   readonly mining?: MiningRepository;
@@ -362,6 +378,52 @@ export async function runReconciliationWorker(
               );
             },
           });
+    // Push channel (Decision 0067). The worker sends only when a Firebase
+    // credential and the push repository are both present; an unusable
+    // credential file leaves the lane feed-only and is logged by reason code.
+    const pushDispatchService = ((): PushDispatchService | null => {
+      if (options.config.push === null || database.push === undefined) {
+        return null;
+      }
+      // The worker log line carries a reason code and nothing else: no
+      // token, no owner, no message text.
+      const pushLogger: PushDispatchLogger = {
+        warn: (context) => {
+          const reasonCode = context["reasonCode"];
+          options.logger.warn(
+            {
+              ...logFields(),
+              ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+            },
+            "LOOP push delivery was not confirmed",
+          );
+        },
+      };
+      try {
+        return createPushDispatchService({
+          repository: database.push,
+          sender: createFcmSender({
+            account: loadFirebaseServiceAccount(
+              options.config.push.serviceAccountJsonPath,
+            ),
+            fetch: nodeFcmFetch,
+          }),
+          logger: pushLogger,
+        });
+      } catch (error) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            reasonCode:
+              error instanceof FirebaseServiceAccountError
+                ? error.reasonCode
+                : "PUSH_CREDENTIAL_FILE_UNREADABLE",
+          },
+          "LOOP push channel stays deferred: the Firebase service account is unusable",
+        );
+        return null;
+      }
+    })();
     // The `alert_evaluator` lane (Decision 0034) is default-off and needs the
     // DexScreener Provider, the V2 alert and notification repositories, and
     // the registry. It only ever triggers on a fresh Provider price.
@@ -389,6 +451,9 @@ export async function runReconciliationWorker(
             }),
             notificationDedupeSeconds:
               evaluatorConfig.notificationDedupeSeconds,
+            ...(pushDispatchService === null
+              ? {}
+              : { push: pushDispatchService }),
             onInfrastructureBackoff: (event) => {
               options.logger.warn(
                 { ...logFields(), ...event },

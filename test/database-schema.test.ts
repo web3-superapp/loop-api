@@ -130,6 +130,9 @@ describe("database schema readiness contract", () => {
       "public.community_ai_usage",
       "public.community_ai_answers",
       "public.community_ai_answer_reports",
+      "public.device_push_tokens",
+      "public.device_push_token_commands",
+      "public.push_deliveries",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

@@ -66,9 +66,10 @@ export interface PriceAlertV2Resource {
   readonly state: PriceAlertV2PublicState;
   readonly triggeredAt: string | null;
   readonly lastEvaluatedAt: string | null;
+  /** Whether a trigger also reaches this owner's devices (Decision 0067). */
   readonly delivery: {
-    readonly status: "unavailable";
-    readonly reasonCode: string;
+    readonly status: "available" | "unavailable";
+    readonly reasonCode: string | null;
   };
   readonly version: number;
   readonly createdAt: string;
@@ -123,6 +124,8 @@ export interface CreateAlertV2ServiceInput {
   readonly facts: MarketFactService | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly chainId: string;
+  /** Decision 0067; defaults to closed. */
+  readonly pushRuntimeAvailable?: boolean;
   readonly now?: () => Date;
 }
 
@@ -237,6 +240,7 @@ export function projectPriceAlertV2(
   record: PriceAlertV2Record,
   asset: AssetRecord | null,
   now: Date,
+  pushRuntimeAvailable = false,
 ): PriceAlertV2Resource {
   const expired =
     record.state === "active" &&
@@ -260,10 +264,14 @@ export function projectPriceAlertV2(
     state: expired ? "expired" : record.state,
     triggeredAt: record.triggeredAt,
     lastEvaluatedAt: record.lastEvaluatedAt,
-    delivery: Object.freeze({
-      status: "unavailable",
-      reasonCode: notificationReasonCodes.pushDeferred,
-    }),
+    delivery: Object.freeze(
+      pushRuntimeAvailable
+        ? { status: "available" as const, reasonCode: null }
+        : {
+            status: "unavailable" as const,
+            reasonCode: notificationReasonCodes.pushDeferred,
+          },
+    ),
     version: record.recordVersion,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -304,7 +312,12 @@ export function createAlertV2Service(
   ): Promise<PriceAlertV2Envelope> {
     const asset = await input.registry.getAsset(record.assetId);
     return Object.freeze({
-      alert: projectPriceAlertV2(record, asset, now()),
+      alert: projectPriceAlertV2(
+        record,
+        asset,
+        now(),
+        input.pushRuntimeAvailable === true,
+      ),
       contractVersion: v2ContractVersion,
     });
   }
@@ -387,6 +400,7 @@ export function createAlertV2Service(
               record,
               assets.get(record.assetId) ?? null,
               current,
+              input.pushRuntimeAvailable === true,
             ),
           ),
         ),

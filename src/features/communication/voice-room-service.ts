@@ -12,6 +12,7 @@ import {
 } from "../../integrations/stream/call-gateway.js";
 import { parseListLimit } from "../community/community-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import type { PushDispatchService } from "../push/push-dispatch-service.js";
 import {
   communicationCommandDigest,
   communicationUnavailableReasonCodes,
@@ -321,6 +322,12 @@ export interface VoiceRoomServiceLogger {
 export interface VoiceRoomServiceOptions {
   readonly repository: CommunicationRepository;
   readonly callGateway: StreamCallGateway;
+  /**
+   * Decision 0067. Omitted keeps a live room in-app only. The fan-out is
+   * detached from the command: a member's device must never be able to slow
+   * down or fail the host's room.
+   */
+  readonly push?: PushDispatchService;
   /** Absent means the unconfirmed go-live is not logged (tests, scripts). */
   readonly logger?: VoiceRoomServiceLogger;
   /** Null keeps the roster closed (CAPABILITY_UNAVAILABLE); no cursor secret, no page. */
@@ -432,6 +439,30 @@ export function createVoiceRoomService(
       }),
       providerSync,
       contractVersion: v2ContractVersion,
+    });
+  }
+
+  /**
+   * `community_voice_room_started` (Decision 0067): an optional event, so
+   * every recipient's `community.announcement` preference decides, and the
+   * host is never pushed about their own room. The pointer names the room
+   * and the route; no title, member count or community text travels.
+   */
+  function announceVoiceRoom(input: {
+    readonly communityId: string;
+    readonly voiceRoomId: string;
+    readonly hostUserId: string;
+  }): void {
+    if (options.push === undefined) {
+      return;
+    }
+    void options.push.dispatchToCommunity({
+      communityId: input.communityId,
+      excludeOwnerUserId: input.hostUserId,
+      eventType: "community_voice_room_started",
+      entityRef: `voiceRoom:${input.voiceRoomId}`,
+      contextRoute: "voice-room",
+      eventKey: `community_voice_room_started:voiceRoom:${input.voiceRoomId}`,
     });
   }
 
@@ -761,6 +792,11 @@ export function createVoiceRoomService(
         }),
       );
       if (record.room.provisionState === "provisioned") {
+        announceVoiceRoom({
+          communityId,
+          voiceRoomId: record.room.voiceRoomId,
+          hostUserId: input.principal.userId,
+        });
         return resource(record, confirmedSync, notObserved);
       }
       const hostStreamUserId = record.hostStreamUserId;
@@ -810,6 +846,11 @@ export function createVoiceRoomService(
         provisionState = "provisioned";
         backstage = false;
         errorCode = null;
+        announceVoiceRoom({
+          communityId,
+          voiceRoomId: record.room.voiceRoomId,
+          hostUserId: input.principal.userId,
+        });
       } else {
         providerSync = unconfirmedSync(voiceRoomProviderSyncReasonCodes.goLive);
         provisionState = "reconciling";

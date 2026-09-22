@@ -65,6 +65,7 @@ describe("loadReconciliationWorkerConfig", () => {
       alertEvaluator: null,
       walletIntentReconcile: null,
       miningSnapshotEnabled: false,
+      push: null,
       miningMockHoldingsEnabled: false,
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",

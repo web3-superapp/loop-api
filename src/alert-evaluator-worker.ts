@@ -13,6 +13,7 @@ import {
   compareDecimalStrings,
 } from "./features/market/market-contract.js";
 import type { MarketFactService } from "./features/market/market-fact-service.js";
+import type { PushDispatchService } from "./features/push/push-dispatch-service.js";
 
 /**
  * The `alert_evaluator` lane (Decision 0034), default off behind
@@ -24,7 +25,10 @@ import type { MarketFactService } from "./features/market/market-fact-service.js
  * missing pair skips the asset for this tick and records nothing. A trigger
  * writes the append-only event, flips the alert to `triggered`, and inserts
  * one context notification whose dedupe key collapses repeats inside the
- * configured window. Push delivery does not exist here or anywhere else.
+ * configured window. When the Decision 0067 push channel is composed, the
+ * same trigger is also pushed to the owner's devices, collapsed on the same
+ * dedupe key; with no Firebase credential the trigger stays a feed row and
+ * nothing else changes.
  */
 
 export const ALERT_EVALUATOR_LANE = "alert_evaluator" as const;
@@ -63,6 +67,8 @@ export interface CreateAlertEvaluatorWorkerOptions {
   readonly registry: ChainRegistryRepository;
   readonly facts: MarketFactService;
   readonly notificationDedupeSeconds: number;
+  /** Decision 0067; omitted keeps a trigger feed-only. */
+  readonly push?: PushDispatchService;
   readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
@@ -254,6 +260,25 @@ export function createAlertEvaluatorWorker(
           });
           if (result.outcome === "triggered") {
             triggeredCount += 1;
+            // Only a freshly written notification is pushed. A repeat
+            // inside the dedupe window, or a preference that suppressed the
+            // feed row, returns `notificationId: null` and must not ring a
+            // device either. The push carries the alert pointer, never the
+            // price, the threshold or the asset address.
+            if (
+              options.push !== undefined &&
+              notification !== null &&
+              result.notificationId !== null
+            ) {
+              await options.push.dispatchToOwner({
+                ownerUserId: alert.ownerUserId,
+                eventType: "price_alert_triggered",
+                entityRef: `priceAlert:${alert.alertId}`,
+                contextRoute: priceAlertContextRoute,
+                eventKey: notification.dedupeKey,
+                ...(signal === undefined ? {} : { signal }),
+              });
+            }
           }
         }
       }

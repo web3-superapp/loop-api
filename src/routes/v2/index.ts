@@ -21,6 +21,7 @@ import type { SendService } from "../../features/wallet-intents/send-service.js"
 import type { SwapService } from "../../features/wallet-intents/swap-service.js";
 import type { WalletIntentService } from "../../features/wallet-intents/wallet-intent-service.js";
 import type { DeviceService } from "../../features/security/device-service.js";
+import type { PushTokenService } from "../../features/push/push-token-service.js";
 import type { SecurityService } from "../../features/security/security-service.js";
 import type { SettingsService } from "../../features/settings/settings-service.js";
 import type { SupportService } from "../../features/support/support-service.js";
@@ -77,6 +78,7 @@ export interface V2RouteDependencies {
   readonly approvalService: ApprovalService;
   readonly swapService: SwapService;
   readonly deviceService: DeviceService;
+  readonly pushTokenService: PushTokenService;
   readonly securityService: SecurityService;
   readonly settingsService: SettingsService;
   readonly supportService: SupportService;
