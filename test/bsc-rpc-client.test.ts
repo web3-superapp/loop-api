@@ -2,6 +2,7 @@ import {
   custom,
   decodeFunctionData,
   encodeFunctionResult,
+  HttpRequestError,
   LimitExceededRpcError,
   multicall3Abi,
   numberToHex,
@@ -17,10 +18,13 @@ import {
 import {
   BscChainMismatchError,
   BscReadUnavailableError,
+  bscMaximumLogRequestsPerSegment,
   createBscReadClient,
   createUnavailableBscReadClient,
   endpointLabelFor,
   endpointRefFor,
+  isLogQueryRejection,
+  summarizeRpcError,
 } from "../src/integrations/bsc/rpc-client.js";
 import { createChainVerificationWatch } from "../src/integrations/bsc/chain-verification-watch.js";
 
@@ -524,7 +528,7 @@ describe("BSC read client", () => {
     expect(expectedNext).toBe(2_001n);
   });
 
-  it("rethrows when even a single block exceeds the endpoint limit", async () => {
+  it("fails closed as BSC_LOG_QUERY_REJECTED when even a single-address, single-block request is refused", async () => {
     const client = createBscReadClient({
       config: chainConfig(),
       transportFactory: () =>
@@ -539,13 +543,27 @@ describe("BSC read client", () => {
     });
 
     // Returning an empty page here would silently drop real transfers.
-    await expect(
-      client.readTransferLogs({
+    const failure = await client
+      .readTransferLogs({
         addresses: [wbnb],
         fromBlock: 10n,
         toBlock: 13n,
-      }),
-    ).rejects.toBeInstanceOf(LimitExceededRpcError);
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(BscReadUnavailableError);
+    expect(failure).toMatchObject({
+      reasonCode: "BSC_LOG_QUERY_REJECTED",
+      rpcError: {
+        errorClass: "LimitExceededRpcError",
+        rpcCode: -32005,
+        method: null,
+      },
+    });
+    // The original Provider error stays reachable for a debugger.
+    expect((failure as Error).cause).toBeInstanceOf(LimitExceededRpcError);
   });
 
   it("probes every endpoint behind an opaque reference", async () => {
@@ -672,6 +690,298 @@ describe("BSC read client", () => {
     ).rejects.toMatchObject({ reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED" });
     // The primary unavailable client is unchanged.
     expect(createUnavailableBscReadClient().chainId).toBe("eip155:56");
+  });
+});
+
+/**
+ * The refusal observed on the Development stack on 2026-09-22 (Decision
+ * 0068): a public endpoint answers `eth_getLogs` with HTTP 403 and a
+ * JSON-RPC-shaped body, and viem surfaces it as an `HttpRequestError` that
+ * is neither a `LimitExceededRpcError` nor an `InvalidParamsRpcError`.
+ */
+const keyedEndpointUrl =
+  "https://user:secret@bsc-rpc.publicnode.com/v1/abcdef-provider-key?token=xyz";
+
+function requestBlocked(body: Record<string, unknown>): HttpRequestError {
+  return new HttpRequestError({
+    body,
+    details: '{"code":-32602,"message":"Request blocked"}',
+    status: 403,
+    url: keyedEndpointUrl,
+  });
+}
+
+function rawTransferLog(
+  address: string,
+  blockNumber: bigint,
+  logIndex: number,
+): unknown {
+  return {
+    address,
+    blockHash: headHash,
+    blockNumber: numberToHex(blockNumber),
+    data: numberToHex(1_000n, { size: 32 }),
+    logIndex: numberToHex(BigInt(logIndex)),
+    removed: false,
+    topics: [
+      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      `0x000000000000000000000000${owner.slice(2)}`,
+      `0x000000000000000000000000${wbnb.slice(2)}`,
+    ],
+    transactionHash: `0x${blockNumber.toString(16).padStart(62, "0")}${String(logIndex).padStart(2, "0")}`,
+    transactionIndex: "0x0",
+  };
+}
+
+describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)", () => {
+  const tokenA = "0x000000000000000000000000000000000000000a";
+  const tokenB = "0x000000000000000000000000000000000000000b";
+  const tokenC = "0x000000000000000000000000000000000000000c";
+
+  it("summarises a refused request into loggable fields and never the URL, body, or key", () => {
+    const summary = summarizeRpcError(
+      requestBlocked({
+        method: "eth_getLogs",
+        params: [
+          { address: [tokenA, tokenB], fromBlock: "0x1", toBlock: "0x2" },
+        ],
+      }),
+    );
+    expect(summary).toEqual({
+      errorClass: "HttpRequestError",
+      rpcStatus: 403,
+      rpcCode: -32602,
+      rpcUrlHost: "bsc-rpc.publicnode.com",
+      method: "eth_getLogs",
+    });
+    const serialised = JSON.stringify(summary);
+    expect(serialised).not.toContain("secret");
+    expect(serialised).not.toContain("provider-key");
+    expect(serialised).not.toContain("token=");
+    expect(serialised).not.toContain(tokenA);
+    expect(serialised).not.toContain("Request blocked");
+  });
+
+  it("classifies only refusals as splittable, never transport failures", () => {
+    expect(isLogQueryRejection(requestBlocked({ method: "eth_getLogs" }))).toBe(
+      true,
+    );
+    expect(
+      isLogQueryRejection(
+        new HttpRequestError({ status: 429, url: keyedEndpointUrl }),
+      ),
+    ).toBe(true);
+    expect(
+      isLogQueryRejection(new LimitExceededRpcError(new Error("quota"))),
+    ).toBe(true);
+    expect(
+      isLogQueryRejection(
+        new HttpRequestError({
+          status: 200,
+          url: keyedEndpointUrl,
+          details: '{"code":-32001,"message":"usage limit"}',
+        }),
+      ),
+    ).toBe(true);
+    expect(isLogQueryRejection(new Error("limit exceeded"))).toBe(true);
+    expect(isLogQueryRejection(new Error("endpoint unavailable"))).toBe(false);
+    expect(
+      isLogQueryRejection(
+        new HttpRequestError({ status: 503, url: keyedEndpointUrl }),
+      ),
+    ).toBe(false);
+    expect(isLogQueryRejection(new BscReadUnavailableError("X"))).toBe(false);
+    expect(summarizeRpcError("not an object").errorClass).toBe("string");
+    expect(summarizeRpcError(new Error("plain"))).toEqual({
+      errorClass: "Error",
+      rpcStatus: null,
+      rpcCode: null,
+      rpcUrlHost: null,
+      method: null,
+    });
+  });
+
+  it("splits a 403 multi-address query by address once the range is a single block, and learns the group size once", async () => {
+    const accepted: { from: bigint; to: bigint; addresses: string[] }[] = [];
+    let rejectedCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            if (request.method !== "eth_getLogs") {
+              return Promise.reject(new Error(`unmocked ${request.method}`));
+            }
+            const params = request.params as readonly [
+              {
+                readonly address: string | string[];
+                readonly fromBlock: string;
+                readonly toBlock: string;
+              },
+            ];
+            const addresses = Array.isArray(params[0].address)
+              ? params[0].address
+              : [params[0].address];
+            const from = BigInt(params[0].fromBlock);
+            const to = BigInt(params[0].toBlock);
+            // The Provider refuses every request naming more than one
+            // address, whatever the block span, like the 2026-09-22 endpoint.
+            if (addresses.length > 1) {
+              rejectedCount += 1;
+              // -32602 is not retried by viem, so one refusal is one request.
+              return Promise.reject(
+                Object.assign(new Error("Request blocked"), {
+                  code: -32602,
+                }),
+              );
+            }
+            accepted.push({ from, to, addresses: [...addresses] });
+            const [address] = addresses;
+            if (address !== tokenB) {
+              return Promise.resolve([]);
+            }
+            const logs: unknown[] = [];
+            for (let block = to; block >= from; block -= 1n) {
+              logs.push(
+                rawTransferLog(tokenB, block, 1),
+                rawTransferLog(tokenB, block, 0),
+              );
+            }
+            return Promise.resolve(logs);
+          },
+        }),
+    });
+
+    const logs = await client.readTransferLogs({
+      addresses: [tokenA, tokenB, tokenC],
+      fromBlock: 1n,
+      toBlock: 4n,
+    });
+
+    // Every block of every address is covered exactly once.
+    for (const token of [tokenA, tokenB, tokenC]) {
+      const covered = accepted
+        .filter((request) => request.addresses[0]?.toLowerCase() === token)
+        .flatMap((request) => {
+          const blocks: bigint[] = [];
+          for (let block = request.from; block <= request.to; block += 1n) {
+            blocks.push(block);
+          }
+          return blocks;
+        })
+        .sort((left, right) => (left < right ? -1 : 1));
+      expect(covered).toEqual([1n, 2n, 3n, 4n]);
+    }
+    expect(accepted.every((request) => request.addresses.length === 1)).toBe(
+      true,
+    );
+    // Range halving (4 → 2 → 1) costs two refusals, then the address list
+    // is narrowed on one leaf (3 → 2 → 1, two refusals) and the learned limit
+    // is applied to every remaining leaf without another refusal.
+    expect(rejectedCount).toBe(4);
+    // Logs come back in block order even though the split reordered requests.
+    expect(logs.map((log) => [log.blockNumber, log.logIndex])).toEqual([
+      [1n, 0],
+      [1n, 1],
+      [2n, 0],
+      [2n, 1],
+      [3n, 0],
+      [3n, 1],
+      [4n, 0],
+      [4n, 1],
+    ]);
+    expect(logs.every((log) => log.address === tokenB)).toBe(true);
+  });
+
+  it("fails closed as BSC_LOG_QUERY_REJECTED when a single-address, single-block 403 is still refused, without any partial page", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            requestCount += 1;
+            return Promise.reject(
+              requestBlocked({
+                method: request.method,
+                params: request.params,
+              }),
+            );
+          },
+        }),
+    });
+
+    const failure = await client
+      .readApprovalLogs({
+        addresses: [tokenA, tokenB],
+        fromBlock: 1n,
+        toBlock: 2n,
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(BscReadUnavailableError);
+    expect(failure).toMatchObject({
+      reasonCode: "BSC_LOG_QUERY_REJECTED",
+      rpcError: {
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+      },
+    });
+    // [1..2]{A,B} → [1]{A,B} → [1]{A}: three refusals and no further probing
+    // (viem retries a 403 up to three times per refusal before giving up).
+    expect(requestCount).toBeLessThanOrEqual(3 * 4);
+  });
+
+  it("fails closed as BSC_LOG_QUERY_BUDGET_EXHAUSTED instead of grinding a rationed endpoint block by block", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            if (request.method === "eth_chainId") {
+              return Promise.resolve("0x38");
+            }
+            const params = request.params as readonly [
+              { readonly fromBlock: string; readonly toBlock: string },
+            ];
+            requestCount += 1;
+            // Only single-block requests are ever accepted; -32602 is not
+            // retried by viem, so the walk is fast and the budget is what stops it.
+            if (BigInt(params[0].toBlock) !== BigInt(params[0].fromBlock)) {
+              return Promise.reject(
+                Object.assign(new Error("Request blocked"), {
+                  code: -32602,
+                }),
+              );
+            }
+            return Promise.resolve([]);
+          },
+        }),
+    });
+
+    await expect(
+      client.readPoolEventLogs({
+        addresses: [tokenA],
+        fromBlock: 1n,
+        toBlock: 2_000n,
+      }),
+    ).rejects.toMatchObject({
+      name: "BscReadUnavailableError",
+      reasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+    });
+    expect(requestCount).toBe(bscMaximumLogRequestsPerSegment);
   });
 });
 

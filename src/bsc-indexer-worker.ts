@@ -11,8 +11,10 @@ import {
   BscChainMismatchError,
   BscReadUnavailableError,
   bscMaximumLogRange,
+  summarizeRpcError,
   type BscApprovalLog,
   type BscReadClient,
+  type BscRpcErrorSummary,
 } from "./integrations/bsc/rpc-client.js";
 
 /**
@@ -49,12 +51,96 @@ export interface BscIndexerRunResult {
   readonly toBlockNumber: string | null;
   readonly transferCount: number;
   readonly reasonCode: string | null;
+  /** Provider error classification behind an `unavailable` tick (Decision 0068). */
+  readonly rpcError?: BscRpcErrorSummary;
 }
 
+export type BscIndexerLaneName = "erc20_transfer" | "pool_event";
+
+/**
+ * Loggable classification of the error that scheduled a retry (Decision
+ * 0068). Only class names, numeric codes, a host name, and a method name:
+ * never a URL, a request body, an address list, or a key.
+ */
 export interface BscIndexerInfrastructureBackoff {
   readonly reasonCode: "bsc_indexer_unavailable";
+  readonly lane: BscIndexerLaneName;
   readonly consecutiveFailureCount: number;
   readonly retryDelayMs: number;
+  readonly errorClass: string;
+  readonly rpcStatus: number | null;
+  readonly rpcCode: number | null;
+  readonly rpcUrlHost: string | null;
+  readonly method: string | null;
+}
+
+/**
+ * Emitted once when a lane's tick becomes `unavailable` (or its reason code
+ * changes), and once more when the lane recovers, so a lane that is idling
+ * on a Provider refusal is visible without a log line per tick.
+ */
+export interface BscIndexerLaneAvailabilityEvent {
+  readonly lane: BscIndexerLaneName;
+  readonly state: "unavailable" | "recovered";
+  readonly reasonCode: string | null;
+  readonly errorClass: string | null;
+  readonly rpcStatus: number | null;
+  readonly rpcCode: number | null;
+  readonly rpcUrlHost: string | null;
+  readonly method: string | null;
+}
+
+export function infrastructureBackoffEvent(
+  lane: BscIndexerLaneName,
+  error: unknown,
+  consecutiveFailureCount: number,
+  retryDelayMs: number,
+): BscIndexerInfrastructureBackoff {
+  return Object.freeze({
+    reasonCode: "bsc_indexer_unavailable" as const,
+    lane,
+    consecutiveFailureCount,
+    retryDelayMs,
+    ...summarizeRpcError(error),
+  });
+}
+
+export function laneAvailabilityEvent(
+  lane: BscIndexerLaneName,
+  state: "unavailable" | "recovered",
+  reasonCode: string | null,
+  rpcError: BscRpcErrorSummary | undefined,
+): BscIndexerLaneAvailabilityEvent {
+  return Object.freeze({
+    lane,
+    state,
+    reasonCode,
+    errorClass: rpcError?.errorClass ?? null,
+    rpcStatus: rpcError?.rpcStatus ?? null,
+    rpcCode: rpcError?.rpcCode ?? null,
+    rpcUrlHost: rpcError?.rpcUrlHost ?? null,
+    method: rpcError?.method ?? null,
+  });
+}
+
+/**
+ * Maps a read failure onto the lane's `unavailable` outcome, or `null` when
+ * the error is not a classified read failure and must propagate to the retry
+ * loop. Both lanes share it so neither can advance past a refused read.
+ */
+export function unavailableReasonFor(error: unknown): {
+  readonly reasonCode: string;
+  readonly rpcError?: BscRpcErrorSummary;
+} | null {
+  if (error instanceof BscChainMismatchError) {
+    return { reasonCode: "BSC_CHAIN_ID_MISMATCH" };
+  }
+  if (error instanceof BscReadUnavailableError) {
+    return error.rpcError === null
+      ? { reasonCode: error.reasonCode }
+      : { reasonCode: error.reasonCode, rpcError: error.rpcError };
+  }
+  return null;
 }
 
 export type BscApprovalCoverageRunKind =
@@ -98,11 +184,15 @@ export interface CreateBscIndexerWorkerOptions {
   readonly onInfrastructureBackoff?: (
     event: BscIndexerInfrastructureBackoff,
   ) => void;
+  readonly onLaneAvailability?: (
+    event: BscIndexerLaneAvailabilityEvent,
+  ) => void;
 }
 
 function idleResult(
   kind: BscIndexerRunKind,
   reasonCode: string | null,
+  rpcError?: BscRpcErrorSummary,
 ): BscIndexerRunResult {
   return Object.freeze({
     kind,
@@ -110,6 +200,7 @@ function idleResult(
     toBlockNumber: null,
     transferCount: 0,
     reasonCode,
+    ...(rpcError === undefined ? {} : { rpcError }),
   });
 }
 
@@ -163,15 +254,12 @@ export function createBscIndexerWorker(
     try {
       head = await options.readClient.getHead();
     } catch (error) {
-      if (
-        error instanceof BscReadUnavailableError ||
-        error instanceof BscChainMismatchError
-      ) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
         return idleResult(
           "unavailable",
-          error instanceof BscChainMismatchError
-            ? "BSC_CHAIN_ID_MISMATCH"
-            : error.reasonCode,
+          unavailable.reasonCode,
+          unavailable.rpcError,
         );
       }
       throw error;
@@ -227,19 +315,35 @@ export function createBscIndexerWorker(
     const toBlock =
       maximumToBlock < head.blockNumber ? maximumToBlock : head.blockNumber;
 
-    const logs = await options.readClient.readTransferLogs({
-      addresses: tokens.map((token) => token.address),
-      fromBlock,
-      toBlock,
-    });
-    // Approval logs are read for the same addresses and range and committed
-    // under the same checkpoint (Decision 0035), so the approvals inventory
-    // can never be ahead of or behind the transfer history.
-    const approvalLogs = await options.readClient.readApprovalLogs({
-      addresses: tokens.map((token) => token.address),
-      fromBlock,
-      toBlock,
-    });
+    // A refused or unreachable read is the lane's `unavailable` outcome, not
+    // a retry-loop failure (Decision 0068); nothing is committed for it.
+    let logs;
+    let approvalLogs;
+    try {
+      logs = await options.readClient.readTransferLogs({
+        addresses: tokens.map((token) => token.address),
+        fromBlock,
+        toBlock,
+      });
+      // Approval logs are read for the same addresses and range and committed
+      // under the same checkpoint (Decision 0035), so the approvals inventory
+      // can never be ahead of or behind the transfer history.
+      approvalLogs = await options.readClient.readApprovalLogs({
+        addresses: tokens.map((token) => token.address),
+        fromBlock,
+        toBlock,
+      });
+    } catch (error) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
+        return idleResult(
+          "unavailable",
+          unavailable.reasonCode,
+          unavailable.rpcError,
+        );
+      }
+      throw error;
+    }
     if (isAborted(signal)) {
       return idleResult("aborted", null);
     }
@@ -359,16 +463,9 @@ export function createBscIndexerWorker(
         toBlock,
       });
     } catch (error) {
-      if (
-        error instanceof BscReadUnavailableError ||
-        error instanceof BscChainMismatchError
-      ) {
-        return coverageIdle(
-          "unavailable",
-          error instanceof BscChainMismatchError
-            ? "BSC_CHAIN_ID_MISMATCH"
-            : error.reasonCode,
-        );
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
+        return coverageIdle("unavailable", unavailable.reasonCode);
       }
       throw error;
     }
@@ -415,26 +512,51 @@ export function createBscIndexerWorker(
       }
       loopRunning = true;
       let consecutiveFailures = 0;
+      let unavailableReasonCode: string | null = null;
       try {
         while (!isAborted(signal)) {
           try {
             const result = await runOnce(signal);
             consecutiveFailures = 0;
+            if (result.kind === "unavailable") {
+              if (result.reasonCode !== unavailableReasonCode) {
+                unavailableReasonCode = result.reasonCode;
+                options.onLaneAvailability?.(
+                  laneAvailabilityEvent(
+                    BSC_INDEXER_LANE,
+                    "unavailable",
+                    result.reasonCode,
+                    result.rpcError,
+                  ),
+                );
+              }
+            } else if (unavailableReasonCode !== null) {
+              unavailableReasonCode = null;
+              options.onLaneAvailability?.(
+                laneAvailabilityEvent(
+                  BSC_INDEXER_LANE,
+                  "recovered",
+                  null,
+                  undefined,
+                ),
+              );
+            }
             if (result.kind !== "advanced" && result.kind !== "reorged") {
               await waitFor(BSC_INDEXER_IDLE_DELAY_MS, signal);
             }
-          } catch {
+          } catch (error) {
             if (isAborted(signal)) {
               break;
             }
             consecutiveFailures += 1;
             const delay = retryDelayMs(consecutiveFailures);
             options.onInfrastructureBackoff?.(
-              Object.freeze({
-                reasonCode: "bsc_indexer_unavailable",
-                consecutiveFailureCount: consecutiveFailures,
-                retryDelayMs: delay,
-              }),
+              infrastructureBackoffEvent(
+                BSC_INDEXER_LANE,
+                error,
+                consecutiveFailures,
+                delay,
+              ),
             );
             await waitFor(delay, signal);
           }

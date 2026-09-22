@@ -17,12 +17,17 @@ const safeCodePattern = /^[A-Za-z0-9_.-]{1,64}$/;
 const safeWorkerIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const safeAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/;
+/** A host name only: no scheme, port, path, query, or user-info (Decision 0068). */
+const safeHostPattern = /^[A-Za-z0-9.-]{1,253}$/;
+const indexerLanes = new Set(["erc20_transfer", "pool_event"]);
 
 export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker started"
   | "LOOP reconciliation worker shutdown requested"
   | "LOOP reconciliation worker stopped"
   | "LOOP reconciliation worker infrastructure retry scheduled"
+  | "LOOP BSC indexer lane is unavailable"
+  | "LOOP BSC indexer lane recovered"
   | "LOOP reconciliation worker failed to start"
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
@@ -58,6 +63,18 @@ export interface ReconciliationWorkerLogFields {
   readonly write?: "confirm" | "observe" | "request" | "reset";
   readonly projectionAttempts?: number;
   readonly errorName?: string;
+  /**
+   * Decision 0068 BSC indexer lanes: which lane, the error class, the HTTP
+   * status and JSON-RPC code the Provider answered with, the endpoint host
+   * name, and the JSON-RPC method. Never a URL, a body, or an address list.
+   */
+  readonly lane?: string;
+  readonly state?: "unavailable" | "recovered";
+  readonly errorClass?: string | null;
+  readonly rpcStatus?: number | null;
+  readonly rpcCode?: number | null;
+  readonly rpcUrlHost?: string | null;
+  readonly method?: string | null;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -136,6 +153,32 @@ function sanitizeFields(
     safeWorkerIdPattern.test(fields.snapshotId)
       ? fields.snapshotId
       : undefined;
+  const lane =
+    fields.lane !== undefined && indexerLanes.has(fields.lane)
+      ? fields.lane
+      : undefined;
+  const state =
+    fields.state === "unavailable" || fields.state === "recovered"
+      ? fields.state
+      : undefined;
+  const errorClass = safeCode(fields.errorClass ?? undefined);
+  const method = safeCode(fields.method ?? undefined);
+  const rpcStatus =
+    typeof fields.rpcStatus === "number" &&
+    Number.isInteger(fields.rpcStatus) &&
+    fields.rpcStatus >= 100 &&
+    fields.rpcStatus <= 599
+      ? fields.rpcStatus
+      : undefined;
+  const rpcCode =
+    typeof fields.rpcCode === "number" && Number.isSafeInteger(fields.rpcCode)
+      ? fields.rpcCode
+      : undefined;
+  const rpcUrlHost =
+    typeof fields.rpcUrlHost === "string" &&
+    safeHostPattern.test(fields.rpcUrlHost)
+      ? fields.rpcUrlHost
+      : undefined;
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -161,6 +204,13 @@ function sanitizeFields(
     ...(unreadInputs === undefined || unreadInputs.length === 0
       ? {}
       : { unreadInputs: Object.freeze(unreadInputs) }),
+    ...(lane === undefined ? {} : { lane }),
+    ...(state === undefined ? {} : { state }),
+    ...(errorClass === undefined ? {} : { errorClass }),
+    ...(rpcStatus === undefined ? {} : { rpcStatus }),
+    ...(rpcCode === undefined ? {} : { rpcCode }),
+    ...(rpcUrlHost === undefined ? {} : { rpcUrlHost }),
+    ...(method === undefined ? {} : { method }),
   });
 }
 

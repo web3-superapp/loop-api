@@ -4,7 +4,11 @@ import {
   BSC_INDEXER_IDLE_DELAY_MS,
   BSC_INDEXER_RETRY_BASE_DELAY_MS,
   BSC_INDEXER_RETRY_MAX_DELAY_MS,
+  infrastructureBackoffEvent,
+  laneAvailabilityEvent,
+  unavailableReasonFor,
   type BscIndexerInfrastructureBackoff,
+  type BscIndexerLaneAvailabilityEvent,
   type BscIndexerRunKind,
 } from "./bsc-indexer-worker.js";
 import type {
@@ -16,11 +20,10 @@ import type {
   PoolRecord,
 } from "./database/chain-registry-repository.js";
 import {
-  BscChainMismatchError,
-  BscReadUnavailableError,
   bscMaximumLogRange,
   type BscPoolEventLog,
   type BscReadClient,
+  type BscRpcErrorSummary,
 } from "./integrations/bsc/rpc-client.js";
 
 /**
@@ -41,6 +44,8 @@ export interface BscPoolIndexerRunResult {
   readonly toBlockNumber: string | null;
   readonly eventCount: number;
   readonly reasonCode: string | null;
+  /** Provider error classification behind an `unavailable` tick (Decision 0068). */
+  readonly rpcError?: BscRpcErrorSummary;
 }
 
 export interface BscPoolIndexerWorker {
@@ -60,11 +65,15 @@ export interface CreateBscPoolIndexerWorkerOptions {
   readonly onInfrastructureBackoff?: (
     event: BscIndexerInfrastructureBackoff,
   ) => void;
+  readonly onLaneAvailability?: (
+    event: BscIndexerLaneAvailabilityEvent,
+  ) => void;
 }
 
 function idleResult(
   kind: BscIndexerRunKind,
   reasonCode: string | null,
+  rpcError?: BscRpcErrorSummary,
 ): BscPoolIndexerRunResult {
   return Object.freeze({
     kind,
@@ -72,6 +81,7 @@ function idleResult(
     toBlockNumber: null,
     eventCount: 0,
     reasonCode,
+    ...(rpcError === undefined ? {} : { rpcError }),
   });
 }
 
@@ -172,15 +182,12 @@ export function createBscPoolIndexerWorker(
     try {
       head = await options.readClient.getHead();
     } catch (error) {
-      if (
-        error instanceof BscReadUnavailableError ||
-        error instanceof BscChainMismatchError
-      ) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
         return idleResult(
           "unavailable",
-          error instanceof BscChainMismatchError
-            ? "BSC_CHAIN_ID_MISMATCH"
-            : error.reasonCode,
+          unavailable.reasonCode,
+          unavailable.rpcError,
         );
       }
       throw error;
@@ -233,11 +240,26 @@ export function createBscPoolIndexerWorker(
     const toBlock =
       maximumToBlock < head.blockNumber ? maximumToBlock : head.blockNumber;
 
-    const logs = await options.readClient.readPoolEventLogs({
-      addresses: pools.map((pool) => pool.address),
-      fromBlock,
-      toBlock,
-    });
+    // A refused or unreachable read is the lane's `unavailable` outcome, not
+    // a retry-loop failure (Decision 0068); nothing is committed for it.
+    let logs;
+    try {
+      logs = await options.readClient.readPoolEventLogs({
+        addresses: pools.map((pool) => pool.address),
+        fromBlock,
+        toBlock,
+      });
+    } catch (error) {
+      const unavailable = unavailableReasonFor(error);
+      if (unavailable !== null) {
+        return idleResult(
+          "unavailable",
+          unavailable.reasonCode,
+          unavailable.rpcError,
+        );
+      }
+      throw error;
+    }
     if (signal !== undefined && signal.aborted) {
       return idleResult("aborted", null);
     }
@@ -307,26 +329,51 @@ export function createBscPoolIndexerWorker(
       }
       loopRunning = true;
       let consecutiveFailures = 0;
+      let unavailableReasonCode: string | null = null;
       try {
         while (!signal.aborted) {
           try {
             const result = await runOnce(signal);
             consecutiveFailures = 0;
+            if (result.kind === "unavailable") {
+              if (result.reasonCode !== unavailableReasonCode) {
+                unavailableReasonCode = result.reasonCode;
+                options.onLaneAvailability?.(
+                  laneAvailabilityEvent(
+                    BSC_POOL_INDEXER_LANE,
+                    "unavailable",
+                    result.reasonCode,
+                    result.rpcError,
+                  ),
+                );
+              }
+            } else if (unavailableReasonCode !== null) {
+              unavailableReasonCode = null;
+              options.onLaneAvailability?.(
+                laneAvailabilityEvent(
+                  BSC_POOL_INDEXER_LANE,
+                  "recovered",
+                  null,
+                  undefined,
+                ),
+              );
+            }
             if (result.kind !== "advanced" && result.kind !== "reorged") {
               await waitFor(BSC_INDEXER_IDLE_DELAY_MS, signal);
             }
-          } catch {
+          } catch (error) {
             if (isAborted(signal)) {
               break;
             }
             consecutiveFailures += 1;
             const delay = retryDelayMs(consecutiveFailures);
             options.onInfrastructureBackoff?.(
-              Object.freeze({
-                reasonCode: "bsc_indexer_unavailable",
-                consecutiveFailureCount: consecutiveFailures,
-                retryDelayMs: delay,
-              }),
+              infrastructureBackoffEvent(
+                BSC_POOL_INDEXER_LANE,
+                error,
+                consecutiveFailures,
+                delay,
+              ),
             );
             await waitFor(delay, signal);
           }

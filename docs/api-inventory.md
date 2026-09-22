@@ -296,6 +296,19 @@ is then byte-identical to S5), otherwise the BSC testnet's own verification, hea
 endpoint URL. The primary slot alone gates the route; `bscRead` describes only
 the primary chain.
 
+Indexer lane reason codes (worker log and `pnpm indexer:backfill` output,
+never an API field): `BSC_RPC_UNREACHABLE`, `BSC_CHAIN_ID_MISMATCH`,
+`BSC_BLOCK_HASH_UNAVAILABLE`, `BSC_BLOCK_TIMESTAMP_UNAVAILABLE`, and since
+Decision 0068 `BSC_LOG_QUERY_REJECTED` (every endpoint refused even a
+single-address, single-block `eth_getLogs`) and
+`BSC_LOG_QUERY_BUDGET_EXHAUSTED` (narrowing a segment would exceed 512
+requests). A refusal (HTTP 403/413/429, JSON-RPC -32602/-32001/-32005, or
+`limit exceeded`-class text) is narrowed by block range, then by address,
+before the lane idles as `unavailable`; the retry-loop warn line and the
+once-per-transition `LOOP BSC indexer lane is unavailable` line carry
+`lane`, `errorClass`, `rpcStatus`, `rpcCode`, `rpcUrlHost` (host name only),
+and `method`.
+
 ### V2 wallet module (Decision 0033, `V2_MODULES_ENABLED=wallet`)
 
 | Method and path                       | Request                                                    | Success projection                                                                                                                          | Interface     | Capability                                                             |

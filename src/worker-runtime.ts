@@ -1,5 +1,6 @@
 import {
   createBscIndexerWorker,
+  type BscIndexerLaneAvailabilityEvent,
   type BscIndexerWorker,
   type CreateBscIndexerWorkerOptions,
 } from "./bsc-indexer-worker.js";
@@ -332,6 +333,28 @@ export async function runReconciliationWorker(
     // Hyperliquid reconciliation and never signs or submits anything.
     const indexerConfig = options.config.bscIndexer;
     const indexerChainConfig = options.config.bscChain;
+    // A lane that idles on a Provider refusal is logged once per transition
+    // (Decision 0068), with the classification fields and nothing else.
+    const onLaneAvailability = (
+      event: BscIndexerLaneAvailabilityEvent,
+    ): void => {
+      if (event.state === "unavailable") {
+        const { reasonCode, ...classification } = event;
+        options.logger.warn(
+          {
+            ...logFields(),
+            ...classification,
+            ...(reasonCode === null ? {} : { reasonCode }),
+          },
+          "LOOP BSC indexer lane is unavailable",
+        );
+        return;
+      }
+      options.logger.info(
+        { ...logFields(), lane: event.lane, state: event.state },
+        "LOOP BSC indexer lane recovered",
+      );
+    };
     const indexerRepository = database.bscIndexer;
     const indexerRegistry = database.chainRegistry;
     const indexerReadClient =
@@ -356,6 +379,7 @@ export async function runReconciliationWorker(
                 "LOOP reconciliation worker infrastructure retry scheduled",
               );
             },
+            onLaneAvailability,
           });
     // The `pool_event` lane shares the BSC_INDEXER_ENABLED switch and the read
     // client but owns its own checkpoint and rewind (Decision 0034).
@@ -377,6 +401,7 @@ export async function runReconciliationWorker(
                 "LOOP reconciliation worker infrastructure retry scheduled",
               );
             },
+            onLaneAvailability,
           });
     // Push channel (Decision 0067). The worker sends only when a Firebase
     // credential and the push repository are both present; an unusable

@@ -291,12 +291,42 @@ export interface BscChainCallClient extends BscReadClient {
   ): Promise<BscAllowanceReadResult>;
 }
 
+/**
+ * Safe, loggable classification of a Provider error (Decision 0068). Every
+ * field is a class name, a numeric status/code, a host name, or a JSON-RPC
+ * method name; never a URL, a request body, an address list, or a key.
+ */
+export interface BscRpcErrorSummary {
+  /** The error's `name` (viem error name) or constructor name. */
+  readonly errorClass: string;
+  /** HTTP status of the failed request, when the Provider answered at all. */
+  readonly rpcStatus: number | null;
+  /** JSON-RPC error code, from the typed error or the response body. */
+  readonly rpcCode: number | null;
+  /** Host name only of the endpoint that answered last. */
+  readonly rpcUrlHost: string | null;
+  /** JSON-RPC method of the failed request. */
+  readonly method: string | null;
+}
+
 export class BscReadUnavailableError extends Error {
   readonly code = "bsc_read_unavailable";
+  /** Present when a Provider error was classified into this reason code. */
+  readonly rpcError: BscRpcErrorSummary | null;
 
-  constructor(readonly reasonCode: string) {
-    super("The BSC read capability is unavailable");
+  constructor(
+    readonly reasonCode: string,
+    options: {
+      readonly cause?: unknown;
+      readonly rpcError?: BscRpcErrorSummary;
+    } = {},
+  ) {
+    super(
+      "The BSC read capability is unavailable",
+      options.cause === undefined ? undefined : { cause: options.cause },
+    );
     this.name = "BscReadUnavailableError";
+    this.rpcError = options.rpcError ?? null;
   }
 }
 
@@ -312,12 +342,25 @@ export class BscChainMismatchError extends Error {
 /** Maximum block span of one `eth_getLogs` request. */
 export const bscMaximumLogRange = 2_000n;
 /**
- * Endpoints cap `eth_getLogs` by block span and by result size, and report the
- * two through different JSON-RPC errors. The client halves the range and
- * retries on either; a single block that still fails is a real endpoint
- * limitation and fails closed instead of silently dropping logs.
+ * Endpoints cap `eth_getLogs` by block span, by result size, by address count,
+ * and by quota, and report these through HTTP statuses, JSON-RPC codes, and
+ * free-text messages alike (Decision 0068). The client treats every such
+ * refusal the same way: it halves the block range first, then halves the
+ * address list once the range is a single block, and only a single-address,
+ * single-block request that is still refused fails closed as
+ * `BSC_LOG_QUERY_REJECTED`. Logs are never silently dropped.
  */
 const bscLogRangeSplitFloor = 1n;
+/**
+ * Upper bound on `eth_getLogs` requests one segment read may issue while it
+ * splits. Beyond it the endpoint policy is too restrictive to index through
+ * and the read fails closed as `BSC_LOG_QUERY_BUDGET_EXHAUSTED` rather than
+ * grinding thousands of requests per segment against a rationed Provider.
+ */
+export const bscMaximumLogRequestsPerSegment = 512;
+export const bscLogQueryRejectedReasonCode = "BSC_LOG_QUERY_REJECTED";
+export const bscLogQueryBudgetExhaustedReasonCode =
+  "BSC_LOG_QUERY_BUDGET_EXHAUSTED";
 /** Mirrors the BSC_CONFIRMATIONS and BSC_REORG_DEPTH_BLOCKS defaults. */
 export const defaultBscConfirmations = 15;
 export const defaultBscReorgDepthBlocks = 64;
@@ -460,6 +503,161 @@ export function isRpcForbiddenError(error: unknown): boolean {
   return inner !== null && inner !== undefined;
 }
 
+const safeNamePattern = /^[A-Za-z0-9_.-]{1,64}$/;
+const safeHostPattern = /^[A-Za-z0-9.-]{1,253}$/;
+
+function walkCauses(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current: unknown = error;
+  while (
+    typeof current === "object" &&
+    current !== null &&
+    chain.length < 16 &&
+    !chain.includes(current)
+  ) {
+    chain.push(current);
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return chain;
+}
+
+function numberField(candidate: unknown, key: string): number | null {
+  if (typeof candidate !== "object" || candidate === null) {
+    return null;
+  }
+  const value = (candidate as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isSafeInteger(value)
+    ? value
+    : null;
+}
+
+function stringField(candidate: unknown, key: string): string | null {
+  if (typeof candidate !== "object" || candidate === null) {
+    return null;
+  }
+  const value = (candidate as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * A JSON-RPC error code embedded in an HTTP error body, as a Provider that
+ * refuses a request with a 4xx status and a JSON-RPC-shaped body reports it
+ * (e.g. `403 {"code":-32602,"message":"Request blocked"}`). Only the numeric
+ * code is read; the body text itself is never kept.
+ */
+function rpcCodeFromDetails(details: string | null): number | null {
+  if (details === null || details.length === 0 || details.length > 4_096) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(details);
+    const direct = numberField(parsed, "code");
+    if (direct !== null) {
+      return direct;
+    }
+    return numberField(
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)["error"]
+        : null,
+      "code",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function methodFromBody(body: unknown): string | null {
+  const candidate: unknown = Array.isArray(body) ? body[0] : body;
+  const method = stringField(candidate, "method");
+  return method !== null && safeNamePattern.test(method) ? method : null;
+}
+
+/**
+ * Classifies any error into loggable fields (Decision 0068). It walks the
+ * `cause` chain viem builds (typed RPC error → `RpcRequestError` /
+ * `HttpRequestError`) and keeps only the class name, numeric status and code,
+ * the endpoint host name, and the method name. It never returns the URL, the
+ * request body, or any message text.
+ */
+export function summarizeRpcError(error: unknown): BscRpcErrorSummary {
+  const chain = walkCauses(error);
+  const first = chain[0];
+  const rawName =
+    stringField(first, "name") ??
+    (typeof first === "object" && first !== null
+      ? first.constructor.name
+      : typeof error);
+  const errorClass = safeNamePattern.test(rawName) ? rawName : "Error";
+  let rpcStatus: number | null = null;
+  let rpcCode: number | null = null;
+  let rpcUrlHost: string | null = null;
+  let method: string | null = null;
+  for (const candidate of chain) {
+    rpcStatus ??= numberField(candidate, "status");
+    const code = numberField(candidate, "code");
+    rpcCode ??= code !== null && code !== -1 ? code : null;
+    const url = stringField(candidate, "url");
+    if (rpcUrlHost === null && url !== null) {
+      const label = endpointLabelFor(url);
+      rpcUrlHost = safeHostPattern.test(label) ? label : null;
+    }
+    method ??= methodFromBody(
+      typeof candidate === "object" && candidate !== null
+        ? (candidate as Record<string, unknown>)["body"]
+        : null,
+    );
+  }
+  if (rpcCode === null) {
+    for (const candidate of chain) {
+      rpcCode ??= rpcCodeFromDetails(stringField(candidate, "details"));
+    }
+  }
+  return Object.freeze({ errorClass, rpcStatus, rpcCode, rpcUrlHost, method });
+}
+
+const rejectionStatuses = new Set([403, 413, 429]);
+const rejectionCodes = new Set([
+  InvalidParamsRpcError.code, // -32602: "Request blocked", range/address caps
+  -32001, // "usage limit" (1rpc-style quota)
+  LimitExceededRpcError.code, // -32005: quota / result cap
+]);
+const rejectionMessagePattern =
+  /limit exceeded|request blocked|usage limit|rate limit|quota|too many|exceed|blocked/i;
+
+/**
+ * Whether a Provider refused an `eth_getLogs` request rather than failing to
+ * serve it (Decision 0068): HTTP 403/413/429, JSON-RPC -32602/-32001/-32005,
+ * or a refusal phrased only in text (`limit exceeded`, `Request blocked`).
+ * A refusal is retried narrower; a transport failure or timeout is not.
+ */
+export function isLogQueryRejection(error: unknown): boolean {
+  if (
+    error instanceof LimitExceededRpcError ||
+    error instanceof InvalidParamsRpcError
+  ) {
+    return true;
+  }
+  const summary = summarizeRpcError(error);
+  if (summary.rpcStatus !== null && rejectionStatuses.has(summary.rpcStatus)) {
+    return true;
+  }
+  if (summary.rpcCode !== null && rejectionCodes.has(summary.rpcCode)) {
+    return true;
+  }
+  return walkCauses(error).some((candidate) => {
+    const details = stringField(candidate, "details");
+    const shortMessage = stringField(candidate, "shortMessage");
+    const message = stringField(candidate, "message");
+    return (
+      (details !== null && rejectionMessagePattern.test(details)) ||
+      (shortMessage !== null && rejectionMessagePattern.test(shortMessage)) ||
+      (message !== null &&
+        !("walk" in (candidate as object)) &&
+        rejectionMessagePattern.test(message))
+    );
+  });
+}
+
 function isNotFoundError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -558,64 +756,101 @@ export function createBscReadClient(
   }
 
   /**
-   * Reads one segment, halving the range whenever the endpoint rejects the
-   * request for exceeding its result limit. The walk is iterative and bounded
-   * by the segment width, and a single block that still exceeds the limit is
-   * rethrown rather than being silently skipped.
+   * Reads one segment, narrowing the request whenever the Provider refuses it
+   * (Decision 0068). The walk is iterative and bounded: the block range is
+   * halved down to one block, then the address list is halved down to one
+   * address, and the whole read fails closed — never a partial page — when a
+   * single-address, single-block request is still refused or when the request
+   * budget runs out. An address-count limit learned on one leaf is applied to
+   * every pending leaf so it is discovered once per read, not once per block.
+   * Collected logs are returned in block order regardless of split order.
    */
-  async function readLogRange(
-    addresses: Address[],
-    fromBlock: bigint,
-    toBlock: bigint,
-  ) {
-    return readLogRangeWith(
-      (range) =>
-        aggregate.getLogs({
-          address: addresses,
-          event: erc20TransferEvent,
-          fromBlock: range.from,
-          toBlock: range.to,
-        }),
-      fromBlock,
-      toBlock,
-    );
-  }
-
-  async function readLogRangeWith<T>(
-    read: (range: {
+  async function readLogRangeWith<
+    T extends {
+      readonly blockNumber: bigint | null;
+      readonly logIndex: number | null;
+    },
+  >(
+    read: (request: {
       readonly from: bigint;
       readonly to: bigint;
+      readonly addresses: readonly Address[];
     }) => Promise<readonly T[]>,
+    addresses: readonly Address[],
     fromBlock: bigint,
     toBlock: bigint,
   ): Promise<T[]> {
-    const pending = [{ from: fromBlock, to: toBlock }];
+    const pending: {
+      readonly from: bigint;
+      readonly to: bigint;
+      readonly addresses: readonly Address[];
+    }[] = [{ from: fromBlock, to: toBlock, addresses }];
     const collected: T[] = [];
+    let addressGroupLimit = addresses.length;
+    let requestCount = 0;
     while (pending.length > 0) {
-      const range = pending.shift();
-      if (range === undefined) {
+      const request = pending.shift();
+      if (request === undefined) {
         break;
       }
+      if (request.addresses.length > addressGroupLimit) {
+        pending.unshift(...splitAddresses(request, addressGroupLimit));
+        continue;
+      }
+      if (requestCount >= bscMaximumLogRequestsPerSegment) {
+        throw new BscReadUnavailableError(bscLogQueryBudgetExhaustedReasonCode);
+      }
+      requestCount += 1;
       try {
-        collected.push(...(await read(range)));
+        collected.push(...(await read(request)));
       } catch (error) {
-        const isRangeRejection =
-          error instanceof LimitExceededRpcError ||
-          error instanceof InvalidParamsRpcError;
-        if (
-          !isRangeRejection ||
-          range.to - range.from < bscLogRangeSplitFloor
-        ) {
+        if (!isLogQueryRejection(error)) {
           throw error;
         }
-        const middle = range.from + (range.to - range.from) / 2n;
-        pending.unshift(
-          { from: range.from, to: middle },
-          { from: middle + 1n, to: range.to },
-        );
+        if (request.to - request.from >= bscLogRangeSplitFloor) {
+          const middle = request.from + (request.to - request.from) / 2n;
+          pending.unshift(
+            { ...request, to: middle },
+            { ...request, from: middle + 1n },
+          );
+          continue;
+        }
+        if (request.addresses.length > 1) {
+          addressGroupLimit = Math.min(
+            addressGroupLimit,
+            Math.ceil(request.addresses.length / 2),
+          );
+          pending.unshift(...splitAddresses(request, addressGroupLimit));
+          continue;
+        }
+        throw new BscReadUnavailableError(bscLogQueryRejectedReasonCode, {
+          cause: error,
+          rpcError: summarizeRpcError(error),
+        });
       }
     }
-    return collected;
+    return collected.sort((left, right) => {
+      const leftBlock = left.blockNumber ?? -1n;
+      const rightBlock = right.blockNumber ?? -1n;
+      if (leftBlock !== rightBlock) {
+        return leftBlock < rightBlock ? -1 : 1;
+      }
+      return (left.logIndex ?? -1) - (right.logIndex ?? -1);
+    });
+  }
+
+  function splitAddresses<R extends { readonly addresses: readonly Address[] }>(
+    request: R,
+    groupSize: number,
+  ): R[] {
+    const groups: R[] = [];
+    for (let index = 0; index < request.addresses.length; index += groupSize) {
+      groups.push({
+        ...request,
+        addresses: request.addresses.slice(index, index + groupSize),
+      });
+    }
+    return groups;
   }
 
   async function readHead(client: ViemClient): Promise<BscChainHead> {
@@ -788,7 +1023,14 @@ export function createBscReadClient(
       if (query.addresses.length === 0) {
         return Object.freeze([]);
       }
-      const logs = await readLogRange(
+      const logs = await readLogRangeWith(
+        (request) =>
+          aggregate.getLogs({
+            address: [...request.addresses],
+            event: erc20TransferEvent,
+            fromBlock: request.from,
+            toBlock: request.to,
+          }),
         [...query.addresses].map(asAddress),
         query.fromBlock,
         query.toBlock,
@@ -831,19 +1073,19 @@ export function createBscReadClient(
       if (query.addresses.length === 0) {
         return Object.freeze([]);
       }
-      const addresses = [...query.addresses].map(asAddress);
       const logs = await readLogRangeWith(
-        (range) =>
+        (request) =>
           aggregate.getLogs({
-            address: addresses,
+            address: [...request.addresses],
             events: [
               pancakeV3SwapEvent,
               pancakeV3MintEvent,
               pancakeV3BurnEvent,
             ],
-            fromBlock: range.from,
-            toBlock: range.to,
+            fromBlock: request.from,
+            toBlock: request.to,
           }),
+        [...query.addresses].map(asAddress),
         query.fromBlock,
         query.toBlock,
       );
@@ -916,15 +1158,15 @@ export function createBscReadClient(
       if (query.addresses.length === 0) {
         return Object.freeze([]);
       }
-      const addresses = [...query.addresses].map(asAddress);
       const logs = await readLogRangeWith(
-        (range) =>
+        (request) =>
           aggregate.getLogs({
-            address: addresses,
+            address: [...request.addresses],
             event: erc20ApprovalEvent,
-            fromBlock: range.from,
-            toBlock: range.to,
+            fromBlock: request.from,
+            toBlock: request.to,
           }),
+        [...query.addresses].map(asAddress),
         query.fromBlock,
         query.toBlock,
       );
