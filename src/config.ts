@@ -259,6 +259,8 @@ const environmentSchema = z
     BSC_WRITES_ENABLED: booleanString,
     BSC_WRITE_CANARY_ASSETS: optionalCredential(4_096),
     BSC_WRITE_CANARY_MAX_USD: z.string().trim().min(1).max(32),
+    BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: optionalCredential(4_096),
+    BSC_WRITE_CANARY_DAILY_MAX_USD: optionalCredential(32),
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
@@ -748,6 +750,17 @@ export interface BscWriteConfig {
   readonly canaryAssetIds: readonly string[];
   /** Canonical decimal USD ceiling per intent (default 20). */
   readonly canaryMaxUsd: string;
+  /**
+   * Rolling 24-hour USD ceiling across every intent of one account that may
+   * still spend (Decision 0065). `null` means no cumulative ceiling.
+   */
+  readonly canaryDailyMaxUsd: string | null;
+  /**
+   * Lowercase counterparty allowlist (send recipient, approve/revoke
+   * spender). Empty means every counterparty is admitted; the per-intent and
+   * daily ceilings are then the only quantitative guards.
+   */
+  readonly canaryCounterpartyAddresses: readonly string[];
   /** Platform fee slot for Privy Swap; `null` sends no fee_configuration. */
   readonly swapFeeBps: number | null;
 }
@@ -1363,6 +1376,7 @@ function parsePasskeyRelyingPartyConfig(data: {
 
 const canaryAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$/;
 const canaryMaxUsdPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/;
+const canaryAddressPattern = /^0x[0-9a-f]{40}$/;
 
 /**
  * Write admission is off unless explicitly enabled, and enabling it requires
@@ -1372,6 +1386,8 @@ function parseBscWriteConfig(data: {
   readonly BSC_WRITES_ENABLED: boolean;
   readonly BSC_WRITE_CANARY_ASSETS?: string | undefined;
   readonly BSC_WRITE_CANARY_MAX_USD: string;
+  readonly BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST?: string | undefined;
+  readonly BSC_WRITE_CANARY_DAILY_MAX_USD?: string | undefined;
   readonly LOOP_SWAP_FEE_BPS: number;
 }): BscWriteConfig | null {
   if (!data.BSC_WRITES_ENABLED) {
@@ -1403,10 +1419,42 @@ function parseBscWriteConfig(data: {
       "BSC_WRITE_CANARY_MAX_USD: must be a positive decimal with at most 6 fraction digits",
     ]);
   }
+  const dailyMaxUsdRaw = data.BSC_WRITE_CANARY_DAILY_MAX_USD?.trim();
+  const dailyMaxUsd =
+    dailyMaxUsdRaw === undefined || dailyMaxUsdRaw.length === 0
+      ? null
+      : dailyMaxUsdRaw;
+  if (
+    dailyMaxUsd !== null &&
+    (!canaryMaxUsdPattern.test(dailyMaxUsd) || /^0(\.0+)?$/.test(dailyMaxUsd))
+  ) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_DAILY_MAX_USD: must be a positive decimal with at most 6 fraction digits",
+    ]);
+  }
+  const counterparties: string[] = [];
+  for (const rawEntry of (
+    data.BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST ?? ""
+  ).split(",")) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!canaryAddressPattern.test(entry)) {
+      throw new ConfigurationError([
+        "BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: every entry must be a 0x-prefixed 20-byte address",
+      ]);
+    }
+    if (!counterparties.includes(entry)) {
+      counterparties.push(entry);
+    }
+  }
   return Object.freeze({
     configVersion: "bscWriteCanaryV1" as const,
     canaryAssetIds: Object.freeze(assetIds),
     canaryMaxUsd: maxUsd,
+    canaryDailyMaxUsd: dailyMaxUsd,
+    canaryCounterpartyAddresses: Object.freeze(counterparties),
     swapFeeBps: data.LOOP_SWAP_FEE_BPS === 0 ? null : data.LOOP_SWAP_FEE_BPS,
   });
 }
@@ -1565,6 +1613,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_WRITES_ENABLED: environment["BSC_WRITES_ENABLED"] ?? "false",
     BSC_WRITE_CANARY_ASSETS: environment["BSC_WRITE_CANARY_ASSETS"],
     BSC_WRITE_CANARY_MAX_USD: environment["BSC_WRITE_CANARY_MAX_USD"] ?? "20",
+    BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST:
+      environment["BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST"],
+    BSC_WRITE_CANARY_DAILY_MAX_USD:
+      environment["BSC_WRITE_CANARY_DAILY_MAX_USD"],
     LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
     MINING_MOCK_HOLDINGS_ENABLED:

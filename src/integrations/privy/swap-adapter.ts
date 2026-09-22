@@ -208,6 +208,18 @@ export function classifyPrivyFailure(error: unknown): PrivySwapFailureKind {
   return "ambiguous";
 }
 
+/**
+ * A 401/403 is the Provider refusing the app itself (missing credential or a
+ * capability that is not enabled for the app, e.g. "Swaps are not enabled for
+ * this app"), not a refusal of the caller's input. It is a configuration fact
+ * and fails closed as a capability, never as a validation error (Decision
+ * 0065).
+ */
+export function isProviderAuthorizationRefusal(error: unknown): boolean {
+  const status = statusOf(error);
+  return status === 401 || status === 403;
+}
+
 /** Bounded, non-sensitive projection of a Provider failure message. */
 function failureReasonCode(message: string | undefined): string | null {
   if (message === undefined) {
@@ -287,6 +299,12 @@ export function createPrivySwapAdapter(
           { signal: request.signal, timeout: quoteTimeoutMs, maxRetries: 0 },
         );
       } catch (error) {
+        if (isProviderAuthorizationRefusal(error)) {
+          throw new PrivySwapProviderError(
+            "unavailable",
+            "PRIVY_SWAP_NOT_AUTHORIZED",
+          );
+        }
         throw new PrivySwapProviderError(
           classifyPrivyFailure(error) === "rejected"
             ? "rejected"

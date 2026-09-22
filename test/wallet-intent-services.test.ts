@@ -292,6 +292,87 @@ describe("send intent preparation", () => {
     });
   });
 
+  it("admits only an allowlisted counterparty when the allowlist is not empty", async () => {
+    const { send } = build({
+      canaryCounterpartyAddresses: [recipientAddress],
+    });
+    const allowed = await send.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: sendBody(),
+      signal,
+    });
+    expect(allowed.resource.state).toBe("awaiting_signature");
+
+    const { send: restricted } = build({
+      canaryCounterpartyAddresses: [spenderAddress],
+    });
+    await expect(
+      restricted.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: sendBody(),
+        signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: { reasonCode: "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST" },
+    });
+  });
+
+  it("counts the rolling day against the daily ceiling and blocks the intent that would cross it", async () => {
+    // Each send is 1.5 USDT × 1 USD; the third crosses a 4 USD day. A
+    // superseded (expired) intent never spent, so only the settled ones are
+    // counted: the two below are moved to `confirmed` before the next
+    // preparation, exactly as a broadcast that landed would.
+    const { send, repository } = build({ canaryDailyMaxUsd: "4" });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await send.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: sendBody(),
+        signal,
+      });
+      expect(result.resource.state).toBe("awaiting_signature");
+      const record = repository.records.get(result.resource.intentId);
+      expect(record).toBeDefined();
+      if (record !== undefined) {
+        repository.records.set(record.intentId, {
+          ...record,
+          state: "confirmed",
+        });
+      }
+    }
+    await expect(
+      send.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: sendBody(),
+        signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: {
+        reasonCode: "CANARY_DAILY_CEILING_EXCEEDED",
+        exposureUsd: "4.5",
+        ceilingUsd: "4",
+      },
+    });
+  });
+
+  it("does not consume the daily ceiling without one configured", async () => {
+    const { send } = build();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await send.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: sendBody(),
+        signal,
+      });
+      expect(result.resource.state).toBe("awaiting_signature");
+    }
+  });
+
   it("does not admit an amount it cannot price", async () => {
     const { send } = build({ marketFacts: null });
     await expectCode(
@@ -1343,6 +1424,30 @@ describe("swap quote, prepare, execute", () => {
       "QUOTE_EXPIRED",
     );
     expect(adapter.executeCalls).toHaveLength(0);
+  });
+
+  it("reports a Provider that has Swap disabled as CAPABILITY_UNAVAILABLE, not a validation error (Decision 0065)", async () => {
+    const refusing = swapAdapterFake();
+    refusing.adapter.quote = () =>
+      Promise.reject(
+        new PrivySwapProviderError("unavailable", "PRIVY_SWAP_NOT_AUTHORIZED"),
+      );
+    const { swap } = swapBuild({ swapAdapter: refusing.adapter });
+    await expectCode(
+      swap.quote({ principal, body: quoteBody, signal }),
+      "CAPABILITY_UNAVAILABLE",
+    );
+
+    const rejecting = swapAdapterFake();
+    rejecting.adapter.quote = () =>
+      Promise.reject(
+        new PrivySwapProviderError("rejected", "PRIVY_SWAP_QUOTE_REJECTED"),
+      );
+    const { swap: invalid } = swapBuild({ swapAdapter: rejecting.adapter });
+    await expectCode(
+      invalid.quote({ principal, body: quoteBody, signal }),
+      "VALIDATION_FAILED",
+    );
   });
 
   it("turns a Provider rejection into failed and an ambiguous transport into unknown", async () => {

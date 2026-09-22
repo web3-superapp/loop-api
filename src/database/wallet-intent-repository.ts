@@ -228,6 +228,18 @@ export interface WalletIntentRepository {
     operationId: string,
   ): Promise<WalletIntentRecord | null>;
   list(input: ListWalletIntentsInput): Promise<WalletIntentPage>;
+  /**
+   * Sum of the USD exposure sealed into the payloads of one account's intents
+   * that were created at or after `since` and may still spend (Decision
+   * 0065). `prepared`, `cancelled`, `expired`, and `failed` intents never
+   * reached a signer or proved nothing was sent, so they do not consume the
+   * rolling daily canary ceiling. The sum is a decimal string; nothing
+   * becomes a JavaScript number.
+   */
+  sumRecentExposureUsd(input: {
+    readonly ownerUserId: string;
+    readonly since: string;
+  }): Promise<string>;
   transition(input: TransitionWalletIntentInput): Promise<WalletIntentRecord>;
   recordEvent(input: RecordWalletIntentEventInput): Promise<void>;
   /** Moves elapsed open intents to `expired`; returns how many changed. */
@@ -420,6 +432,18 @@ function mapSwapQuote(row: unknown): StoredSwapQuote {
   });
 }
 
+/**
+ * The states in which an intent may already have moved, or may still move,
+ * funds. `reverted` is included: the chain executed the transaction.
+ */
+const dailyCeilingStates = Object.freeze([
+  "awaiting_signature",
+  "submitted",
+  "confirmed",
+  "reverted",
+  "unknown",
+]);
+
 function unavailable(): Promise<never> {
   return Promise.reject(new WalletIntentUnavailableError());
 }
@@ -430,6 +454,7 @@ export function createUnavailableWalletIntentRepository(): WalletIntentRepositor
     get: unavailable,
     findByOperationId: unavailable,
     list: unavailable,
+    sumRecentExposureUsd: unavailable,
     transition: unavailable,
     recordEvent: unavailable,
     expireElapsed: unavailable,
@@ -596,6 +621,26 @@ export function createPostgresWalletIntentRepository(
         items: Object.freeze(rows.slice(0, input.limit)),
         hasMore: rows.length > input.limit,
       });
+    },
+
+    async sumRecentExposureUsd(input: {
+      readonly ownerUserId: string;
+      readonly since: string;
+    }): Promise<string> {
+      const result = await pool.query<{ readonly total: string }>({
+        text: `
+          select coalesce(
+                   sum((canonical_payload -> 'policy' ->> 'valueUsd')::numeric),
+                   0
+                 )::text as total
+          from public.wallet_intents
+          where owner_user_id = $1
+            and created_at >= $2::timestamptz
+            and state = any($3::text[])
+        `,
+        values: [input.ownerUserId, input.since, [...dailyCeilingStates]],
+      });
+      return result.rows[0]?.total ?? "0";
     },
 
     async transition(

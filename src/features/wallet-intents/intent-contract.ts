@@ -108,6 +108,8 @@ export const walletIntentRefusalReasonCodes = Object.freeze({
   assetBlocked: "ASSET_BLOCKED",
   assetNotInCanaryAllowlist: "ASSET_NOT_IN_CANARY_ALLOWLIST",
   canaryCeilingExceeded: "CANARY_CEILING_EXCEEDED",
+  canaryDailyCeilingExceeded: "CANARY_DAILY_CEILING_EXCEEDED",
+  counterpartyNotInCanaryAllowlist: "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
   unlimitedExposureExceedsCeiling: "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
   nativeAssetNotApprovable: "NATIVE_ASSET_NOT_APPROVABLE",
   priceImpactBlocked: "PRICE_IMPACT_BLOCKED",

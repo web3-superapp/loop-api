@@ -28,9 +28,18 @@
 - 写开关关闭（`BSC_WRITES_ENABLED=false`，默认）时所有 prepare / broadcast-report /
   execute / quote 返回 `503 CAPABILITY_UNAVAILABLE`；`preflight`、`GET` 读接口、
   `GET /v2/approvals*` 不受写开关影响。
-- 开启时是 **canary**：只允许 `BSC_WRITE_CANARY_ASSETS` 里的资产，单笔 USD 价值 ≤
-  `BSC_WRITE_CANARY_MAX_USD`（默认 20）；超限或资产不在名单 → `403 POLICY_BLOCKED`，
-  `detailsSafe` 说明是哪条规则（见 §7.1）。
+- 开启时是 **canary**（Decision 0065）：只允许 `BSC_WRITE_CANARY_ASSETS` 里的资产，
+  单笔 USD 价值 ≤ `BSC_WRITE_CANARY_MAX_USD`（Development = 5），同一账号滚动 24 小时
+  累计 ≤ `BSC_WRITE_CANARY_DAILY_MAX_USD`（Development = 25；未配置 = 不限），收款方 /
+  授权 spender 必须在 `BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST` 内（为空 = 不限收款人；
+  revoke 永远放行）。任何一条不满足 → `403 POLICY_BLOCKED`，`detailsSafe.reasonCode`
+  说明是哪条规则（见 §7.1）。
+  日上限只在 prepare 时判定：已经拿到可签 intent 的设备不会被后来的 prepare 挡住，
+  broadcast-report 只复核单笔上限。日上限只累计"可能已花或仍可能花"的 intent
+  （`awaiting_signature`/`submitted`/`confirmed`/`reverted`/`unknown`）；被取消、过期、
+  被新 intent 取代、或证明未发出的 intent 不占额度。
+- Development 上写开关已打开（真钱小额）。**成功返回 intent 不代表链上完成**，
+  仍以 `GET /v2/wallet-intents/{intentId}` 的状态机为准。
   价值无法用**新鲜**行情定价（无行情或 stale）→ `503 CAPABILITY_UNAVAILABLE`，不会假定"很小"。
 
 ## 2. Headers
@@ -468,7 +477,8 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 | 422  | `VALIDATION_FAILED`      | 外部钱包、自转、原生资产授权（`detailsSafe.reasonCode = NATIVE_ASSET_NOT_APPROVABLE`）、未确认无限授权、哈希 payload 不符、Privy 定性拒绝 | 按场景提示                                |
 | 503  | `CAPABILITY_UNAVAILABLE` | 写开关关闭、链未校验/不可达、无法定价、RPC 事实读不到                                                                                     | 整块 unavailable，可重试                  |
 | 503  | `INDEXING_DELAYED`       | 授权盘点无 checkpoint / 无 Approval 覆盖 / 覆盖晚于钱包最早活动（§5.3）                                                                   | unavailable，可重试                       |
-| 503  | `PROVIDER_DISCONNECTED`  | Privy 报价不可达                                                                                                                          | 可重试                                    |
+| 503  | `PROVIDER_DISCONNECTED`  | Privy 报价不可达（超时 / 5xx / 429）                                                                                                      | 可重试                                    |
+| 503  | `CAPABILITY_UNAVAILABLE` | Privy 对 quote 回 401/403（例如"Swaps are not enabled for this app"）→ 该能力当前不存在，不是用户输入错误（Decision 0065）                | 显示 unavailable，不提示用户改参数        |
 
 ### 7.1 `detailsSafe`（策略拒绝的原因槽位）
 
@@ -478,7 +488,9 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 | HTTP / code             | `detailsSafe`                                                                                    | 出现位置                               |
 | ----------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_NOT_IN_CANARY_ALLOWLIST" }`                                              | send / approve / revoke / swap         |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_CEILING_EXCEEDED", "exposureUsd": "750.51", "ceilingUsd": "20" }`       | send、精确额度 approve、swap           |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_CEILING_EXCEEDED", "exposureUsd": "5.9976", "ceilingUsd": "5" }`        | send、精确额度 approve、swap（单笔）   |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_DAILY_CEILING_EXCEEDED", "exposureUsd": "27.5", "ceilingUsd": "25" }`   | send / approve / swap（滚动 24 小时）  |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST" }`                                       | send 收款人、approve spender           |
 | `403 POLICY_BLOCKED`    | `{ "reasonCode": "UNLIMITED_EXPOSURE_EXCEEDS_CEILING", "exposureUsd": "…", "ceilingUsd": "20" }` | unlimited approve（按实际敞口）        |
 | `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_BLOCKED" }`                                                              | 注册表里 `status = blocked` 的资产     |
 | `403 POLICY_BLOCKED`    | `{ "reasonCode": "PRICE_IMPACT_BLOCKED" }`                                                       | swap（价格影响 ≥ 阈值）                |
@@ -490,12 +502,14 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 
 ## 8. 本步明确 unavailable / pending 的项
 
-| 项目                      | 表现                                                                      |
-| ------------------------- | ------------------------------------------------------------------------- |
-| 收款方恶意地址筛查        | `screening.status=unavailable`，`GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED` |
-| 授权风险事实              | `riskFacts.status=unavailable`，`GOPLUS_APPROVAL_FACTS_NOT_CONFIGURED`    |
-| Privy BSC Swap 真机证据   | `privySwap.evidence.status=pending`                                       |
-| 平台费                    | `platformFeeBps: null`（`LOOP_SWAP_FEE_BPS` 待决策）                      |
-| 滑点/价格影响策略产品确认 | `policy.status = "pendingProductConfirmation"`                            |
-| 用户自定义单笔上限（D20） | 只有 canary 上限会触发 `POLICY_BLOCKED`                                   |
-| 资产变动分析 / 模拟评分   | 不提供；只有 `simulation.status`                                          |
+| 项目                      | 表现                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 收款方恶意地址筛查        | `screening.status=unavailable`，`GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED`                                                                                                                                     |
+| 授权风险事实              | `riskFacts.status=unavailable`，`GOPLUS_APPROVAL_FACTS_NOT_CONFIGURED`                                                                                                                                        |
+| Privy BSC Swap 真机证据   | `privySwap.evidence.status=pending`                                                                                                                                                                           |
+| Privy Swap 能力本身       | 2026-09-22 实测 Provider 回 `403 Swaps are not enabled for this app`；`POST /v2/swap/quote` → `503 CAPABILITY_UNAVAILABLE`。`privySwap.availability=available` 只说明 LOOP 侧配置齐全，不代表 Provider 已开通 |
+| 钱包无 BNB                | prepare 走到 gas 储备校验 → `409 INSUFFICIENT_BALANCE`（不是 500）；文案应说明"需要 BNB 付手续费"                                                                                                             |
+| 平台费                    | `platformFeeBps: null`（`LOOP_SWAP_FEE_BPS` 待决策）                                                                                                                                                          |
+| 滑点/价格影响策略产品确认 | `policy.status = "pendingProductConfirmation"`                                                                                                                                                                |
+| 用户自定义单笔上限（D20） | 只有 canary 上限会触发 `POLICY_BLOCKED`                                                                                                                                                                       |
+| 资产变动分析 / 模拟评分   | 不提供；只有 `simulation.status`                                                                                                                                                                              |

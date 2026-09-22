@@ -249,6 +249,50 @@ describe("Privy Swap adapter", () => {
     });
   });
 
+  it("reports a Provider authorization refusal on a quote as unavailable (Decision 0065)", async () => {
+    const refusal = Object.assign(
+      new Error('403 {"error":"Swaps are not enabled for this app"}'),
+      { status: 403 },
+    );
+    const adapter = createPrivySwapAdapter(
+      clientFake({ quoteError: refusal }).client,
+    );
+    await expect(
+      adapter.quote({
+        providerWalletId: "wallet_1",
+        source: { assetAddress: usdt, caip2: "eip155:56" },
+        destination: { assetAddress: wbnb, caip2: "eip155:56" },
+        baseAmount: "1",
+        slippageBps: 50,
+        feeBps: null,
+        signal,
+      }),
+    ).rejects.toMatchObject({
+      kind: "unavailable",
+      reasonCode: "PRIVY_SWAP_NOT_AUTHORIZED",
+    });
+
+    const rejecting = createPrivySwapAdapter(
+      clientFake({
+        quoteError: Object.assign(new Error("400"), { status: 400 }),
+      }).client,
+    );
+    await expect(
+      rejecting.quote({
+        providerWalletId: "wallet_1",
+        source: { assetAddress: usdt, caip2: "eip155:56" },
+        destination: { assetAddress: wbnb, caip2: "eip155:56" },
+        baseAmount: "1",
+        slippageBps: 50,
+        feeBps: null,
+        signal,
+      }),
+    ).rejects.toMatchObject({
+      kind: "rejected",
+      reasonCode: "PRIVY_SWAP_QUOTE_REJECTED",
+    });
+  });
+
   it("reports a malformed quote as unavailable and stays closed without credentials", async () => {
     const adapter = createPrivySwapAdapter(
       clientFake({ quote: { caip2: 5 } }).client,

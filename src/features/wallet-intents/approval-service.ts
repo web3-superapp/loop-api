@@ -39,6 +39,7 @@ import {
   canaryPolicyFact,
   chainUnavailable,
   enforceCanaryCeiling,
+  enforceDailyCanaryCeiling,
   intentStateForSimulation,
   parseIntentAmount,
   preExecute,
@@ -50,6 +51,7 @@ import {
   requireCanaryAllowlisted,
   requireSignableWallet,
   requireWallet,
+  requireCanaryCounterparty,
   requireWriteAdmission,
   valueInUsd,
   withPrepareIdempotency,
@@ -219,6 +221,12 @@ export function createApprovalService(
     if (spender === wallet.address) {
       throw V2ApiError.fromCode("VALIDATION_FAILED");
     }
+    // A spender is a counterparty that can move funds, so it walks the same
+    // allowlist as a send recipient (Decision 0065). Revoke passes through:
+    // `approve(spender, 0)` removes exposure.
+    if (input.allowance.mode !== "zero") {
+      requireCanaryCounterparty(writes, spender);
+    }
     const allowanceRaw =
       input.allowance.mode === "unlimited"
         ? maxUint256
@@ -262,6 +270,12 @@ export function createApprovalService(
             isUnlimited
               ? walletIntentRefusalReasonCodes.unlimitedExposureExceedsCeiling
               : walletIntentRefusalReasonCodes.canaryCeilingExceeded,
+          );
+          await enforceDailyCanaryCeiling(
+            runtime,
+            writes,
+            input.principal.userId,
+            valuation.valueUsd,
           );
         }
         let spenderCode: Hex;

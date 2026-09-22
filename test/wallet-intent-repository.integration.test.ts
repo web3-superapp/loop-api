@@ -293,6 +293,74 @@ describe("PostgreSQL wallet intents, approvals, and migration 000021", () => {
     await pool.end();
   });
 
+  it("sums only the exposure that may still spend, inside the window (Decision 0065)", async () => {
+    const owner = await createOwner();
+    const walletId = await seedWallet(owner);
+    const since = new Date(Date.now() - 60_000).toISOString();
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("0");
+
+    const first = await intents.create(await createInput(owner, walletId));
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("1");
+
+    // The second preparation supersedes the first: an expired intent never
+    // reached a signer, so the day's exposure stays at one intent.
+    const second = await intents.create(await createInput(owner, walletId));
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("1");
+
+    const submitted = await intents.transition({
+      ownerUserId: owner,
+      intentId: second.intentId,
+      expectedVersion: second.recordVersion,
+      fromStates: ["awaiting_signature"],
+      toState: "submitted",
+      eventType: "broadcast_reported",
+      actorType: "api",
+      requestId: randomUUID(),
+      transactionHash: `0x${"5".repeat(64)}`,
+      reconcileAfter: new Date().toISOString(),
+    });
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("1");
+
+    await intents.transition({
+      ownerUserId: owner,
+      intentId: submitted.intentId,
+      expectedVersion: submitted.recordVersion,
+      fromStates: ["submitted"],
+      toState: "failed",
+      eventType: "provider_rejected",
+      actorType: "api",
+      requestId: randomUUID(),
+      reasonCode: "PRIVY_SWAP_NOT_SENT",
+    });
+    // Nothing was sent and the first intent is expired: the day is clear.
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("0");
+    expect(first.state).toBe("awaiting_signature");
+
+    // A window that starts after the rows were written sees nothing.
+    expect(
+      await intents.sumRecentExposureUsd({
+        ownerUserId: owner,
+        since: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    ).toBe("0");
+
+    // Another account's exposure is never counted.
+    const stranger = await createOwner();
+    expect(
+      await intents.sumRecentExposureUsd({ ownerUserId: stranger, since }),
+    ).toBe("0");
+  });
+
   it("creates an intent, supersedes the wallet's open intent, and appends events", async () => {
     const owner = await createOwner();
     const walletId = await seedWallet(owner);

@@ -35,6 +35,7 @@ import {
   buildUnsignedTransaction,
   canaryPolicyFact,
   enforceCanaryCeiling,
+  enforceDailyCanaryCeiling,
   intentStateForSimulation,
   parseIntentAmount,
   preExecute,
@@ -43,6 +44,7 @@ import {
   readFeeSnapshot,
   readNonce,
   requireCanaryAsset,
+  requireCanaryCounterparty,
   requireSignableWallet,
   requireWallet,
   requireWriteAdmission,
@@ -205,6 +207,7 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
       if (recipient === wallet.address) {
         throw V2ApiError.fromCode("VALIDATION_FAILED");
       }
+      requireCanaryCounterparty(writes, recipient);
       const requestId = runtime.createUuid();
       const outcome = await withPrepareIdempotency(
         runtime,
@@ -223,6 +226,12 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
         async (operationId): Promise<WalletIntentRecord> => {
           const valuation = await valueInUsd(runtime, asset, amountRaw, signal);
           enforceCanaryCeiling(writes, valuation.valueUsd);
+          await enforceDailyCanaryCeiling(
+            runtime,
+            writes,
+            principal.userId,
+            valuation.valueUsd,
+          );
           const balance = await readBalanceSnapshot(runtime, wallet, asset);
           if (amountRaw > balance.rawBalance) {
             throw V2ApiError.fromCode("INSUFFICIENT_BALANCE");

@@ -45,6 +45,7 @@ import {
   parseDecimalAmount,
 } from "../chain/chain-contract.js";
 import {
+  addDecimalStrings,
   compareDecimalStrings,
   multiplyDecimalStrings,
 } from "../market/market-contract.js";
@@ -311,6 +312,63 @@ export function enforceCanaryCeiling(
       reasonCode,
       exposureUsd: valueUsd,
       ceilingUsd: writes.canaryMaxUsd,
+    });
+  }
+}
+
+/** The rolling window the daily canary ceiling is measured over. */
+export const canaryDailyWindowMs = 24 * 60 * 60 * 1000;
+
+/**
+ * Counterparty allowlist (Decision 0065). An empty allowlist admits every
+ * counterparty: the ceilings are then the only quantitative guard. A
+ * non-empty allowlist is exact and case-insensitive; a send recipient or an
+ * approve/revoke spender outside it is POLICY_BLOCKED.
+ */
+export function requireCanaryCounterparty(
+  writes: BscWriteConfig,
+  address: string,
+): void {
+  if (writes.canaryCounterpartyAddresses.length === 0) {
+    return;
+  }
+  if (!writes.canaryCounterpartyAddresses.includes(address.toLowerCase())) {
+    throw V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode:
+        walletIntentRefusalReasonCodes.counterpartyNotInCanaryAllowlist,
+    });
+  }
+}
+
+/**
+ * Rolling 24-hour cumulative ceiling across one account's intents that may
+ * still spend (Decision 0065). It is an admission gate, not a payload fact:
+ * a signed intent is never re-blocked by later preparations, so a device that
+ * already holds a signable review can always finish or cancel it.
+ */
+export async function enforceDailyCanaryCeiling(
+  runtime: WalletIntentRuntime,
+  writes: BscWriteConfig,
+  ownerUserId: string,
+  valueUsd: string,
+): Promise<void> {
+  const ceilingUsd = writes.canaryDailyMaxUsd;
+  if (ceilingUsd === null) {
+    return;
+  }
+  const since = new Date(
+    runtime.now().getTime() - canaryDailyWindowMs,
+  ).toISOString();
+  const spentUsd = await runtime.repository.sumRecentExposureUsd({
+    ownerUserId,
+    since,
+  });
+  const exposureUsd = addDecimalStrings(spentUsd, valueUsd);
+  if (compareDecimalStrings(exposureUsd, ceilingUsd) > 0) {
+    throw V2ApiError.fromCode("POLICY_BLOCKED", {
+      reasonCode: walletIntentRefusalReasonCodes.canaryDailyCeilingExceeded,
+      exposureUsd,
+      ceilingUsd,
     });
   }
 }

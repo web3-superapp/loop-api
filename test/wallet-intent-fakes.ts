@@ -28,6 +28,7 @@ import {
   type WalletIntentRepository,
 } from "../src/database/wallet-intent-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
+import { addDecimalStrings } from "../src/features/market/market-contract.js";
 import type {
   AssetPriceFact,
   MarketFactService,
@@ -596,6 +597,32 @@ export function intentRepositoryFake(
             record.providerOperationId === operationId,
         ) ?? null,
       ),
+    sumRecentExposureUsd: (input) =>
+      Promise.resolve(
+        [...records.values()]
+          .filter(
+            (record) =>
+              record.ownerUserId === input.ownerUserId &&
+              record.createdAt >= input.since &&
+              [
+                "awaiting_signature",
+                "submitted",
+                "confirmed",
+                "reverted",
+                "unknown",
+              ].includes(record.state),
+          )
+          .reduce((total, record) => {
+            const valueUsd = (
+              record.canonicalPayload as {
+                readonly policy?: { readonly valueUsd?: string | null };
+              }
+            ).policy?.valueUsd;
+            return typeof valueUsd === "string"
+              ? addDecimalStrings(total, valueUsd)
+              : total;
+          }, "0"),
+      ),
     list: (input) => {
       const items = [...records.values()]
         .filter((record) => record.ownerUserId === input.ownerUserId)
@@ -808,6 +835,8 @@ export interface RuntimeFakeOptions {
   readonly writesEnabled?: boolean;
   readonly canaryAssetIds?: readonly string[];
   readonly canaryMaxUsd?: string;
+  readonly canaryDailyMaxUsd?: string | null;
+  readonly canaryCounterpartyAddresses?: readonly string[];
   readonly privyAppId?: string | null;
   readonly readClient?: ReadClientFakeOptions;
   readonly marketFacts?: MarketFactService | null;
@@ -835,6 +864,9 @@ export function runtimeFake(options: RuntimeFakeOptions = {}) {
                 usdtAssetId,
               ],
               canaryMaxUsd: options.canaryMaxUsd ?? "20",
+              canaryDailyMaxUsd: options.canaryDailyMaxUsd ?? null,
+              canaryCounterpartyAddresses:
+                options.canaryCounterpartyAddresses ?? [],
               swapFeeBps: null,
             },
       privyAppId:

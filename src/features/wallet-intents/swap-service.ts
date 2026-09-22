@@ -35,6 +35,7 @@ import {
   assetSnapshot,
   canaryPolicyFact,
   enforceCanaryCeiling,
+  enforceDailyCanaryCeiling,
   isElapsed,
   parseIntentAmount,
   projectIntent,
@@ -194,6 +195,8 @@ export interface CreateSwapServiceInput {
 }
 
 const defaultPrivyApiBaseUrl = "https://api.privy.io";
+/** Emitted by the adapter when Privy answers 401/403 on a quote. */
+const privySwapNotAuthorizedReasonCode = "PRIVY_SWAP_NOT_AUTHORIZED";
 const executeAttemptMs = 10_000;
 const postExecuteReconcileDelayMs = 5_000;
 
@@ -348,6 +351,12 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         signal,
       );
       enforceCanaryCeiling(writes, inputValuation.valueUsd);
+      await enforceDailyCanaryCeiling(
+        runtime,
+        writes,
+        principal.userId,
+        inputValuation.valueUsd,
+      );
       const balance = await readBalanceSnapshot(runtime, wallet, sourceAsset);
       if (amountRaw > balance.rawBalance) {
         throw V2ApiError.fromCode("INSUFFICIENT_BALANCE");
@@ -371,6 +380,11 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         });
       } catch (error) {
         if (error instanceof PrivySwapProviderError) {
+          if (error.reasonCode === privySwapNotAuthorizedReasonCode) {
+            // The Provider refused the app, not the request: Swap is a
+            // capability LOOP does not have here (Decision 0065).
+            throw V2ApiError.capabilityUnavailable();
+          }
           throw error.kind === "rejected"
             ? V2ApiError.fromCode("VALIDATION_FAILED")
             : V2ApiError.fromCode("PROVIDER_DISCONNECTED");
@@ -516,6 +530,12 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         quote.destinationAssetId,
       );
       enforceCanaryCeiling(writes, quote.inputValuation.valueUsd);
+      await enforceDailyCanaryCeiling(
+        runtime,
+        writes,
+        principal.userId,
+        quote.inputValuation.valueUsd,
+      );
       if (quote.snapshot.priceImpact.decision === "blocked") {
         throw V2ApiError.fromCode("POLICY_BLOCKED", {
           reasonCode: walletIntentRefusalReasonCodes.priceImpactBlocked,

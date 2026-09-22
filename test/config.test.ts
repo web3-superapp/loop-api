@@ -120,6 +120,49 @@ describe("loadConfig", () => {
     expect(Object.isFrozen(config.streamTokenQuota)).toBe(true);
   });
 
+  it("parses the canary guards and keeps writes closed without the switch (Decision 0065)", () => {
+    expect(loadConfig(validEnvironment()).bscWrites).toBeNull();
+
+    const enabled = validEnvironment();
+    enabled["BSC_WRITES_ENABLED"] = "true";
+    enabled["BSC_RPC_URLS"] = "https://bsc.example.test";
+    enabled["BSC_WRITE_CANARY_ASSETS"] =
+      "eip155:56:native,eip155:56:0x55d398326f99059ff775485246999027b3197955";
+    enabled["BSC_WRITE_CANARY_MAX_USD"] = "5";
+    enabled["BSC_WRITE_CANARY_DAILY_MAX_USD"] = "25";
+    enabled["BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST"] =
+      "0xC8932B012DC70670D57278961E66431A5BDAF611";
+    expect(loadConfig(enabled).bscWrites).toEqual({
+      configVersion: "bscWriteCanaryV1",
+      canaryAssetIds: [
+        "eip155:56:native",
+        "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      ],
+      canaryMaxUsd: "5",
+      canaryDailyMaxUsd: "25",
+      canaryCounterpartyAddresses: [
+        "0xc8932b012dc70670d57278961e66431a5bdaf611",
+      ],
+      swapFeeBps: null,
+    });
+
+    const unrestricted = { ...enabled };
+    delete unrestricted["BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST"];
+    delete unrestricted["BSC_WRITE_CANARY_DAILY_MAX_USD"];
+    expect(loadConfig(unrestricted).bscWrites).toMatchObject({
+      canaryDailyMaxUsd: null,
+      canaryCounterpartyAddresses: [],
+    });
+
+    const badAddress = { ...enabled };
+    badAddress["BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST"] = "0xnot-an-address";
+    expect(() => loadConfig(badAddress)).toThrow(ConfigurationError);
+
+    const badDaily = { ...enabled };
+    badDaily["BSC_WRITE_CANARY_DAILY_MAX_USD"] = "0";
+    expect(() => loadConfig(badDaily)).toThrow(ConfigurationError);
+  });
+
   it("keeps the Development mock holdings off by default and refuses them in production (Decision 0061)", () => {
     expect(loadConfig(validEnvironment()).miningMockHoldingsEnabled).toBe(
       false,

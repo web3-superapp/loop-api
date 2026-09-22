@@ -528,6 +528,21 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
         .detailsSafe.exposureUsd,
     ).toBe("string");
 
+    const { app: restricted } = await createApp(fakes(), {
+      BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: spenderAddress,
+    });
+    const foreignRecipient = await restricted.inject({
+      method: "POST",
+      url: "/v2/wallet-intents/send",
+      headers: commandHeaders(),
+      payload: sendBody,
+    });
+    expect(foreignRecipient.statusCode).toBe(403);
+    expect(foreignRecipient.json()).toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: { reasonCode: "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST" },
+    });
+
     const { app: allowlisted } = await createApp(fakes(), {
       BSC_WRITE_CANARY_ASSETS: wbnbAssetId,
     });
