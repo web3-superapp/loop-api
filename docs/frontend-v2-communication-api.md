@@ -424,7 +424,9 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   事件里拼状态；兜底轮询 ≥ 15 s、只在 host 视角开。举手响应的 `providerSync`
   报的就是这一次发送：`unconfirmed` + `STREAM_CALL_EVENT_UNCONFIRMED` 表示
   **举手已经记上了**，但没有设备被告知——给举手者提示"主持人可能稍后才看到"。
-  同一个 `Idempotency-Key` 重放会再发一次事件。
+  `state` 只会是本命令产生的状态：同一个 `Idempotency-Key` 重放时，若这条举手
+  已被 host 置为 `invited`（或已有更新的一条），后端不再发事件、响应
+  `confirmed`；事件永远不会带 `invited`。
 
 - **join 之后名单与人数立即包含新成员（决策 0069 §2.3）**：`join` 在一个事务
   里提交，`GET …/members`、`GET …/voice-rooms/{id}` 每次读 PostgreSQL、没有缓存，
@@ -433,11 +435,14 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
   "在线 N 人"用 `observed.participantCount`，它要等对方设备真正 `call.join()`
   之后才含该人——在 Stream 的 `call.session_participant_joined|left`、
   `call.member_added|removed` 事件上重读房间资源即可。
-- **`leave` 幂等（决策 0069 §2.4）**：在 live 房里，从未加入或已经离开的账号
-  调 `POST …/leave` 得 **`200`**、`viewer.role: null`，不写任何行；不再是
-  `409 DATA_STALE`。host 调 leave 仍是 `403 PERMISSION_DENIED`（host 只能
-  `end`）；房间已结束后的 leave 仍是 `409 DATA_STALE`（所有写都是），客户端
-  收到它就导航回社区页。
+- **`leave` 幂等（决策 0069 §2.4）**：在 live 房里，**社区成员**从未加入或已经
+  离开时调 `POST …/leave` 得 **`200`**、`viewer.role: null`、
+  `providerSync: confirmed`、`participants.observed: unavailable`（后端什么都
+  没写、没做 Stream 移除、也没观测——不要把 observed 显示成 0）；不再是
+  `409 DATA_STALE`。拒绝顺序与 join 相同：`404` → `403 PERMISSION_DENIED`
+  （非社区成员 / 被 ban，不看房间状态；host 调 leave 也是 403，host 只能
+  `end`）→ `409 DATA_STALE`（房间已结束，所有写都是），客户端收到 409 就导航
+  回社区页。
 - **人数（决策 0051，三个口径三个字段，不要混）**：
   - `speakerCount` / `listenerCount`：LOOP 的**角色意图**（`voice_room_members`
     中 `joined` 的 speaker / listener）。**都不含 host**，所以只有主持人的房间是

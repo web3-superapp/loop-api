@@ -9,6 +9,7 @@ import {
   streamSendAudioPermission,
   StreamCallGatewayUnavailableError,
   type StreamCallGateway,
+  type StreamCallGatewayUnavailableReason,
 } from "../../integrations/stream/call-gateway.js";
 import { parseListLimit } from "../community/community-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
@@ -627,6 +628,8 @@ export function createVoiceRoomService(
    * One sanitized warning per unconfirmed Stream write (Decision 0069): the
    * response already says `providerSync.unconfirmed`, this makes the same
    * fact findable in the API log by `requestId` (= `x-request-id`).
+   * `providerReason` is the gateway's coarse classification (timeout,
+   * rejected, invalid_input) or null when the failure was not the gateway's.
    */
   function warnUnconfirmedWrite(
     context: {
@@ -637,6 +640,8 @@ export function createVoiceRoomService(
     reasonCode: string,
     error: unknown,
   ): void {
+    const providerReason: StreamCallGatewayUnavailableReason | null =
+      error instanceof StreamCallGatewayUnavailableError ? error.reason : null;
     options.logger?.warn(
       {
         voiceRoomId: context.voiceRoomId,
@@ -644,6 +649,7 @@ export function createVoiceRoomService(
         requestId: context.requestId,
         reasonCode,
         errorName: error instanceof Error ? error.name : "unknown",
+        providerReason,
       },
       "Voice room provider write was not confirmed",
     );
@@ -693,14 +699,23 @@ export function createVoiceRoomService(
    * under the host's Stream user, the queue's owner; carries the entry, not
    * the raiser. Only a provisioned live room has a call to send it on; a
    * room without one has no provider write to confirm.
+   *
+   * `expectedState` is the state this command produces (`pending` for a
+   * raise, `cancelled` for a cancel). The record carries the viewer's latest
+   * hand raise, which on a same-key replay may already have moved on (the
+   * host invited it) or may be a later entry; an event is sent only when the
+   * entry is still in the state this command made, so a replay never
+   * announces a state this command did not produce.
    */
   async function announceHandRaise(
     record: VoiceRoomViewerRecord,
     input: VoiceRoomCommandInput,
+    expectedState: HandRaiseState,
   ): Promise<VoiceRoomProviderSync> {
     const handRaise = record.viewerHandRaise;
     if (
       handRaise === null ||
+      handRaise.state !== expectedState ||
       record.room.provisionState !== "provisioned" ||
       record.room.state !== "live"
     ) {
@@ -1077,6 +1092,12 @@ export function createVoiceRoomService(
           requestId: input.requestId,
         }),
       );
+      if (record.outcome === "no_op") {
+        // Already out of the live room (Decision 0069 §2.4): nothing was
+        // written, so there is no Stream removal to attempt and nothing to
+        // observe after it. `confirmed` because there was no provider write.
+        return resource(record, confirmedSync, notObserved);
+      }
       const providerSync = await attemptProviderWrite(
         writeContext(record, input.requestId),
         () =>
@@ -1116,7 +1137,7 @@ export function createVoiceRoomService(
       // follows is the custom event that tells the host the queue changed.
       return resource(
         record,
-        await announceHandRaise(record, input),
+        await announceHandRaise(record, input, "pending"),
         await observeAfterCommand(record, input.signal),
       );
     },
@@ -1139,7 +1160,7 @@ export function createVoiceRoomService(
       );
       return resource(
         record,
-        await announceHandRaise(record, input),
+        await announceHandRaise(record, input, "cancelled"),
         await observeAfterCommand(record, input.signal),
       );
     },

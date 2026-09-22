@@ -997,7 +997,7 @@ describe("Stream audio_room call gateway", () => {
         streamUserId: "not-a-loop-user",
         signal: signal(),
       }),
-    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1056,12 +1056,14 @@ describe("Stream audio_room call gateway", () => {
             signal: signal(),
             ...input,
           } as never),
-        ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+        ).rejects.toEqual(
+          new StreamCallGatewayUnavailableError("invalid_input"),
+        );
       }
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("sanitizes a provider rejection into the unavailable error", async () => {
+    it("sanitizes a provider rejection into the unavailable error with a coarse reason", async () => {
       const fetchMock = vi
         .fn()
         .mockResolvedValueOnce(
@@ -1076,7 +1078,19 @@ describe("Stream audio_room call gateway", () => {
           custom,
           signal: signal(),
         }),
-      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+      ).rejects.toMatchObject({
+        name: "StreamCallGatewayUnavailableError",
+        reason: "rejected",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        gateway.sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom: {},
+          signal: signal(),
+        }),
+      ).rejects.toMatchObject({ reason: "invalid_input" });
       expect(fetchMock).toHaveBeenCalledTimes(1);
       await expect(
         createUnavailableStreamCallGateway().sendCallEvent({
@@ -1172,10 +1186,10 @@ describe("Stream audio_room call gateway", () => {
 
     await expect(
       gateway.endCall({ callId: "default", signal: signal() }),
-    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
     await expect(
       gateway.observeSession({ callId: "default", signal: signal() }),
-    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1251,7 +1265,10 @@ describe("Stream audio_room call gateway", () => {
 
       await expect(
         gateway.goLive({ callId, signal: signal() }),
-      ).rejects.toBeInstanceOf(StreamCallGatewayUnavailableError);
+      ).rejects.toMatchObject({
+        name: "StreamCallGatewayUnavailableError",
+        reason: "timeout",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1282,7 +1299,7 @@ describe("Stream audio_room call gateway", () => {
 
       await expect(
         gateway.goLive({ callId: "default", signal: signal() }),
-      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
       await expect(
         gateway.goLive({ callId, signal: aborted.signal }),
       ).rejects.toThrow();

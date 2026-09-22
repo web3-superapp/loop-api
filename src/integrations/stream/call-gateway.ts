@@ -196,12 +196,24 @@ export interface StreamCallGateway {
   ): Promise<StreamCallSessionObservation>;
 }
 
+/**
+ * Coarse, log-safe classification of why a call to Stream did not confirm
+ * (Decision 0069 §2.2): the SDK's 3s budget elapsed (`timeout`), Stream or
+ * the network answered with a failure (`rejected`), or the input never
+ * reached the provider (`invalid_input`). An aborted request signal is not
+ * one of these: it is rethrown as the abort itself, never sanitized.
+ */
+export type StreamCallGatewayUnavailableReason =
+  "timeout" | "rejected" | "invalid_input";
+
 export class StreamCallGatewayUnavailableError extends Error {
   readonly code = "stream_call_gateway_unavailable";
+  readonly reason: StreamCallGatewayUnavailableReason;
 
-  constructor() {
+  constructor(reason: StreamCallGatewayUnavailableReason = "rejected") {
     super("The Stream call gateway is unavailable");
     this.name = "StreamCallGatewayUnavailableError";
+    this.reason = reason;
   }
 }
 
@@ -215,7 +227,7 @@ export class StreamCallProjectionMismatchError extends Error {
 }
 
 function unavailable(): never {
-  throw new StreamCallGatewayUnavailableError();
+  throw new StreamCallGatewayUnavailableError("invalid_input");
 }
 
 function projectionMismatch(): never {
@@ -312,10 +324,32 @@ function parseSignal(value: unknown): AbortSignal {
   return value;
 }
 
+/**
+ * The SDK's per-request `AbortSignal.timeout` fires as a TimeoutError, which
+ * the SDK re-throws as its own error with no provider `code`, a message that
+ * names the timeout, and the original not kept as `cause`. Both shapes are
+ * a timeout; a provider answer always carries a `code` or a response status.
+ */
+function isTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === "TimeoutError" || error.name === "AbortError") {
+    return true;
+  }
+  const wrapped = error as Error & { readonly code?: unknown };
+  return (
+    isRecord((wrapped as { metadata?: unknown }).metadata) &&
+    wrapped.code === undefined &&
+    /timeout/i.test(error.message)
+  );
+}
+
 function sanitizeProviderFailure(error: unknown, signal: AbortSignal): never {
   signal.throwIfAborted();
-  void error;
-  return unavailable();
+  throw new StreamCallGatewayUnavailableError(
+    isTimeout(error) ? "timeout" : "rejected",
+  );
 }
 
 function validateCallResponse(
