@@ -9,7 +9,9 @@ import {
   askDigest,
   buildCommunityAiBriefContent,
   buildCommunityAiUserContent,
+  communityAiBriefRetrySeconds,
   communityAiBriefWindowHours,
+  communityAiDefaultTimeoutMs,
   communityAiCapabilityDefinitions,
   communityAiChatWindowDays,
   communityAiDisclaimer,
@@ -20,6 +22,7 @@ import {
   parseAskBody,
   parseReportBody,
   reportDigest,
+  type CommunityAiBriefReasonCode,
   type CommunityAiCapabilityId,
   type CommunityAiOmittedSource,
   type CommunityAiReportReason,
@@ -99,7 +102,7 @@ export type CommunityAiBriefProjection =
       model: string;
       generatedAt: string;
     }>
-  | Readonly<{ status: "unavailable"; reasonCode: string }>;
+  | Readonly<{ status: "unavailable"; reasonCode: CommunityAiBriefReasonCode }>;
 
 export interface CommunityAiOverviewResource {
   readonly capabilities: readonly CommunityAiCapabilityProjection[];
@@ -155,6 +158,10 @@ export interface CommunityAiService {
   report(input: CommunityAiReportInput): Promise<CommunityAiReportResource>;
 }
 
+export interface CommunityAiServiceLogger {
+  warn(context: Record<string, unknown>, message: string): void;
+}
+
 export interface CommunityAiServiceOptions {
   readonly gateway: CommunityAiGateway;
   readonly repository: CommunityAiRepository;
@@ -162,10 +169,24 @@ export interface CommunityAiServiceOptions {
   readonly userRateLimitPerMinute: number;
   readonly communityDailyLimit: number;
   readonly briefCacheSeconds: number;
-  readonly now?: () => Date;
+  /**
+   * Ceiling for one background brief generation. It is an own
+   * `AbortSignal.timeout`, never the triggering request's signal: that
+   * request has already answered by the time the model is called.
+   */
+  readonly briefTimeoutMs?: number | undefined;
+  /** Absent means a failed background generation is not logged (tests). */
+  readonly logger?: CommunityAiServiceLogger | undefined;
+  readonly now?: (() => Date) | undefined;
+  /**
+   * Test hook: called once the background generation started by a
+   * `getOverview` has settled. Production never waits on it.
+   */
+  readonly onBriefSettled?: ((communityId: string) => void) | undefined;
 }
 
 interface CachedBrief {
+  readonly kind: "available";
   readonly summary: string;
   readonly model: string;
   readonly generatedAt: string;
@@ -173,6 +194,19 @@ interface CachedBrief {
   readonly bounded: boolean;
   readonly expiresAtMs: number;
 }
+
+/**
+ * The last background generation failed. `reasonCode` is the Provider
+ * classification or the quota refusal; `null` is an unexpected failure that
+ * was logged and will be retried, so the client keeps seeing "pending".
+ */
+interface FailedBrief {
+  readonly kind: "failed";
+  readonly reasonCode: CommunityAiBriefReasonCode | null;
+  readonly expiresAtMs: number;
+}
+
+type BriefCacheEntry = CachedBrief | FailedBrief;
 
 function projectSource(source: CommunityAiSource): CommunityAiSourceProjection {
   return Object.freeze({
@@ -214,7 +248,10 @@ export function createCommunityAiService(
   options: CommunityAiServiceOptions,
 ): CommunityAiService {
   const now = options.now ?? ((): Date => new Date());
-  const briefCache = new Map<string, CachedBrief>();
+  const briefTimeoutMs = options.briefTimeoutMs ?? communityAiDefaultTimeoutMs;
+  const briefCache = new Map<string, BriefCacheEntry>();
+  /** One generation per community at a time; concurrent reads share it. */
+  const briefInFlight = new Set<string>();
 
   /**
    * Citations are intersected with the sources this request assembled, so a
@@ -386,7 +423,7 @@ export function createCommunityAiService(
               : latest,
           null,
         );
-        const brief = await buildBrief(input, knowledge);
+        const brief = readBrief(input, knowledge);
         return Object.freeze({
           capabilities: Object.freeze(capabilities),
           knowledge: Object.freeze({
@@ -443,11 +480,17 @@ export function createCommunityAiService(
    * The daily brief. It is a model call, so it is quota-counted like any other
    * and cached per community for the configured window: every member of a
    * community may read the same channel, so they may share one summary.
+   *
+   * The read never waits for the model (Decision 0066, amended 2026-09-23
+   * (2)): knowledge assembly plus a summary takes longer than the 15 s HTTP
+   * deadlines, so a cache miss answers `COMMUNITY_AI_BRIEF_PENDING` at once
+   * and starts one background generation for the community. The request that
+   * triggered it pays the quota, exactly as before.
    */
-  async function buildBrief(
+  function readBrief(
     input: CommunityAiReadInput,
     knowledge: CommunityAiKnowledge,
-  ): Promise<CommunityAiBriefProjection> {
+  ): CommunityAiBriefProjection {
     if (!isActiveMember(knowledge.community)) {
       return Object.freeze({
         status: "unavailable" as const,
@@ -456,27 +499,61 @@ export function createCommunityAiService(
     }
     const chat = knowledge.chat;
     if (chat === null) {
-      const reason =
-        knowledge.omitted.find((entry) => entry.kind === "communityChat")
-          ?.reasonCode ?? communityAiReasonCodes.chatNotObserved;
+      const omitted = knowledge.omitted.find(
+        (entry) => entry.kind === "communityChat",
+      )?.reasonCode;
       return Object.freeze({
         status: "unavailable" as const,
-        reasonCode: reason,
+        reasonCode:
+          omitted === communityAiReasonCodes.chatNotConnected
+            ? communityAiReasonCodes.chatNotConnected
+            : communityAiReasonCodes.chatNotObserved,
       });
     }
     const currentMs = now().getTime();
     const cached = briefCache.get(input.communityId);
     if (cached !== undefined && cached.expiresAtMs > currentMs) {
+      if (cached.kind === "available") {
+        return Object.freeze({
+          status: "available" as const,
+          messageCount: cached.messageCount,
+          bounded: cached.bounded,
+          windowHours: chat.windowHours,
+          summary: cached.summary,
+          model: cached.model,
+          generatedAt: cached.generatedAt,
+        });
+      }
       return Object.freeze({
-        status: "available" as const,
-        messageCount: cached.messageCount,
-        bounded: cached.bounded,
-        windowHours: chat.windowHours,
-        summary: cached.summary,
-        model: cached.model,
-        generatedAt: cached.generatedAt,
+        status: "unavailable" as const,
+        reasonCode: cached.reasonCode ?? communityAiReasonCodes.briefPending,
       });
     }
+    if (!briefInFlight.has(input.communityId)) {
+      briefInFlight.add(input.communityId);
+      // Detached on purpose. The request has its answer; nothing awaits this,
+      // and shutdown does not wait for it either.
+      void generateBrief(input, knowledge, chat)
+        .catch((error: unknown) => {
+          recordBriefFailure(input.communityId, error, input.requestId);
+        })
+        .finally(() => {
+          briefInFlight.delete(input.communityId);
+          options.onBriefSettled?.(input.communityId);
+        });
+    }
+    return Object.freeze({
+      status: "unavailable" as const,
+      reasonCode: communityAiReasonCodes.briefPending,
+    });
+  }
+
+  /** The background half: reserve quota, call the model, settle, cache. */
+  async function generateBrief(
+    input: CommunityAiReadInput,
+    knowledge: CommunityAiKnowledge,
+    chat: NonNullable<CommunityAiKnowledge["chat"]>,
+  ): Promise<void> {
     const reserved = await options.repository.reserveBrief({
       communityId: input.communityId,
       ownerUserId: input.principal.userId,
@@ -493,7 +570,9 @@ export function createCommunityAiService(
           messageCount: chat.messageCount,
           bounded: chat.bounded,
         }),
-        signal: input.signal,
+        // `AbortSignal.timeout` uses an unref'd timer: it never keeps the
+        // process alive on shutdown.
+        signal: AbortSignal.timeout(briefTimeoutMs),
       });
     } catch (error) {
       await options.repository.settleUsage({
@@ -503,12 +582,6 @@ export function createCommunityAiService(
         inputTokens: null,
         outputTokens: null,
       });
-      if (error instanceof CommunityAiProviderError) {
-        return Object.freeze({
-          status: "unavailable" as const,
-          reasonCode: error.reason,
-        });
-      }
       throw error;
     }
     await options.repository.settleUsage({
@@ -521,29 +594,53 @@ export function createCommunityAiService(
     const summary =
       completion.answer === "" ? (completion.refusal ?? "") : completion.answer;
     if (summary === "") {
-      return Object.freeze({
-        status: "unavailable" as const,
-        reasonCode: "COMMUNITY_AI_PROVIDER_MALFORMED",
-      });
+      throw new CommunityAiProviderError("COMMUNITY_AI_PROVIDER_MALFORMED");
     }
-    const generatedAt = new Date(currentMs).toISOString();
+    const generatedMs = now().getTime();
     briefCache.set(input.communityId, {
+      kind: "available",
       summary,
       model: completion.model,
-      generatedAt,
+      generatedAt: new Date(generatedMs).toISOString(),
       messageCount: chat.messageCount,
       bounded: chat.bounded,
-      expiresAtMs: currentMs + options.briefCacheSeconds * 1_000,
+      expiresAtMs: generatedMs + options.briefCacheSeconds * 1_000,
     });
-    return Object.freeze({
-      status: "available" as const,
-      messageCount: chat.messageCount,
-      bounded: chat.bounded,
-      windowHours: chat.windowHours,
-      summary,
-      model: completion.model,
-      generatedAt,
+  }
+
+  /**
+   * A failed generation is published under its classification until the
+   * retry window elapses; nothing is thrown, because no request is waiting.
+   * The log line carries identifiers and the error class only: never the
+   * Provider body, the transcript, or the summary.
+   */
+  function recordBriefFailure(
+    communityId: string,
+    error: unknown,
+    requestId: string,
+  ): void {
+    let reasonCode: CommunityAiBriefReasonCode | null;
+    if (error instanceof CommunityAiProviderError) {
+      reasonCode = error.reason;
+    } else if (error instanceof CommunityAiQuotaExceededError) {
+      reasonCode = communityAiReasonCodes.quotaExhausted;
+    } else {
+      reasonCode = null;
+    }
+    briefCache.set(communityId, {
+      kind: "failed",
+      reasonCode,
+      expiresAtMs: now().getTime() + communityAiBriefRetrySeconds * 1_000,
     });
+    options.logger?.warn(
+      {
+        communityId,
+        requestId,
+        reasonCode,
+        errorName: error instanceof Error ? error.name : "unknown",
+      },
+      "Community AI brief generation failed",
+    );
   }
 
   return Object.freeze(service);

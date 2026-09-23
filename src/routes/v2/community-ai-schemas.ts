@@ -1,5 +1,6 @@
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
+  communityAiBriefReasonCodes,
   communityAiCapabilityIds,
   communityAiReportReasons,
   communityAiSourceKinds,
@@ -174,7 +175,12 @@ const briefSchema = {
       required: ["status", "reasonCode"],
       properties: {
         status: { type: "string", const: "unavailable" },
-        reasonCode: reasonCodeSchema,
+        reasonCode: {
+          type: "string",
+          enum: [...communityAiBriefReasonCodes],
+          description:
+            "COMMUNITY_AI_BRIEF_PENDING means a summary is being generated in the background; re-read the overview later. The Provider codes classify the last failed generation.",
+        },
       },
     },
   ],

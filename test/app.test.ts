@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { requestAbortDeadlineMilliseconds } from "../src/core/http/request-abort-signal.js";
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import { createUnavailableControlPlaneRepository } from "../src/database/control-plane-repository.js";
@@ -469,13 +470,22 @@ describe("LOOP API foundation", () => {
     );
     apps.push(app);
 
-    expect(
-      (
-        app.initialConfig as unknown as {
-          readonly handlerTimeout?: number;
-        }
-      ).handlerTimeout,
-    ).toBe(15_000);
+    const initialConfig = app.initialConfig as unknown as {
+      readonly handlerTimeout?: number;
+      readonly connectionTimeout?: number;
+      readonly requestTimeout?: number;
+    };
+    expect(initialConfig.handlerTimeout).toBe(15_000);
+    expect(initialConfig.requestTimeout).toBe(15_000);
+    // The socket inactivity timeout must never undercut the handler budget:
+    // otherwise Node closes the socket before the sanitized 503 is written.
+    expect(initialConfig.connectionTimeout).toBe(15_000);
+    expect(initialConfig.connectionTimeout).toBeGreaterThanOrEqual(
+      initialConfig.handlerTimeout ?? Number.POSITIVE_INFINITY,
+    );
+    expect(initialConfig.connectionTimeout).toBeGreaterThanOrEqual(
+      requestAbortDeadlineMilliseconds,
+    );
     const response = await app.inject({
       method: "GET",
       url: "/test-handler-timeout",

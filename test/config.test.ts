@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { requestAbortDeadlineMilliseconds } from "../src/core/http/request-abort-signal.js";
+
 import {
   ConfigurationError,
   loadConfig,
@@ -858,7 +860,12 @@ describe("Community AI Provider configuration (Decision 0066, amended 2026-09-23
       apiKey: "sk-ant-fallback-key",
       baseUrl: "https://api.anthropic.com",
       model: "claude-sonnet-5",
+      // Below the 15 s HTTP deadlines with room for knowledge assembly.
+      timeoutMs: 11_000,
     });
+    expect(config.communityAi?.timeoutMs).toBeLessThan(
+      requestAbortDeadlineMilliseconds,
+    );
     expect(Object.isFrozen(config.communityAi)).toBe(true);
   });
 
