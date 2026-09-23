@@ -29,6 +29,12 @@ import type {
   MiningPowerProjection,
 } from "../mining/mining-power-reader.js";
 import type { AliasPolicy } from "../profile/alias-policy.js";
+import type { AssetRecord } from "../../database/chain-registry-repository.js";
+import {
+  InvalidAssetSearchQueryError,
+  parseAssetSearchQuery,
+  searchRegistryAssets,
+} from "./asset-search.js";
 import {
   communityPresenceNotObserved,
   type CommunityPresenceProjection,
@@ -484,9 +490,9 @@ export interface SearchResultProjection {
   readonly resultType: SearchResultType;
   readonly stableId: string;
   readonly displaySnapshot: SearchDisplaySnapshot;
-  readonly destination: {
-    readonly kind: "publicProfile" | "communityProfile";
-  };
+  readonly destination:
+    | { readonly kind: "publicProfile" | "communityProfile" }
+    | { readonly kind: "assetDetail"; readonly assetId: string };
 }
 
 export interface SearchResource {
@@ -907,9 +913,20 @@ export interface CommunityServiceOptions {
    * `STREAM_PRESENCE_NOT_CONNECTED`.
    */
   readonly presence?: CommunityPresenceReader | null;
+  /**
+   * Read-only Asset Registry rows for `search?domain=assets` (Decision
+   * 0071). Absent means no registry repository is composed, so the domain
+   * reads `ASSET_REGISTRY_NOT_COMPOSED` instead of an empty result.
+   */
+  readonly assetRegistry?: CommunityAssetSearchSource | null;
   readonly cursorCodec: V2CursorCodec | null;
   readonly searchQuota: AliasSearchQuota;
   readonly aliasPolicy: AliasPolicy;
+}
+
+/** The one registry read the asset search domain needs. */
+export interface CommunityAssetSearchSource {
+  listReadableAssets(): Promise<readonly AssetRecord[]>;
 }
 
 export function createCommunityService(
@@ -1283,6 +1300,99 @@ export function createCommunityService(
                 limit: request.limit,
                 membershipId: last.membershipId,
                 roleRank: communityRoleRank[last.role],
+              }),
+            ),
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  /**
+   * `domain=assets` (Decision 0071): a prefix match over the readable Asset
+   * Registry rows. It is a public registry of a dozen curated assets, so it
+   * draws on no alias-search quota and never touches a Provider; a registry
+   * that is not composed is `unavailable`, never an empty page.
+   */
+  async function searchAssets(
+    ownerUserId: string,
+    input: SearchInput,
+  ): Promise<SearchResource> {
+    const registry = options.assetRegistry ?? null;
+    if (registry === null) {
+      if (input.cursor !== undefined) {
+        throw V2ApiError.invalidRequest();
+      }
+      return Object.freeze({
+        domain: "assets" as const,
+        status: "unavailable" as const,
+        reasonCode: communityUnavailableReasonCodes.searchAssets,
+        results: Object.freeze([]),
+        nextCursor: null,
+        contractVersion: v2ContractVersion,
+      });
+    }
+    let query: string;
+    try {
+      query = parseAssetSearchQuery(input.q);
+    } catch (error) {
+      if (error instanceof InvalidAssetSearchQueryError) {
+        throw V2ApiError.invalidRequest();
+      }
+      throw error;
+    }
+    const filter = searchFilter("assets", query, "verified");
+    const route = communityCursorRoutes.searchAssets;
+    const request = page(
+      ownerUserId,
+      route,
+      filter,
+      input.cursor,
+      input.limit,
+      searchResultLimits,
+    );
+    const afterAssetId = readString(request.continuation, "stableId") ?? null;
+    const assets = await registry.listReadableAssets();
+    const result = searchRegistryAssets(assets, query, {
+      limit: request.limit,
+      afterAssetId,
+    });
+    const last = result.items.at(-1);
+    return Object.freeze({
+      domain: "assets" as const,
+      status: "available" as const,
+      reasonCode: null,
+      results: Object.freeze(
+        result.items.map(({ asset }) =>
+          Object.freeze({
+            resultType: "asset" as const,
+            stableId: asset.assetId,
+            displaySnapshot: Object.freeze({
+              title: asset.symbol,
+              subtitle: asset.name,
+              avatarRef: null,
+              memberCount: null,
+              verificationStatus:
+                asset.status === "verified"
+                  ? ("verified" as const)
+                  : ("pending" as const),
+            }),
+            destination: Object.freeze({
+              kind: "assetDetail" as const,
+              assetId: asset.assetId,
+            }),
+          }),
+        ),
+      ),
+      nextCursor:
+        last === undefined
+          ? null
+          : nextCursor(
+              result.hasMore,
+              ownerUserId,
+              route,
+              filter,
+              Object.freeze({
+                limit: request.limit,
+                stableId: last.asset.assetId,
               }),
             ),
       contractVersion: v2ContractVersion,
@@ -2023,7 +2133,7 @@ export function createCommunityService(
           ["users", "communities", "assets", "launch", "dapps"],
           "users",
         );
-        if (domain !== "users" && domain !== "communities") {
+        if (domain === "launch" || domain === "dapps") {
           if (input.cursor !== undefined) {
             throw V2ApiError.invalidRequest();
           }
@@ -2035,6 +2145,9 @@ export function createCommunityService(
             nextCursor: null,
             contractVersion: v2ContractVersion,
           });
+        }
+        if (domain === "assets") {
+          return searchAssets(owner.userId, input);
         }
 
         let query: string;

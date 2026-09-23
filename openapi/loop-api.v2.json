@@ -45253,11 +45253,20 @@
                         "properties": {
                           "resultType": {
                             "type": "string",
-                            "enum": ["user", "community"]
+                            "enum": ["user", "community", "asset"]
                           },
                           "stableId": {
-                            "type": "string",
-                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            "description": "Opaque stable ID of the result: publicProfileId for a user, communityId for a community, and the canonical CAIP-19 assetId for a registry asset (Decision 0071).",
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                              }
+                            ]
                           },
                           "displaySnapshot": {
                             "type": "object",
@@ -45315,8 +45324,17 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "enum": ["publicProfile", "communityProfile"],
+                                "enum": [
+                                  "publicProfile",
+                                  "communityProfile",
+                                  "assetDetail"
+                                ],
                                 "description": "Canonical destination kind. Clients map it to their own route and never build a route from display text."
+                              },
+                              "assetId": {
+                                "type": "string",
+                                "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                                "description": "Present only when kind is assetDetail: the CAIP-19 asset ID the token page is opened with (`GET /v2/market/assets/{assetId}`)."
                               }
                             }
                           }
@@ -59290,7 +59308,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -61012,7 +61069,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -62743,7 +62839,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -64500,7 +64635,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -65495,7 +65669,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -68350,7 +68563,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -70109,7 +70361,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -70858,7 +71149,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -73720,7 +74050,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -76608,7 +76977,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -79462,7 +79870,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -80329,7 +80776,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },
@@ -81152,7 +81638,46 @@
                     "correlationId": { "type": "string", "format": "uuid" },
                     "detailsSafe": {
                       "anyOf": [
-                        { "type": "object", "additionalProperties": true },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
                         { "type": "null" }
                       ]
                     },

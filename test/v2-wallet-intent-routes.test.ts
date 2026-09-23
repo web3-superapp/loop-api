@@ -505,6 +505,36 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("says how much of the day is used and left when the daily ceiling refuses", async () => {
+    const { app } = await createApp(fakes(), {
+      BSC_WRITE_CANARY_DAILY_MAX_USD: "1",
+    });
+    const overDay = await app.inject({
+      method: "POST",
+      url: "/v2/wallet-intents/send",
+      headers: commandHeaders(),
+      payload: sendBody,
+    });
+    expect(overDay.statusCode).toBe(403);
+    // Nothing was spent yet, so the whole day is still available; the
+    // refusal says so with the two figures the sheet renders (Decision 0071).
+    expect(overDay.json()).toMatchObject({
+      code: "POLICY_BLOCKED",
+      category: "authorization",
+      retryable: false,
+      detailsSafe: {
+        reasonCode: "CANARY_DAILY_CEILING_EXCEEDED",
+        ceilingUsd: "1",
+        spentUsd: "0",
+        remainingUsd: "1",
+      },
+    });
+    expect(
+      typeof overDay.json<{ detailsSafe: { exposureUsd: unknown } }>()
+        .detailsSafe.exposureUsd,
+    ).toBe("string");
+  });
+
   it("maps policy and balance refusals to the catalog codes", async () => {
     const { app } = await createApp(fakes(), { BSC_WRITE_CANARY_MAX_USD: "1" });
     const tooLarge = await app.inject({

@@ -25,11 +25,14 @@ import {
   parseV2CommandMetadata,
   publicProfileIdPatternSource,
   safeTextPatternSource,
+  searchDestinationKinds,
   searchDomains,
   searchResultLimits,
+  searchResultTypes,
   storedAvatarRefPatternSource,
   v2CommandHeadersSchema,
 } from "../../features/community/community-contract.js";
+import { assetIdPatternSource } from "../../features/chain/chain-contract.js";
 import {
   communityMembershipStatuses,
   communityRoles,
@@ -962,8 +965,15 @@ export const searchResourceSchema = {
         additionalProperties: false,
         required: ["resultType", "stableId", "displaySnapshot", "destination"],
         properties: {
-          resultType: { type: "string", enum: ["user", "community"] },
-          stableId: { type: "string", pattern: opaqueIdPatternSource },
+          resultType: { type: "string", enum: [...searchResultTypes] },
+          stableId: {
+            description:
+              "Opaque stable ID of the result: publicProfileId for a user, communityId for a community, and the canonical CAIP-19 assetId for a registry asset (Decision 0071).",
+            anyOf: [
+              { type: "string", pattern: opaqueIdPatternSource },
+              { type: "string", pattern: assetIdPatternSource },
+            ],
+          },
           displaySnapshot: {
             type: "object",
             additionalProperties: false,
@@ -1011,9 +1021,15 @@ export const searchResourceSchema = {
             properties: {
               kind: {
                 type: "string",
-                enum: ["publicProfile", "communityProfile"],
+                enum: [...searchDestinationKinds],
                 description:
                   "Canonical destination kind. Clients map it to their own route and never build a route from display text.",
+              },
+              assetId: {
+                type: "string",
+                pattern: assetIdPatternSource,
+                description:
+                  "Present only when kind is assetDetail: the CAIP-19 asset ID the token page is opened with (`GET /v2/market/assets/{assetId}`).",
               },
             },
           },

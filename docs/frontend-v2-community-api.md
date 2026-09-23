@@ -117,9 +117,9 @@ Privy ID、Stream ID**：
 | `COMMUNITY_LINKS_DEFERRED`                                                                                       | `community.officialLinks`                                                                          |
 | `MESSAGE_PREVIEW_DEFERRED`                                                                                       | `message-requests[].preview`                                                                       |
 | `AI_MODERATION_DEFERRED`                                                                                         | `message-requests[].aiModeration`                                                                  |
-| `ASSET_REGISTRY_DEFERRED`                                                                                        | `search?domain=assets`                                                                             |
-| `LAUNCH_MODULE_DEFERRED`                                                                                         | `search?domain=launch`                                                                             |
-| `DAPP_DIRECTORY_DEFERRED`                                                                                        | `search?domain=dapps`                                                                              |
+| `ASSET_REGISTRY_NOT_COMPOSED`                                                                                    | `search?domain=assets`（后端没有组合资产注册表；决策 0071 起该域正常可用）                         |
+| `LAUNCH_PROJECT_DIRECTORY_PENDING`                                                                               | `search?domain=launch`（Launch 模块已上线但还没有项目目录可搜；02 合约方案未到）                   |
+| `DAPP_DIRECTORY_NOT_INTEGRATED`                                                                                  | `search?domain=dapps`（没有接入任何 DApp 目录 Provider）                                           |
 | `REFERRAL_GRAPH_DEFERRED`                                                                                        | `referral.edges`                                                                                   |
 | `INVITE_CODE_DEFERRED`                                                                                           | `referral.inviteCode`                                                                              |
 
@@ -755,7 +755,7 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 | query          | 取值                                                        | 默认       |
 | -------------- | ----------------------------------------------------------- | ---------- |
 | `domain`       | `users` \| `communities` \| `assets` \| `launch` \| `dapps` | 必填       |
-| `q`            | 归一化后 2–40 码点的前缀                                    | 必填       |
+| `q`            | 归一化后 2–40 码点的前缀（`assets` 域 2–64）                | 必填       |
 | `verification` | `verified` \| `all`（仅 `communities`）                     | `verified` |
 | `limit`        | 1–20                                                        | 20         |
 | `cursor`       | 上一页 `nextCursor`                                         | —          |
@@ -784,21 +784,56 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 }
 ```
 
-- `assets` / `launch` / `dapps` 返回 **HTTP 200** 且
-  `{"status": "unavailable", "reasonCode": …, "results": [], "nextCursor": null}`。
-  三个 seg 可切换但显示 unavailable 说明。
 - `users`：`resultType: "user"`，`stableId` 是 `publicProfileId`，
   `displaySnapshot.title` 是 alias（无 alias 时是 loopId），`subtitle` 是 loopId，
   `memberCount`/`verificationStatus` 为 `null`。只返回已激活且 `discoverable`
   的账号，排除双向屏蔽。
 - `communities`：只返回 `verified`；`verification=all` 只对当前账号已加入的社区
   额外放行。匹配 name 前缀或 slug 前缀。
-- **必须用 `destination.kind` 导航**（`publicProfile` / `communityProfile`），
-  禁止从 `displaySnapshot` 文案或 ticker 拼路由。
+- **`assets`（决策 0071，2026-09-23 起可用）**：搜的是资产注册表（`pnpm asset:register`
+  登记的 11 个 + 原生 BNB，`blocked` 的不出现），不是链上全量代币。按前缀匹配
+  symbol（精确 > 前缀）→ name（开头 > 任一单词开头，"bnb" 能找到 "Wrapped BNB"）→
+  合约地址（带 `0x` 任意长度，或不带 `0x` 至少 4 位 hex）；大小写不敏感，不做子串匹配。
+  一行形状：
+
+  ```json
+  {
+    "resultType": "asset",
+    "stableId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+    "displaySnapshot": {
+      "title": "USDT",
+      "subtitle": "Tether USD",
+      "avatarRef": null,
+      "memberCount": null,
+      "verificationStatus": "pending"
+    },
+    "destination": {
+      "kind": "assetDetail",
+      "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955"
+    }
+  }
+  ```
+
+  `stableId` 就是 CAIP-19 `assetId`（注册表的稳定键，决策 0033）；`destination.assetId`
+  重复一份，**用它打开代币页**（`GET /v2/market/assets/{assetId}` 等）。
+  `verificationStatus` 只有注册表 `verified` 的资产是 `verified`（当前只有 USD1），
+  其余 `pending`——这是注册表核验状态，不是社区认证。`avatarRef` 恒 `null`（注册表
+  不存 logo）。排序：匹配等级 → symbol → assetId；分页与其他域一样用 `nextCursor`。
+  没有匹配时是 `status: "available"` + 空 `results`（不是 unavailable）。`assets` 域
+  **不消耗**公共搜索配额。`ASSET_REGISTRY_NOT_COMPOSED` 只在后端没有组合注册表时出现。
+
+- `launch` / `dapps` 返回 **HTTP 200** 且
+  `{"status": "unavailable", "reasonCode": …, "results": [], "nextCursor": null}`，
+  `reasonCode` 分别是 `LAUNCH_PROJECT_DIRECTORY_PENDING`（Launch 有模块无项目目录）与
+  `DAPP_DIRECTORY_NOT_INTEGRATED`（未接入）。两个 seg 可切换但显示各自的 unavailable 说明。
+- **必须用 `destination.kind` 导航**（`publicProfile` / `communityProfile` /
+  `assetDetail`），禁止从 `displaySnapshot` 文案或 ticker 拼路由。`assetDetail` 是唯一
+  带参数（`assetId`）的目的地。
 - 前缀太短、含非法字符、未知 `domain` → `400 INVALID_REQUEST`。
-- 与 `GET /v1/discovery/users` 共用同一个公共搜索配额桶，超限
-  `429 RATE_LIMITED`（`retryable: true`）。三个 unavailable 域不消耗配额。
+- `users` / `communities` 与 `GET /v1/discovery/users` 共用同一个公共搜索配额桶，超限
+  `429 RATE_LIMITED`（`retryable: true`）。`assets` 与两个 unavailable 域不消耗配额。
 - 聊天内容不进入本域。
+- 建议：结果页默认落在有结果的域，而不是固定「社区」（走查 2026-09-23）。
 
 ### 4.13 `GET /v2/mining/referral/rules` — `referral` 页（只读）
 

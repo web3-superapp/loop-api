@@ -1100,11 +1100,22 @@ export async function buildApp(
   const communityPresenceReaderComposed =
     config.stream !== null ||
     options.streamCommunityChannelGateway !== undefined;
+  const chainRegistryRepository =
+    database.chainRegistry ?? createUnavailableChainRegistryRepository();
   const communityService =
     options.communityService ??
     createCommunityService({
       repository: database.community ?? createUnavailableCommunityRepository(),
       communicationRepository: database.communication ?? null,
+      // Decision 0071: `search?domain=assets` reads the composed Asset
+      // Registry; without one the domain stays unavailable.
+      assetRegistry:
+        database.chainRegistry === undefined
+          ? null
+          : {
+              listReadableAssets: () =>
+                chainRegistryRepository.listReadableAssets(bscChainId),
+            },
       presence: communityPresenceReaderComposed
         ? createCommunityPresenceReader({
             gateway: streamCommunityChannelGateway,
@@ -1279,8 +1290,6 @@ export async function buildApp(
             reasonCode: launchChainReasonCodes.notConfigured,
           })
         : createBscReadClient({ config: config.launchChain })));
-  const chainRegistryRepository =
-    database.chainRegistry ?? createUnavailableChainRegistryRepository();
   const bscIndexerRepository =
     database.bscIndexer ?? createUnavailableBscIndexerRepository();
   const accountWalletRepository =
