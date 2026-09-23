@@ -50,6 +50,14 @@ export const communityAiBriefWindowHours = 24;
 export const communityAiDefaultTimeoutMs = 11_000;
 
 /**
+ * Ceiling for one background brief generation (Decision 0066, amendment 2,
+ * follow-up S76c). The brief never answers a request, so it is not bound by
+ * the HTTP deadlines; the observed summary model needs more than 11 s.
+ * `COMMUNITY_AI_BRIEF_TIMEOUT_MS` overrides it.
+ */
+export const communityAiDefaultBriefTimeoutMs = 30_000;
+
+/**
  * After a background brief generation fails, the failure is published for
  * this long before a later read is allowed to trigger another model call. It
  * bounds the quota a persistently failing Provider can burn per community.

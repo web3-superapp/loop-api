@@ -358,6 +358,52 @@ describe("Anthropic Community AI adapter (Decision 0066)", () => {
     ).rejects.toMatchObject({ reason: "COMMUNITY_AI_PROVIDER_UNAVAILABLE" });
   });
 
+  it("lets one call override the gateway ceiling (the background brief)", async () => {
+    let resolveFetch: (() => void) | null = null;
+    const slow: AnthropicFetch = (_url, init) =>
+      new Promise((resolve, reject) => {
+        init.signal.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+        resolveFetch = (): void => {
+          resolve({
+            ok: true,
+            status: 200,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  model: "m",
+                  content: [
+                    {
+                      type: "tool_use",
+                      name: "community_ai_answer",
+                      input: { answer: "late but inside", citations: [] },
+                    },
+                  ],
+                }),
+              ),
+          });
+        };
+      });
+    const gateway = createAnthropicCommunityAiGateway({
+      apiKey: "sk-ant-test",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude-sonnet-5",
+      timeoutMs: 20,
+      maximumOutputTokens: 800,
+      fetch: slow,
+    });
+    const call = gateway.complete({
+      system: "s",
+      userContent: "u",
+      timeoutMs: 5_000,
+    });
+    // Past the 20 ms gateway default, still inside the per-call ceiling.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    (resolveFetch as (() => void) | null)?.();
+    await expect(call).resolves.toMatchObject({ answer: "late but inside" });
+  });
+
   it("sends the key only as a header and forces the answer tool", async () => {
     const seen: { headers?: Record<string, string>; body?: string } = {};
     const fetchImpl: AnthropicFetch = (_url, init) => {
@@ -785,6 +831,22 @@ describe("Community AI service (Decision 0066)", () => {
     expect(request.signal).toBeInstanceOf(AbortSignal);
     expect(request.signal).not.toBe(controller.signal);
     expect(request.signal?.aborted).toBe(false);
+  });
+
+  it("gives the background brief its own ceiling and leaves ask on the gateway default", async () => {
+    const { service: instance, complete, briefSettled } = service();
+    const pending = briefSettled();
+    await instance.getOverview(readContext);
+    await pending;
+    const brief = complete.mock.calls[0]?.[0] as { timeoutMs?: number };
+    expect(brief.timeoutMs).toBe(1_000);
+    await instance.ask({
+      ...readContext,
+      idempotencyKey,
+      body: { question: "社区有多少人？" },
+    });
+    const ask = complete.mock.calls[1]?.[0] as { timeoutMs?: number };
+    expect(ask.timeoutMs).toBeUndefined();
   });
 
   it("runs one generation for concurrent reads of the same community", async () => {

@@ -869,6 +869,23 @@ describe("Community AI Provider configuration (Decision 0066, amended 2026-09-23
     expect(Object.isFrozen(config.communityAi)).toBe(true);
   });
 
+  it("gives the background brief a ceiling of its own, independent of the HTTP deadlines", () => {
+    const environment = validEnvironment();
+    environment["COMMUNITY_AI_API_KEY"] = "sk-or-primary-key";
+
+    expect(loadConfig(environment).communityAi?.briefTimeoutMs).toBe(30_000);
+
+    environment["COMMUNITY_AI_BRIEF_TIMEOUT_MS"] = "45000";
+    expect(loadConfig(environment).communityAi?.briefTimeoutMs).toBe(45_000);
+    // The ask ceiling is untouched by it.
+    expect(loadConfig(environment).communityAi?.timeoutMs).toBe(11_000);
+
+    for (const invalid of ["4999", "120001", "abc"]) {
+      environment["COMMUNITY_AI_BRIEF_TIMEOUT_MS"] = invalid;
+      expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+    }
+  });
+
   it("prefers COMMUNITY_AI_API_KEY over ANTHROPIC_API_KEY", () => {
     const environment = validEnvironment();
     environment["ANTHROPIC_API_KEY"] = "sk-ant-fallback-key";

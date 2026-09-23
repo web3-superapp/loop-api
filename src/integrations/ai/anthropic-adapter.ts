@@ -70,6 +70,12 @@ export interface CommunityAiCompletionRequest {
   /** The assembled sources plus the caller's question, already fenced. */
   readonly userContent: string;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Overrides the gateway's default ceiling for this call. The background
+   * brief uses it: it answers no request, so the `ask` ceiling that keeps a
+   * request inside the HTTP deadlines does not apply to it.
+   */
+  readonly timeoutMs?: number | undefined;
 }
 
 export interface CommunityAiGateway {
@@ -283,7 +289,7 @@ export function createAnthropicCommunityAiGateway(
       request: CommunityAiCompletionRequest,
     ): Promise<CommunityAiCompletion> {
       const { signal, release } = combineSignals(
-        input.timeoutMs,
+        request.timeoutMs ?? input.timeoutMs,
         request.signal,
       );
       let response: Awaited<ReturnType<AnthropicFetch>>;

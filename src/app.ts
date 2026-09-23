@@ -145,8 +145,8 @@ import {
   type CommunityAiGateway,
 } from "./integrations/ai/anthropic-adapter.js";
 import {
+  communityAiDefaultBriefTimeoutMs,
   communityAiDefaultQuota,
-  communityAiDefaultTimeoutMs,
 } from "./features/community-ai/community-ai-contract.js";
 import { createUnavailableCommunityAiRepository } from "./features/community-ai/community-ai-repository.js";
 import {
@@ -1617,7 +1617,8 @@ export async function buildApp(
             config.communityAi?.briefCacheSeconds ??
             communityAiDefaultQuota.briefCacheSeconds,
           briefTimeoutMs:
-            config.communityAi?.timeoutMs ?? communityAiDefaultTimeoutMs,
+            config.communityAi?.briefTimeoutMs ??
+            communityAiDefaultBriefTimeoutMs,
           logger: app.log,
         })
       : createUnavailableCommunityAiService());

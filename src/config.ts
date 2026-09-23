@@ -189,6 +189,7 @@ const communityAiEnvironmentShape = {
   COMMUNITY_AI_BASE_URL: z.string().trim().min(1).max(2_048),
   COMMUNITY_AI_MODEL: z.string().trim().min(1).max(128),
   COMMUNITY_AI_TIMEOUT_MS: positiveIntegerString(1_000, 60_000),
+  COMMUNITY_AI_BRIEF_TIMEOUT_MS: positiveIntegerString(5_000, 120_000),
   COMMUNITY_AI_MAX_OUTPUT_TOKENS: positiveIntegerString(64, 4_096),
   COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 60),
   COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: positiveIntegerString(1, 10_000),
@@ -207,6 +208,10 @@ function communityAiEnvironmentDefaults(
     // Below the 15 s HTTP deadlines with room for knowledge assembly, so a
     // slow model ends in a 503, not a closed socket (Decision 0066 (2)).
     COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "11000",
+    // The background brief answers no request, so it is not bound by the HTTP
+    // deadlines and gets a ceiling of its own (S76c).
+    COMMUNITY_AI_BRIEF_TIMEOUT_MS:
+      environment["COMMUNITY_AI_BRIEF_TIMEOUT_MS"] ?? "30000",
     COMMUNITY_AI_MAX_OUTPUT_TOKENS:
       environment["COMMUNITY_AI_MAX_OUTPUT_TOKENS"] ?? "800",
     COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE:
@@ -247,6 +252,7 @@ function parseCommunityAiConfig(data: {
   readonly COMMUNITY_AI_BASE_URL: string;
   readonly COMMUNITY_AI_MODEL: string;
   readonly COMMUNITY_AI_TIMEOUT_MS: number;
+  readonly COMMUNITY_AI_BRIEF_TIMEOUT_MS: number;
   readonly COMMUNITY_AI_MAX_OUTPUT_TOKENS: number;
   readonly COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: number;
   readonly COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: number;
@@ -268,6 +274,7 @@ function parseCommunityAiConfig(data: {
     baseUrl,
     model: data.COMMUNITY_AI_MODEL,
     timeoutMs: data.COMMUNITY_AI_TIMEOUT_MS,
+    briefTimeoutMs: data.COMMUNITY_AI_BRIEF_TIMEOUT_MS,
     maximumOutputTokens: data.COMMUNITY_AI_MAX_OUTPUT_TOKENS,
     userRateLimitPerMinute: data.COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE,
     communityDailyLimit: data.COMMUNITY_AI_COMMUNITY_DAILY_LIMIT,
@@ -922,7 +929,10 @@ export interface CommunityAiConfig {
    */
   readonly baseUrl: string;
   readonly model: string;
+  /** Per-request Provider ceiling for `ask`; below the HTTP deadlines. */
   readonly timeoutMs: number;
+  /** Ceiling for one background brief generation; independent of HTTP. */
+  readonly briefTimeoutMs: number;
   readonly maximumOutputTokens: number;
   readonly userRateLimitPerMinute: number;
   readonly communityDailyLimit: number;
