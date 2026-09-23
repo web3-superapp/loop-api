@@ -286,6 +286,37 @@ export function registerV2CommunityRoutes(
     },
   );
 
+  app.post(
+    "/v2/communities/:communityId/resubmit",
+    {
+      schema: {
+        operationId: "resubmitV2Community",
+        summary: "Resubmit a rejected community application",
+        description:
+          "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0072): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+        tags: ["community"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: communityIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: communityResourceSchema, ...commandErrors },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as CommunityParams;
+      const resource = await service.resubmitCommunity({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        communityId: params.communityId,
+        ...commandContext(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
   app.get(
     "/v2/communities/:communityId/members",
     {

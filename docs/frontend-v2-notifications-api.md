@@ -259,12 +259,12 @@ DELETE /v2/devices/push-token
 
 只有四个键，**没有金额、地址、ticker、余额、验证码、聊天正文、社区名**：
 
-| 键             | 值                                                                          |
-| -------------- | --------------------------------------------------------------------------- |
-| `type`         | `price_alert_triggered` / `security_event` / `community_voice_room_started` |
-| `entityRef`    | `<类型>:<UUID>`，如 `priceAlert:…`、`deviceSession:…`、`voiceRoom:…`        |
-| `contextRoute` | `token` / `devices` / `voice-room`                                          |
-| `eventVersion` | `"1"`                                                                       |
+| 键             | 值                                                                                                                                                |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`         | `price_alert_triggered` / `security_event` / `community_voice_room_started` / `community_application_verified` / `community_application_rejected` |
+| `entityRef`    | `<类型>:<UUID>`，如 `priceAlert:…`、`deviceSession:…`、`voiceRoom:…`、`community:…`                                                               |
+| `contextRoute` | `token` / `devices` / `voice-room` / `community-profile`                                                                                          |
+| `eventVersion` | `"1"`                                                                                                                                             |
 
 可见文案由客户端用本地化 key 渲染（`push.priceAlertTriggered.title/body`、
 `push.securityEvent.*`、`push.communityVoiceRoomStarted.*`），服务端不下发任何
@@ -277,11 +277,19 @@ DELETE /v2/devices/push-token
 
 ### 7.3 事件字典（第一批）
 
-| `type`                         | 触发                                   | 偏好类别                 | 可关 |
-| ------------------------------ | -------------------------------------- | ------------------------ | ---- |
-| `price_alert_triggered`        | 价格提醒被评估器触发且写入了 feed 通知 | `trade.priceAlert`       | 是   |
-| `security_event`               | 新设备登录、远程撤销设备会话           | `security.event`         | 否   |
-| `community_voice_room_started` | 社区语音房开播（房主自己不收）         | `community.announcement` | 是   |
+| `type`                           | 触发                                                                                                    | 偏好类别                 | 可关 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------ | ---- |
+| `price_alert_triggered`          | 价格提醒被评估器触发且写入了 feed 通知                                                                  | `trade.priceAlert`       | 是   |
+| `security_event`                 | 新设备登录、远程撤销设备会话                                                                            | `security.event`         | 否   |
+| `community_voice_room_started`   | 社区语音房开播（房主自己不收）                                                                          | `community.announcement` | 是   |
+| `community_application_verified` | 运营通过了你创建的社区申请（决策 0072）；`entityRef: community:<id>`，`contextRoute: community-profile` | `community.announcement` | 是   |
+| `community_application_rejected` | 运营驳回了你创建的社区申请（决策 0072）；原因只在 feed 行与社区详情里，不在推送里                       | `community.announcement` | 是   |
+
+社区申请结果的 feed 行（`type: community.announcement`，`payload.event =
+ community.application.verified|rejected`，含 `communityId`、`communityName`、`reviewedAt`、
+`reason`）**不受偏好开关影响**，只有推送受 `community.announcement` 门控；见
+`docs/frontend-v2-community-api.md` §7。`payload` 值上限从 256 放宽到 512 字符以容纳
+280 码点的驳回原因。
 
 ### 7.4 送达语义
 

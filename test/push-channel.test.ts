@@ -157,7 +157,22 @@ describe("push contract (Decision 0067)", () => {
       "price_alert_triggered",
       "security_event",
       "community_voice_room_started",
+      "community_application_verified",
+      "community_application_rejected",
     ]);
+    // Decision 0072: both review outcomes are optional community events.
+    expect(pushEventDictionary.community_application_verified).toMatchObject({
+      category: "community.announcement",
+      mandatory: false,
+      titleLocKey: "push.communityApplicationVerified.title",
+      bodyLocKey: "push.communityApplicationVerified.body",
+    });
+    expect(pushEventDictionary.community_application_rejected).toMatchObject({
+      category: "community.announcement",
+      mandatory: false,
+      titleLocKey: "push.communityApplicationRejected.title",
+      bodyLocKey: "push.communityApplicationRejected.body",
+    });
     expect(pushEventDictionary.security_event.mandatory).toBe(true);
     expect(pushEventDictionary.price_alert_triggered.mandatory).toBe(false);
     expect(pushEventDictionary.community_voice_room_started.mandatory).toBe(

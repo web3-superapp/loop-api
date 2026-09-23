@@ -9,8 +9,8 @@ import {
 import type { CommunityMissingChannelRecord } from "../src/database/community-repository.js";
 import {
   createUnavailableCommunityRepository,
-  type CommunityRecord,
   type CommunityRepository,
+  type CommunityReviewRecord,
 } from "../src/features/community/community-repository.js";
 
 const databaseUrl = "postgres://loop_api:local@127.0.0.1:5433/loop_api_s30";
@@ -30,20 +30,31 @@ const second: CommunityMissingChannelRecord = Object.freeze({
   memberCount: 18,
 });
 
+/** The repair branch: already verified, so nothing changed and no event. */
 function verifiedRecord(
   candidate: CommunityMissingChannelRecord,
-): CommunityRecord {
+): CommunityReviewRecord {
   return Object.freeze({
-    communityId: candidate.communityId,
-    name: candidate.name,
-    slug: candidate.slug,
-    description: null,
-    logoRef: null,
-    verificationStatus: "verified",
-    boundAssetKey: null,
-    memberCount: candidate.memberCount,
-    createdAt: "2026-09-15T01:00:00.000Z",
-    configVersion: "communityV1",
+    community: Object.freeze({
+      communityId: candidate.communityId,
+      name: candidate.name,
+      slug: candidate.slug,
+      description: null,
+      logoRef: null,
+      verificationStatus: "verified",
+      boundAssetKey: null,
+      memberCount: candidate.memberCount,
+      createdAt: "2026-09-15T01:00:00.000Z",
+      configVersion: "communityV1",
+      application: Object.freeze({
+        submittedAt: "2026-09-15T01:00:00.000Z",
+        reviewedAt: "2026-09-15T02:00:00.000Z",
+        rejectedReason: null,
+      }),
+    }),
+    ownerUserId: null,
+    eventId: null,
+    changed: false,
   });
 }
 
@@ -60,12 +71,13 @@ function outputWriter() {
 
 function dependenciesFake(
   candidates: readonly CommunityMissingChannelRecord[],
-  verifyCommunity = vi.fn((input: VerifyInput): Promise<CommunityRecord> =>
-    Promise.resolve(
-      verifiedRecord(
-        candidates.find((c) => c.communityId === input.communityId) ?? first,
+  verifyCommunity = vi.fn(
+    (input: VerifyInput): Promise<CommunityReviewRecord> =>
+      Promise.resolve(
+        verifiedRecord(
+          candidates.find((c) => c.communityId === input.communityId) ?? first,
+        ),
       ),
-    ),
   ),
 ) {
   const close = vi.fn(() => Promise.resolve());
@@ -172,7 +184,7 @@ describe("pnpm community:provision-channels operator script", () => {
 
   it("reports a refused community, continues with the rest, and exits 1", async () => {
     const verifyCommunity = vi.fn(
-      (input: VerifyInput): Promise<CommunityRecord> =>
+      (input: VerifyInput): Promise<CommunityReviewRecord> =>
         input.communityId === first.communityId
           ? Promise.reject(new Error("refused"))
           : Promise.resolve(verifiedRecord(second)),

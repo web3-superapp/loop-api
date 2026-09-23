@@ -159,6 +159,27 @@ describe("V2 community permission matrix", () => {
     ).toBe(false);
   });
 
+  it("gives only the owner the right to resubmit a rejected application (Decision 0072)", () => {
+    expect(communitySelfPermissionMatrix.owner.resubmitApplication).toBe(true);
+    expect(communitySelfPermissionMatrix.admin.resubmitApplication).toBe(false);
+    expect(communitySelfPermissionMatrix.member.resubmitApplication).toBe(
+      false,
+    );
+    expect(canPerformSelfAction(active("owner"), "resubmitApplication")).toBe(
+      true,
+    );
+    expect(canPerformSelfAction(active("admin"), "resubmitApplication")).toBe(
+      false,
+    );
+    expect(canPerformSelfAction(null, "resubmitApplication")).toBe(false);
+    expect(
+      canPerformSelfAction(
+        { role: "owner", status: "banned" },
+        "resubmitApplication",
+      ),
+    ).toBe(false);
+  });
+
   it("lets admins and members leave but requires the owner to transfer first", () => {
     expect(communitySelfPermissionMatrix.owner.leave).toBe(false);
     expect(canPerformSelfAction(active("owner"), "leave")).toBe(false);

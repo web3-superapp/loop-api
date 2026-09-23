@@ -1278,7 +1278,12 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       requestId: randomUUID(),
       reasonCode: "operator_manual_review",
     });
-    expect(verified.verificationStatus).toBe("verified");
+    expect(verified.community.verificationStatus).toBe("verified");
+    expect(verified.changed).toBe(true);
+    expect(verified.ownerUserId).toBe(owner.userId);
+    expect(verified.eventId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(verified.community.application.reviewedAt).not.toBeNull();
+    expect(verified.community.application.rejectedReason).toBeNull();
 
     const audit = await pool.query<{ actor_type: string; reason_code: string }>(
       {
@@ -1449,6 +1454,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     const strangerHome = await repository.getCommunityHome({
       viewerUserId: joiner.userId,
       joinedLimit: 50,
+      ownedLimit: 50,
       discoverLimit: 50,
     });
     expect(strangerHome.joined).toHaveLength(0);
@@ -1464,6 +1470,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     const bounded = await repository.getCommunityHome({
       viewerUserId: joiner.userId,
       joinedLimit: 50,
+      ownedLimit: 50,
       discoverLimit: 5,
     });
     expect(bounded.discover.length).toBeLessThanOrEqual(5);
@@ -1472,6 +1479,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     const joinedHome = await repository.getCommunityHome({
       viewerUserId: joiner.userId,
       joinedLimit: 50,
+      ownedLimit: 50,
       discoverLimit: 50,
     });
     expect(
@@ -1795,6 +1803,10 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       });
     }
 
+    await join(owner.userId, theirs);
+
+    // Decision 0072: `joined` is the non-owner memberships and `owned` the
+    // communities the viewer owns; a community is in exactly one group.
     const joinedOnly = await repository.listCommunities({
       viewerUserId: owner.userId,
       sort: "newest",
@@ -1802,9 +1814,21 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       membership: "joined",
       limit: 50,
     });
-    const ids = joinedOnly.map((item) => item.communityId);
-    expect(ids).toContain(mine);
-    expect(ids).not.toContain(theirs);
+    const joinedIds = joinedOnly.map((item) => item.communityId);
+    expect(joinedIds).toContain(theirs);
+    expect(joinedIds).not.toContain(mine);
+
+    const ownedOnly = await repository.listCommunities({
+      viewerUserId: owner.userId,
+      sort: "newest",
+      verification: "all",
+      membership: "owned",
+      limit: 50,
+    });
+    const ownedIds = ownedOnly.map((item) => item.communityId);
+    expect(ownedIds).toContain(mine);
+    expect(ownedIds).not.toContain(theirs);
+    expect(ownedOnly[0]?.application.reviewedAt).not.toBeNull();
   });
 
   it("lists a verified community without a channel and repairs it through verifyCommunity", async () => {
@@ -1818,7 +1842,9 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     await pool.query({
       text: `
         update public.communities
-        set verification_status = 'verified', verified_at = clock_timestamp()
+        set verification_status = 'verified',
+            verified_at = clock_timestamp(),
+            reviewed_at = clock_timestamp()
         where community_id = $1
       `,
       values: [communityId],
@@ -1836,7 +1862,9 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       requestId: randomUUID(),
       reasonCode: "operator_channel_provision",
     });
-    expect(record.verificationStatus).toBe("verified");
+    expect(record.community.verificationStatus).toBe("verified");
+    expect(record.changed).toBe(false);
+    expect(record.eventId).toBeNull();
 
     const channel = await pool.query<{ stream_channel_id: string }>({
       text: `select stream_channel_id from public.community_channels where community_id = $1`,
@@ -2169,6 +2197,377 @@ describe("PostgreSQL V2 community and social graph repository", () => {
           limit: 10,
         }),
       ).rejects.toBeInstanceOf(CommunityRepositoryUnavailableError);
+    });
+  });
+
+  describe("application review and resubmission (Decision 0072)", () => {
+    const reason = "Name collides with a listed token; pick another";
+
+    async function auditRows(communityId: string): Promise<
+      readonly {
+        event_type: string;
+        actor_type: string;
+        reason_code: string | null;
+        note: string | null;
+      }[]
+    > {
+      const result = await pool.query<{
+        event_type: string;
+        actor_type: string;
+        reason_code: string | null;
+        note: string | null;
+      }>({
+        text: `
+          select event_type, actor_type, reason_code, note
+          from public.community_role_events
+          where community_id = $1
+            and event_type in (
+              'community_verified',
+              'community_rejected',
+              'community_resubmitted'
+            )
+          order by occurred_at asc, event_id asc
+        `,
+        values: [communityId],
+      });
+      return result.rows;
+    }
+
+    function resubmit(ownerUserId: string, communityId: string, key?: string) {
+      return repository.resubmitCommunity({
+        ownerUserId,
+        communityId,
+        idempotencyKey: key ?? randomUUID(),
+        requestSha256: commandDigest("community", "resubmitCommunity", [
+          communityId,
+        ]),
+        requestId: randomUUID(),
+      });
+    }
+
+    it("creates an application with the submission time and no review", async () => {
+      const owner = await createAccount("review-fresh");
+      const communityId = await createCommunity(owner.userId, "review-fresh");
+      const detail = await repository.getCommunity({
+        viewerUserId: owner.userId,
+        communityId,
+      });
+      expect(detail.community.verificationStatus).toBe("pending");
+      expect(detail.community.application).toEqual({
+        submittedAt: detail.community.createdAt,
+        reviewedAt: null,
+        rejectedReason: null,
+      });
+    });
+
+    it("rejects a pending application with the reason on the row and on the audit note", async () => {
+      const owner = await createAccount("review-reject");
+      const communityId = await createCommunity(owner.userId, "review-reject");
+
+      const rejected = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "policy_name_clash",
+        reason: `  ${reason}  `,
+      });
+      expect(rejected.changed).toBe(true);
+      expect(rejected.ownerUserId).toBe(owner.userId);
+      expect(rejected.eventId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(rejected.community.verificationStatus).toBe("rejected");
+      expect(rejected.community.application.rejectedReason).toBe(reason);
+      expect(rejected.community.application.reviewedAt).not.toBeNull();
+      expect(rejected.community.application.submittedAt).toBe(
+        rejected.community.createdAt,
+      );
+      expect(await auditRows(communityId)).toEqual([
+        {
+          event_type: "community_rejected",
+          actor_type: "operator",
+          reason_code: "policy_name_clash",
+          note: reason,
+        },
+      ]);
+
+      // A second rejection changes nothing and audits nothing.
+      const again = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "policy_name_clash",
+        reason: "another reason",
+      });
+      expect(again.changed).toBe(false);
+      expect(again.eventId).toBeNull();
+      expect(again.community.application.rejectedReason).toBe(reason);
+      expect(await auditRows(communityId)).toHaveLength(1);
+
+      // The owner still sees it; a stranger still cannot.
+      const stranger = await createAccount("review-stranger");
+      await expect(
+        repository.getCommunity({
+          viewerUserId: stranger.userId,
+          communityId,
+        }),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    });
+
+    it("refuses to reject a verified community and refuses an unsafe reason", async () => {
+      const owner = await createAccount("review-verified");
+      const communityId = await createCommunity(
+        owner.userId,
+        "review-verified",
+      );
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await expect(
+        repository.rejectCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+          reason,
+        }),
+      ).rejects.toBeInstanceOf(CommunityDataStaleError);
+
+      const pendingOwner = await createAccount("review-unsafe");
+      const pending = await createCommunity(
+        pendingOwner.userId,
+        "review-unsafe",
+      );
+      for (const bad of ["", "   ", "x".repeat(281), "bad\u0000reason"]) {
+        await expect(
+          repository.rejectCommunity({
+            communityId: pending,
+            requestId: randomUUID(),
+            reasonCode: "operator_manual_review",
+            reason: bad,
+          }),
+        ).rejects.toBeInstanceOf(CommunityRepositoryUnavailableError);
+      }
+      const detail = await repository.getCommunity({
+        viewerUserId: pendingOwner.userId,
+        communityId: pending,
+      });
+      expect(detail.community.verificationStatus).toBe("pending");
+      expect(await auditRows(pending)).toEqual([]);
+    });
+
+    it("lets only the owner resubmit a rejected application, once per key, and clears the review", async () => {
+      const owner = await createAccount("resubmit-owner");
+      const admin = await createAccount("resubmit-admin");
+      const member = await createAccount("resubmit-member");
+      const stranger = await createAccount("resubmit-stranger");
+      const communityId = await createCommunity(owner.userId, "resubmit-me");
+      await join(admin.userId, communityId);
+      await join(member.userId, communityId);
+      await repository.governMember({
+        actorUserId: owner.userId,
+        communityId,
+        targetPublicProfileId: admin.publicProfileId,
+        action: "assignAdmin",
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          admin.publicProfileId,
+          "assignAdmin",
+        ]),
+        requestId: randomUUID(),
+      });
+
+      // Pending: nothing to resubmit.
+      await expect(resubmit(owner.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityDataStaleError,
+      );
+
+      const rejected = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason,
+      });
+      const rejectedAt = rejected.community.application.reviewedAt;
+
+      await expect(resubmit(admin.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityPermissionDeniedError,
+      );
+      await expect(resubmit(member.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityPermissionDeniedError,
+      );
+      await expect(
+        resubmit(stranger.userId, communityId),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+
+      const key = randomUUID();
+      const resubmitted = await resubmit(owner.userId, communityId, key);
+      expect(resubmitted.community.verificationStatus).toBe("pending");
+      expect(resubmitted.community.application.rejectedReason).toBeNull();
+      expect(resubmitted.community.application.reviewedAt).toBeNull();
+      expect(
+        Date.parse(resubmitted.community.application.submittedAt),
+      ).toBeGreaterThan(Date.parse(resubmitted.community.createdAt));
+      expect(
+        Date.parse(resubmitted.community.application.submittedAt),
+      ).toBeGreaterThanOrEqual(Date.parse(rejectedAt ?? ""));
+      expect(resubmitted.viewerMembership?.role).toBe("owner");
+
+      // Replay under the same key returns the state without a second audit.
+      const replay = await resubmit(owner.userId, communityId, key);
+      expect(replay.community.verificationStatus).toBe("pending");
+      // A second, differently keyed resubmission finds nothing to do.
+      await expect(resubmit(owner.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityDataStaleError,
+      );
+      // The same key with a different digest is a conflict.
+      await expect(
+        repository.resubmitCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: key,
+          requestSha256: commandDigest("community", "resubmitCommunity", [
+            communityId,
+            "other",
+          ]),
+          requestId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(CommunityIdempotencyConflictError);
+
+      const audits = await auditRows(communityId);
+      expect(audits.map((row) => row.event_type)).toEqual([
+        "community_rejected",
+        "community_resubmitted",
+      ]);
+      // The reason survives on the audit row after the community forgot it.
+      expect(audits[0]?.note).toBe(reason);
+      expect(audits[1]).toMatchObject({
+        actor_type: "member",
+        reason_code: "owner_resubmission",
+        note: null,
+      });
+
+      // A second rejection is a second audit row and a fresh reason.
+      const secondRejection = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason: "Still too close to a listed token",
+      });
+      expect(secondRejection.changed).toBe(true);
+      expect(secondRejection.eventId).not.toBe(rejected.eventId);
+      expect(secondRejection.community.application.rejectedReason).toBe(
+        "Still too close to a listed token",
+      );
+
+      // Verifying a rejected community closes the review and clears the reason.
+      const verified = await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_reconsidered",
+      });
+      expect(verified.changed).toBe(true);
+      expect(verified.community.application.rejectedReason).toBeNull();
+      expect(verified.community.application.reviewedAt).not.toBeNull();
+      expect(
+        (await auditRows(communityId)).map((row) => row.event_type),
+      ).toEqual([
+        "community_rejected",
+        "community_resubmitted",
+        "community_rejected",
+        "community_verified",
+      ]);
+    });
+
+    it("keeps the review columns paired with the status at the database level", async () => {
+      const owner = await createAccount("review-pairing");
+      const communityId = await createCommunity(owner.userId, "review-pairing");
+      for (const statement of [
+        `update public.communities set rejected_reason = 'x' where community_id = $1`,
+        `update public.communities set reviewed_at = clock_timestamp() where community_id = $1`,
+        `update public.communities set verification_status = 'rejected' where community_id = $1`,
+        `update public.communities set rejected_reason = '${"x".repeat(281)}', reviewed_at = clock_timestamp(), verification_status = 'rejected' where community_id = $1`,
+      ]) {
+        await expect(
+          pool.query({ text: statement, values: [communityId] }),
+        ).rejects.toMatchObject({ code: "23514" });
+      }
+      await expect(
+        pool.query({
+          text: `
+            update public.community_role_events set note = 'late edit'
+            where community_id = $1
+          `,
+          values: [communityId],
+        }),
+      ).rejects.toMatchObject({ code: "55000" });
+    });
+
+    it("splits the home aggregate into owned and joined and pages each through listCommunities", async () => {
+      const owner = await createAccount("home-split-owner");
+      const other = await createAccount("home-split-other");
+      const mine = await createCommunity(owner.userId, "home-split-mine");
+      const theirs = await createCommunity(other.userId, "home-split-theirs");
+      await repository.verifyCommunity({
+        communityId: theirs,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await join(owner.userId, theirs);
+      await repository.rejectCommunity({
+        communityId: mine,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason,
+      });
+
+      const home = await repository.getCommunityHome({
+        viewerUserId: owner.userId,
+        joinedLimit: 50,
+        ownedLimit: 50,
+        discoverLimit: 5,
+      });
+      expect(home.joined.map((entry) => entry.community.communityId)).toEqual([
+        theirs,
+      ]);
+      expect(home.joined[0]?.viewerMembership?.role).toBe("member");
+      expect(home.owned.map((entry) => entry.community.communityId)).toEqual([
+        mine,
+      ]);
+      expect(home.owned[0]?.viewerMembership?.role).toBe("owner");
+      expect(home.owned[0]?.community.application.rejectedReason).toBe(reason);
+      expect(home.ownedTruncated).toBe(false);
+      expect(home.discover.map((item) => item.communityId)).not.toContain(
+        theirs,
+      );
+
+      const second = await createCommunity(owner.userId, "home-split-second");
+      const bounded = await repository.getCommunityHome({
+        viewerUserId: owner.userId,
+        joinedLimit: 50,
+        ownedLimit: 1,
+        discoverLimit: 5,
+      });
+      // Newest submission first, and the bound reports the overflow.
+      expect(bounded.owned.map((entry) => entry.community.communityId)).toEqual(
+        [second],
+      );
+      expect(bounded.ownedTruncated).toBe(true);
+
+      const ownedPage = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "newest",
+        verification: "all",
+        membership: "owned",
+        limit: 50,
+      });
+      expect(ownedPage.map((item) => item.communityId)).toEqual([second, mine]);
+      const joinedPage = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "newest",
+        verification: "all",
+        membership: "joined",
+        limit: 50,
+      });
+      expect(joinedPage.map((item) => item.communityId)).toEqual([theirs]);
     });
   });
 });

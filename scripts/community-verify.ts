@@ -2,23 +2,22 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import pg from "pg";
-
-import { createPostgresCommunityRepository } from "../src/database/community-repository.js";
-import type {
-  CommunityRecord,
-  CommunityRepository,
-} from "../src/features/community/community-repository.js";
+import type { CommunityReviewResult } from "../src/features/community/community-review-service.js";
+import {
+  createCommunityReviewRuntime,
+  type CreateCommunityReviewRuntime,
+} from "./community-review-runtime.js";
 
 /**
  * Dev-only operator path that sets a community to `verified`
- * (Decision 0031, main-agent ruling 2026-09-07).
+ * (Decision 0031, main-agent ruling 2026-09-07; Decision 0072).
  *
  * Verification is never self-served through the API: `POST /v2/communities`
  * only creates a `pending` record. This script is the single documented way
- * to promote one, it always writes an operator audit row, and it refuses to
- * run with `NODE_ENV=production` — the reviewed Admin console and RBAC land
- * in D17.
+ * to promote one, it always writes an operator audit row, it tells the owner
+ * through the feed (and the push channel when one is composed), and it
+ * refuses to run with `NODE_ENV=production` — the reviewed Admin console and
+ * RBAC land in D17.
  */
 
 export type CommunityVerificationErrorCode =
@@ -36,17 +35,12 @@ interface OutputWriter {
   readonly write: (contents: string) => unknown;
 }
 
-export type CreateCommunityVerifyRepository = (databaseUrl: string) => {
-  readonly repository: CommunityRepository;
-  readonly close: () => Promise<void>;
-};
-
 export interface RunCommunityVerificationOptions {
   readonly argv: readonly string[];
   readonly environment: NodeJS.ProcessEnv;
   readonly stdout: OutputWriter;
   readonly stderr: OutputWriter;
-  readonly createRepository?: CreateCommunityVerifyRepository;
+  readonly createRuntime?: CreateCommunityReviewRuntime;
 }
 
 export class CommunityVerificationError extends Error {
@@ -54,21 +48,6 @@ export class CommunityVerificationError extends Error {
     super("Community verification failed");
     this.name = "CommunityVerificationError";
   }
-}
-
-function defaultCreateRepository(databaseUrl: string): {
-  readonly repository: CommunityRepository;
-  readonly close: () => Promise<void>;
-} {
-  const pool = new pg.Pool({
-    application_name: "loop-api-community-verify",
-    connectionString: databaseUrl,
-    max: 1,
-  });
-  return {
-    repository: createPostgresCommunityRepository(pool),
-    close: () => pool.end(),
-  };
 }
 
 export interface CommunityVerificationRequest {
@@ -116,20 +95,24 @@ export function parseCommunityVerificationRequest(
   return Object.freeze({ communityId, reasonCode, databaseUrl });
 }
 
-export async function verifyCommunity(
-  request: CommunityVerificationRequest,
-  createRepository: CreateCommunityVerifyRepository = defaultCreateRepository,
-): Promise<CommunityRecord> {
-  const { repository, close } = createRepository(request.databaseUrl);
-  try {
-    return await repository.verifyCommunity({
-      communityId: request.communityId,
-      requestId: randomUUID(),
-      reasonCode: request.reasonCode,
-    });
-  } finally {
-    await close();
-  }
+/** One line per fact the operator needs: outcome, feed row, push. */
+export function describeReviewResult(
+  result: CommunityReviewResult,
+  pushReasonCode: string | null,
+): string {
+  const community = result.community;
+  const push =
+    pushReasonCode !== null
+      ? `unavailable (${pushReasonCode})`
+      : result.push.reasonCode === null
+        ? result.push.status
+        : `${result.push.status} (${result.push.reasonCode})`;
+  return (
+    `Community ${community.communityId} is ${community.verificationStatus} ` +
+    `(slug ${community.slug}, members ${String(community.memberCount)}, ` +
+    `changed ${String(result.changed)}, notification ${result.notification}, ` +
+    `push ${push})\n`
+  );
 }
 
 export async function runCommunityVerification(
@@ -150,17 +133,26 @@ export async function runCommunityVerification(
     return 1;
   }
 
+  const runtime = (options.createRuntime ?? createCommunityReviewRuntime)({
+    databaseUrl: request.databaseUrl,
+    environment: options.environment,
+    stderr: options.stderr,
+  });
   try {
-    const record = await verifyCommunity(request, options.createRepository);
-    options.stdout.write(
-      `Community ${record.communityId} is ${record.verificationStatus} (slug ${record.slug}, members ${String(record.memberCount)})\n`,
-    );
+    const result = await runtime.service.verify({
+      communityId: request.communityId,
+      requestId: randomUUID(),
+      reasonCode: request.reasonCode,
+    });
+    options.stdout.write(describeReviewResult(result, runtime.pushReasonCode));
     return 0;
   } catch {
     options.stderr.write(
       "Community verification failed (community_verify_failed)\n",
     );
     return 1;
+  } finally {
+    await runtime.close();
   }
 }
 

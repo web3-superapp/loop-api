@@ -48,6 +48,8 @@ import {
   type CommunityOrderingFacts,
   type CommunityRecord,
   type CommunityRepository,
+  type CommunityReviewInput,
+  type CommunityReviewRecord,
   type ConnectionCountsRecord,
   type ConnectionRecord,
   type CreateCommunityInput,
@@ -98,6 +100,24 @@ const uuidV4Schema = z.string().regex(canonicalUuidV4Pattern);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const limitSchema = z.number().int().min(1).max(101);
 const dateSchema = z.date().refine((value) => !Number.isNaN(value.getTime()));
+const reasonCodeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+/**
+ * Operator rejection reason (Decision 0072): trimmed, 1-280 code points, no
+ * control or format characters, mirroring the description bound so the
+ * database check never fails on a value the script accepted.
+ */
+const rejectedReasonSchema = z
+  .string()
+  .max(1_024)
+  .transform((value) => value.trim())
+  .refine((value) => {
+    const codePoints = Array.from(value).length;
+    return (
+      codePoints >= 1 &&
+      codePoints <= 280 &&
+      !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)
+    );
+  });
 
 const communityRowSchema = z
   .object({
@@ -111,6 +131,9 @@ const communityRowSchema = z
     member_count: z.number().int().min(0),
     config_version: z.literal(communityConfigVersion),
     created_at: dateSchema,
+    application_submitted_at: dateSchema,
+    reviewed_at: dateSchema.nullable(),
+    rejected_reason: z.string().min(1).nullable(),
   })
   .strict();
 
@@ -148,8 +171,35 @@ const communityColumns = `
   community.bound_asset_key,
   community.member_count,
   community.config_version,
-  community.created_at
+  community.created_at,
+  community.application_submitted_at,
+  community.reviewed_at,
+  community.rejected_reason
 `;
+
+/**
+ * The community columns of a joined row, picked by name so a row that also
+ * carries membership or ordering columns can be parsed by the strict schema.
+ */
+function pickCommunityRow(
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    community_id: row["community_id"],
+    name: row["name"],
+    slug: row["slug"],
+    description: row["description"],
+    logo_ref: row["logo_ref"],
+    verification_status: row["verification_status"],
+    bound_asset_key: row["bound_asset_key"],
+    member_count: row["member_count"],
+    config_version: row["config_version"],
+    created_at: row["created_at"],
+    application_submitted_at: row["application_submitted_at"],
+    reviewed_at: row["reviewed_at"],
+    rejected_reason: row["rejected_reason"],
+  };
+}
 
 const identityColumns = `
   profile.public_profile_id,
@@ -195,6 +245,11 @@ function toCommunityRecord(value: unknown): CommunityRecord {
     memberCount: row.member_count,
     createdAt: row.created_at.toISOString(),
     configVersion: row.config_version,
+    application: Object.freeze({
+      submittedAt: row.application_submitted_at.toISOString(),
+      reviewedAt: row.reviewed_at?.toISOString() ?? null,
+      rejectedReason: row.rejected_reason,
+    }),
   });
 }
 
@@ -241,18 +296,7 @@ function toOrderedCommunityRecord(
   sort: "activity" | "miningPower",
 ): CommunityRecord {
   const row = value as Record<string, unknown>;
-  const community = toCommunityRecord({
-    community_id: row["community_id"],
-    name: row["name"],
-    slug: row["slug"],
-    description: row["description"],
-    logo_ref: row["logo_ref"],
-    verification_status: row["verification_status"],
-    bound_asset_key: row["bound_asset_key"],
-    member_count: row["member_count"],
-    config_version: row["config_version"],
-    created_at: row["created_at"],
-  });
+  const community = toCommunityRecord(pickCommunityRow(row));
   if (sort === "miningPower") {
     const ordering = miningOrderingRowSchema.parse({
       mining_power: row["mining_power"],
@@ -568,11 +612,13 @@ async function appendCommunityAudit(
     readonly fromStatus?: string | null;
     readonly toStatus?: string | null;
     readonly reasonCode?: string | null;
+    /** Free-text operator note (Decision 0072), bounded like a description. */
+    readonly note?: string | null;
     readonly idempotencyRecordId: string | null;
     readonly requestId: string;
   },
-): Promise<void> {
-  await client.query({
+): Promise<string> {
+  const result = await client.query<{ event_id: string }>({
     text: `
       insert into public.community_role_events (
         community_id,
@@ -586,9 +632,11 @@ async function appendCommunityAudit(
         to_status,
         reason_code,
         idempotency_record_id,
-        request_id
+        request_id,
+        note
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      returning event_id
     `,
     values: [
       input.communityId,
@@ -603,8 +651,28 @@ async function appendCommunityAudit(
       input.reasonCode ?? null,
       input.idempotencyRecordId,
       input.requestId,
+      input.note ?? null,
     ],
   });
+  return opaqueIdSchema.parse(result.rows[0]?.event_id);
+}
+
+/** The current owner's account, or null when no owner membership exists. */
+async function readOwnerUserId(
+  client: DatabaseClient,
+  communityId: string,
+): Promise<string | null> {
+  const result = await client.query<{ owner_user_id: string }>({
+    text: `
+      select owner_user_id
+      from public.community_memberships
+      where community_id = $1 and role = 'owner'
+      limit 1
+    `,
+    values: [communityId],
+  });
+  const row = result.rows[0];
+  return row === undefined ? null : userIdSchema.parse(row.owner_user_id);
 }
 
 async function appendSocialGraphAudit(
@@ -1211,7 +1279,9 @@ export function createPostgresCommunityRepository(
     // `verification=verified` narrows to verified only; `all` additionally
     // shows what the shared visibility predicate already allows (the viewer's
     // own applications and the communities they joined). `membership=joined`
-    // restricts the page to the viewer's own memberships.
+    // restricts the page to the viewer's non-owner memberships and
+    // `membership=owned` to the communities they currently own (Decision
+    // 0072); a community is in exactly one of the two.
     const result = await client.query<Record<string, unknown>>({
       text: `
         select ${communityColumns}${orderingColumns}
@@ -1230,6 +1300,10 @@ export function createPostgresCommunityRepository(
             where joined.community_id = community.community_id
               and joined.owner_user_id = $1::uuid
               and joined.status <> 'banned'
+              and (
+                ($6::text = 'joined' and joined.role <> 'owner')
+                or ($6::text = 'owned' and joined.role = 'owner')
+              )
           )
         )
         ${keyset}
@@ -1305,12 +1379,16 @@ export function createPostgresCommunityRepository(
     async getCommunityHome(rawInput: {
       readonly viewerUserId: string;
       readonly joinedLimit: number;
+      readonly ownedLimit: number;
       readonly discoverLimit: number;
     }): Promise<CommunityHomeRecord> {
       try {
         const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
         const joinedLimit = limitSchema.parse(rawInput.joinedLimit);
+        const ownedLimit = limitSchema.parse(rawInput.ownedLimit);
         const discoverLimit = limitSchema.parse(rawInput.discoverLimit);
+        // Decision 0072: the owner memberships form their own group, ordered
+        // by the latest submission so a resubmitted application rises.
         const joined = await pool.query<Record<string, unknown>>({
           text: `
             select
@@ -1323,10 +1401,30 @@ export function createPostgresCommunityRepository(
               on community.community_id = membership.community_id
             where membership.owner_user_id = $1
               and membership.status <> 'banned'
+              and membership.role <> 'owner'
             order by membership.joined_at desc, membership.membership_id desc
             limit $2
           `,
           values: [viewerUserId, joinedLimit + 1],
+        });
+        const owned = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              ${communityColumns},
+              membership.role,
+              membership.status,
+              membership.joined_at
+            from public.community_memberships as membership
+            join public.communities as community
+              on community.community_id = membership.community_id
+            where membership.owner_user_id = $1
+              and membership.role = 'owner'
+            order by
+              community.application_submitted_at desc,
+              community.community_id desc
+            limit $2
+          `,
+          values: [viewerUserId, ownedLimit + 1],
         });
         const discover = await pool.query<Record<string, unknown>>({
           text: `
@@ -1349,31 +1447,25 @@ export function createPostgresCommunityRepository(
           text: `select clock_timestamp() as observed_at`,
         });
         const observedAt = dateSchema.parse(observed.rows[0]?.observed_at);
-        const joinedRows = joined.rows.slice(0, joinedLimit);
+        const membershipDetail = (
+          row: Record<string, unknown>,
+        ): CommunityDetailRecord =>
+          Object.freeze({
+            community: toCommunityRecord(pickCommunityRow(row)),
+            viewerMembership: toMembershipRecord({
+              role: row["role"],
+              status: row["status"],
+              joined_at: row["joined_at"],
+            }),
+          });
         return Object.freeze({
           joinedTruncated: joined.rows.length > joinedLimit,
           joined: Object.freeze(
-            joinedRows.map((row) =>
-              Object.freeze({
-                community: toCommunityRecord({
-                  community_id: row["community_id"],
-                  name: row["name"],
-                  slug: row["slug"],
-                  description: row["description"],
-                  logo_ref: row["logo_ref"],
-                  verification_status: row["verification_status"],
-                  bound_asset_key: row["bound_asset_key"],
-                  member_count: row["member_count"],
-                  config_version: row["config_version"],
-                  created_at: row["created_at"],
-                }),
-                viewerMembership: toMembershipRecord({
-                  role: row["role"],
-                  status: row["status"],
-                  joined_at: row["joined_at"],
-                }),
-              }),
-            ),
+            joined.rows.slice(0, joinedLimit).map(membershipDetail),
+          ),
+          ownedTruncated: owned.rows.length > ownedLimit,
+          owned: Object.freeze(
+            owned.rows.slice(0, ownedLimit).map(membershipDetail),
           ),
           discover: Object.freeze(discover.rows.map(toCommunityRecord)),
           observedAt: observedAt.toISOString(),
@@ -1684,6 +1776,71 @@ export function createPostgresCommunityRepository(
             requestId,
           });
           return leftDetail();
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async resubmitCommunity(
+      rawInput: CommunityMembershipCommandInput,
+    ): Promise<CommunityDetailRecord> {
+      try {
+        const ownerUserId = userIdSchema.parse(rawInput.ownerUserId);
+        const communityId = opaqueIdSchema.parse(rawInput.communityId);
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimCommunityCommand(client, {
+            ownerUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          if ((await findCommunityAudit(client, recordId)) !== null) {
+            return readDetail(client, communityId, ownerUserId);
+          }
+          await readVisibleCommunity(client, communityId, ownerUserId);
+          const current = await readCommunity(client, communityId, true);
+          const actor = await readMembership(
+            client,
+            communityId,
+            ownerUserId,
+            true,
+          );
+          if (!canPerformSelfAction(actor, "resubmitApplication")) {
+            throw new CommunityPermissionDeniedError();
+          }
+          // Decision 0072: only a rejected application can go back to
+          // pending; a pending one is already there and a verified one has
+          // nothing to resubmit.
+          if (current.verificationStatus !== "rejected") {
+            throw new CommunityDataStaleError();
+          }
+          await client.query({
+            text: `
+              update public.communities
+              set
+                verification_status = 'pending',
+                rejected_reason = null,
+                reviewed_at = null,
+                application_submitted_at = clock_timestamp(),
+                record_version = record_version + 1,
+                updated_at = clock_timestamp()
+              where community_id = $1 and verification_status = 'rejected'
+            `,
+            values: [communityId],
+          });
+          await appendCommunityAudit(client, {
+            communityId,
+            actorUserId: ownerUserId,
+            targetUserId: ownerUserId,
+            eventType: "community_resubmitted",
+            reasonCode: "owner_resubmission",
+            idempotencyRecordId: recordId,
+            requestId,
+          });
+          return readDetail(client, communityId, ownerUserId);
         });
       } catch (error) {
         return translateRepositoryError(error);
@@ -3084,18 +3241,7 @@ export function createPostgresCommunityRepository(
         return Object.freeze(
           result.rows.map((row) =>
             Object.freeze({
-              community: toCommunityRecord({
-                community_id: row["community_id"],
-                name: row["name"],
-                slug: row["slug"],
-                description: row["description"],
-                logo_ref: row["logo_ref"],
-                verification_status: row["verification_status"],
-                bound_asset_key: row["bound_asset_key"],
-                member_count: row["member_count"],
-                config_version: row["config_version"],
-                created_at: row["created_at"],
-              }),
+              community: toCommunityRecord(pickCommunityRow(row)),
               searchKey: z.string().min(1).parse(row["name_search_key"]),
               viewerJoined: row["viewer_joined"] === true,
             }),
@@ -3106,18 +3252,13 @@ export function createPostgresCommunityRepository(
       }
     },
 
-    async verifyCommunity(rawInput: {
-      readonly communityId: string;
-      readonly requestId: string;
-      readonly reasonCode: string;
-    }): Promise<CommunityRecord> {
+    async verifyCommunity(
+      rawInput: CommunityReviewInput,
+    ): Promise<CommunityReviewRecord> {
       try {
         const communityId = opaqueIdSchema.parse(rawInput.communityId);
         const requestId = uuidV4Schema.parse(rawInput.requestId);
-        const reasonCode = z
-          .string()
-          .regex(/^[a-z][a-z0-9_]{0,63}$/)
-          .parse(rawInput.reasonCode);
+        const reasonCode = reasonCodeSchema.parse(rawInput.reasonCode);
         return await withTransaction(pool, async (client) => {
           const current = await readCommunity(client, communityId, true);
           if (current.verificationStatus === "verified") {
@@ -3127,21 +3268,30 @@ export function createPostgresCommunityRepository(
               requestId,
               mode: "repair",
             });
-            return readCommunity(client, communityId);
+            return Object.freeze({
+              community: await readCommunity(client, communityId),
+              ownerUserId: await readOwnerUserId(client, communityId),
+              eventId: null,
+              changed: false,
+            });
           }
+          // Decision 0072: verifying also closes the review, whether the
+          // application was pending or the operator reconsidered a rejection.
           await client.query({
             text: `
               update public.communities
               set
                 verification_status = 'verified',
                 verified_at = clock_timestamp(),
+                reviewed_at = clock_timestamp(),
+                rejected_reason = null,
                 record_version = record_version + 1,
                 updated_at = clock_timestamp()
               where community_id = $1 and verification_status <> 'verified'
             `,
             values: [communityId],
           });
-          await appendCommunityAudit(client, {
+          const eventId = await appendCommunityAudit(client, {
             communityId,
             actorUserId: null,
             targetUserId: null,
@@ -3155,7 +3305,69 @@ export function createPostgresCommunityRepository(
             memberCap: communityChannelMemberCap,
             requestId,
           });
-          return readCommunity(client, communityId);
+          return Object.freeze({
+            community: await readCommunity(client, communityId),
+            ownerUserId: await readOwnerUserId(client, communityId),
+            eventId,
+            changed: true,
+          });
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async rejectCommunity(
+      rawInput: CommunityReviewInput & { readonly reason: string },
+    ): Promise<CommunityReviewRecord> {
+      try {
+        const communityId = opaqueIdSchema.parse(rawInput.communityId);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const reasonCode = reasonCodeSchema.parse(rawInput.reasonCode);
+        const reason = rejectedReasonSchema.parse(rawInput.reason);
+        return await withTransaction(pool, async (client) => {
+          const current = await readCommunity(client, communityId, true);
+          if (current.verificationStatus === "verified") {
+            // Unverifying has channel consequences nobody has decided on.
+            throw new CommunityDataStaleError();
+          }
+          if (current.verificationStatus === "rejected") {
+            return Object.freeze({
+              community: current,
+              ownerUserId: await readOwnerUserId(client, communityId),
+              eventId: null,
+              changed: false,
+            });
+          }
+          await client.query({
+            text: `
+              update public.communities
+              set
+                verification_status = 'rejected',
+                reviewed_at = clock_timestamp(),
+                rejected_reason = $2,
+                record_version = record_version + 1,
+                updated_at = clock_timestamp()
+              where community_id = $1 and verification_status = 'pending'
+            `,
+            values: [communityId, reason],
+          });
+          const eventId = await appendCommunityAudit(client, {
+            communityId,
+            actorUserId: null,
+            targetUserId: null,
+            eventType: "community_rejected",
+            reasonCode,
+            note: reason,
+            idempotencyRecordId: null,
+            requestId,
+          });
+          return Object.freeze({
+            community: await readCommunity(client, communityId),
+            ownerUserId: await readOwnerUserId(client, communityId),
+            eventId,
+            changed: true,
+          });
         });
       } catch (error) {
         return translateRepositoryError(error);

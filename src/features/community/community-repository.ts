@@ -36,8 +36,19 @@ export interface CommunityRecord {
   readonly memberCount: number;
   readonly createdAt: string;
   readonly configVersion: string;
+  /**
+   * Review facts of the application (Decision 0072). Always read; the
+   * service projects them only to the current owner.
+   */
+  readonly application: CommunityApplicationFacts;
   /** Only set by the two ordering sorts of Decision 0061. */
   readonly ordering?: CommunityOrderingFacts | undefined;
+}
+
+export interface CommunityApplicationFacts {
+  readonly submittedAt: string;
+  readonly reviewedAt: string | null;
+  readonly rejectedReason: string | null;
 }
 
 export interface MembershipRecord {
@@ -129,9 +140,13 @@ export interface CommunityOrderingFacts {
 }
 
 export interface CommunityHomeRecord {
+  /** Non-owner memberships (Decision 0072): owned communities are separate. */
   readonly joined: readonly CommunityDetailRecord[];
   /** True when the account has joined more communities than `joinedLimit`. */
   readonly joinedTruncated: boolean;
+  /** Communities the viewer currently owns, newest submission first. */
+  readonly owned: readonly CommunityDetailRecord[];
+  readonly ownedTruncated: boolean;
   readonly discover: readonly CommunityRecord[];
   readonly observedAt: string;
 }
@@ -361,6 +376,7 @@ export interface CommunityRepository {
   getCommunityHome(input: {
     readonly viewerUserId: string;
     readonly joinedLimit: number;
+    readonly ownedLimit: number;
     readonly discoverLimit: number;
   }): Promise<CommunityHomeRecord>;
   getCommunity(input: {
@@ -373,6 +389,14 @@ export interface CommunityRepository {
     input: CommunityMembershipCommandInput,
   ): Promise<CommunityDetailRecord>;
   leaveCommunity(
+    input: CommunityMembershipCommandInput,
+  ): Promise<CommunityDetailRecord>;
+  /**
+   * Owner-only `rejected -> pending` transition (Decision 0072). Clears the
+   * reason and the review time, stamps the submission time, and appends a
+   * `community_resubmitted` audit row. Any other state is stale.
+   */
+  resubmitCommunity(
     input: CommunityMembershipCommandInput,
   ): Promise<CommunityDetailRecord>;
   listMembers(input: ListMembersInput): Promise<CommunityMemberPageRecord>;
@@ -401,11 +425,35 @@ export interface CommunityRepository {
     input: SearchCommunitiesInput,
   ): Promise<readonly SearchCommunityRecord[]>;
   /** Dev-only operator path used by `pnpm community:verify`; writes an audit row. */
-  verifyCommunity(input: {
-    readonly communityId: string;
-    readonly requestId: string;
-    readonly reasonCode: string;
-  }): Promise<CommunityRecord>;
+  verifyCommunity(input: CommunityReviewInput): Promise<CommunityReviewRecord>;
+  /**
+   * Dev-only operator path used by `pnpm community:reject` (Decision 0072).
+   * Only a `pending` community can be rejected; a `verified` one is stale
+   * and an already rejected one is returned unchanged.
+   */
+  rejectCommunity(
+    input: CommunityReviewInput & { readonly reason: string },
+  ): Promise<CommunityReviewRecord>;
+}
+
+export interface CommunityReviewInput {
+  readonly communityId: string;
+  readonly requestId: string;
+  readonly reasonCode: string;
+}
+
+/**
+ * Outcome of an operator review. `changed` is false when the command found
+ * nothing to do (already verified, already rejected); then `eventId` is null
+ * and no notification is owed. `ownerUserId` is the current owner, the one
+ * account the result is announced to; null only for a community whose owner
+ * membership is missing, which the schema forbids for a created community.
+ */
+export interface CommunityReviewRecord {
+  readonly community: CommunityRecord;
+  readonly ownerUserId: string | null;
+  readonly eventId: string | null;
+  readonly changed: boolean;
 }
 
 export class CommunityRepositoryUnavailableError extends Error {
@@ -500,6 +548,7 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     updateCommunity: unavailable,
     joinCommunity: unavailable,
     leaveCommunity: unavailable,
+    resubmitCommunity: unavailable,
     listMembers: unavailable,
     governMember: unavailable,
     follow: unavailable,
@@ -516,5 +565,6 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     searchUsers: unavailable,
     searchCommunities: unavailable,
     verifyCommunity: unavailable,
+    rejectCommunity: unavailable,
   });
 }

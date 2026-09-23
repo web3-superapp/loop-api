@@ -3258,6 +3258,7 @@
                   "additionalProperties": false,
                   "required": [
                     "joined",
+                    "owned",
                     "discover",
                     "unread",
                     "liveVoice",
@@ -3270,6 +3271,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "required": ["items", "truncated"],
+                      "description": "Communities the account joined as admin or member. Communities it owns are in `owned`, never here (Decision 0072).",
                       "properties": {
                         "items": {
                           "type": "array",
@@ -3381,6 +3383,172 @@
                         "truncated": {
                           "type": "boolean",
                           "description": "True when the account joined more communities than this aggregate carries; continue with GET /v2/communities?membership=joined."
+                        }
+                      }
+                    },
+                    "owned": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["items", "truncated"],
+                      "description": "Communities the account currently owns, newest submission first, each with its review state (Decision 0072).",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "maxItems": 50,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "community",
+                              "membership",
+                              "application"
+                            ],
+                            "properties": {
+                              "community": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "communityId",
+                                  "name",
+                                  "slug",
+                                  "description",
+                                  "logoRef",
+                                  "verificationStatus",
+                                  "boundAssetKey",
+                                  "memberCount",
+                                  "createdAt",
+                                  "configVersion"
+                                ],
+                                "properties": {
+                                  "communityId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1024
+                                  },
+                                  "slug": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9-]{3,32}$"
+                                  },
+                                  "description": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1024
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "logoRef": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^avatar:preset/community-(0[1-9]|1[0-2])$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "verificationStatus": {
+                                    "type": "string",
+                                    "enum": ["pending", "verified", "rejected"]
+                                  },
+                                  "boundAssetKey": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$",
+                                        "description": "Canonical eip155:<chainId>:<lowercase address>. It is stored but not resolved before D10; no price, supply, or holder fact is implied."
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "memberCount": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "description": "Server-maintained member count from PostgreSQL, excluding banned rows."
+                                  },
+                                  "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "configVersion": {
+                                    "type": "string",
+                                    "enum": ["communityV1"]
+                                  }
+                                }
+                              },
+                              "membership": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["role", "status", "joinedAt"],
+                                "properties": {
+                                  "role": {
+                                    "type": "string",
+                                    "enum": ["owner", "admin", "member"]
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["active", "muted", "banned"]
+                                  },
+                                  "joinedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              "application": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "submittedAt",
+                                  "reviewedAt",
+                                  "rejectedReason"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "verified", "rejected"],
+                                    "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                                  },
+                                  "submittedAt": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "description": "When the current application was submitted; moves forward on resubmission."
+                                  },
+                                  "reviewedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "When the operator verified or rejected; null while pending."
+                                  },
+                                  "rejectedReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1024,
+                                        "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "truncated": {
+                          "type": "boolean",
+                          "description": "True when the account owns more communities than this aggregate carries; continue with GET /v2/communities?membership=owned."
                         }
                       }
                     },
@@ -3991,11 +4159,11 @@
             "required": false
           },
           {
-            "schema": { "type": "string", "enum": ["all", "joined"] },
+            "schema": { "type": "string", "enum": ["all", "joined", "owned"] },
             "in": "query",
             "name": "membership",
             "required": false,
-            "description": "`joined` narrows the page to the caller's own memberships; it is the cursor-paged continuation of the home aggregate."
+            "description": "`joined` narrows the page to the caller's admin/member memberships and `owned` to the communities the caller currently owns (each row then carries `application`); both are cursor-paged continuations of the home aggregate and a community is in exactly one of them (Decision 0072)."
           },
           {
             "schema": {
@@ -4409,6 +4577,46 @@
                                 }
                               }
                             ]
+                          },
+                          "application": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "status",
+                              "submittedAt",
+                              "reviewedAt",
+                              "rejectedReason"
+                            ],
+                            "properties": {
+                              "status": {
+                                "type": "string",
+                                "enum": ["pending", "verified", "rejected"],
+                                "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                              },
+                              "submittedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "When the current application was submitted; moves forward on resubmission."
+                              },
+                              "reviewedAt": {
+                                "anyOf": [
+                                  { "type": "string", "format": "date-time" },
+                                  { "type": "null" }
+                                ],
+                                "description": "When the operator verified or rejected; null while pending."
+                              },
+                              "rejectedReason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1024,
+                                    "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                  },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
                           }
                         }
                       }
@@ -5134,6 +5342,7 @@
                   "required": [
                     "community",
                     "viewer",
+                    "application",
                     "chat",
                     "voice",
                     "miningPower",
@@ -5267,6 +5476,52 @@
                           "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
                         }
                       }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
                     },
                     "chat": {
                       "type": "object",
@@ -6316,6 +6571,7 @@
                   "required": [
                     "community",
                     "viewer",
+                    "application",
                     "chat",
                     "voice",
                     "miningPower",
@@ -6449,6 +6705,52 @@
                           "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
                         }
                       }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
                     },
                     "chat": {
                       "type": "object",
@@ -7399,6 +7701,7 @@
                   "required": [
                     "community",
                     "viewer",
+                    "application",
                     "chat",
                     "voice",
                     "miningPower",
@@ -7532,6 +7835,52 @@
                           "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
                         }
                       }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
                     },
                     "chat": {
                       "type": "object",
@@ -8590,6 +8939,7 @@
                   "required": [
                     "community",
                     "viewer",
+                    "application",
                     "chat",
                     "voice",
                     "miningPower",
@@ -8723,6 +9073,52 @@
                           "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
                         }
                       }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
                     },
                     "chat": {
                       "type": "object",
@@ -9781,6 +10177,7 @@
                   "required": [
                     "community",
                     "viewer",
+                    "application",
                     "chat",
                     "voice",
                     "miningPower",
@@ -9914,6 +10311,1290 @@
                           "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
                         }
                       }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                    },
+                    "chat": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "channelCid",
+                        "memberState",
+                        "reasonCode",
+                        "viewerPersona"
+                      ],
+                      "properties": {
+                        "viewerPersona": {
+                          "description": "The viewer's own persona in the official channel (Decision 0055): the `loop_group_alias` every other member sees for them. Null before the first membership sync generated one, or when the viewer is not a member.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["alias", "projectionState"],
+                              "properties": {
+                                "alias": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][a-z]{2,15}-[0-9]{4}$"
+                                },
+                                "projectionState": {
+                                  "type": "string",
+                                  "enum": ["pending", "confirmed"]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["available", "syncing", "unavailable"]
+                        },
+                        "channelCid": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^messaging:loop_community_[0-9a-f]{32}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "memberState": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "synced",
+                                "pending",
+                                "removed",
+                                "capacityPending"
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "voice": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "currentRoomId", "reasonCode"],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["available", "unavailable"]
+                        },
+                        "currentRoomId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "miningPower": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope",
+                            "weight",
+                            "participants"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "stale": {
+                              "type": "boolean",
+                              "description": "True when a newer run under the same version did not complete (Decision 0057): the number is the last complete snapshot's and is older than that run. Always emitted; optional for older clients."
+                            },
+                            "subject": {
+                              "type": "string",
+                              "enum": ["community"]
+                            },
+                            "weight": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "value",
+                                    "configVersion",
+                                    "reviewedAt"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["approved"]
+                                    },
+                                    "value": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    },
+                                    "configVersion": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                                    },
+                                    "reviewedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "reasonCode",
+                                    "reviewStatus"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "COMMUNITY_ASSET_NOT_BOUND without a bound asset (nothing to review); COMMUNITY_WEIGHT_PENDING_REVIEW for a bound community without an approved weight."
+                                    },
+                                    "reviewStatus": {
+                                      "type": "string",
+                                      "enum": [
+                                        "pending_review",
+                                        "not_applicable"
+                                      ],
+                                      "description": "pending_review pairs with COMMUNITY_WEIGHT_PENDING_REVIEW; not_applicable pairs with COMMUNITY_ASSET_NOT_BOUND (Decision 0046)."
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "participants": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "count"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["available"]
+                                    },
+                                    "count": { "type": "integer", "minimum": 0 }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "subject",
+                            "power",
+                            "snapshotId",
+                            "formulaVersion",
+                            "computedAt",
+                            "scope"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "power": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "snapshotId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "formulaVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                            },
+                            "computedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "scope": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["development_baseline"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The version's self-declared scope. development_baseline is the Decision 0043 placeholder (weights 1, placeholder daily budget); null is a product version."
+                            },
+                            "stale": {
+                              "type": "boolean",
+                              "description": "True when a newer run under the same version did not complete (Decision 0057): the number is the last complete snapshot's and is older than that run. Always emitted; optional for older clients."
+                            },
+                            "subject": { "type": "string", "enum": ["account"] }
+                          }
+                        }
+                      ]
+                    },
+                    "onlineCount": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                              "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "count",
+                            "observedAt",
+                            "source"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "count": { "type": "integer", "minimum": 0 },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["stream_member_presence"]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "announcements": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "reasonCode"],
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unavailable"] },
+                        "reasonCode": {
+                          "type": "string",
+                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                        }
+                      }
+                    },
+                    "officialLinks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "reasonCode"],
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unavailable"] },
+                        "reasonCode": {
+                          "type": "string",
+                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                          "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "PROFILE_ACTIVATION_REQUIRED",
+                        "RESOURCE_CONFLICT",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "VALIDATION_FAILED",
+                        "ALIAS_RESERVED",
+                        "ALIAS_BLOCKED"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/communities/{communityId}/resubmit": {
+      "post": {
+        "operationId": "resubmitV2Community",
+        "summary": "Resubmit a rejected community application",
+        "tags": ["community"],
+        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0072): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "communityId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "community",
+                    "viewer",
+                    "application",
+                    "chat",
+                    "voice",
+                    "miningPower",
+                    "onlineCount",
+                    "announcements",
+                    "officialLinks",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "community": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "communityId",
+                        "name",
+                        "slug",
+                        "description",
+                        "logoRef",
+                        "verificationStatus",
+                        "boundAssetKey",
+                        "memberCount",
+                        "createdAt",
+                        "configVersion"
+                      ],
+                      "properties": {
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024
+                        },
+                        "slug": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9-]{3,32}$"
+                        },
+                        "description": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1024
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "logoRef": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^avatar:preset/community-(0[1-9]|1[0-2])$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "verificationStatus": {
+                          "type": "string",
+                          "enum": ["pending", "verified", "rejected"]
+                        },
+                        "boundAssetKey": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$",
+                              "description": "Canonical eip155:<chainId>:<lowercase address>. It is stored but not resolved before D10; no price, supply, or holder fact is implied."
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "memberCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Server-maintained member count from PostgreSQL, excluding banned rows."
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "configVersion": {
+                          "type": "string",
+                          "enum": ["communityV1"]
+                        }
+                      }
+                    },
+                    "viewer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "membership",
+                        "canInviteAdmin",
+                        "canMute",
+                        "canBan"
+                      ],
+                      "properties": {
+                        "membership": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["role", "status", "joinedAt"],
+                              "properties": {
+                                "role": {
+                                  "type": "string",
+                                  "enum": ["owner", "admin", "member"]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["active", "muted", "banned"]
+                                },
+                                "joinedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "canInviteAdmin": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may appoint an admin somewhere in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canMute": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may mute someone in this community. It names no target and must not decide a member row's commands."
+                        },
+                        "canBan": {
+                          "type": "boolean",
+                          "description": "Viewer-level only: this viewer may ban someone in this community, and may therefore open the `role=banned` governance view. It names no target and must not decide a member row's commands."
+                        }
+                      }
+                    },
+                    "application": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "submittedAt",
+                            "reviewedAt",
+                            "rejectedReason"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["pending", "verified", "rejected"],
+                              "description": "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed."
+                            },
+                            "submittedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "When the current application was submitted; moves forward on resubmission."
+                            },
+                            "reviewedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ],
+                              "description": "When the operator verified or rejected; null while pending."
+                            },
+                            "rejectedReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1024,
+                                  "description": "Operator text, trimmed to 1-280 Unicode code points. Present only while rejected and only to the owner."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
                     },
                     "chat": {
                       "type": "object",
@@ -103586,12 +105267,12 @@
                             "type": "object",
                             "additionalProperties": {
                               "anyOf": [
-                                { "type": "string", "maxLength": 256 },
+                                { "type": "string", "maxLength": 512 },
                                 { "type": "null" }
                               ]
                             },
                             "maxProperties": 16,
-                            "description": "Display facts only; every value is a string with provenance in the same object."
+                            "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0072)."
                           },
                           "source": {
                             "anyOf": [
@@ -104219,12 +105900,12 @@
                           "type": "object",
                           "additionalProperties": {
                             "anyOf": [
-                              { "type": "string", "maxLength": 256 },
+                              { "type": "string", "maxLength": 512 },
                               { "type": "null" }
                             ]
                           },
                           "maxProperties": 16,
-                          "description": "Display facts only; every value is a string with provenance in the same object."
+                          "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0072)."
                         },
                         "source": {
                           "anyOf": [

@@ -32,6 +32,7 @@ import {
   type CommunityRepository,
   type MembershipRecord,
 } from "../src/features/community/community-repository.js";
+import { commandDigest } from "../src/features/community/community-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
 import {
@@ -74,6 +75,11 @@ const community: CommunityRecord = Object.freeze({
   memberCount: 2,
   createdAt,
   configVersion: "communityV1",
+  application: Object.freeze({
+    submittedAt: createdAt,
+    reviewedAt: "2026-09-07T02:00:00.000Z",
+    rejectedReason: null,
+  }),
 });
 
 const ownerMembership: MembershipRecord = Object.freeze({
@@ -139,6 +145,21 @@ function communityRepositoryFake() {
   const updateCommunityMock = vi.fn(() =>
     Promise.resolve({ community, viewerMembership: ownerMembership }),
   );
+  const resubmitCommunityMock = vi.fn<CommunityRepository["resubmitCommunity"]>(
+    () =>
+      Promise.resolve({
+        community: {
+          ...community,
+          verificationStatus: "pending" as const,
+          application: {
+            submittedAt: "2026-09-08T01:00:00.000Z",
+            reviewedAt: null,
+            rejectedReason: null,
+          },
+        },
+        viewerMembership: ownerMembership,
+      }),
+  );
   const governMemberMock = vi.fn(() =>
     Promise.resolve({
       community,
@@ -182,8 +203,28 @@ function communityRepositoryFake() {
     ),
     getCommunityHome: vi.fn(() =>
       Promise.resolve({
-        joined: [{ community, viewerMembership: ownerMembership }],
+        joined: [
+          {
+            community,
+            viewerMembership: { ...ownerMembership, role: "member" as const },
+          },
+        ],
         joinedTruncated: true,
+        owned: [
+          {
+            community: {
+              ...community,
+              verificationStatus: "rejected" as const,
+              application: {
+                submittedAt: createdAt,
+                reviewedAt: "2026-09-07T02:00:00.000Z",
+                rejectedReason: "Name collides with a listed token",
+              },
+            },
+            viewerMembership: ownerMembership,
+          },
+        ],
+        ownedTruncated: false,
         discover: [community],
         observedAt: createdAt,
       }),
@@ -199,6 +240,7 @@ function communityRepositoryFake() {
     leaveCommunity: vi.fn(() =>
       Promise.resolve({ community, viewerMembership: null }),
     ),
+    resubmitCommunity: resubmitCommunityMock,
     listMembers: listMembersMock,
     governMember: governMemberMock,
     follow: vi.fn(() =>
@@ -259,10 +301,26 @@ function communityRepositoryFake() {
         { community, searchKey: "frog holders", viewerJoined: true },
       ]),
     ),
-    verifyCommunity: vi.fn(() => Promise.resolve(community)),
+    verifyCommunity: vi.fn(() =>
+      Promise.resolve({
+        community,
+        ownerUserId: accountId,
+        eventId: null,
+        changed: false,
+      }),
+    ),
+    rejectCommunity: vi.fn(() =>
+      Promise.resolve({
+        community,
+        ownerUserId: accountId,
+        eventId: null,
+        changed: false,
+      }),
+    ),
   };
   return {
     repository,
+    resubmitCommunityMock,
     listCommunitiesMock,
     listMembersMock,
     sendMessageRequestMock,
@@ -293,6 +351,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
     sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
+    resubmitCommunityMock,
     governMemberMock,
   } = communityRepositoryFake();
   const database = {
@@ -328,6 +387,7 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
     sendMessageRequestMock,
     createCommunityMock,
     updateCommunityMock,
+    resubmitCommunityMock,
     governMemberMock,
     consumeIssuanceQuota,
     database,
@@ -2916,6 +2976,284 @@ describe("LOOP API V2 community, social, and search modules", () => {
       expect(detail.body).toContain(
         '"onlineCount":{"status":"unavailable","reasonCode":"COMMUNICATION_RUNTIME_UNAVAILABLE"}',
       );
+    });
+  });
+
+  describe("community application progress (Decision 0072)", () => {
+    it("splits the home aggregate into joined (non-owner) and owned (with review state)", async () => {
+      const { app } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/community/home",
+        headers: commonHeaders(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        joined: { items: { membership: { role: string } }[] };
+        owned: {
+          items: {
+            community: { verificationStatus: string };
+            membership: { role: string };
+            application: Record<string, unknown>;
+          }[];
+          truncated: boolean;
+        };
+      }>();
+      expect(body.joined.items.map((item) => item.membership.role)).toEqual([
+        "member",
+      ]);
+      expect(body.owned.truncated).toBe(false);
+      expect(body.owned.items).toHaveLength(1);
+      expect(body.owned.items[0]).toMatchObject({
+        community: { verificationStatus: "rejected" },
+        membership: { role: "owner" },
+        application: {
+          status: "rejected",
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: "Name collides with a listed token",
+        },
+      });
+      expect(
+        Object.keys(body.owned.items[0]?.application ?? {}).sort(),
+      ).toEqual(["rejectedReason", "reviewedAt", "status", "submittedAt"]);
+    });
+
+    it("drops an owned row whose membership is not the owner's, never mislabelling it", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityHome = vi.fn(() =>
+        Promise.resolve({
+          joined: [],
+          joinedTruncated: false,
+          owned: [
+            {
+              community,
+              viewerMembership: {
+                role: "admin" as const,
+                status: "active" as const,
+                joinedAt: createdAt,
+              },
+            },
+          ],
+          ownedTruncated: true,
+          discover: [],
+          observedAt: createdAt,
+        }),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/community/home",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        owned: { items: [], truncated: true },
+      });
+    });
+
+    it("projects the application block to the owner only", async () => {
+      const { app } = await createApp();
+      const asOwner = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(asOwner.statusCode).toBe(200);
+      expect(asOwner.json()).toMatchObject({
+        application: {
+          status: "verified",
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: null,
+        },
+      });
+
+      const rejectedCommunity = {
+        ...community,
+        verificationStatus: "rejected" as const,
+        application: {
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: "Slug looks like an impersonation",
+        },
+      };
+      for (const membership of [
+        null,
+        {
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+        },
+        {
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+        },
+      ]) {
+        const dependencies = fakes();
+        dependencies.communityRepository.getCommunity = vi.fn(() =>
+          Promise.resolve({
+            community: rejectedCommunity,
+            viewerMembership: membership,
+          }),
+        );
+        const { app: other } = await createApp(dependencies);
+        const response = await other.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ application: null });
+        // The reason never leaks through any other field either.
+        expect(response.body).not.toContain("impersonation");
+        expect(response.body).not.toContain("submittedAt");
+      }
+    });
+
+    it("pages the caller's own communities with membership=owned and attaches the review state", async () => {
+      const dependencies = fakes();
+      const pending = {
+        ...community,
+        verificationStatus: "pending" as const,
+        application: {
+          submittedAt: "2026-09-08T01:00:00.000Z",
+          reviewedAt: null,
+          rejectedReason: null,
+        },
+      };
+      const listCommunities = vi.fn(() => Promise.resolve([pending]));
+      dependencies.communityRepository.listCommunities = listCommunities;
+      const { app } = await createApp(dependencies);
+      const owned = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=owned&verification=all",
+        headers: commonHeaders(),
+      });
+      expect(owned.statusCode).toBe(200);
+      expect(listCommunities).toHaveBeenCalledWith(
+        expect.objectContaining({ membership: "owned", verification: "all" }),
+      );
+      expect(owned.json()).toMatchObject({
+        items: [
+          {
+            communityId,
+            verificationStatus: "pending",
+            application: {
+              status: "pending",
+              submittedAt: "2026-09-08T01:00:00.000Z",
+              reviewedAt: null,
+              rejectedReason: null,
+            },
+          },
+        ],
+      });
+
+      const joined = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=joined&verification=all",
+        headers: commonHeaders(),
+      });
+      expect(joined.statusCode).toBe(200);
+      expect(
+        joined.json<{ items: Record<string, unknown>[] }>().items[0],
+      ).not.toHaveProperty("application");
+
+      const discover = await app.inject({
+        method: "GET",
+        url: "/v2/communities?verification=all",
+        headers: commonHeaders(),
+      });
+      expect(discover.statusCode).toBe(200);
+      expect(discover.body).not.toContain("submittedAt");
+
+      const unknown = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=created",
+        headers: commonHeaders(),
+      });
+      expect(unknown.statusCode).toBe(400);
+    });
+
+    it("resubmits a rejected application through the owner-only command", async () => {
+      const { app, resubmitCommunityMock } = await createApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expectOperationalHeaders(response);
+      expect(resubmitCommunityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerUserId: accountId,
+          communityId,
+          idempotencyKey: idempotencyKey(),
+          requestSha256: commandDigest("community", "resubmitCommunity", [
+            communityId,
+          ]),
+        }),
+      );
+      expect(response.json()).toMatchObject({
+        community: { verificationStatus: "pending" },
+        application: {
+          status: "pending",
+          submittedAt: "2026-09-08T01:00:00.000Z",
+          reviewedAt: null,
+          rejectedReason: null,
+        },
+        onlineCount: {
+          status: "unavailable",
+          reasonCode: "STREAM_PRESENCE_NOT_OBSERVED",
+        },
+      });
+
+      const withoutKey = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commonHeaders(),
+      });
+      expect(withoutKey.statusCode).toBe(400);
+      const withBody = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commandHeaders(),
+        payload: { name: "Edited" },
+      });
+      expect(withBody.statusCode).toBe(400);
+      expect(resubmitCommunityMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("maps the resubmit state machine and permission refusals onto catalog codes", async () => {
+      const cases = [
+        [new CommunityDataStaleError(), 409, "DATA_STALE"],
+        [new CommunityPermissionDeniedError(), 403, "PERMISSION_DENIED"],
+        [new CommunityNotFoundError(), 404, "NOT_FOUND"],
+        [new CommunityIdempotencyConflictError(), 409, "IDEMPOTENCY_CONFLICT"],
+      ] as const;
+      for (const [error, statusCode, code] of cases) {
+        const dependencies = fakes();
+        dependencies.resubmitCommunityMock.mockRejectedValue(error);
+        const { app } = await createApp(dependencies);
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/resubmit`,
+          headers: commandHeaders(),
+        });
+        expect(response.statusCode, code).toBe(statusCode);
+        expect(response.json()).toMatchObject({ code });
+        expect(Object.keys(response.json()).sort()).toEqual([
+          "category",
+          "code",
+          "correlationId",
+          "detailsSafe",
+          "providerReferenceSafe",
+          "retryable",
+          "userMessageKey",
+        ]);
+      }
     });
   });
 });
