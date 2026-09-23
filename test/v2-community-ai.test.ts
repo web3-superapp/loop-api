@@ -24,6 +24,7 @@ import type { CommunityResource } from "../src/features/community/community-serv
 import type { CommunityService } from "../src/features/community/community-service.js";
 import type { CommunicationRepository } from "../src/features/communication/communication-repository.js";
 import {
+  communityAiMessagesUrl,
   createAnthropicCommunityAiGateway,
   CommunityAiProviderError,
   parseCommunityAiCompletion,
@@ -339,6 +340,7 @@ describe("Anthropic Community AI adapter (Decision 0066)", () => {
     const make = (fetchImpl: AnthropicFetch) =>
       createAnthropicCommunityAiGateway({
         apiKey: "sk-ant-test",
+        baseUrl: "https://api.anthropic.com",
         model: "claude-sonnet-5",
         timeoutMs: 20,
         maximumOutputTokens: 800,
@@ -371,6 +373,7 @@ describe("Anthropic Community AI adapter (Decision 0066)", () => {
     };
     const gateway = createAnthropicCommunityAiGateway({
       apiKey: "sk-ant-secret",
+      baseUrl: "https://api.anthropic.com",
       model: "claude-sonnet-5",
       timeoutMs: 1_000,
       maximumOutputTokens: 800,
@@ -386,6 +389,56 @@ describe("Anthropic Community AI adapter (Decision 0066)", () => {
       name: "community_ai_answer",
     });
     expect(JSON.stringify(sent)).not.toContain("sk-ant-secret");
+  });
+
+  it("derives the request URL from baseUrl and normalises a trailing slash", async () => {
+    expect(communityAiMessagesUrl("https://api.anthropic.com")).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+    expect(communityAiMessagesUrl("https://api.onlyrouter.ai/")).toBe(
+      "https://api.onlyrouter.ai/v1/messages",
+    );
+    expect(communityAiMessagesUrl("https://api.onlyrouter.ai//")).toBe(
+      "https://api.onlyrouter.ai/v1/messages",
+    );
+
+    const urls: string[] = [];
+    const headers: Record<string, string>[] = [];
+    const fetchImpl: AnthropicFetch = (url, init) => {
+      urls.push(url);
+      headers.push({ ...init.headers });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify(body({ answer: "ok", citations: [] })),
+          ),
+      });
+    };
+    for (const baseUrl of [
+      "https://api.onlyrouter.ai",
+      "https://api.onlyrouter.ai/",
+    ]) {
+      await createAnthropicCommunityAiGateway({
+        apiKey: "sk-or-secret",
+        baseUrl,
+        model: "claude-sonnet-4-6",
+        timeoutMs: 1_000,
+        maximumOutputTokens: 800,
+        fetch: fetchImpl,
+      }).complete({ system: "rules", userContent: "sources" });
+    }
+    expect(urls).toEqual([
+      "https://api.onlyrouter.ai/v1/messages",
+      "https://api.onlyrouter.ai/v1/messages",
+    ]);
+    // The same Anthropic wire headers reach a compatible gateway unchanged.
+    expect(headers[0]?.["x-api-key"]).toBe("sk-or-secret");
+    expect(headers[0]?.["anthropic-version"]).toBe("2023-06-01");
+    for (const url of urls) {
+      expect(url).not.toContain("sk-or-secret");
+    }
   });
 });
 

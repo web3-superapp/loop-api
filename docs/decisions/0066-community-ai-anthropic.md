@@ -133,12 +133,38 @@ Retention is not decided (§6.4 lists it as open). This step stores the minimum 
 
 ## 9. Configuration
 
-| variable                                  | default           | effect                                 |
-| ----------------------------------------- | ----------------- | -------------------------------------- |
-| `ANTHROPIC_API_KEY`                       | unset             | unset ⇒ `communityAi` stays `deferred` |
-| `COMMUNITY_AI_MODEL`                      | `claude-sonnet-5` | model published in every answer        |
-| `COMMUNITY_AI_TIMEOUT_MS`                 | `20000`           | 1000–60000                             |
-| `COMMUNITY_AI_MAX_OUTPUT_TOKENS`          | `800`             | 64–4096                                |
-| `COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE` | `6`               | 1–60                                   |
-| `COMMUNITY_AI_COMMUNITY_DAILY_LIMIT`      | `200`             | 1–10000                                |
-| `COMMUNITY_AI_BRIEF_CACHE_SECONDS`        | `3600`            | 60–86400                               |
+| variable                                  | default                     | effect                                                                                         |
+| ----------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `COMMUNITY_AI_API_KEY`                    | unset                       | Provider key; see the 2026-09-23 amendment                                                     |
+| `ANTHROPIC_API_KEY`                       | unset                       | fallback key when `COMMUNITY_AI_API_KEY` is unset; both unset ⇒ `communityAi` stays `deferred` |
+| `COMMUNITY_AI_BASE_URL`                   | `https://api.anthropic.com` | Anthropic-compatible Provider origin; see the amendment                                        |
+| `COMMUNITY_AI_MODEL`                      | `claude-sonnet-5`           | model published in every answer                                                                |
+| `COMMUNITY_AI_TIMEOUT_MS`                 | `20000`                     | 1000–60000                                                                                     |
+| `COMMUNITY_AI_MAX_OUTPUT_TOKENS`          | `800`                       | 64–4096                                                                                        |
+| `COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE` | `6`                         | 1–60                                                                                           |
+| `COMMUNITY_AI_COMMUNITY_DAILY_LIMIT`      | `200`                       | 1–10000                                                                                        |
+| `COMMUNITY_AI_BRIEF_CACHE_SECONDS`        | `3600`                      | 60–86400                                                                                       |
+
+## Amendment 2026-09-23: Provider 端点可配置（OnlyRouter）
+
+用户裁决（2026-09-23）：Community AI 走 Anthropic 兼容网关 **OnlyRouter**（`https://api.onlyrouter.ai`），key 由用户稍后提供。此前 adapter 把 `https://api.anthropic.com/v1/messages` 写死。§2 的 Provider 边界不变：仍是同一个 adapter、同一套 Messages 请求形状（`x-api-key`、`anthropic-version: 2023-06-01`、强制 `community_ai_answer` 工具），只是请求发往 `${COMMUNITY_AI_BASE_URL}/v1/messages`。
+
+### 新增配置
+
+| variable                | default                     | rule                                                                                                                                                                                                                        |
+| ----------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMMUNITY_AI_BASE_URL` | `https://api.anthropic.com` | 必须是 **https origin**：不允许凭据、路径、查询、片段。尾部斜杠被规范掉（`https://api.onlyrouter.ai/` ⇒ `https://api.onlyrouter.ai`）。`.../v1` 之类的路径是启动错误，不会被悄悄拼成 `/v1/v1/messages`。无 key 时同样校验。 |
+| `COMMUNITY_AI_API_KEY`  | unset                       | Provider key，规格同 `ANTHROPIC_API_KEY`（8–512 字符，空白视为未设置）。**优先于** `ANTHROPIC_API_KEY`。                                                                                                                    |
+
+key 取值规则：`COMMUNITY_AI_API_KEY` ⇒ 否则 `ANTHROPIC_API_KEY` ⇒ 两者都缺则 `config.communityAi === null`，能力保持 `deferred` + `COMMUNITY_AI_RUNTIME_DEFERRED`，三条路由 `503 CAPABILITY_UNAVAILABLE`。`ANTHROPIC_API_KEY` 保留，不删除。
+
+### 不变的红线
+
+- key 与 Provider origin 只存在于 `AppConfig` 与 adapter 闭包；不进日志、不进错误体、不进 `detailsSafe`、不进 OpenAPI，也不通过 `meta/about` 或能力投影下发（现状不下发 Provider 信息，本次不新增）。
+- Development 栈（`ops/api-dev.env`）只写 `COMMUNITY_AI_BASE_URL=https://api.onlyrouter.ai`；key 只能进 `.env.local`。
+- 失败分类（§2）与 OnlyRouter 无关：仍按 HTTP 状态归为 `REJECTED` / `UNAVAILABLE` / `MALFORMED`。
+
+### 待验证（需要 key）
+
+- OnlyRouter 对 `tool_choice: {type: "tool", name: ...}` 与 `tools[].input_schema.additionalProperties: false` 是否完整透传。若网关退化为纯文本回复，adapter 会按 §2 判为 `COMMUNITY_AI_PROVIDER_MALFORMED`，不会半信任答案。
+- `COMMUNITY_AI_MODEL` 在 OnlyRouter 侧的可用模型名（其示例为 `claude-sonnet-4-6`；默认值 `claude-sonnet-5` 是否被该网关接受未验证）。

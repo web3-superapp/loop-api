@@ -11,8 +11,25 @@
  * `tool_use` block for that tool is a rejection.
  */
 
-export const anthropicMessagesUrl = "https://api.anthropic.com/v1/messages";
+/**
+ * Default Provider origin. The effective origin is `baseUrl` on the gateway
+ * input (`COMMUNITY_AI_BASE_URL`), which may point at any Anthropic-compatible
+ * gateway; the request path is always `/v1/messages`.
+ */
+export const defaultAnthropicBaseUrl = "https://api.anthropic.com";
+export const anthropicMessagesPath = "/v1/messages";
+/** The default request URL; kept for reference, not used when `baseUrl` differs. */
+export const anthropicMessagesUrl = `${defaultAnthropicBaseUrl}${anthropicMessagesPath}`;
 export const anthropicVersionHeader = "2023-06-01";
+
+/**
+ * `${baseUrl}/v1/messages` with any trailing slashes on the origin removed, so
+ * `https://api.onlyrouter.ai/` and `https://api.onlyrouter.ai` both resolve to
+ * `https://api.onlyrouter.ai/v1/messages`.
+ */
+export function communityAiMessagesUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/u, "")}${anthropicMessagesPath}`;
+}
 export const communityAiToolName = "community_ai_answer";
 
 export type CommunityAiProviderFailureReason =
@@ -78,6 +95,8 @@ export type AnthropicFetch = (
 
 export interface CreateAnthropicCommunityAiGatewayInput {
   readonly apiKey: string;
+  /** Provider origin, e.g. `https://api.anthropic.com` or `https://api.onlyrouter.ai`. */
+  readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
   readonly maximumOutputTokens: number;
@@ -247,6 +266,7 @@ function combineSignals(
 export function createAnthropicCommunityAiGateway(
   input: CreateAnthropicCommunityAiGatewayInput,
 ): CommunityAiGateway {
+  const messagesUrl = communityAiMessagesUrl(input.baseUrl);
   const performFetch: AnthropicFetch =
     input.fetch ??
     ((url, init) =>
@@ -268,7 +288,7 @@ export function createAnthropicCommunityAiGateway(
       );
       let response: Awaited<ReturnType<AnthropicFetch>>;
       try {
-        response = await performFetch(anthropicMessagesUrl, {
+        response = await performFetch(messagesUrl, {
           method: "POST",
           headers: {
             "content-type": "application/json",
