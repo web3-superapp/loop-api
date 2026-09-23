@@ -2979,7 +2979,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
   });
 
-  describe("community application progress (Decision 0072)", () => {
+  describe("community application progress (Decision 0073)", () => {
     it("splits the home aggregate into joined (non-owner) and owned (with review state)", async () => {
       const { app } = await createApp();
       const response = await app.inject({

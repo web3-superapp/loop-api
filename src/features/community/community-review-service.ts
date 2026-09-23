@@ -10,7 +10,7 @@ import type {
 } from "./community-repository.js";
 
 /**
- * Operator review of a community application (Decision 0072).
+ * Operator review of a community application (Decision 0073).
  *
  * Both outcomes follow the same order as every other producer since
  * Decision 0067: the durable state change first (status, review columns,

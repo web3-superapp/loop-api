@@ -1,4 +1,4 @@
-# Decision 0072: An applicant can see, and is told, what happened to their community application
+# Decision 0073: An applicant can see, and is told, what happened to their community application
 
 - Status: Accepted
 - Date: 2026-09-23

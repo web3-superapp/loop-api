@@ -24,7 +24,7 @@ export const pushPlatforms = Object.freeze(["android", "ios"] as const);
 export type PushPlatform = (typeof pushPlatforms)[number];
 
 /**
- * First event batch plus the Decision 0072 review events. `security_event`
+ * First event batch plus the Decision 0073 review events. `security_event`
  * is mandatory (03 §15.1: security notifications may be forced on); every
  * other event is gated by the owner's `notification_preferences_v2` category
  * and can be switched off.
@@ -72,7 +72,7 @@ export const pushEventDictionary = Object.freeze({
     bodyLocKey: "push.communityVoiceRoomStarted.body",
   }),
   /**
-   * Decision 0072: the two review outcomes, addressed to the community's
+   * Decision 0073: the two review outcomes, addressed to the community's
    * current owner. The pointer names the community; the reason stays in the
    * feed row and on the detail resource.
    */

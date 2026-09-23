@@ -100,7 +100,7 @@ export type CommunityVerificationFilter =
   (typeof communityVerificationFilters)[number];
 /**
  * `joined` is the viewer's non-owner memberships; `owned` is the communities
- * the viewer currently owns (Decision 0072). A community is in exactly one.
+ * the viewer currently owns (Decision 0073). A community is in exactly one.
  */
 export const communityMembershipFilters = ["all", "joined", "owned"] as const;
 export type CommunityMembershipFilter =
@@ -262,7 +262,7 @@ export interface CommunitySummary {
 }
 
 /**
- * The owner-only view of an application's review state (Decision 0072).
+ * The owner-only view of an application's review state (Decision 0073).
  * `submittedAt` is the last (re)submission; `reviewedAt` and
  * `rejectedReason` are null while pending; a verified application has a
  * `reviewedAt` and no reason.

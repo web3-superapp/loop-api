@@ -282,8 +282,8 @@ DELETE /v2/devices/push-token
 | `price_alert_triggered`          | 价格提醒被评估器触发且写入了 feed 通知                                                                  | `trade.priceAlert`       | 是   |
 | `security_event`                 | 新设备登录、远程撤销设备会话                                                                            | `security.event`         | 否   |
 | `community_voice_room_started`   | 社区语音房开播（房主自己不收）                                                                          | `community.announcement` | 是   |
-| `community_application_verified` | 运营通过了你创建的社区申请（决策 0072）；`entityRef: community:<id>`，`contextRoute: community-profile` | `community.announcement` | 是   |
-| `community_application_rejected` | 运营驳回了你创建的社区申请（决策 0072）；原因只在 feed 行与社区详情里，不在推送里                       | `community.announcement` | 是   |
+| `community_application_verified` | 运营通过了你创建的社区申请（决策 0073）；`entityRef: community:<id>`，`contextRoute: community-profile` | `community.announcement` | 是   |
+| `community_application_rejected` | 运营驳回了你创建的社区申请（决策 0073）；原因只在 feed 行与社区详情里，不在推送里                       | `community.announcement` | 是   |
 
 社区申请结果的 feed 行（`type: community.announcement`，`payload.event =
  community.application.verified|rejected`，含 `communityId`、`communityName`、`reviewedAt`、

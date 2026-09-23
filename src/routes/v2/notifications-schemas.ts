@@ -258,7 +258,7 @@ const notificationSchema = {
       },
       maxProperties: 16,
       description:
-        "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0072).",
+        "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0073).",
     },
     source: {
       anyOf: [

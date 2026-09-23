@@ -412,7 +412,7 @@ describe("push repository (migration 000037)", () => {
     expect(stored.rows[0]?.completed_at).not.toBeNull();
   });
 
-  it("admits the two community review events of Decision 0072", async () => {
+  it("admits the two community review events of Decision 0073", async () => {
     const owner = await createOwner();
     const session = await createSession(owner);
     const registered = await register(owner, session);

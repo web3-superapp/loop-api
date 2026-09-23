@@ -73,7 +73,7 @@ function runtimeFake(reject: CommunityReviewService["reject"]) {
   return { create, reject: rejectMock, close };
 }
 
-describe("pnpm community:reject operator script (Decision 0072)", () => {
+describe("pnpm community:reject operator script (Decision 0073)", () => {
   it("refuses production before examining anything else", () => {
     expect(() =>
       parseCommunityRejectionRequest(

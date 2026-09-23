@@ -10,7 +10,7 @@ import { describeReviewResult } from "./community-verify.js";
 
 /**
  * Dev-only operator path that sets a `pending` community to `rejected`
- * (Decision 0072).
+ * (Decision 0073).
  *
  * Usage: `pnpm community:reject <communityId> --reason "<text>" [reasonCode]`
  *

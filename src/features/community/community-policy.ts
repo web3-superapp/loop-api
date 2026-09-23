@@ -99,7 +99,7 @@ export const communityPermissionMatrix: Readonly<
 /**
  * Self actions per actor role: the owner must transfer before leaving, and
  * only the owner may edit the community profile or resubmit a rejected
- * application (Decision 0072).
+ * application (Decision 0073).
  */
 export const communitySelfPermissionMatrix: Readonly<
   Record<CommunityRole, Readonly<Record<CommunitySelfAction, boolean>>>

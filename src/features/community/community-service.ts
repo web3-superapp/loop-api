@@ -244,7 +244,7 @@ export interface CommunityResource {
   readonly community: CommunitySummary;
   readonly viewer: ViewerProjection;
   /**
-   * The application's review state (Decision 0072), projected only to the
+   * The application's review state (Decision 0073), projected only to the
    * current owner; every other viewer receives null.
    */
   readonly application: CommunityApplicationProjection | null;
@@ -336,7 +336,7 @@ export type CommunityActivityProjection =
 export interface CommunityDiscoverItem extends CommunitySummary {
   readonly miningPower?: MiningPowerProjection;
   readonly activity?: CommunityActivityProjection;
-  /** Present only on `membership=owned` rows (Decision 0072). */
+  /** Present only on `membership=owned` rows (Decision 0073). */
   readonly application?: CommunityApplicationProjection;
 }
 
@@ -627,7 +627,7 @@ function applicationProjection(
   });
 }
 
-/** The review state is the owner's alone (Decision 0072). */
+/** The review state is the owner's alone (Decision 0073). */
 function ownerApplication(
   record: CommunityDetailRecord,
 ): CommunityApplicationProjection | null {

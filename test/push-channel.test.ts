@@ -160,7 +160,7 @@ describe("push contract (Decision 0067)", () => {
       "community_application_verified",
       "community_application_rejected",
     ]);
-    // Decision 0072: both review outcomes are optional community events.
+    // Decision 0073: both review outcomes are optional community events.
     expect(pushEventDictionary.community_application_verified).toMatchObject({
       category: "community.announcement",
       mandatory: false,

@@ -24,7 +24,7 @@ import type {
 import { androidLocKey } from "../src/integrations/fcm/fcm-sender.js";
 
 /**
- * The two review producers (Decision 0072) follow the Decision 0067 order:
+ * The two review producers (Decision 0073) follow the Decision 0067 order:
  * the durable review first, then the feed row, then a push that points at
  * it. Nothing about the feed or the push can change what the review did.
  */
@@ -138,7 +138,7 @@ function repositoryFake(input: {
 
 const silentLogger = { warn: vi.fn() };
 
-describe("community application feed row (Decision 0072)", () => {
+describe("community application feed row (Decision 0073)", () => {
   it("names the community, the outcome, the review time and the reason, keyed by the audit event", () => {
     const row = communityApplicationNotification({
       ownerUserId,
@@ -186,7 +186,7 @@ describe("community application feed row (Decision 0072)", () => {
   });
 });
 
-describe("community review service (Decision 0072)", () => {
+describe("community review service (Decision 0073)", () => {
   it("verifies, writes the feed row, then pushes a pointer to the owner", async () => {
     const notifications = notificationsFake();
     const push = pushFake();

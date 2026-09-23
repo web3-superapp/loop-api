@@ -19,7 +19,7 @@ import {
 } from "../src/integrations/fcm/service-account.js";
 
 /**
- * Shared composition for the two Dev-only review scripts (Decision 0072).
+ * Shared composition for the two Dev-only review scripts (Decision 0073).
  *
  * One pool, the community repository, the notification repository, and —
  * only when `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` names a usable file — the

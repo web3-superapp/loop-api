@@ -10,7 +10,7 @@ import {
 
 /**
  * Dev-only operator path that sets a community to `verified`
- * (Decision 0031, main-agent ruling 2026-09-07; Decision 0072).
+ * (Decision 0031, main-agent ruling 2026-09-07; Decision 0073).
  *
  * Verification is never self-served through the API: `POST /v2/communities`
  * only creates a `pending` record. This script is the single documented way

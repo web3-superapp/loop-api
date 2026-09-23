@@ -159,7 +159,7 @@ describe("V2 community permission matrix", () => {
     ).toBe(false);
   });
 
-  it("gives only the owner the right to resubmit a rejected application (Decision 0072)", () => {
+  it("gives only the owner the right to resubmit a rejected application (Decision 0073)", () => {
     expect(communitySelfPermissionMatrix.owner.resubmitApplication).toBe(true);
     expect(communitySelfPermissionMatrix.admin.resubmitApplication).toBe(false);
     expect(communitySelfPermissionMatrix.member.resubmitApplication).toBe(

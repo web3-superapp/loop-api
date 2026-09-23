@@ -293,7 +293,7 @@ export function registerV2CommunityRoutes(
         operationId: "resubmitV2Community",
         summary: "Resubmit a rejected community application",
         description:
-          "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0072): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+          "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

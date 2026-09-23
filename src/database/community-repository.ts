@@ -102,7 +102,7 @@ const limitSchema = z.number().int().min(1).max(101);
 const dateSchema = z.date().refine((value) => !Number.isNaN(value.getTime()));
 const reasonCodeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 /**
- * Operator rejection reason (Decision 0072): trimmed, 1-280 code points, no
+ * Operator rejection reason (Decision 0073): trimmed, 1-280 code points, no
  * control or format characters, mirroring the description bound so the
  * database check never fails on a value the script accepted.
  */
@@ -612,7 +612,7 @@ async function appendCommunityAudit(
     readonly fromStatus?: string | null;
     readonly toStatus?: string | null;
     readonly reasonCode?: string | null;
-    /** Free-text operator note (Decision 0072), bounded like a description. */
+    /** Free-text operator note (Decision 0073), bounded like a description. */
     readonly note?: string | null;
     readonly idempotencyRecordId: string | null;
     readonly requestId: string;
@@ -1387,7 +1387,7 @@ export function createPostgresCommunityRepository(
         const joinedLimit = limitSchema.parse(rawInput.joinedLimit);
         const ownedLimit = limitSchema.parse(rawInput.ownedLimit);
         const discoverLimit = limitSchema.parse(rawInput.discoverLimit);
-        // Decision 0072: the owner memberships form their own group, ordered
+        // Decision 0073: the owner memberships form their own group, ordered
         // by the latest submission so a resubmitted application rises.
         const joined = await pool.query<Record<string, unknown>>({
           text: `
@@ -1811,7 +1811,7 @@ export function createPostgresCommunityRepository(
           if (!canPerformSelfAction(actor, "resubmitApplication")) {
             throw new CommunityPermissionDeniedError();
           }
-          // Decision 0072: only a rejected application can go back to
+          // Decision 0073: only a rejected application can go back to
           // pending; a pending one is already there and a verified one has
           // nothing to resubmit.
           if (current.verificationStatus !== "rejected") {
@@ -3275,7 +3275,7 @@ export function createPostgresCommunityRepository(
               changed: false,
             });
           }
-          // Decision 0072: verifying also closes the review, whether the
+          // Decision 0073: verifying also closes the review, whether the
           // application was pending or the operator reconsidered a rejection.
           await client.query({
             text: `

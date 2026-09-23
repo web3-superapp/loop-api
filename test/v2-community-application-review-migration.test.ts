@@ -13,7 +13,7 @@ function captureSql(operation: (pgm: MigrationBuilder) => void): string {
   return String(sql.mock.calls[0]?.[0]);
 }
 
-describe("000039 community application review migration contract (Decision 0072)", () => {
+describe("000039 community application review migration contract (Decision 0073)", () => {
   it("adds the three review facts, backfills the submission time, and pairs them with the status", () => {
     const statement = captureSql(up);
 

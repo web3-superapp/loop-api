@@ -1,7 +1,7 @@
 import type { MigrationBuilder } from "node-pg-migrate";
 
 /**
- * Decision 0072: an applicant can see, and is told, what happened to their
+ * Decision 0073: an applicant can see, and is told, what happened to their
  * community application.
  *
  * `communities` gains the three review facts the applicant is shown:
@@ -15,7 +15,7 @@ import type { MigrationBuilder } from "node-pg-migrate";
  * nullable `note`, where the reject audit row keeps the operator's reason
  * text after a resubmission clears it from the community row.
  *
- * `push_deliveries` admits the two review events of Decision 0072.
+ * `push_deliveries` admits the two review events of Decision 0073.
  */
 export function up(pgm: MigrationBuilder): void {
   pgm.sql(`
@@ -65,11 +65,11 @@ export function up(pgm: MigrationBuilder): void {
         );
 
     comment on column public.communities.application_submitted_at is
-      'When the current application was (re)submitted (Decision 0072). Equals created_at until the owner resubmits after a rejection.';
+      'When the current application was (re)submitted (Decision 0073). Equals created_at until the owner resubmits after a rejection.';
     comment on column public.communities.reviewed_at is
-      'When the operator last verified or rejected the application (Decision 0072); null while pending.';
+      'When the operator last verified or rejected the application (Decision 0073); null while pending.';
     comment on column public.communities.rejected_reason is
-      'Operator-supplied reason shown only to the owner while the application is rejected (Decision 0072); cleared on resubmission.';
+      'Operator-supplied reason shown only to the owner while the application is rejected (Decision 0073); cleared on resubmission.';
 
     alter table public.community_role_events
       add column note text,
@@ -104,7 +104,7 @@ export function up(pgm: MigrationBuilder): void {
         ));
 
     comment on column public.community_role_events.note is
-      'Free-text operator note bounded like a community description (Decision 0072). The community_rejected row keeps the reason here after resubmission clears it from the community.';
+      'Free-text operator note bounded like a community description (Decision 0073). The community_rejected row keeps the reason here after resubmission clears it from the community.';
 
     alter table public.push_deliveries
       drop constraint push_deliveries_event_type_check;

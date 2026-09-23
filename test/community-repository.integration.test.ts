@@ -1805,7 +1805,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
 
     await join(owner.userId, theirs);
 
-    // Decision 0072: `joined` is the non-owner memberships and `owned` the
+    // Decision 0073: `joined` is the non-owner memberships and `owned` the
     // communities the viewer owns; a community is in exactly one group.
     const joinedOnly = await repository.listCommunities({
       viewerUserId: owner.userId,
@@ -2200,7 +2200,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     });
   });
 
-  describe("application review and resubmission (Decision 0072)", () => {
+  describe("application review and resubmission (Decision 0073)", () => {
     const reason = "Name collides with a listed token; pick another";
 
     async function auditRows(communityId: string): Promise<

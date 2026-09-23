@@ -148,7 +148,7 @@ Privy ID、Stream ID**：
   D10 之前后端不解析它，前端也不得据此展示价格、市值、持有人等任何事实。
 - `memberCount` 来自 PostgreSQL，是唯一可信的成员数字。
 
-### 申请进度投影 `application`（S79b，决策 0072）
+### 申请进度投影 `application`（S79b，决策 0073）
 
 ```json
 {
@@ -214,7 +214,7 @@ Privy ID、Stream ID**：
 
 `discover` 最多 5 条，只含 `verified` 且当前账号未加入的社区。
 
-**「我的社区」拆成两组（S79b，决策 0072）**：`joined` 是当前账号以 admin/member 身份
+**「我的社区」拆成两组（S79b，决策 0073）**：`joined` 是当前账号以 admin/member 身份
 加入的社区；`owned` 是当前账号**是 owner** 的社区（含 `pending`/`rejected`/`verified`），
 按 `application.submittedAt` 倒序，每行必带 `application`。同一社区只会出现在其中一组：
 自己创建的社区不再出现在 `joined` 里。「我」页「我的社区」= `joined` 组 +「我创建的」
@@ -495,7 +495,7 @@ fixture 顶替。写接口（create / patch / join / leave）返回的同一字�
 `viewer.membership === null` 表示未加入（显示"加入"按钮）。`status === "muted"`
 表示被禁言，`banned` 表示被封禁。
 
-`application`（S79b，决策 0072）：调用者是当前 owner 时为 §3 的申请进度对象，否则
+`application`（S79b，决策 0073）：调用者是当前 owner 时为 §3 的申请进度对象，否则
 `null`。owner 视角的 `community-profile` 顶部按 `application.status` 显示「审核中」
 或「已驳回」横幅（驳回横幅带 `rejectedReason` 原文与「修改后重新提交」入口 → 4.3c）；
 非 owner 看到的 `pending` 社区只显示"审核中"标记，永远看不到原因。
@@ -993,7 +993,7 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 6. A 任命 B 为 admin → B 禁言第三个成员 → 成员越权 403 → 封禁后取关与 DM 请求
    被拒 → cursor 跨账号失效 → 关闭模块后 404。
 
-## 7. 申请审核结果通知（S79b，决策 0072）
+## 7. 申请审核结果通知（S79b，决策 0073）
 
 运营用 `pnpm community:verify <id>` / `pnpm community:reject <id> --reason "…"` 审核后，
 后端向**当前 owner** 写一条站内通知（`GET /v2/notifications/feed`，类别

@@ -37,7 +37,7 @@ export interface CommunityRecord {
   readonly createdAt: string;
   readonly configVersion: string;
   /**
-   * Review facts of the application (Decision 0072). Always read; the
+   * Review facts of the application (Decision 0073). Always read; the
    * service projects them only to the current owner.
    */
   readonly application: CommunityApplicationFacts;
@@ -140,7 +140,7 @@ export interface CommunityOrderingFacts {
 }
 
 export interface CommunityHomeRecord {
-  /** Non-owner memberships (Decision 0072): owned communities are separate. */
+  /** Non-owner memberships (Decision 0073): owned communities are separate. */
   readonly joined: readonly CommunityDetailRecord[];
   /** True when the account has joined more communities than `joinedLimit`. */
   readonly joinedTruncated: boolean;
@@ -392,7 +392,7 @@ export interface CommunityRepository {
     input: CommunityMembershipCommandInput,
   ): Promise<CommunityDetailRecord>;
   /**
-   * Owner-only `rejected -> pending` transition (Decision 0072). Clears the
+   * Owner-only `rejected -> pending` transition (Decision 0073). Clears the
    * reason and the review time, stamps the submission time, and appends a
    * `community_resubmitted` audit row. Any other state is stale.
    */
@@ -427,7 +427,7 @@ export interface CommunityRepository {
   /** Dev-only operator path used by `pnpm community:verify`; writes an audit row. */
   verifyCommunity(input: CommunityReviewInput): Promise<CommunityReviewRecord>;
   /**
-   * Dev-only operator path used by `pnpm community:reject` (Decision 0072).
+   * Dev-only operator path used by `pnpm community:reject` (Decision 0073).
    * Only a `pending` community can be rejected; a `verified` one is stale
    * and an already rejected one is returned unchanged.
    */
