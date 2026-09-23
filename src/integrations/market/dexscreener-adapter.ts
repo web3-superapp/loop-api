@@ -340,6 +340,9 @@ export function normalizeDexscreenerPairs(
     pairs,
     // Every pair this endpoint returns belongs to the requested token.
     unrepresentablePairCount: unrepresentable.length,
+    unrepresentableBasePairCount: unrepresentable.filter(
+      (pair) => pair.baseTokenAddress === tokenAddress,
+    ).length,
   });
 }
 
@@ -369,6 +372,9 @@ export function normalizeDexscreenerBatch(
           (pair) =>
             pair.baseTokenAddress === tokenAddress ||
             pair.quoteTokenAddress === tokenAddress,
+        ).length,
+        unrepresentableBasePairCount: unrepresentable.filter(
+          (pair) => pair.baseTokenAddress === tokenAddress,
         ).length,
       }),
     ),

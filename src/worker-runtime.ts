@@ -50,7 +50,14 @@ import {
   loadFirebaseServiceAccount,
 } from "./integrations/fcm/service-account.js";
 import { createMarketFactService } from "./features/market/market-fact-service.js";
+import { marketReasonCodes } from "./features/market/market-contract.js";
 import { createMarketProviders } from "./integrations/market/provider-factory.js";
+import {
+  createMarketSparklineWarmWorker,
+  type CreateMarketSparklineWarmWorkerOptions,
+  type MarketSparklineWarmWorker,
+} from "./market-sparkline-warm-worker.js";
+import type { WatchlistV2Repository } from "./database/watchlist-v2-repository.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 import type { BscIndexerRepository } from "./database/bsc-indexer-repository.js";
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
@@ -124,6 +131,8 @@ export interface ReconciliationWorkerDatabase {
   readonly chainRegistry?: ChainRegistryRepository;
   readonly bscIndexer?: BscIndexerRepository;
   readonly marketFacts?: MarketFactCacheRepository;
+  /** Watchlisted asset ids for the sparkline warm lane (Decision 0074). */
+  readonly watchlistsV2?: WatchlistV2Repository;
   readonly alertsV2?: AlertV2Repository;
   readonly notifications?: NotificationRepository;
   /** Device push tokens and delivery attempts (Decision 0067). */
@@ -174,6 +183,10 @@ export type MiningSnapshotWorkerFactory = (
   options: CreateMiningSnapshotWorkerOptions,
 ) => MiningSnapshotWorker;
 
+export type MarketSparklineWarmWorkerFactory = (
+  options: CreateMarketSparklineWarmWorkerOptions,
+) => MarketSparklineWarmWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -194,6 +207,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createAlertEvaluatorWorker?: AlertEvaluatorWorkerFactory;
   readonly createWalletIntentReconcileWorker?: WalletIntentReconcileWorkerFactory;
   readonly createMiningSnapshotWorker?: MiningSnapshotWorkerFactory;
+  readonly createMarketSparklineWarmWorker?: MarketSparklineWarmWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
 }
@@ -236,6 +250,8 @@ export async function runReconciliationWorker(
     createWalletIntentReconcileWorker;
   const miningSnapshotWorkerFactory =
     options.createMiningSnapshotWorker ?? createMiningSnapshotWorker;
+  const sparklineWarmWorkerFactory =
+    options.createMarketSparklineWarmWorker ?? createMarketSparklineWarmWorker;
   const readClientFactory =
     options.createBscReadClient ??
     ((config): BscReadClient => createBscReadClient({ config }));
@@ -565,6 +581,69 @@ export async function runReconciliationWorker(
               }
             },
           });
+    // The `market_sparkline_warm` lane (Decision 0074) is default-on but has
+    // nothing to warm from without the OHLCV Provider: it is then left out
+    // and said so once, with the same reason the API publishes.
+    const sparklineWarmConfig = options.config.sparklineWarm;
+    let sparklineWarmWorker: MarketSparklineWarmWorker | null = null;
+    if (
+      sparklineWarmConfig !== null &&
+      database.chainRegistry !== undefined &&
+      database.marketFacts !== undefined
+    ) {
+      if (!options.config.market.geckoterminal.enabled) {
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "market_sparkline_warm",
+            reasonCode: marketReasonCodes.geckoterminalDisabled,
+          },
+          "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled",
+        );
+      } else {
+        const providers = createMarketProviders(
+          options.config.market,
+          "worker",
+        );
+        sparklineWarmWorker = sparklineWarmWorkerFactory({
+          registry: database.chainRegistry,
+          watchlist: database.watchlistsV2 ?? null,
+          cache: database.marketFacts,
+          facts: createMarketFactService({
+            config: options.config.market,
+            cache: database.marketFacts,
+            pairsProvider: providers.pairs,
+            securityProvider: null,
+            candlesProvider: providers.candles,
+            tokenLookupProvider: providers.tokenLookup,
+          }),
+          chainId: bscChainId,
+          intervalMs: sparklineWarmConfig.intervalMs,
+          sparklineTtlSeconds: options.config.market.sparklineTtlSeconds,
+          poolRevalidationSeconds:
+            options.config.market.unlistedMetadataTtlSeconds,
+          onRunResult: (result) => {
+            if (result.kind === "failed") {
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane: "market_sparkline_warm",
+                  assetId: result.assetId,
+                  reasonCode: result.reasonCode,
+                },
+                "LOOP market sparkline warm lane could not refresh an asset",
+              );
+            }
+          },
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        });
+      }
+    }
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).
     const communityChannelGateway =
@@ -660,6 +739,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               miningSnapshotWorker.run(controller.signal),
+            ),
+          ]),
+      ...(sparklineWarmWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              sparklineWarmWorker.run(controller.signal),
             ),
           ]),
     ];

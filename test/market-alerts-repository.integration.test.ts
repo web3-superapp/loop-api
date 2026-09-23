@@ -300,6 +300,54 @@ describe("PostgreSQL market facts, pool lane, V2 alerts, and notifications", () 
     expect(await facts.findVerifiedCommunityByAssetId(usdtAssetId)).toBeNull();
   });
 
+  it("reads the rows of one fact kind for many subjects in one query (Decision 0074)", async () => {
+    for (const [address, closes] of [
+      [wbnb, ["747.12", "747.48"]],
+      [usdt, ["1", "1.0001"]],
+    ] as const) {
+      await facts.put({
+        subjectKey: `token:${address}`,
+        factKind: "sparkline_1h",
+        source: "geckoterminal",
+        value: {
+          interval: "1h",
+          poolAddress,
+          poolOrigin: "registry",
+          poolChosenAt: "2026-09-23T11:00:00.000Z",
+          closes: [...closes],
+          candleCount: closes.length,
+          high: closes[1],
+          low: closes[0],
+        },
+        rawDigest: "c".repeat(64),
+        fetchedAt: "2026-09-23T11:00:00.000Z",
+        ttlSeconds: 300,
+      });
+    }
+    const unknown = `token:0x${"1".repeat(40)}`;
+    const rows = await facts.getMany(
+      [`token:${wbnb}`, `token:${usdt}`, unknown, `token:${wbnb}`],
+      "sparkline_1h",
+      "geckoterminal",
+    );
+    expect([...rows.keys()].sort()).toEqual([`token:${usdt}`, `token:${wbnb}`]);
+    expect(rows.get(`token:${wbnb}`)).toMatchObject({
+      factKind: "sparkline_1h",
+      source: "geckoterminal",
+      ttlSeconds: 300,
+      fetchedAt: "2026-09-23T11:00:00.000Z",
+      value: { closes: ["747.12", "747.48"], candleCount: 2 },
+    });
+    // Another source of the same kind is a different row.
+    expect(
+      (await facts.getMany([`token:${wbnb}`], "sparkline_1h", "dexscreener"))
+        .size,
+    ).toBe(0);
+    expect(
+      (await facts.getMany([], "sparkline_1h", "geckoterminal")).size,
+    ).toBe(0);
+  });
+
   it("commits pool events with their own checkpoint, aggregates candles, and rewinds only its own lane", async () => {
     const poolId = await seedPool();
     await indexer.commitTransferSegment({

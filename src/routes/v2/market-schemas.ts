@@ -15,6 +15,7 @@ import {
   candleLimits,
   marketFactQualities,
   marketSources,
+  marketSparklinePolicy,
   marketTrendingRules,
   providerLookupSourceKind,
   signedDecimalPatternSource,
@@ -105,16 +106,105 @@ const assetSummarySchema = {
   ],
 } as const;
 
+/**
+ * The row's 1H line (Decision 0074): the last 24 hourly closes of one pool,
+ * projected from a cache row the worker lane keeps warm. The overview never
+ * reads the Provider for it, so a missing row is `unavailable`, never a
+ * throttled read. Clients draw `closes` and stop calling `/candles` per row.
+ */
+export const marketSparklineSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "interval",
+        "closes",
+        "observedAt",
+        "source",
+        "quality",
+      ],
+      properties: {
+        status: { type: "string", const: "available" },
+        interval: { type: "string", const: marketSparklinePolicy.interval },
+        closes: {
+          type: "array",
+          minItems: 1,
+          maxItems: marketSparklinePolicy.pointLimit,
+          items: decimalSchema,
+          description:
+            "Hourly closes, oldest first; the last one is the open hour. Never a JavaScript number.",
+        },
+        observedAt: dateTimeSchema,
+        source: { type: "string", enum: [...marketSources] },
+        quality: { type: "string", enum: ["fresh", "stale", "proxied"] },
+      },
+    },
+    unavailableSchema,
+  ],
+  description:
+    "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED.",
+} as const;
+
+/**
+ * 24h high / low of the same cached hourly candles (Decision 0074 §1b), for
+ * the token page's two cells. `bars` is how many candles the range covers.
+ */
+export const marketRange24hSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "high",
+        "low",
+        "bars",
+        "observedAt",
+        "source",
+        "quality",
+      ],
+      properties: {
+        status: { type: "string", const: "available" },
+        high: decimalSchema,
+        low: decimalSchema,
+        bars: {
+          type: "integer",
+          minimum: 1,
+          maximum: marketSparklinePolicy.pointLimit,
+          description:
+            "Hourly candles the range covers; below 24 the token has less than a day of history at this pool.",
+        },
+        observedAt: dateTimeSchema,
+        source: { type: "string", enum: [...marketSources] },
+        quality: { type: "string", enum: ["fresh", "stale", "proxied"] },
+      },
+    },
+    unavailableSchema,
+  ],
+  description:
+    "Same cache row and the same unavailable reason codes as the overview row sparkline: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED, MARKET_SPARKLINE_EXPIRED, MARKET_SPARKLINE_EMPTY, MARKET_FACT_CACHE_UNAVAILABLE, ASSET_BLOCKED.",
+} as const;
+
 const marketAssetRowSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["assetId", "asset", "logo", "price", "priceChange24h"],
+  required: [
+    "assetId",
+    "asset",
+    "logo",
+    "price",
+    "priceChange24h",
+    "sparkline",
+  ],
   properties: {
     assetId: { type: "string", pattern: assetIdPatternSource },
     asset: assetSummarySchema,
     logo: tokenLogoSchema,
     price: marketFactSchema,
     priceChange24h: marketFactSchema,
+    sparkline: marketSparklineSchema,
   },
 } as const;
 
@@ -189,8 +279,10 @@ export const marketOverviewResourceSchema = {
                 required: [
                   "assetId",
                   "asset",
+                  "logo",
                   "price",
                   "priceChange24h",
+                  "sparkline",
                   "volume24h",
                   "liquidityUsd",
                 ],
@@ -326,6 +418,7 @@ export const marketAssetResourceSchema = {
     "community",
     "security",
     "holderCount",
+    "range24h",
     "contractVersion",
   ],
   properties: {
@@ -441,6 +534,7 @@ export const marketAssetResourceSchema = {
       ],
     },
     holderCount: marketFactSchema,
+    range24h: marketRange24hSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

@@ -1435,6 +1435,7 @@ export async function buildApp(
       cursorCodec: v2CursorCodec,
       lookupQuota: unlistedTokenLookupQuota,
       chainId: bscChainId,
+      staleGraceSeconds: config.market.staleGraceSeconds,
     });
   const alertV2Service =
     options.alertV2Service ??

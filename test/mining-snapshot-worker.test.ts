@@ -648,11 +648,16 @@ describe("mining-snapshot lane", () => {
         budgetApiPerMinute: 120,
         budgetWorkerPerMinute: 120,
       },
-      geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
+      geckoterminal: {
+        enabled: false,
+        rateLimitPerMinute: 30,
+        budgetWorkerPerMinute: 10,
+      },
       goplus: null,
       priceTtlSeconds: 30,
       securityTtlSeconds: 600,
       candlesTtlSeconds: 60,
+      sparklineTtlSeconds: 300,
       staleGraceSeconds: 900,
       unlistedPriceTtlSeconds: 60,
       unlistedMetadataTtlSeconds: 3_600,
@@ -677,6 +682,7 @@ describe("mining-snapshot lane", () => {
       get: vi.fn((subjectKey: string) =>
         Promise.resolve(rows.get(subjectKey) ?? null),
       ),
+      getMany: vi.fn(() => Promise.resolve(new Map())),
       put: vi.fn((record: MarketFactCacheRecord) => {
         rows.set(record.subjectKey, record);
         return Promise.resolve(record);

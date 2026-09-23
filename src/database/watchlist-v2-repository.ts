@@ -57,6 +57,12 @@ export interface ReplaceWatchlistV2Input {
 export interface WatchlistV2Repository {
   get(ownerUserId: string): Promise<WatchlistV2Snapshot>;
   replace(input: ReplaceWatchlistV2Input): Promise<WatchlistV2Snapshot>;
+  /**
+   * Every distinct V2 asset id any owner has on a watchlist, most-watched
+   * first, bounded (Decision 0074). Owners are never returned: the market
+   * sparkline lane only needs to know which assets deserve a warm row.
+   */
+  listDistinctAssetIds(limit: number): Promise<readonly string[]>;
 }
 
 export class WatchlistV2UnavailableError extends Error {
@@ -215,6 +221,31 @@ export function createPostgresWatchlistV2Repository(
       return loadSnapshot(pool, ownerUserId);
     },
 
+    async listDistinctAssetIds(limit: number): Promise<readonly string[]> {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+        fail();
+      }
+      const result = await pool.query<{ asset_id: string }>({
+        text: `
+          select asset_id
+          from public.watchlist_items
+          where asset_id is not null
+          group by asset_id
+          order by count(distinct owner_user_id) desc, asset_id asc
+          limit $1
+        `,
+        values: [limit],
+      });
+      return Object.freeze(
+        result.rows.map((row) => {
+          if (!assetIdPattern.test(row.asset_id)) {
+            fail();
+          }
+          return row.asset_id;
+        }),
+      );
+    },
+
     async replace(
       input: ReplaceWatchlistV2Input,
     ): Promise<WatchlistV2Snapshot> {
@@ -337,5 +368,9 @@ function unavailable(): Promise<never> {
 }
 
 export function createUnavailableWatchlistV2Repository(): WatchlistV2Repository {
-  return Object.freeze({ get: unavailable, replace: unavailable });
+  return Object.freeze({
+    get: unavailable,
+    replace: unavailable,
+    listDistinctAssetIds: unavailable,
+  });
 }

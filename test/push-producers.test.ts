@@ -327,6 +327,7 @@ describe("price_alert_triggered producer", () => {
     };
     return {
       readTokenPairs: () => Promise.resolve(fact),
+      recallPrimaryPairPriceChange: () => Promise.resolve(null),
       readTokenPairsBatch: () => Promise.reject(new Error("not used")),
       readPair: () => Promise.reject(new Error("not used")),
       readAssetPrice: () =>

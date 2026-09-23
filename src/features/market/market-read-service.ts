@@ -17,6 +17,7 @@ import type {
 } from "../../database/chain-registry-repository.js";
 import {
   MarketFactCacheUnavailableError,
+  type MarketFactCacheRecord,
   type MarketFactCacheRepository,
 } from "../../database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../../database/watchlist-v2-repository.js";
@@ -67,6 +68,15 @@ import {
   type UnlistedTokenFact,
 } from "./market-fact-service.js";
 import {
+  projectRange24h,
+  projectSparkline,
+  readSparklineRow,
+  readSparklineRows,
+  unavailableSparkline,
+  type Range24hProjection,
+  type SparklineProjection,
+} from "./market-sparkline.js";
+import {
   UnlistedTokenLookupQuotaUnavailableError,
   UnlistedTokenLookupRateLimitedError,
   type UnlistedTokenLookupQuota,
@@ -110,6 +120,12 @@ export interface MarketAssetRow {
   readonly logo: TokenLogoProjection;
   readonly price: MarketFactProjection;
   readonly priceChange24h: MarketFactProjection;
+  /**
+   * The row's 1H line (Decision 0074): the last 24 hourly closes projected
+   * from the cache row the worker lane keeps warm. Never read from the
+   * Provider on the request path.
+   */
+  readonly sparkline: SparklineProjection;
 }
 
 export interface TrendingRow extends MarketAssetRow {
@@ -235,6 +251,12 @@ export interface MarketAssetResource {
       }
     | UnavailableBlock;
   readonly holderCount: MarketFactProjection;
+  /**
+   * 24h high / low (Decision 0074 §1b): the extremes of the same cached
+   * hourly candles the overview row's sparkline is drawn from; never a
+   * Provider read on the request path.
+   */
+  readonly range24h: Range24hProjection;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -433,6 +455,12 @@ export interface CreateMarketReadServiceInput {
    */
   readonly lookupQuota: UnlistedTokenLookupQuota | null;
   readonly chainId: string;
+  /**
+   * Seconds past its TTL a cached sparkline row is still published as
+   * `stale` (Decision 0074); the same `MARKET_STALE_GRACE_SECONDS` every
+   * other fact uses.
+   */
+  readonly staleGraceSeconds: number;
   readonly now?: () => Date;
   readonly createRecommendationId?: () => string;
 }
@@ -495,6 +523,7 @@ function pairFactsFromSnapshot(
   fact: CachedFact<{
     readonly tokenAddress: string;
     readonly pairs: readonly TokenPairSnapshot[];
+    readonly unrepresentableBasePairCount?: number | undefined;
   }>,
   proxied = false,
 ): PairFacts {
@@ -517,7 +546,13 @@ function pairFactsFromSnapshot(
   }
   const pair = selectPrimaryPair(fact.value);
   if (pair === null) {
-    return allUnavailable(marketReasonCodes.pairNotFound);
+    // The Provider reported base pairs but none could be represented
+    // (Decisions 0060/0062): that is not "no pair" (Decision 0074 §5).
+    return allUnavailable(
+      (fact.value.unrepresentableBasePairCount ?? 0) > 0
+        ? marketReasonCodes.pairUnrepresentable
+        : marketReasonCodes.pairNotFound,
+    );
   }
   const quality = proxied
     ? "proxied"
@@ -902,7 +937,71 @@ export function createMarketReadService(
         address,
         signal === undefined ? {} : { signal },
       ));
-    return pairFactsFromSnapshot(fact, asset.address === null);
+    const facts = pairFactsFromSnapshot(fact, asset.address === null);
+    // The Provider answered the pair without `priceChange.h24` this time
+    // (it does, per pool, for a minute or two): the number it last reported
+    // for the same pair is published as stale, with the time it was
+    // reported and this reason (Decision 0074 §4). Nothing else is used.
+    if (
+      facts.primaryPair !== null &&
+      facts.priceChange24h.quality === "unavailable" &&
+      facts.priceChange24h.reasonCode === marketReasonCodes.factMissing
+    ) {
+      const remembered = await input.facts.recallPrimaryPairPriceChange(
+        address,
+        facts.primaryPair.pairAddress,
+      );
+      if (remembered !== null) {
+        return Object.freeze({
+          ...facts,
+          priceChange24h: availableFact({
+            value: remembered.value,
+            source: "dexscreener",
+            fetchedAt: remembered.fetchedAt,
+            ttlSeconds: remembered.ttlSeconds,
+            quality: "stale",
+            reasonCode: marketReasonCodes.factMissing,
+          }),
+        });
+      }
+    }
+    return facts;
+  }
+
+  /**
+   * The asset page's 24h range from the sparkline cache row (Decision 0074
+   * §1b): the native asset reads WBNB's row and is labelled proxied; a
+   * disabled OHLCV Provider, a blocked asset, or an unreadable cache close
+   * the block with the same codes the overview rows use.
+   */
+  async function range24hFor(subject: {
+    readonly address: string | null;
+    readonly blocked: boolean;
+  }): Promise<Range24hProjection> {
+    if (subject.blocked) {
+      return unavailableSparkline("ASSET_BLOCKED");
+    }
+    if (!input.facts.candlesProviderEnabled) {
+      return unavailableSparkline(marketReasonCodes.geckoterminalDisabled);
+    }
+    let record: MarketFactCacheRecord | null;
+    try {
+      record = await readSparklineRow(
+        input.cache,
+        subject.address ?? bscWrappedNativeAddress,
+      );
+    } catch (error) {
+      if (!(error instanceof MarketFactCacheUnavailableError)) {
+        throw error;
+      }
+      return unavailableSparkline(marketReasonCodes.cacheUnavailable);
+    }
+    return projectRange24h({
+      record,
+      nowMs: now().getTime(),
+      staleGraceSeconds: input.staleGraceSeconds,
+      proxied: subject.address === null,
+    });
   }
 
   async function chainHead(): Promise<{
@@ -1012,13 +1111,39 @@ export function createMarketReadService(
           }
         }
       }
+      const rowAddresses = [
+        ...scanned,
+        ...readable.filter((asset) => watchlistIds.has(asset.assetId)),
+      ].map((asset) => asset.address ?? bscWrappedNativeAddress);
       const prefetched = await input.facts.readTokenPairsBatch(
-        [
-          ...scanned,
-          ...readable.filter((asset) => watchlistIds.has(asset.assetId)),
-        ].map((asset) => asset.address ?? bscWrappedNativeAddress),
+        rowAddresses,
         signal === undefined ? {} : { signal },
       );
+      // Row sparklines (Decision 0074): one cache read for every row, never
+      // a Provider call. A disabled OHLCV Provider publishes nothing, as
+      // for every other fact of a disabled Provider.
+      const sparklineRows = input.facts.candlesProviderEnabled
+        ? await readSparklineRows(input.cache, [...new Set(rowAddresses)])
+        : new Map<string, MarketFactCacheRecord>();
+      const nowMs = now().getTime();
+      const sparklineFor = (asset: AssetRecord): SparklineProjection => {
+        if (asset.status === "blocked") {
+          return unavailableSparkline("ASSET_BLOCKED");
+        }
+        if (!input.facts.candlesProviderEnabled) {
+          return unavailableSparkline(marketReasonCodes.geckoterminalDisabled);
+        }
+        if (sparklineRows === null) {
+          return unavailableSparkline(marketReasonCodes.cacheUnavailable);
+        }
+        return projectSparkline({
+          record:
+            sparklineRows.get(asset.address ?? bscWrappedNativeAddress) ?? null,
+          nowMs,
+          staleGraceSeconds: input.staleGraceSeconds,
+          proxied: asset.address === null,
+        });
+      };
 
       let watchlist: MarketOverviewResource["watchlist"];
       if (input.watchlist === null) {
@@ -1044,6 +1169,7 @@ export function createMarketReadService(
                   logo: projectTokenLogoForAssetId(item.assetId),
                   price: unavailableFact("ASSET_NOT_READABLE"),
                   priceChange24h: unavailableFact("ASSET_NOT_READABLE"),
+                  sparkline: unavailableSparkline("ASSET_NOT_READABLE"),
                 }),
               );
               continue;
@@ -1060,6 +1186,7 @@ export function createMarketReadService(
                 }),
                 price: facts.price,
                 priceChange24h: facts.priceChange24h,
+                sparkline: sparklineFor(asset),
               }),
             );
           }
@@ -1094,6 +1221,7 @@ export function createMarketReadService(
             }),
             price: facts.price,
             priceChange24h: facts.priceChange24h,
+            sparkline: sparklineFor(asset),
             volume24h: facts.volume24h,
             liquidityUsd: facts.liquidityUsd,
           }),
@@ -1197,6 +1325,12 @@ export function createMarketReadService(
           community: unavailableBlock(marketReasonCodes.communityNotBound),
           security: goplus.security,
           holderCount: goplus.holderCount,
+          // The warm lane covers registry assets only; an address the
+          // registry does not know has no row and says so.
+          range24h: await range24hFor({
+            address: resolved.address,
+            blocked: false,
+          }),
           contractVersion: v2ContractVersion,
         });
       }
@@ -1318,6 +1452,10 @@ export function createMarketReadService(
         community,
         security,
         holderCount,
+        range24h: await range24hFor({
+          address: asset.address,
+          blocked: asset.status === "blocked",
+        }),
         contractVersion: v2ContractVersion,
       });
     },

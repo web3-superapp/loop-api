@@ -3271,7 +3271,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "required": ["items", "truncated"],
-                      "description": "Communities the account joined as admin or member. Communities it owns are in `owned`, never here (Decision 0072).",
+                      "description": "Communities the account joined as admin or member. Communities it owns are in `owned`, never here (Decision 0073).",
                       "properties": {
                         "items": {
                           "type": "array",
@@ -3390,7 +3390,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "required": ["items", "truncated"],
-                      "description": "Communities the account currently owns, newest submission first, each with its review state (Decision 0072).",
+                      "description": "Communities the account currently owns, newest submission first, each with its review state (Decision 0073).",
                       "properties": {
                         "items": {
                           "type": "array",
@@ -4163,7 +4163,7 @@
             "in": "query",
             "name": "membership",
             "required": false,
-            "description": "`joined` narrows the page to the caller's admin/member memberships and `owned` to the communities the caller currently owns (each row then carries `application`); both are cursor-paged continuations of the home aggregate and a community is in exactly one of them (Decision 0072)."
+            "description": "`joined` narrows the page to the caller's admin/member memberships and `owned` to the communities the caller currently owns (each row then carries `application`); both are cursor-paged continuations of the home aggregate and a community is in exactly one of them (Decision 0073)."
           },
           {
             "schema": {
@@ -5521,7 +5521,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -6750,7 +6750,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -7880,7 +7880,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -9118,7 +9118,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -10356,7 +10356,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -11355,7 +11355,7 @@
         "operationId": "resubmitV2Community",
         "summary": "Resubmit a rejected community application",
         "tags": ["community"],
-        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0072): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
         "parameters": [
           {
             "schema": {
@@ -11594,7 +11594,7 @@
                         },
                         { "type": "null" }
                       ],
-                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0072)."
+                      "description": "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073)."
                     },
                     "chat": {
                       "type": "object",
@@ -47693,7 +47693,8 @@
                                   "asset",
                                   "logo",
                                   "price",
-                                  "priceChange24h"
+                                  "priceChange24h",
+                                  "sparkline"
                                 ],
                                 "properties": {
                                   "assetId": {
@@ -47942,6 +47943,80 @@
                                       }
                                     },
                                     "description": "One Provider-reported fact with provenance. `unavailable` carries a null value and a reasonCode; `stale` is past its TTL but inside the grace window; `derived` is computed by LOOP from indexed chain events."
+                                  },
+                                  "sparkline": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "interval",
+                                          "closes",
+                                          "observedAt",
+                                          "source",
+                                          "quality"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "interval": {
+                                            "type": "string",
+                                            "enum": ["1h"]
+                                          },
+                                          "closes": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 24,
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                              "description": "Canonical decimal string; never a JavaScript number."
+                                            },
+                                            "description": "Hourly closes, oldest first; the last one is the open hour. Never a JavaScript number."
+                                          },
+                                          "observedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "goplus",
+                                              "geckoterminal",
+                                              "loop_indexer"
+                                            ]
+                                          },
+                                          "quality": {
+                                            "type": "string",
+                                            "enum": [
+                                              "fresh",
+                                              "stale",
+                                              "proxied"
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
                                   }
                                 }
                               }
@@ -48018,8 +48093,10 @@
                                 "required": [
                                   "assetId",
                                   "asset",
+                                  "logo",
                                   "price",
                                   "priceChange24h",
+                                  "sparkline",
                                   "volume24h",
                                   "liquidityUsd"
                                 ],
@@ -48270,6 +48347,80 @@
                                       }
                                     },
                                     "description": "One Provider-reported fact with provenance. `unavailable` carries a null value and a reasonCode; `stale` is past its TTL but inside the grace window; `derived` is computed by LOOP from indexed chain events."
+                                  },
+                                  "sparkline": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "interval",
+                                          "closes",
+                                          "observedAt",
+                                          "source",
+                                          "quality"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "interval": {
+                                            "type": "string",
+                                            "enum": ["1h"]
+                                          },
+                                          "closes": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 24,
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                              "description": "Canonical decimal string; never a JavaScript number."
+                                            },
+                                            "description": "Hourly closes, oldest first; the last one is the open hour. Never a JavaScript number."
+                                          },
+                                          "observedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "goplus",
+                                              "geckoterminal",
+                                              "loop_indexer"
+                                            ]
+                                          },
+                                          "quality": {
+                                            "type": "string",
+                                            "enum": [
+                                              "fresh",
+                                              "stale",
+                                              "proxied"
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
                                   },
                                   "volume24h": {
                                     "type": "object",
@@ -49075,6 +49226,7 @@
                     "community",
                     "security",
                     "holderCount",
+                    "range24h",
                     "contractVersion"
                   ],
                   "properties": {
@@ -50073,6 +50225,78 @@
                         }
                       },
                       "description": "One Provider-reported fact with provenance. `unavailable` carries a null value and a reasonCode; `stale` is past its TTL but inside the grace window; `derived` is computed by LOOP from indexed chain events."
+                    },
+                    "range24h": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "high",
+                            "low",
+                            "bars",
+                            "observedAt",
+                            "source",
+                            "quality"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "high": {
+                              "type": "string",
+                              "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                              "description": "Canonical decimal string; never a JavaScript number."
+                            },
+                            "low": {
+                              "type": "string",
+                              "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                              "description": "Canonical decimal string; never a JavaScript number."
+                            },
+                            "bars": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 24,
+                              "description": "Hourly candles the range covers; below 24 the token has less than a day of history at this pool."
+                            },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "dexscreener",
+                                "goplus",
+                                "geckoterminal",
+                                "loop_indexer"
+                              ]
+                            },
+                            "quality": {
+                              "type": "string",
+                              "enum": ["fresh", "stale", "proxied"]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        }
+                      ],
+                      "description": "Same cache row and the same unavailable reason codes as the overview row sparkline: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED, MARKET_SPARKLINE_EXPIRED, MARKET_SPARKLINE_EMPTY, MARKET_FACT_CACHE_UNAVAILABLE, ASSET_BLOCKED."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -105775,7 +105999,7 @@
                               ]
                             },
                             "maxProperties": 16,
-                            "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0072)."
+                            "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0073)."
                           },
                           "source": {
                             "anyOf": [
@@ -106408,7 +106632,7 @@
                             ]
                           },
                           "maxProperties": 16,
-                          "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0072)."
+                          "description": "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0073)."
                         },
                         "source": {
                           "anyOf": [

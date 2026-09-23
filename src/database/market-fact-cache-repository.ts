@@ -77,6 +77,17 @@ export interface MarketFactCacheRepository {
   ): Promise<MarketFactCacheRecord | null>;
   put(input: PutMarketFactInput): Promise<MarketFactCacheRecord>;
   /**
+   * The rows of one fact kind and source for many subjects in one query
+   * (Decision 0074): the overview reads one sparkline row per asset row and
+   * must not pay a round trip each. Subjects without a row are absent from
+   * the map; order is irrelevant.
+   */
+  getMany(
+    subjectKeys: readonly string[],
+    factKind: string,
+    source: MarketSource,
+  ): Promise<ReadonlyMap<string, MarketFactCacheRecord>>;
+  /**
    * The verified community bound to an asset, if any. Community binding is a
    * PostgreSQL fact written by the community module (Decision 0031); the
    * market surface only reads it.
@@ -132,6 +143,31 @@ export function createPostgresMarketFactCacheRepository(
       });
       const row = result.rows[0];
       return row === undefined ? null : mapRow(row);
+    },
+
+    async getMany(
+      subjectKeys: readonly string[],
+      factKind: string,
+      source: MarketSource,
+    ): Promise<ReadonlyMap<string, MarketFactCacheRecord>> {
+      const unique = [...new Set(subjectKeys)];
+      const records = new Map<string, MarketFactCacheRecord>();
+      if (unique.length === 0) {
+        return records;
+      }
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select ${columns}
+          from public.market_fact_cache
+          where subject_key = any($1::text[]) and fact_kind = $2 and source = $3
+        `,
+        values: [unique, factKind, source],
+      });
+      for (const row of result.rows) {
+        const record = mapRow(row);
+        records.set(record.subjectKey, record);
+      }
+      return records;
     },
 
     async put(input: PutMarketFactInput): Promise<MarketFactCacheRecord> {
@@ -202,6 +238,7 @@ function unavailable(): Promise<never> {
 export function createUnavailableMarketFactCacheRepository(): MarketFactCacheRepository {
   return Object.freeze({
     get: unavailable,
+    getMany: unavailable,
     put: unavailable,
     findVerifiedCommunityByAssetId: unavailable,
   });

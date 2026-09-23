@@ -382,6 +382,7 @@ export function marketFactsFake(
   };
   return {
     readTokenPairs: vi.fn(() => Promise.reject(new Error("not used"))),
+    recallPrimaryPairPriceChange: vi.fn(() => Promise.resolve(null)),
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
     readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice: vi.fn(readAssetPrice),

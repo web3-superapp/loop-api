@@ -103,11 +103,16 @@ const config: MarketConfig = Object.freeze({
     budgetApiPerMinute: 120,
     budgetWorkerPerMinute: 120,
   },
-  geckoterminal: { enabled: false, rateLimitPerMinute: 30 },
+  geckoterminal: {
+    enabled: false,
+    rateLimitPerMinute: 30,
+    budgetWorkerPerMinute: 10,
+  },
   goplus: null,
   priceTtlSeconds: 30,
   securityTtlSeconds: 600,
   candlesTtlSeconds: 60,
+  sparklineTtlSeconds: 300,
   staleGraceSeconds: 900,
   unlistedPriceTtlSeconds: 60,
   unlistedMetadataTtlSeconds: 3_600,
@@ -198,6 +203,7 @@ function cacheFake(initial: MarketFactCacheRecord | null = null) {
   });
   const repository: MarketFactCacheRepository = {
     get,
+    getMany: vi.fn(() => Promise.resolve(new Map())),
     put,
     findVerifiedCommunityByAssetId: vi.fn(() => Promise.resolve(null)),
   };
@@ -840,6 +846,110 @@ describe("market fact service", () => {
         quality: "unavailable",
         reasonCode: "MARKET_PROVIDER_UNREACHABLE",
       });
+    });
+  });
+
+  describe("a 24h change the Provider skipped (Decision 0074 §4)", () => {
+    const deepest = "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae";
+    /** The deepest base pair reports `priceChange.h24`, as it usually does. */
+    function reporting(priceChangeH24: string | null): TokenPairsSnapshot {
+      const base = snapshot("747.39");
+      return {
+        ...base,
+        pairs: base.pairs.map((pair) =>
+          pair.pairAddress === deepest ? { ...pair, priceChangeH24 } : pair,
+        ),
+      };
+    }
+
+    it("remembers the primary pair's change on a fresh read and recalls it as the same pair's, inside the grace window only", async () => {
+      let reported: string | null = "-0.31";
+      const provider = providerFake(
+        () => reporting(reported),
+        "2026-09-08T00:00:00.000Z",
+      );
+      const cache = cacheFake();
+      let clock = "2026-09-08T00:00:00.000Z";
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date(clock),
+      });
+      await service.readTokenPairs(wbnb);
+      await expect(
+        cache.repository.get(
+          `token:${wbnb}`,
+          "pair_price_change_h24",
+          "dexscreener",
+        ),
+      ).resolves.toMatchObject({
+        source: "dexscreener",
+        fetchedAt: "2026-09-08T00:00:00.000Z",
+        ttlSeconds: 30,
+        value: { pairAddress: deepest, priceChangeH24: "-0.31" },
+      });
+
+      // 100 s later the Provider answers the same pair without the field:
+      // the fresh snapshot is cached, the memory is left as it was.
+      clock = "2026-09-08T00:01:40.000Z";
+      reported = null;
+      const skipped = await service.readTokenPairs(wbnb);
+      expect(
+        selectPrimaryPair(skipped.value as TokenPairsSnapshot)?.priceChangeH24,
+      ).toBeNull();
+      await expect(
+        service.recallPrimaryPairPriceChange(wbnb, deepest),
+      ).resolves.toEqual({
+        value: "-0.31",
+        fetchedAt: "2026-09-08T00:00:00.000Z",
+        ttlSeconds: 30,
+      });
+      // Another pair's number is never borrowed.
+      await expect(
+        service.recallPrimaryPairPriceChange(
+          wbnb,
+          "0x172fcd41e0913e95784454622d1c3724f546f849",
+        ),
+      ).resolves.toBeNull();
+      // Past TTL + grace (30 s + 900 s) the memory is not published.
+      clock = "2026-09-08T00:15:31.000Z";
+      await expect(
+        service.recallPrimaryPairPriceChange(wbnb, deepest),
+      ).resolves.toBeNull();
+    });
+
+    it("remembers the change from a batch read as well, and nothing without a Provider", async () => {
+      const provider = providerFake(
+        () => reporting("0.42"),
+        "2026-09-08T00:00:00.000Z",
+      );
+      const cache = cacheFake();
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:00:01.000Z"),
+      });
+      await service.readTokenPairsBatch([wbnb]);
+      await expect(
+        service.recallPrimaryPairPriceChange(wbnb, deepest),
+      ).resolves.toMatchObject({ value: "0.42" });
+
+      const disabled = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: null,
+        securityProvider: null,
+        candlesProvider: null,
+      });
+      await expect(
+        disabled.recallPrimaryPairPriceChange(wbnb, deepest),
+      ).resolves.toBeNull();
     });
   });
 });

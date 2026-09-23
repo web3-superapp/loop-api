@@ -40,9 +40,14 @@ export function createMarketProviders(
 ): MarketProviders {
   const fetchOption =
     options.fetch === undefined ? {} : { fetch: options.fetch };
+  // The worker's sparkline lane (Decision 0074) gets its own, smaller share
+  // of the GeckoTerminal limit; the API keeps the configured throttle.
   const geckoterminal = config.geckoterminal.enabled
     ? createGeckoterminalAdapter({
-        rateLimitPerMinute: config.geckoterminal.rateLimitPerMinute,
+        rateLimitPerMinute:
+          role === "api"
+            ? config.geckoterminal.rateLimitPerMinute
+            : config.geckoterminal.budgetWorkerPerMinute,
         ...fetchOption,
       })
     : null;

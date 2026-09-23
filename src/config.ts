@@ -161,10 +161,18 @@ const marketEnvironmentShape = {
   MARKET_DEXSCREENER_BUDGET_API: positiveIntegerString(1, 300),
   MARKET_DEXSCREENER_BUDGET_WORKER: positiveIntegerString(1, 300),
   MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 30),
+  /**
+   * Worker-process share of the GeckoTerminal limit (Decision 0074). Both
+   * processes throttle themselves; the sum is not refined to 30 because the
+   * API already yields `stale` facts under a Provider 429.
+   */
+  MARKET_GECKOTERMINAL_BUDGET_WORKER: positiveIntegerString(1, 30),
   MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
   MARKET_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
   MARKET_SECURITY_TTL_SECONDS: positiveIntegerString(60, 86_400),
   MARKET_CANDLES_TTL_SECONDS: positiveIntegerString(15, 3_600),
+  /** Row sparkline cache TTL (Decision 0074); read by the API, refreshed by the worker lane. */
+  MARKET_SPARKLINE_TTL_SECONDS: positiveIntegerString(60, 3_600),
   MARKET_STALE_GRACE_SECONDS: positiveIntegerString(0, 86_400),
   MARKET_UNLISTED_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
   MARKET_UNLISTED_METADATA_TTL_SECONDS: positiveIntegerString(60, 86_400),
@@ -605,6 +613,8 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
     ALERT_EVALUATOR_ENABLED: booleanString,
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
+    MARKET_SPARKLINE_WARM_ENABLED: booleanString,
+    MARKET_SPARKLINE_WARM_INTERVAL_MS: positiveIntegerString(1_000, 60_000),
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
     MINING_SNAPSHOT_ENABLED: booleanString,
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
@@ -898,12 +908,17 @@ export interface MarketConfig {
   };
   readonly geckoterminal: {
     readonly enabled: boolean;
+    /** The API process throttle. */
     readonly rateLimitPerMinute: number;
+    /** The worker process throttle (Decision 0074); the two share one egress. */
+    readonly budgetWorkerPerMinute: number;
   };
   readonly goplus: GoplusConfig | null;
   readonly priceTtlSeconds: number;
   readonly securityTtlSeconds: number;
   readonly candlesTtlSeconds: number;
+  /** Row sparkline row TTL (Decision 0074). */
+  readonly sparklineTtlSeconds: number;
   /** Seconds past TTL during which a cached fact may still be served as stale. */
   readonly staleGraceSeconds: number;
   /**
@@ -1057,6 +1072,12 @@ export interface ReconciliationWorkerConfig {
   readonly market: MarketConfig;
   /** `alert_evaluator` lane (Decision 0034); default off. */
   readonly alertEvaluator: AlertEvaluatorConfig | null;
+  /**
+   * `market_sparkline_warm` lane (Decision 0074); default on. It only ever
+   * runs when the GeckoTerminal Provider is enabled, which the runtime
+   * checks against `market.geckoterminal.enabled`.
+   */
+  readonly sparklineWarm: { readonly intervalMs: number } | null;
   /**
    * `wallet-intent-reconcile` lane (Decision 0035); default off. It reads
    * receipts over RPC and, when Privy credentials are present, Privy wallet
@@ -1631,6 +1652,8 @@ function marketEnvironmentDefaults(
       environment["MARKET_DEXSCREENER_BUDGET_WORKER"] ?? "120",
     MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE:
       environment["MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_GECKOTERMINAL_BUDGET_WORKER:
+      environment["MARKET_GECKOTERMINAL_BUDGET_WORKER"] ?? "10",
     MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE:
       environment["MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE"] ?? "30",
     MARKET_UNLISTED_PRICE_TTL_SECONDS:
@@ -1642,6 +1665,8 @@ function marketEnvironmentDefaults(
       environment["MARKET_SECURITY_TTL_SECONDS"] ?? "600",
     MARKET_CANDLES_TTL_SECONDS:
       environment["MARKET_CANDLES_TTL_SECONDS"] ?? "60",
+    MARKET_SPARKLINE_TTL_SECONDS:
+      environment["MARKET_SPARKLINE_TTL_SECONDS"] ?? "300",
     MARKET_STALE_GRACE_SECONDS:
       environment["MARKET_STALE_GRACE_SECONDS"] ?? "900",
     GOPLUS_APP_KEY: environment["GOPLUS_APP_KEY"],
@@ -1655,10 +1680,12 @@ function parseMarketConfig(data: {
   readonly MARKET_DEXSCREENER_BUDGET_API: number;
   readonly MARKET_DEXSCREENER_BUDGET_WORKER: number;
   readonly MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_GECKOTERMINAL_BUDGET_WORKER: number;
   readonly MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: number;
   readonly MARKET_PRICE_TTL_SECONDS: number;
   readonly MARKET_SECURITY_TTL_SECONDS: number;
   readonly MARKET_CANDLES_TTL_SECONDS: number;
+  readonly MARKET_SPARKLINE_TTL_SECONDS: number;
   readonly MARKET_STALE_GRACE_SECONDS: number;
   readonly MARKET_UNLISTED_PRICE_TTL_SECONDS: number;
   readonly MARKET_UNLISTED_METADATA_TTL_SECONDS: number;
@@ -1674,6 +1701,7 @@ function parseMarketConfig(data: {
     geckoterminal: Object.freeze({
       enabled: data.MARKET_PROVIDER_GECKOTERMINAL_ENABLED,
       rateLimitPerMinute: data.MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE,
+      budgetWorkerPerMinute: data.MARKET_GECKOTERMINAL_BUDGET_WORKER,
     }),
     goplus:
       data.GOPLUS_APP_KEY !== undefined && data.GOPLUS_APP_SECRET !== undefined
@@ -1686,6 +1714,7 @@ function parseMarketConfig(data: {
     priceTtlSeconds: data.MARKET_PRICE_TTL_SECONDS,
     securityTtlSeconds: data.MARKET_SECURITY_TTL_SECONDS,
     candlesTtlSeconds: data.MARKET_CANDLES_TTL_SECONDS,
+    sparklineTtlSeconds: data.MARKET_SPARKLINE_TTL_SECONDS,
     staleGraceSeconds: data.MARKET_STALE_GRACE_SECONDS,
     unlistedPriceTtlSeconds: data.MARKET_UNLISTED_PRICE_TTL_SECONDS,
     unlistedMetadataTtlSeconds: data.MARKET_UNLISTED_METADATA_TTL_SECONDS,
@@ -1976,6 +2005,10 @@ export function loadReconciliationWorkerConfig(
     ALERT_EVALUATOR_ENABLED: environment["ALERT_EVALUATOR_ENABLED"] ?? "false",
     ALERT_NOTIFICATION_DEDUPE_SECONDS:
       environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
+    MARKET_SPARKLINE_WARM_ENABLED:
+      environment["MARKET_SPARKLINE_WARM_ENABLED"] ?? "true",
+    MARKET_SPARKLINE_WARM_INTERVAL_MS:
+      environment["MARKET_SPARKLINE_WARM_INTERVAL_MS"] ?? "4000",
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
@@ -2073,6 +2106,11 @@ export function loadReconciliationWorkerConfig(
       ? Object.freeze({
           notificationDedupeSeconds:
             parsed.data.ALERT_NOTIFICATION_DEDUPE_SECONDS,
+        })
+      : null,
+    sparklineWarm: parsed.data.MARKET_SPARKLINE_WARM_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.MARKET_SPARKLINE_WARM_INTERVAL_MS,
         })
       : null,
     walletIntentReconcile: parsed.data.WALLET_INTENT_RECONCILE_ENABLED
