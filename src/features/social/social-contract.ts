@@ -48,11 +48,16 @@ const socialListLimitSchema = z.number().int().min(1).max(50);
 
 export const socialListLimits = Object.freeze({ default: 20, maximum: 50 });
 
+/**
+ * Decision 0070: a missing `social_privacy_preferences` row means the open
+ * defaults. Every gate that reads the table treats an absent row exactly like
+ * this value; an explicit `disabled` stored by the owner is respected.
+ */
 export const defaultSocialPrivacyValues: Readonly<SocialPrivacyValues> =
   Object.freeze({
-    friend_requests: "disabled",
-    group_invites: "disabled",
-    direct_messages: "disabled",
+    friend_requests: "enabled",
+    group_invites: "friends",
+    direct_messages: "friends",
   });
 
 export interface SocialPrivacyResource {

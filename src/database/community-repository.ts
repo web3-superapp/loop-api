@@ -2635,6 +2635,26 @@ export function createPostgresCommunityRepository(
             `,
             values: [ownerUserId, target.userId],
           });
+          // Decision 0070: the recipient's `friendRequests` gate. A missing
+          // `social_privacy_preferences` row is the open default; only an
+          // explicit `disabled` refuses, with the same non-enumerating error
+          // as every other ineligible target.
+          const gate = await client.query<{ open: boolean }>({
+            text: `
+              select coalesce(
+                (
+                  select friend_requests = 'enabled'
+                  from public.social_privacy_preferences
+                  where owner_user_id = $1
+                ),
+                true
+              ) as open
+            `,
+            values: [target.userId],
+          });
+          if (gate.rows[0]?.open !== true) {
+            throw new CommunityTargetUnavailableError();
+          }
           await client.query({
             text: `
               update public.friend_requests

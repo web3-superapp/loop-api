@@ -110,6 +110,10 @@ DELETE /v2/chat/groups/{groupId}/membership
 
 - **好友关系（含 `message-requests accept` 产生的 friendship）是 DM 唯一准入。**
   非好友一律 `404 NOT_FOUND`（非枚举）。
+- 目标的隐私开关 `directMessages`（群：每个被邀请好友的 `groupInvites`）**默认开启**
+  （决策 0070，2026-09-23）：从未进过隐私中心的账号即可被好友私聊/拉群；只有对方
+  在 `/v2/profile/privacy` 明确设为 `disabled` 时才 `404 NOT_FOUND`。前端对此 404
+  的文案应是"对方暂不接受私聊/群邀请"，不要说"不是好友"——两者服务端不可区分。
 - 小群 3–30 人：`friendPublicProfileIds` 传 2–29 个已接受好友，后端自动加上调用者。
 - 两个写接口是**同一个 V1 持久操作状态机的 camelCase 投影**：
 

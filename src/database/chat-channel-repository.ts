@@ -475,10 +475,10 @@ async function eligibleGroupTargets(
       from unnest($2::uuid[]) as requested(public_profile_id)
       join public.user_profiles as profile
         on profile.public_profile_id = requested.public_profile_id
-      join public.social_privacy_preferences as privacy
+      left join public.social_privacy_preferences as privacy
         on privacy.owner_user_id = profile.owner_user_id
-       and privacy.group_invites = 'friends'
       where profile.owner_user_id <> $1
+        and coalesce(privacy.group_invites, 'friends') = 'friends'
         and exists (
           select 1
           from public.friendships as friendship
@@ -529,11 +529,11 @@ async function resolveDirectTarget(
       select exists (
         select 1
         from public.friendships as friendship
-        join public.social_privacy_preferences as privacy
+        left join public.social_privacy_preferences as privacy
           on privacy.owner_user_id = $2
-         and privacy.direct_messages = 'friends'
         where friendship.user_id_low = least($1::uuid, $2::uuid)
           and friendship.user_id_high = greatest($1::uuid, $2::uuid)
+          and coalesce(privacy.direct_messages, 'friends') = 'friends'
       ) as eligible
     `,
     values: [ownerUserId, profile.data.owner_user_id],
@@ -761,11 +761,12 @@ async function assertSubmissionEligibility(
     text: `
       select target.owner_user_id
       from unnest($2::uuid[]) as target(owner_user_id)
-      join public.social_privacy_preferences as privacy
+      left join public.social_privacy_preferences as privacy
         on privacy.owner_user_id = target.owner_user_id
       where case
-        when $3 = 'group_invites' then privacy.group_invites = $4
-        else privacy.direct_messages = $4
+        when $3 = 'group_invites'
+          then coalesce(privacy.group_invites, 'friends') = $4
+        else coalesce(privacy.direct_messages, 'friends') = $4
       end
         and exists (
           select 1
