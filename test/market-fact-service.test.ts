@@ -584,6 +584,56 @@ describe("market fact service", () => {
   });
 
   describe("unregistered token lookup (Decision 0058)", () => {
+    it("carries the DexScreener image of the token's own base pair into the market fact and never one from GeckoTerminal (Decision 0072)", async () => {
+      const image = `https://dd.dexscreener.com/ds-data/tokens/bsc/${weth}.png`;
+      const withImage = (): TokenPairsSnapshot => {
+        const base = wethPairs();
+        return {
+          ...base,
+          pairs: [
+            // The asset is only the quote here: this picture is WBNB's.
+            {
+              ...base.pairs[0]!,
+              pairAddress: "0x0000000000000000000000000000000000000abc",
+              baseTokenAddress: wbnb,
+              quoteTokenAddress: weth,
+              liquidityUsd: "999999999",
+              imageUrl:
+                "https://dd.dexscreener.com/ds-data/tokens/bsc/wbnb.png",
+            },
+            { ...base.pairs[0]!, imageUrl: image },
+          ],
+        };
+      };
+      const viaDexscreener = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: providerFake(withImage),
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: null,
+      });
+      await expect(
+        viaDexscreener.readUnlistedToken(weth),
+      ).resolves.toMatchObject({
+        market: { value: { imageUrl: image }, source: "dexscreener" },
+      });
+
+      const viaGeckoTerminal = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: providerFake(withImage),
+        securityProvider: null,
+        candlesProvider: null,
+        tokenLookupProvider: lookupProviderFake(lookupSnapshot),
+      });
+      await expect(
+        viaGeckoTerminal.readUnlistedToken(weth),
+      ).resolves.toMatchObject({
+        market: { value: { imageUrl: null }, source: "geckoterminal" },
+      });
+    });
+
     it("describes the token from GeckoTerminal, caching the market snapshot for 60s and the identity for 1h", async () => {
       const cache = cacheFake();
       const lookup = lookupProviderFake(lookupSnapshot);

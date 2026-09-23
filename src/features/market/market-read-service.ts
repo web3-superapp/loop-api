@@ -72,6 +72,15 @@ import {
   type UnlistedTokenLookupQuota,
 } from "./unlisted-token-lookup-quota.js";
 import { observedHolderCount } from "../../integrations/market/goplus-adapter.js";
+import {
+  observedLogoImage,
+  observedLogoImageFromPairs,
+  projectTokenLogo,
+  projectTokenLogoForAddress,
+  projectTokenLogoForAssetId,
+  type ObservedLogoImage,
+  type TokenLogoProjection,
+} from "./token-logo.js";
 
 /**
  * V2 market read surface (Decision 0034).
@@ -97,6 +106,8 @@ export interface UnavailableBlock {
 export interface MarketAssetRow {
   readonly assetId: string;
   readonly asset: AssetSummaryProjection | null;
+  /** Display picture of the asset (Decision 0072); never an identifier. */
+  readonly logo: TokenLogoProjection;
   readonly price: MarketFactProjection;
   readonly priceChange24h: MarketFactProjection;
 }
@@ -198,6 +209,11 @@ export interface MarketAssetResource {
   readonly marketCap: MarketFactProjection;
   readonly fdv: MarketFactProjection;
   readonly primaryPair: PrimaryPairProjection | null;
+  /**
+   * The asset's logo (Decision 0072): DexScreener's image from the primary
+   * pair when it reported one, else the Trust Wallet rule URL.
+   */
+  readonly logo: TokenLogoProjection;
   readonly community:
     | {
         readonly status: "available";
@@ -328,6 +344,8 @@ export interface NewPairRow {
   readonly baseTokenAddress: string | null;
   readonly quoteTokenAddress: string | null;
   readonly registryAssetId: string | null;
+  /** The base token's logo (Decision 0072); `unavailable` without a base token address. */
+  readonly logo: TokenLogoProjection;
   readonly createdAt: string | null;
   readonly reserveUsd: string | null;
   readonly volumeH24Usd: string | null;
@@ -464,6 +482,13 @@ interface PairFacts {
   readonly primaryPair: PrimaryPairProjection | null;
   /** Raw volume string for ordering; null when unavailable. */
   readonly volumeForOrdering: string | null;
+  /**
+   * The image DexScreener reported on one of the asset's own base pairs,
+   * stamped with the fact's observation time; `null` when none, when the
+   * fact is unavailable, or when the fact is a proxy's (the proxy's picture
+   * is not the asset's).
+   */
+  readonly logoImage: ObservedLogoImage | null;
 }
 
 function pairFactsFromSnapshot(
@@ -483,6 +508,7 @@ function pairFactsFromSnapshot(
       fdv: unavailableFact(reasonCode),
       primaryPair: null,
       volumeForOrdering: null,
+      logoImage: null,
     });
   if (fact.value === null || fact.fetchedAt === null) {
     return allUnavailable(
@@ -525,6 +551,16 @@ function pairFactsFromSnapshot(
       pairCreatedAt: pair.pairCreatedAt,
     }),
     volumeForOrdering: pair.volumeH24,
+    // A proxied fact is the wrapped token's; its picture is not the native
+    // asset's, so the native asset takes the rule URL instead.
+    logoImage: proxied
+      ? null
+      : observedLogoImageFromPairs({
+          tokenAddress: fact.value.tokenAddress,
+          pairs: fact.value.pairs,
+          preferredPair: pair,
+          observedAt: fact.fetchedAt,
+        }),
   });
 }
 
@@ -751,6 +787,7 @@ export function createMarketReadService(
               pairCreatedAt: value.primaryPair.pairCreatedAt,
             }),
       volumeForOrdering: value.volumeH24,
+      logoImage: observedLogoImage(value.imageUrl, fetchedAt),
     });
   }
 
@@ -1002,6 +1039,9 @@ export function createMarketReadService(
                 Object.freeze({
                   assetId: item.assetId,
                   asset: null,
+                  // The rule URL follows from the address alone; a row the
+                  // registry cannot vouch for still shows its picture.
+                  logo: projectTokenLogoForAssetId(item.assetId),
                   price: unavailableFact("ASSET_NOT_READABLE"),
                   priceChange24h: unavailableFact("ASSET_NOT_READABLE"),
                 }),
@@ -1013,6 +1053,11 @@ export function createMarketReadService(
               Object.freeze({
                 assetId: asset.assetId,
                 asset: summarize(asset),
+                logo: projectTokenLogo({
+                  chainId: asset.chainId,
+                  address: asset.address,
+                  providerImage: facts.logoImage,
+                }),
                 price: facts.price,
                 priceChange24h: facts.priceChange24h,
               }),
@@ -1042,6 +1087,11 @@ export function createMarketReadService(
           Object.freeze({
             assetId: asset.assetId,
             asset: summarize(asset),
+            logo: projectTokenLogo({
+              chainId: asset.chainId,
+              address: asset.address,
+              providerImage: facts.logoImage,
+            }),
             price: facts.price,
             priceChange24h: facts.priceChange24h,
             volume24h: facts.volume24h,
@@ -1143,6 +1193,7 @@ export function createMarketReadService(
           marketCap: facts.marketCap,
           fdv: facts.fdv,
           primaryPair: facts.primaryPair,
+          logo: projectTokenLogoForAssetId(resolved.assetId, facts.logoImage),
           community: unavailableBlock(marketReasonCodes.communityNotBound),
           security: goplus.security,
           holderCount: goplus.holderCount,
@@ -1259,6 +1310,11 @@ export function createMarketReadService(
         marketCap: facts.marketCap,
         fdv: facts.fdv,
         primaryPair: facts.primaryPair,
+        logo: projectTokenLogo({
+          chainId: asset.chainId,
+          address: asset.address,
+          providerImage: facts.logoImage,
+        }),
         community,
         security,
         holderCount,
@@ -1856,6 +1912,10 @@ export function createMarketReadService(
                   pool.baseTokenAddress === null
                     ? null
                     : (byAddress.get(pool.baseTokenAddress) ?? null),
+                logo: projectTokenLogoForAddress(
+                  input.chainId,
+                  pool.baseTokenAddress,
+                ),
                 createdAt: pool.createdAt,
                 reserveUsd: pool.reserveUsd,
                 volumeH24Usd: pool.volumeH24Usd,

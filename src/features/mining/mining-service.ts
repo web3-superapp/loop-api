@@ -12,6 +12,10 @@ import {
 } from "../community/referral-rules.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
+  projectTokenLogoForAssetId,
+  type TokenLogoProjection,
+} from "../market/token-logo.js";
+import {
   hasNoMiningSnapshot,
   resolveMiningBaseline,
   type MiningBaselineResolution,
@@ -175,6 +179,8 @@ export interface MiningIncludedAssetProjection {
   readonly assetId: string;
   /** The registry's on-chain `symbol()`; null only without a registry row. */
   readonly symbol: string | null;
+  /** Display picture of the asset (Decision 0072); never an identifier. */
+  readonly logo: TokenLogoProjection;
   readonly holding: string;
   readonly referencePriceUsd: string;
   /**
@@ -195,6 +201,8 @@ export interface MiningExcludedAssetProjection {
   readonly assetId: string;
   /** The registry's on-chain `symbol()`; null only without a registry row. */
   readonly symbol: string | null;
+  /** Display picture of the asset (Decision 0072); never an identifier. */
+  readonly logo: TokenLogoProjection;
   readonly reasonCode: string;
 }
 
@@ -720,6 +728,7 @@ export function createMiningService(dependencies: {
           return Object.freeze({
             assetId,
             symbol: symbols.get(assetId) ?? null,
+            logo: projectTokenLogoForAssetId(assetId),
             reasonCode:
               selection.kind === "skip"
                 ? selection.reasonCode
@@ -737,6 +746,7 @@ export function createMiningService(dependencies: {
               Object.freeze({
                 assetId: row.assetId,
                 symbol: symbols.get(row.assetId) ?? null,
+                logo: projectTokenLogoForAssetId(row.assetId),
                 holding: row.holding,
                 referencePriceUsd: row.referencePriceUsd,
                 referencePriceQuality: row.referencePriceQuality,

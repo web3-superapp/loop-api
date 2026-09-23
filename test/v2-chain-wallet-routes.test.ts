@@ -819,7 +819,9 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
 
   it("keeps chain status, balances, and capabilities byte-identical to the S5 baseline while the launch slot is shared (Decision 0038)", async () => {
     // The fixtures were generated from the integration/v2 sources at
-    // 25ca0c3 (before this decision) with these same fakes.
+    // 25ca0c3 (before this decision) with these same fakes. Decision 0072
+    // added the `logo` field to every balance row; the balances fixture
+    // was regenerated with it (rule URLs only: no market runtime here).
     const baseline = (name: string): string =>
       readFileSync(
         new URL(`./fixtures/s9-baseline/${name}.json`, import.meta.url),
@@ -925,6 +927,11 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
         assetId: "eip155:97:native",
         symbol: "tBNB",
         decimals: 18,
+        // The Trust Wallet rule covers BSC mainnet only (Decision 0072).
+        logo: {
+          status: "unavailable",
+          reasonCode: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
+        },
         rawValue: "2500000000000000000",
         displayBalance: "2.5",
         availableBalance: "2.5",
@@ -1614,6 +1621,12 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
                 name: "Wrapped BNB",
                 decimals: 18,
                 status: "pending",
+              },
+              logo: {
+                status: "available",
+                url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png",
+                source: "trustwallet",
+                observedAt: null,
               },
               reasonCode: null,
             },

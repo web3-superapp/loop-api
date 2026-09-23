@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import pg from "pg";
+import { getAddress } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createV2CursorCodec } from "../src/core/http/v2-cursor.js";
@@ -128,6 +129,12 @@ describe("V2 asset search over the Asset Registry (integration)", () => {
         title: "USDC",
         subtitle: "USD Coin",
         avatarRef: null,
+        logo: {
+          status: "available",
+          url: `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/${getAddress(usdc)}/logo.png`,
+          source: "trustwallet",
+          observedAt: null,
+        },
         memberCount: null,
         verificationStatus: "verified",
       },

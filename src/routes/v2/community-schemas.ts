@@ -46,6 +46,7 @@ import { communityPersonaAliasPatternSource } from "../../features/communication
 import { memberSearchLimits } from "../../features/identity/alias-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { tokenLogoSchema } from "./token-logo-schema.js";
 import {
   miningCommunityWeightSchema,
   miningParticipantsSchema,
@@ -981,6 +982,7 @@ export const searchResourceSchema = {
               "title",
               "subtitle",
               "avatarRef",
+              "logo",
               "memberCount",
               "verificationStatus",
             ],
@@ -1002,6 +1004,11 @@ export const searchResourceSchema = {
               },
               avatarRef: {
                 anyOf: [{ type: "string", maxLength: 256 }, { type: "null" }],
+              },
+              logo: {
+                description:
+                  "The token picture of an asset result (Decision 0072); null for user and community results, whose picture is avatarRef.",
+                anyOf: [tokenLogoSchema, { type: "null" }],
               },
               memberCount: {
                 anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],

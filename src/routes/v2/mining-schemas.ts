@@ -16,6 +16,7 @@ import {
 } from "../../features/mining/mining-contract.js";
 import { miningRankLimit } from "../../features/mining/mining-service.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { tokenLogoSchema } from "./token-logo-schema.js";
 import { unavailableSchema } from "./launch-schemas.js";
 import {
   miningCommunityWeightSchema,
@@ -310,6 +311,7 @@ export const miningAssetsResourceSchema = {
         required: [
           "assetId",
           "symbol",
+          "logo",
           "holding",
           "referencePriceUsd",
           "referencePriceQuality",
@@ -322,6 +324,7 @@ export const miningAssetsResourceSchema = {
         properties: {
           assetId: { type: "string", pattern: assetIdPatternSource },
           symbol: symbolSchema,
+          logo: tokenLogoSchema,
           holding: decimalSchema,
           referencePriceUsd: decimalSchema,
           referencePriceQuality: {
@@ -362,10 +365,11 @@ export const miningAssetsResourceSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["assetId", "symbol", "reasonCode"],
+        required: ["assetId", "symbol", "logo", "reasonCode"],
         properties: {
           assetId: { type: "string", pattern: assetIdPatternSource },
           symbol: symbolSchema,
+          logo: tokenLogoSchema,
           reasonCode: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
         },
       },

@@ -246,6 +246,12 @@ PUT /v2/wallets/active
       "name": "BNB",
       "decimals": 18,
       "address": null,
+      "logo": {
+        "status": "available",
+        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+        "source": "trustwallet",
+        "observedAt": null
+      },
       "balance": {
         "status": "available",
         "rawValue": "7000000000000000000",
@@ -289,6 +295,14 @@ PUT /v2/wallets/active
   "contractVersion": "2.0"
 }
 ```
+
+每行必填 `logo`（决策 0072，形状、主机白名单与客户端回退规则见
+`docs/frontend-v2-market-api.md` §2a）：代币行在估值用到的 DexScreener 交易对带
+`info.imageUrl` 时是 `{status:"available", source:"dexscreener", url, observedAt}`，
+否则是 Trust Wallet 规则 URL（`source:"trustwallet"`, `observedAt: null`）；原生 BNB
+永远是规则 URL（不借 WBNB 的图）。`launchChain.nativeBalance` 也有 `logo`：Launch 槽
+指向 `eip155:97` 时是 `{status:"unavailable", reasonCode:"TOKEN_LOGO_CHAIN_UNSUPPORTED"}`。
+加载失败 → monogram，不重试。
 
 代币行的 `valuation`（S5b 接入行情后）：
 
@@ -501,6 +515,12 @@ query：`cursor`（不透明）或 `limit`（1–50，默认 25），二者互�
             "decimals": 18,
             "status": "pending"
           },
+          "logo": {
+            "status": "available",
+            "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png",
+            "source": "trustwallet",
+            "observedAt": null
+          },
           "reasonCode": null
         }
       ]
@@ -526,6 +546,9 @@ PUT /v2/watchlist
   请求不写入。前端应在加入自选前先 `GET /v2/assets/{assetId}` 确认。
 - 已入库但后来变得不可读的资产，`asset` 为 `null` 且
   `reasonCode: "ASSET_NOT_READABLE"`，行仍然列出（让用户能删掉它）。
+- 每行必填 `logo`（决策 0072）：本接口不读行情事实，一律是 Trust Wallet 规则 URL
+  （`source:"trustwallet"`, `observedAt:null`；原生 BNB 是 `…/smartchain/info/logo.png`）。
+  形状与回退规则见 `docs/frontend-v2-market-api.md` §2a。
 - **自选不是行情事实**：价格、涨跌幅要等 S5b 的 `market` 接口，本步不要显示。
 - 该资源与冻结的 V1 `/v1/watchlist` **共用同一个版本号**，迁移是单向一次性的：
   - V2 的整体替换会覆盖遗留的 V1 行；

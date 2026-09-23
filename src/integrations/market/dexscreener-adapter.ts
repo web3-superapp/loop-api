@@ -8,6 +8,7 @@ import {
   normalizeEvmAddress,
   InvalidChainIdentityError,
 } from "../../features/chain/chain-contract.js";
+import { acceptTokenLogoUrl } from "../../features/market/token-logo.js";
 import {
   marketPairsBatchLimit,
   MarketProviderError,
@@ -90,6 +91,13 @@ const pairSchema = z
       .nullable()
       .optional(),
     pairCreatedAt: z.union([z.string(), z.number()]).nullable().optional(),
+    // Token profile block; only the base token's image is read from it
+    // (Decision 0072). Any other shape is ignored, never refused.
+    info: z
+      .object({ imageUrl: z.unknown().optional() })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -230,6 +238,9 @@ function normalizePair(pair: ParsedPair): TokenPairSnapshot {
     buysH24: optionalCount("txns.h24.buys", pair.txns?.h24?.buys),
     sellsH24: optionalCount("txns.h24.sells", pair.txns?.h24?.sells),
     pairCreatedAt: optionalEpochMillis("pairCreatedAt", pair.pairCreatedAt),
+    // Gated at the boundary: a URL off the allow-list is dropped here and
+    // never cached, without touching the pair's other facts.
+    imageUrl: acceptTokenLogoUrl(pair.info?.imageUrl),
   });
 }
 

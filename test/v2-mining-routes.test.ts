@@ -791,6 +791,12 @@ describe("LOOP API V2 mining module", () => {
           {
             assetId: cakeAsset,
             symbol: "Cake",
+            logo: {
+              status: "available",
+              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0000000000000000000000000000000000000002/logo.png",
+              source: "trustwallet",
+              observedAt: null,
+            },
             holding: "100",
             referencePriceUsd: "2.3",
             referencePriceQuality: "fresh",
@@ -803,6 +809,12 @@ describe("LOOP API V2 mining module", () => {
           {
             assetId: loopAsset,
             symbol: "LOOP",
+            logo: {
+              status: "available",
+              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0000000000000000000000000000000000000001/logo.png",
+              source: "trustwallet",
+              observedAt: null,
+            },
             holding: "1",
             referencePriceUsd: "885",
             referencePriceQuality: "fresh",
@@ -819,6 +831,12 @@ describe("LOOP API V2 mining module", () => {
           {
             assetId: nativeAsset,
             symbol: "BNB",
+            logo: {
+              status: "available",
+              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+              source: "trustwallet",
+              observedAt: null,
+            },
             reasonCode: "MINING_PRICE_NOT_FRESH",
           },
         ],

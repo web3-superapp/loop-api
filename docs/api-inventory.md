@@ -388,6 +388,21 @@ its own facts and never borrows another source. Derived candles are aggregated
 by the `pool_event` indexer lane (`pnpm indexer:backfill --lane pool_event`)
 and priced in the pool's other token, never in USD.
 
+Every asset row also carries a `logo` (Decision 0072): the market overview
+rows, the asset page, the new-pairs rows, wallet balance rows (and the launch
+slot's native balance), watchlist items, mining `included`/`excluded` rows,
+and asset search results (`displaySnapshot.logo`, `null` for other domains).
+`{status: "available", url, source: "dexscreener" | "trustwallet", observedAt}`
+or `{status: "unavailable", reasonCode}`. The URL is admitted only over
+`https://` on `cdn.dexscreener.com`, `dd.dexscreener.com`, or
+`raw.githubusercontent.com`; `dexscreener` is the `info.imageUrl` of the
+asset's own base pair inside the cached pair fact (same TTL, no extra
+request), `trustwallet` is the Trust Wallet assets-repository rule URL keyed
+by the EIP-55 address (never probed; `observedAt: null`). The client loads
+it directly and falls back to its monogram on any load failure without
+retrying. Reason codes: `TOKEN_LOGO_ADDRESS_UNKNOWN` (pool row without a base
+token), `TOKEN_LOGO_CHAIN_UNSUPPORTED` (launch-slot testnet).
+
 ### V2 notifications module (Decision 0034, `V2_MODULES_ENABLED=notifications`)
 
 | Method and path                                | Request                                                         | Success projection                                                                       | Interface     | Capability                                                                                             |

@@ -22,6 +22,7 @@ import {
   type TokenSecuritySnapshot,
 } from "../../integrations/market/market-data-provider.js";
 import type { AssetRecord } from "../../database/chain-registry-repository.js";
+import { providerImageUrlFromPairs } from "./token-logo.js";
 import {
   bscWrappedNativeAddress,
   bscWrappedNativeAssetId,
@@ -86,6 +87,12 @@ export interface UnlistedTokenMarket {
   readonly marketCap: string | null;
   readonly fdv: string | null;
   readonly primaryPair: UnlistedTokenPair | null;
+  /**
+   * The base-token image DexScreener reported on one of the token's own
+   * base pairs, already gated to the logo allow-list (Decision 0072); `null`
+   * from the GeckoTerminal path, which reports no admissible host.
+   */
+  readonly imageUrl: string | null;
 }
 
 export interface UnlistedTokenFact {
@@ -991,6 +998,7 @@ function marketFromLookup(snapshot: TokenLookupSnapshot): UnlistedTokenMarket {
             quoteTokenSymbol: pool.quoteTokenSymbol ?? "",
             pairCreatedAt: pool.createdAt,
           }),
+    imageUrl: null,
   });
 }
 
@@ -1027,6 +1035,11 @@ function identityFromPairs(
 
 function marketFromPairs(snapshot: TokenPairsSnapshot): UnlistedTokenMarket {
   const pair = selectPrimaryPair(snapshot);
+  const imageUrl = providerImageUrlFromPairs({
+    tokenAddress: snapshot.tokenAddress,
+    pairs: snapshot.pairs,
+    preferredPair: pair,
+  });
   if (pair === null) {
     return Object.freeze({
       priceUsd: null,
@@ -1036,6 +1049,7 @@ function marketFromPairs(snapshot: TokenPairsSnapshot): UnlistedTokenMarket {
       marketCap: null,
       fdv: null,
       primaryPair: null,
+      imageUrl,
     });
   }
   return Object.freeze({
@@ -1053,5 +1067,6 @@ function marketFromPairs(snapshot: TokenPairsSnapshot): UnlistedTokenMarket {
       quoteTokenSymbol: pair.quoteTokenSymbol,
       pairCreatedAt: pair.pairCreatedAt,
     }),
+    imageUrl,
   });
 }

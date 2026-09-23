@@ -22,6 +22,7 @@ import {
   endpointHealthStates,
 } from "../../integrations/bsc/rpc-client.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { tokenLogoSchema } from "./token-logo-schema.js";
 import {
   parseV2CommonRequestMetadata,
   parseV2WriteRequestMetadata,
@@ -435,6 +436,7 @@ const launchChainBalanceSchema = {
             "assetId",
             "symbol",
             "decimals",
+            "logo",
             "rawValue",
             "displayBalance",
             "availableBalance",
@@ -446,6 +448,7 @@ const launchChainBalanceSchema = {
             assetId: assetIdSchema,
             symbol: { type: "string", minLength: 1, maxLength: 32 },
             decimals: { type: "integer", minimum: 0, maximum: 36 },
+            logo: tokenLogoSchema,
             rawValue: rawAmountSchema,
             displayBalance: decimalAmountSchema,
             availableBalance: decimalAmountSchema,
@@ -530,6 +533,7 @@ export const walletBalancesResourceSchema = {
           "name",
           "decimals",
           "address",
+          "logo",
           "balance",
           "pending",
           "valuation",
@@ -541,6 +545,7 @@ export const walletBalancesResourceSchema = {
           name: { type: "string", minLength: 1, maxLength: 128 },
           decimals: { type: "integer", minimum: 0, maximum: 36 },
           address: { anyOf: [addressSchema, { type: "null" }] },
+          logo: tokenLogoSchema,
           balance: {
             anyOf: [
               {
@@ -854,9 +859,10 @@ export const watchlistResourceSchema = {
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["assetId", "asset", "reasonCode"],
+              required: ["assetId", "asset", "logo", "reasonCode"],
               properties: {
                 assetId: assetIdSchema,
+                logo: tokenLogoSchema,
                 asset: {
                   anyOf: [
                     {
