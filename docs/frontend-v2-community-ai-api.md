@@ -125,7 +125,8 @@ Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
 5. `brief` 是模型生成的，必须带 AI 生成标识与 `disclaimer`。
 6. **brief 是异步生成的（2026-09-23 (2) 修正）。** 一小时缓存过期后的第一次
    读会立即得到 `reasonCode: "COMMUNITY_AI_BRIEF_PENDING"`，服务端同时在后台
-   生成（约 10–15 s）。客户端显示「摘要生成中，稍后下拉刷新」，**不要**自动
+   生成（通常 10–20 s，服务端上限 `COMMUNITY_AI_BRIEF_TIMEOUT_MS`，默认 30 s，
+   与 `ask` 的上限无关）。客户端显示「摘要生成中，稍后下拉刷新」，**不要**自动
    轮询、不要把它当错误、不要显示重试按钮；用户下拉刷新即重新读取 overview。
    同一社区多人同时读只会触发一次生成。整页其余字段（能力清单、知识源、示例
    问题）在 PENDING 时都是完整的，正常渲染。

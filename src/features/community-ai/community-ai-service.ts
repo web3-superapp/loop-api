@@ -11,7 +11,7 @@ import {
   buildCommunityAiUserContent,
   communityAiBriefRetrySeconds,
   communityAiBriefWindowHours,
-  communityAiDefaultTimeoutMs,
+  communityAiDefaultBriefTimeoutMs,
   communityAiCapabilityDefinitions,
   communityAiChatWindowDays,
   communityAiDisclaimer,
@@ -248,7 +248,8 @@ export function createCommunityAiService(
   options: CommunityAiServiceOptions,
 ): CommunityAiService {
   const now = options.now ?? ((): Date => new Date());
-  const briefTimeoutMs = options.briefTimeoutMs ?? communityAiDefaultTimeoutMs;
+  const briefTimeoutMs =
+    options.briefTimeoutMs ?? communityAiDefaultBriefTimeoutMs;
   const briefCache = new Map<string, BriefCacheEntry>();
   /** One generation per community at a time; concurrent reads share it. */
   const briefInFlight = new Set<string>();
@@ -571,8 +572,11 @@ export function createCommunityAiService(
           bounded: chat.bounded,
         }),
         // `AbortSignal.timeout` uses an unref'd timer: it never keeps the
-        // process alive on shutdown.
+        // process alive on shutdown. The same ceiling replaces the gateway's
+        // `ask` default, which exists only to keep a request inside the HTTP
+        // deadlines.
         signal: AbortSignal.timeout(briefTimeoutMs),
+        timeoutMs: briefTimeoutMs,
       });
     } catch (error) {
       await options.repository.settleUsage({
