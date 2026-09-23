@@ -73,6 +73,9 @@ const privacyRecord: PrivacyV2Record = Object.freeze({
     communities: "everyone",
     tradeHistory: "self",
   }),
+  friendRequests: "enabled",
+  groupInvites: "friends",
+  directMessages: "disabled",
   version: 1,
   updatedAt,
 });
@@ -728,6 +731,9 @@ describe("LOOP API V2 profile module", () => {
           communities: "self",
           tradeHistory: "self",
         },
+        friendRequests: "enabled",
+        groupInvites: "friends",
+        directMessages: "friends",
       },
       version: 0,
       updatedAt: null,
@@ -746,6 +752,9 @@ describe("LOOP API V2 profile module", () => {
           communities: "everyone",
           tradeHistory: "self",
         },
+        friendRequests: "enabled",
+        groupInvites: "friends",
+        directMessages: "disabled",
       },
     };
     const replaced = await app.inject({
@@ -778,6 +787,31 @@ describe("LOOP API V2 profile module", () => {
     });
     expect(legacyField.statusCode).toBe(400);
     expect(legacyField.json()).toMatchObject({ code: "INVALID_REQUEST" });
+
+    // The social gates are part of the full replacement: omitting one or
+    // sending a value outside its enum is a request-shape error, and the
+    // repository is never asked (Decision 0070).
+    const withoutGate: Partial<typeof body.privacy> = { ...body.privacy };
+    delete withoutGate.friendRequests;
+    const missingGate = await app.inject({
+      method: "PUT",
+      url: "/v2/profile/privacy",
+      headers: commonHeaders(),
+      payload: { expectedVersion: 0, privacy: withoutGate },
+    });
+    expect(missingGate.statusCode).toBe(400);
+    expect(missingGate.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    const badGate = await app.inject({
+      method: "PUT",
+      url: "/v2/profile/privacy",
+      headers: commonHeaders(),
+      payload: {
+        expectedVersion: 0,
+        privacy: { ...body.privacy, directMessages: "everyone" },
+      },
+    });
+    expect(badGate.statusCode).toBe(400);
+    expect(badGate.json()).toMatchObject({ code: "INVALID_REQUEST" });
 
     const withKey = await app.inject({
       method: "PUT",

@@ -25,6 +25,7 @@ import {
 } from "../src/features/identity/loop-id.js";
 import { profileActivationDigest } from "../src/features/profile/profile-v2-contract.js";
 import {
+  privacyV2RecordValues,
   ProfileV2IdempotencyConflictError,
   ProfileV2RepositoryUnavailableError,
   ProfileV2VersionConflictError,
@@ -684,6 +685,9 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
           communities: "everyone",
           tradeHistory: "self",
         },
+        friendRequests: "enabled",
+        groupInvites: "friends",
+        directMessages: "friends",
       },
     });
     expect(created).toMatchObject({
@@ -696,6 +700,9 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
         communities: "everyone",
         tradeHistory: "self",
       },
+      friendRequests: "enabled",
+      groupInvites: "friends",
+      directMessages: "friends",
       version: 1,
     });
     await expect(v1.getPrivacy(ownerUserId)).resolves.toBeNull();
@@ -713,6 +720,9 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
             communities: "self",
             tradeHistory: "self",
           },
+          friendRequests: "enabled",
+          groupInvites: "friends",
+          directMessages: "friends",
         },
       }),
     ).rejects.toBeInstanceOf(ProfileV2VersionConflictError);
@@ -729,6 +739,9 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
           communities: "self",
           tradeHistory: "everyone",
         },
+        friendRequests: "enabled",
+        groupInvites: "friends",
+        directMessages: "friends",
       },
     });
     expect(updated).toMatchObject({ version: 2, anonymousMode: false });
@@ -748,9 +761,203 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
             communities: "self",
             tradeHistory: "self",
           },
+          friendRequests: "enabled",
+          groupInvites: "friends",
+          directMessages: "friends",
         },
       }),
     ).resolves.toBeNull();
+  });
+
+  it("reads open social gates by default and commits them with the presentation flags (Decision 0070)", async () => {
+    const ownerUserId = await createOwner("social-gates");
+    const openPresentation = {
+      discoverable: false,
+      anonymousMode: false,
+      visibility: {
+        totalAssets: "self",
+        miningPower: "self",
+        communities: "self",
+        tradeHistory: "self",
+      },
+    } as const;
+    const readSocialRow = async () => {
+      const result = await pool.query<{
+        friend_requests: string;
+        group_invites: string;
+        direct_messages: string;
+        record_version: number;
+      }>({
+        text: `
+          select friend_requests, group_invites, direct_messages, record_version
+          from public.social_privacy_preferences
+          where owner_user_id = $1
+        `,
+        values: [ownerUserId],
+      });
+      return result.rows[0] ?? null;
+    };
+
+    // No row anywhere is the pure default and writes nothing.
+    await expect(v2.getPrivacy(ownerUserId)).resolves.toBeNull();
+    await expect(readSocialRow()).resolves.toBeNull();
+
+    // Changing only a social gate creates the resource (version 1) and the
+    // social row in one transaction.
+    const closedDm = await v2.replacePrivacy({
+      ownerUserId,
+      expectedVersion: 0,
+      privacy: {
+        ...openPresentation,
+        friendRequests: "enabled",
+        groupInvites: "friends",
+        directMessages: "disabled",
+      },
+    });
+    expect(closedDm).toMatchObject({
+      ownerUserId,
+      ...openPresentation,
+      friendRequests: "enabled",
+      groupInvites: "friends",
+      directMessages: "disabled",
+      version: 1,
+    });
+    await expect(readSocialRow()).resolves.toEqual({
+      friend_requests: "enabled",
+      group_invites: "friends",
+      direct_messages: "disabled",
+      record_version: 1,
+    });
+    await expect(v2.getPrivacy(ownerUserId)).resolves.toEqual(closedDm);
+
+    // An identical replacement is a no-op at any expected version.
+    await expect(
+      v2.replacePrivacy({
+        ownerUserId,
+        expectedVersion: 7,
+        privacy: {
+          ...openPresentation,
+          friendRequests: "enabled",
+          groupInvites: "friends",
+          directMessages: "disabled",
+        },
+      }),
+    ).resolves.toEqual(closedDm);
+
+    // Reopening only the gate bumps the resource version and the social row.
+    const reopened = await v2.replacePrivacy({
+      ownerUserId,
+      expectedVersion: 1,
+      privacy: {
+        ...openPresentation,
+        friendRequests: "disabled",
+        groupInvites: "friends",
+        directMessages: "friends",
+      },
+    });
+    expect(reopened).toMatchObject({
+      friendRequests: "disabled",
+      directMessages: "friends",
+      version: 2,
+    });
+    await expect(readSocialRow()).resolves.toEqual({
+      friend_requests: "disabled",
+      group_invites: "friends",
+      direct_messages: "friends",
+      record_version: 2,
+    });
+
+    // Changing only a presentation flag leaves the social row untouched.
+    const discoverable = await v2.replacePrivacy({
+      ownerUserId,
+      expectedVersion: 2,
+      privacy: {
+        ...openPresentation,
+        discoverable: true,
+        friendRequests: "disabled",
+        groupInvites: "friends",
+        directMessages: "friends",
+      },
+    });
+    expect(discoverable).toMatchObject({ discoverable: true, version: 3 });
+    await expect(readSocialRow()).resolves.toMatchObject({
+      record_version: 2,
+    });
+  });
+
+  it("projects a social-only row (written by V1) as version 0 and adopts it on the first V2 write", async () => {
+    const ownerUserId = await createOwner("social-only");
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        )
+        values ($1, 'disabled', 'disabled', 'friends')
+      `,
+      values: [ownerUserId],
+    });
+    const socialOnly = await v2.getPrivacy(ownerUserId);
+    if (socialOnly === null) {
+      throw new Error("expected the social-only row to project");
+    }
+    expect(socialOnly).toEqual({
+      ownerUserId,
+      discoverable: false,
+      anonymousMode: false,
+      visibility: {
+        totalAssets: "self",
+        miningPower: "self",
+        communities: "self",
+        tradeHistory: "self",
+      },
+      friendRequests: "disabled",
+      groupInvites: "disabled",
+      directMessages: "friends",
+      version: 0,
+      updatedAt: null,
+    });
+
+    // A stale expectation against version 0 that also changes something is a
+    // conflict; an identical retry is not.
+    await expect(
+      v2.replacePrivacy({
+        ownerUserId,
+        expectedVersion: 3,
+        privacy: {
+          ...privacyV2RecordValues(socialOnly),
+          groupInvites: "friends",
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProfileV2VersionConflictError);
+    await expect(
+      v2.replacePrivacy({
+        ownerUserId,
+        expectedVersion: 3,
+        privacy: privacyV2RecordValues(socialOnly),
+      }),
+    ).resolves.toEqual(socialOnly);
+
+    const adopted = await v2.replacePrivacy({
+      ownerUserId,
+      expectedVersion: 0,
+      privacy: {
+        ...privacyV2RecordValues(socialOnly),
+        groupInvites: "friends",
+      },
+    });
+    expect(adopted).toMatchObject({
+      version: 1,
+      friendRequests: "disabled",
+      groupInvites: "friends",
+      directMessages: "friends",
+    });
+    expect(adopted?.updatedAt).not.toBeNull();
+    await expect(v2.getPrivacy(ownerUserId)).resolves.toEqual(adopted);
+    const socialRow = await pool.query<{ record_version: number }>({
+      text: `select record_version from public.social_privacy_preferences where owner_user_id = $1`,
+      values: [ownerUserId],
+    });
+    expect(socialRow.rows[0]).toEqual({ record_version: 2 });
   });
 
   it("fails closed on unsafe or malformed inputs before any SQL mutation", async () => {
