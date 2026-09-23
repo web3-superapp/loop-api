@@ -1056,10 +1056,26 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     const sender = await createAccount("send-sender");
     const recipient = await createAccount("send-recipient");
     const hidden = await createAccount("send-hidden");
+    const closed = await createAccount("send-closed");
     await pool.query({
       text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
       values: [hidden.userId],
     });
+    // Decision 0070: the recipient never wrote a social privacy row, which is
+    // the open default; `closed` explicitly turned message requests off.
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        ) values ($1, 'disabled', 'friends', 'friends')
+      `,
+      values: [closed.userId],
+    });
+    const recipientRows = await pool.query({
+      text: `select 1 from public.social_privacy_preferences where owner_user_id = $1`,
+      values: [recipient.userId],
+    });
+    expect(recipientRows.rowCount).toBe(0);
 
     const send = (
       targetPublicProfileId: string,
@@ -1081,6 +1097,9 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       CommunityTargetUnavailableError,
     );
     await expect(send(sender.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(closed.publicProfileId)).rejects.toBeInstanceOf(
       CommunityTargetUnavailableError,
     );
 

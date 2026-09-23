@@ -274,12 +274,23 @@ describe("PostgreSQL social repository", () => {
         ({ publicProfileId }) => publicProfileId === hidden.publicProfileId,
       ),
     ).toBeUndefined();
+    // Decision 0070: no social privacy row is the open default, so the
+    // account is listed and can receive a request.
     expect(
       initialSearch.find(
         ({ publicProfileId }) =>
           publicProfileId === missingPrivacy.publicProfileId,
       ),
-    ).toBeUndefined();
+    ).toMatchObject({ relationship: "none", friendRequestId: null });
+    const toMissing = await repository.sendFriendRequest(
+      sendInput({
+        ownerUserId: alice.ownerUserId,
+        targetPublicProfileId: missingPrivacy.publicProfileId,
+        suffix: "alice-missing",
+      }),
+    );
+    expect(toMissing.created).toBe(true);
+    expect(toMissing.operation.result).toMatchObject({ status: "pending" });
 
     const command = sendInput({
       ownerUserId: alice.ownerUserId,

@@ -155,16 +155,16 @@ function dependencies() {
 }
 
 describe("social service", () => {
-  it("returns a non-writing, fail-closed social privacy default", async () => {
+  it("returns a non-writing, open-by-default social privacy resource", async () => {
     const input = dependencies();
     await expect(
       input.service.getSocialPrivacy({ principal }),
     ).resolves.toEqual({
       version: 0,
       social_privacy: {
-        friend_requests: "disabled",
-        group_invites: "disabled",
-        direct_messages: "disabled",
+        friend_requests: "enabled",
+        group_invites: "friends",
+        direct_messages: "friends",
       },
       updated_at: null,
     });

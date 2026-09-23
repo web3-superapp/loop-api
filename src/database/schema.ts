@@ -1,4 +1,4 @@
-export const latestMigrationName = "000037_v2_push_channel";
+export const latestMigrationName = "000038_social_gates_default_open";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

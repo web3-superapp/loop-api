@@ -9,11 +9,14 @@ import {
   parsePrivacyV2Values,
   parseProfileV2ActivationValues,
   parseProfileV2Values,
+  privacyFriendGateValues,
+  privacyFriendRequestsValues,
   privacyV2ValuesEqual,
   profileActivationDigestVersion,
   profileInterestValues,
   profileStatusValues,
   profileV2ValuesEqual,
+  type PrivacyV2Values,
   type ProfileV2Values,
 } from "../features/profile/profile-v2-contract.js";
 import {
@@ -74,6 +77,22 @@ const rawPrivacyRowSchema = z
     updated_at: dateSchema,
   })
   .strict();
+
+const rawSocialGatesRowSchema = z
+  .object({
+    owner_user_id: ownerUserIdSchema,
+    friend_requests: z.enum(privacyFriendRequestsValues),
+    group_invites: z.enum(privacyFriendGateValues),
+    direct_messages: z.enum(privacyFriendGateValues),
+  })
+  .strict();
+
+type SocialGatesRow = z.infer<typeof rawSocialGatesRowSchema>;
+
+interface PrivacyParts {
+  readonly privacy: z.infer<typeof rawPrivacyRowSchema> | null;
+  readonly social: SocialGatesRow | null;
+}
 
 const rawCommandRowSchema = z
   .object({
@@ -166,24 +185,66 @@ function toProfileRecord(value: unknown): ProfileV2Record {
   });
 }
 
-function toPrivacyRecord(value: unknown): PrivacyV2Record {
-  const row = rawPrivacyRowSchema.parse(value);
+/**
+ * Compose the resource from its two relations. A missing
+ * `privacy_preferences_v2` row contributes the fail-closed presentation
+ * defaults and version 0; a missing `social_privacy_preferences` row
+ * contributes the open social defaults (Decision 0070). Both missing is the
+ * pure default and is reported as `null`.
+ */
+function toPrivacyRecord(
+  ownerUserId: string,
+  parts: PrivacyParts,
+): PrivacyV2Record | null {
+  if (parts.privacy === null && parts.social === null) {
+    return null;
+  }
+  if (
+    (parts.privacy !== null && parts.privacy.owner_user_id !== ownerUserId) ||
+    (parts.social !== null && parts.social.owner_user_id !== ownerUserId)
+  ) {
+    throw new ProfileV2RepositoryUnavailableError();
+  }
+  const row = parts.privacy;
+  const social = parts.social;
   const privacy = parsePrivacyV2Values({
-    discoverable: row.discoverable,
-    anonymousMode: row.anonymous_mode,
-    visibility: {
-      totalAssets: row.total_assets_visibility,
-      miningPower: row.mining_power_visibility,
-      communities: row.communities_visibility,
-      tradeHistory: row.trade_history_visibility,
-    },
+    discoverable: row?.discoverable ?? defaultPrivacyV2Values.discoverable,
+    anonymousMode: row?.anonymous_mode ?? defaultPrivacyV2Values.anonymousMode,
+    visibility:
+      row === null
+        ? defaultPrivacyV2Values.visibility
+        : {
+            totalAssets: row.total_assets_visibility,
+            miningPower: row.mining_power_visibility,
+            communities: row.communities_visibility,
+            tradeHistory: row.trade_history_visibility,
+          },
+    friendRequests:
+      social?.friend_requests ?? defaultPrivacyV2Values.friendRequests,
+    groupInvites: social?.group_invites ?? defaultPrivacyV2Values.groupInvites,
+    directMessages:
+      social?.direct_messages ?? defaultPrivacyV2Values.directMessages,
   });
   return Object.freeze({
-    ownerUserId: row.owner_user_id,
+    ownerUserId,
     ...privacy,
-    version: row.record_version,
-    updatedAt: row.updated_at.toISOString(),
+    version: row?.record_version ?? 0,
+    updatedAt: row?.updated_at.toISOString() ?? null,
   });
+}
+
+function socialGatesEqual(
+  social: SocialGatesRow | null,
+  privacy: PrivacyV2Values,
+): boolean {
+  return (
+    (social?.friend_requests ?? defaultPrivacyV2Values.friendRequests) ===
+      privacy.friendRequests &&
+    (social?.group_invites ?? defaultPrivacyV2Values.groupInvites) ===
+      privacy.groupInvites &&
+    (social?.direct_messages ?? defaultPrivacyV2Values.directMessages) ===
+      privacy.directMessages
+  );
 }
 
 async function withTransaction<T>(
@@ -250,12 +311,13 @@ async function readProfile(
   return row === undefined ? null : toProfileRecord(row);
 }
 
-async function readPrivacy(
+async function readPrivacyParts(
   client: DatabaseClient,
   ownerUserId: string,
   forUpdate: boolean,
-): Promise<PrivacyV2Record | null> {
-  const result = await client.query<Record<string, unknown>>({
+): Promise<PrivacyParts> {
+  const lock = forUpdate ? "for update" : "";
+  const privacy = await client.query<Record<string, unknown>>({
     text: `
       select
         owner_user_id,
@@ -270,12 +332,91 @@ async function readPrivacy(
       from public.privacy_preferences_v2
       where owner_user_id = $1
       limit 1
-      ${forUpdate ? "for update" : ""}
+      ${lock}
     `,
     values: [ownerUserId],
   });
-  const row = result.rows[0];
-  return row === undefined ? null : toPrivacyRecord(row);
+  const social = await client.query<Record<string, unknown>>({
+    text: `
+      select
+        owner_user_id,
+        friend_requests,
+        group_invites,
+        direct_messages
+      from public.social_privacy_preferences
+      where owner_user_id = $1
+      limit 1
+      ${lock}
+    `,
+    values: [ownerUserId],
+  });
+  const privacyRow = privacy.rows[0];
+  const socialRow = social.rows[0];
+  return Object.freeze({
+    privacy:
+      privacyRow === undefined ? null : rawPrivacyRowSchema.parse(privacyRow),
+    social:
+      socialRow === undefined ? null : rawSocialGatesRowSchema.parse(socialRow),
+  });
+}
+
+async function readPrivacy(
+  client: DatabaseClient,
+  ownerUserId: string,
+  forUpdate: boolean,
+): Promise<PrivacyV2Record | null> {
+  return toPrivacyRecord(
+    ownerUserId,
+    await readPrivacyParts(client, ownerUserId, forUpdate),
+  );
+}
+
+/**
+ * Commit the social gates when they differ from what the admission checks
+ * currently read. No row plus the open defaults is left as no row: a missing
+ * row already means exactly that (Decision 0070).
+ */
+async function writeSocialGates(
+  client: DatabaseClient,
+  ownerUserId: string,
+  social: SocialGatesRow | null,
+  privacy: PrivacyV2Values,
+): Promise<void> {
+  if (socialGatesEqual(social, privacy)) {
+    return;
+  }
+  const result = await client.query({
+    text: `
+      insert into public.social_privacy_preferences (
+        owner_user_id,
+        friend_requests,
+        group_invites,
+        direct_messages
+      )
+      values ($1, $2, $3, $4)
+      on conflict (owner_user_id) do update
+      set
+        friend_requests = excluded.friend_requests,
+        group_invites = excluded.group_invites,
+        direct_messages = excluded.direct_messages,
+        record_version = public.social_privacy_preferences.record_version + 1,
+        updated_at = greatest(
+          clock_timestamp(),
+          public.social_privacy_preferences.updated_at
+        )
+      where public.social_privacy_preferences.record_version < $5
+    `,
+    values: [
+      ownerUserId,
+      privacy.friendRequests,
+      privacy.groupInvites,
+      privacy.directMessages,
+      maximumRecordVersion,
+    ],
+  });
+  if (result.rowCount !== 1) {
+    throw new ProfileV2VersionConflictError();
+  }
 }
 
 async function requireProfile(
@@ -549,7 +690,12 @@ export function createPostgresProfileV2Repository(
         const privacy = parsePrivacyV2Values(parsed.privacy);
         return await withTransaction(pool, async (client) => {
           await lockOwner(client, parsed.ownerUserId);
-          const current = await readPrivacy(client, parsed.ownerUserId, true);
+          const parts = await readPrivacyParts(
+            client,
+            parsed.ownerUserId,
+            true,
+          );
+          const current = toPrivacyRecord(parsed.ownerUserId, parts);
           const values = [
             parsed.ownerUserId,
             privacy.discoverable,
@@ -560,7 +706,10 @@ export function createPostgresProfileV2Repository(
             privacy.visibility.tradeHistory,
           ];
 
-          if (current === null) {
+          if (parts.privacy === null) {
+            // No committed resource version yet (a social-only row still
+            // reads as version 0). Version 0 creates the resource; any other
+            // expectation only passes as an identical retry.
             if (parsed.expectedVersion === 0) {
               await client.query({
                 text: `
@@ -578,12 +727,28 @@ export function createPostgresProfileV2Repository(
                 `,
                 values,
               });
+              await writeSocialGates(
+                client,
+                parsed.ownerUserId,
+                parts.social,
+                privacy,
+              );
               return readPrivacy(client, parsed.ownerUserId, false);
             }
-            if (privacyV2ValuesEqual(defaultPrivacyV2Values, privacy)) {
-              return null;
+            if (
+              privacyV2ValuesEqual(
+                current === null
+                  ? defaultPrivacyV2Values
+                  : privacyV2RecordValues(current),
+                privacy,
+              )
+            ) {
+              return current;
             }
             throw new ProfileV2VersionConflictError();
+          }
+          if (current === null) {
+            throw new ProfileV2RepositoryUnavailableError();
           }
 
           if (privacyV2ValuesEqual(privacyV2RecordValues(current), privacy)) {
@@ -612,6 +777,12 @@ export function createPostgresProfileV2Repository(
           if (updated.rowCount !== 1) {
             throw new ProfileV2VersionConflictError();
           }
+          await writeSocialGates(
+            client,
+            parsed.ownerUserId,
+            parts.social,
+            privacy,
+          );
           return readPrivacy(client, parsed.ownerUserId, false);
         });
       } catch (error) {

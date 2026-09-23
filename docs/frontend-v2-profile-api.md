@@ -181,7 +181,9 @@ body：
 
 ## `GET /v2/profile/privacy`
 
-无 body/query。无行时返回 version 0 的 fail-closed 默认值（不落库）：
+无 body/query。无行时返回 version 0 的默认值（不落库）。展示类开关 fail-closed
+（`discoverable=false`、四个可见性面 `self`）；三个社交开关**默认开启**
+（决策 0070，用户 2026-09-23 裁决）：
 
 ```json
 {
@@ -193,7 +195,10 @@ body：
       "miningPower": "self",
       "communities": "self",
       "tradeHistory": "self"
-    }
+    },
+    "friendRequests": "enabled",
+    "groupInvites": "friends",
+    "directMessages": "friends"
   },
   "version": 0,
   "updatedAt": null,
@@ -214,7 +219,10 @@ body：
       "miningPower": "everyone",
       "communities": "everyone",
       "tradeHistory": "self"
-    }
+    },
+    "friendRequests": "enabled",
+    "groupInvites": "friends",
+    "directMessages": "disabled"
   }
 }
 ```
@@ -223,7 +231,26 @@ body：
   永不显示钱包地址；四个 visibility 各为 `self | everyone`。
 - 与 V1 `/v1/profile/privacy` 完全独立（各自的表与 version）；不存在
   `copyTradeVisibility`，传入任何未知字段都是 `400`。
-- 这些值只是展示偏好，不是授权，也不产生任何社交关系。
+- 展示类值只是展示偏好，不是授权，也不产生任何社交关系。
+
+### 社交开关（决策 0070，2026-09-23 新增）
+
+| 字段             | 取值                  | 默认      | 服务端在哪里读它                                                                                  |
+| ---------------- | --------------------- | --------- | ------------------------------------------------------------------------------------------------- |
+| `friendRequests` | `enabled \| disabled` | `enabled` | `POST /v2/message-requests`：目标关闭则 `404 NOT_FOUND`（**同时仍要求目标 `discoverable=true`**） |
+| `groupInvites`   | `friends \| disabled` | `friends` | `POST /v2/chat/groups`：任一被邀请好友关闭则 `404 NOT_FOUND`                                      |
+| `directMessages` | `friends \| disabled` | `friends` | `POST /v2/chat/direct-channels`：目标关闭则 `404 NOT_FOUND`（好友关系仍是前提）                   |
+
+- **`PUT` 是整体替换，三个字段全部必填**；缺任一字段或值不在枚举内 →
+  `400 INVALID_REQUEST`。前端保存时把 `GET` 读到的九个值一起回传。
+- 三个开关与展示类开关在同一事务提交；任何一个开关变化都会让 `version` +1。
+  无行账号首次写入（`expectedVersion: 0`）后 `version` 为 1。
+- "缺行即默认"：从未进过隐私中心的账号在服务端就是 `enabled/friends/friends`，
+  不需要前端做任何初始化写入。用户主动关掉的值会被原样保留。
+- 语义文案建议：`friendRequests` = "允许陌生人发消息请求"（副标题提示需同时打开
+  "显示 LOOP ID / 可被发现"才会被找到）；`directMessages` = "允许好友发起私聊"；
+  `groupInvites` = "允许好友拉我进群"。
+- 旧 `/v1/profile/social-privacy` 已退役，不要再调用；它的默认值也已同步为开启。
 
 ## 别名规则与错误码
 

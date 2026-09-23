@@ -33,11 +33,28 @@ export const privacyVisibilityValues = Object.freeze([
   "self",
   "everyone",
 ] as const);
+/**
+ * Social gates (Decision 0070). They are stored in the V1
+ * `social_privacy_preferences` relation and read by every message-request,
+ * direct-channel, and group admission check; a missing row is the open
+ * default below.
+ */
+export const privacyFriendRequestsValues = Object.freeze([
+  "enabled",
+  "disabled",
+] as const);
+export const privacyFriendGateValues = Object.freeze([
+  "friends",
+  "disabled",
+] as const);
 export const profileActivationDigestVersion = "profile_activation_v1" as const;
 
 export type ProfileInterest = (typeof profileInterestValues)[number];
 export type ProfileStatus = (typeof profileStatusValues)[number];
 export type PrivacyVisibility = (typeof privacyVisibilityValues)[number];
+export type PrivacyFriendRequests =
+  (typeof privacyFriendRequestsValues)[number];
+export type PrivacyFriendGate = (typeof privacyFriendGateValues)[number];
 
 const forbiddenTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 const loopIdPattern = new RegExp(loopIdPatternSource);
@@ -110,6 +127,9 @@ const privacyValuesSchema = z
     discoverable: z.boolean(),
     anonymousMode: z.boolean(),
     visibility: visibilitySchema,
+    friendRequests: z.enum(privacyFriendRequestsValues),
+    groupInvites: z.enum(privacyFriendGateValues),
+    directMessages: z.enum(privacyFriendGateValues),
   })
   .strict();
 
@@ -164,6 +184,12 @@ export interface PrivacyV2Values {
   readonly discoverable: boolean;
   readonly anonymousMode: boolean;
   readonly visibility: PrivacyV2Visibility;
+  /** Strangers may send a message request (`POST /v2/message-requests`). */
+  readonly friendRequests: PrivacyFriendRequests;
+  /** Accepted friends may add this account to a group (`POST /v2/chat/groups`). */
+  readonly groupInvites: PrivacyFriendGate;
+  /** Accepted friends may open a direct channel (`POST /v2/chat/direct-channels`). */
+  readonly directMessages: PrivacyFriendGate;
 }
 
 export interface ReplacePrivacyV2Request {
@@ -194,6 +220,11 @@ export const defaultProfileV2Values: ProfileV2Values = Object.freeze({
   interests: Object.freeze([]),
 });
 
+/**
+ * Version-0 defaults. Presentation flags fail closed (nothing is shown until
+ * the owner opts in); the three social gates default open (Decision 0070) so
+ * an account that never visited the privacy centre can still be reached.
+ */
 export const defaultPrivacyV2Values: PrivacyV2Values = Object.freeze({
   discoverable: false,
   anonymousMode: false,
@@ -203,6 +234,9 @@ export const defaultPrivacyV2Values: PrivacyV2Values = Object.freeze({
     communities: "self",
     tradeHistory: "self",
   }),
+  friendRequests: "enabled",
+  groupInvites: "friends",
+  directMessages: "friends",
 });
 
 function invalid(): never {
@@ -228,6 +262,9 @@ export function freezePrivacyV2Values(value: PrivacyV2Values): PrivacyV2Values {
       communities: value.visibility.communities,
       tradeHistory: value.visibility.tradeHistory,
     }),
+    friendRequests: value.friendRequests,
+    groupInvites: value.groupInvites,
+    directMessages: value.directMessages,
   });
 }
 
@@ -309,7 +346,10 @@ export function privacyV2ValuesEqual(
     left.visibility.totalAssets === right.visibility.totalAssets &&
     left.visibility.miningPower === right.visibility.miningPower &&
     left.visibility.communities === right.visibility.communities &&
-    left.visibility.tradeHistory === right.visibility.tradeHistory
+    left.visibility.tradeHistory === right.visibility.tradeHistory &&
+    left.friendRequests === right.friendRequests &&
+    left.groupInvites === right.groupInvites &&
+    left.directMessages === right.directMessages
   );
 }
 

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresChatChannelRepository } from "../src/database/chat-channel-repository.js";
 import {
   ChatChannelIdempotencyConflictRepositoryError,
+  ChatChannelTargetUnavailableRepositoryError,
   type ChatChannelRepository,
 } from "../src/features/communication/chat-channel-repository.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
@@ -296,6 +297,98 @@ describe("PostgreSQL Chat channel repository", () => {
       channel_state: "active",
       event_count: "4",
     });
+  });
+
+  it("admits a friend with no social privacy row and refuses an explicit disabled (Decision 0070)", async () => {
+    const owner = await createUser("default-owner");
+    const target = await createUser("default-target");
+    const second = await createUser("default-second");
+    await makeFriends(owner.ownerUserId, target.ownerUserId);
+    await makeFriends(owner.ownerUserId, second.ownerUserId);
+    await pool.query({
+      text: `
+        delete from public.social_privacy_preferences
+        where owner_user_id = any($1::uuid[])
+      `,
+      values: [[target.ownerUserId, second.ownerUserId]],
+    });
+
+    // No row is the open default for a direct channel ...
+    const direct = await repository.prepareDirectOperation({
+      operationId: randomUUID(),
+      ownerUserId: owner.ownerUserId,
+      requestId: randomUUID(),
+      requestDigest: digest("default-direct"),
+      targetPublicProfileId: target.publicProfileId,
+    });
+    expect(direct).toMatchObject({ status: "pending", errorCode: null });
+    await expect(
+      repository.claimSubmission({
+        operationId: direct.operationId,
+        ownerUserId: owner.ownerUserId,
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({ channelId: direct.channelId, kind: "direct" });
+
+    // ... and for a group.
+    const group = await repository.prepareGroupOperation({
+      operationId: randomUUID(),
+      ownerUserId: owner.ownerUserId,
+      requestId: randomUUID(),
+      requestDigest: digest("default-group"),
+      name: "Default gates",
+      friendPublicProfileIds: [target.publicProfileId, second.publicProfileId],
+    });
+    expect(group).toMatchObject({ status: "pending", errorCode: null });
+
+    // An explicit disabled row written by the owner is respected.
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        ) values ($1, 'enabled', 'disabled', 'disabled')
+      `,
+      values: [target.ownerUserId],
+    });
+    await expect(
+      repository.prepareDirectOperation({
+        operationId: randomUUID(),
+        ownerUserId: owner.ownerUserId,
+        requestId: randomUUID(),
+        requestDigest: digest("closed-direct"),
+        targetPublicProfileId: target.publicProfileId,
+      }),
+    ).rejects.toBeInstanceOf(ChatChannelTargetUnavailableRepositoryError);
+    await expect(
+      repository.prepareGroupOperation({
+        operationId: randomUUID(),
+        ownerUserId: owner.ownerUserId,
+        requestId: randomUUID(),
+        requestDigest: digest("closed-group"),
+        name: "Closed gates",
+        friendPublicProfileIds: [
+          target.publicProfileId,
+          second.publicProfileId,
+        ],
+      }),
+    ).rejects.toBeInstanceOf(ChatChannelTargetUnavailableRepositoryError);
+
+    // A stranger with no row is still not a target: friendship stays the
+    // admission rule.
+    const stranger = await createUser("default-stranger");
+    await pool.query({
+      text: `delete from public.social_privacy_preferences where owner_user_id = $1`,
+      values: [stranger.ownerUserId],
+    });
+    await expect(
+      repository.prepareDirectOperation({
+        operationId: randomUUID(),
+        ownerUserId: owner.ownerUserId,
+        requestId: randomUUID(),
+        requestDigest: digest("stranger-direct"),
+        targetPublicProfileId: stranger.publicProfileId,
+      }),
+    ).rejects.toBeInstanceOf(ChatChannelTargetUnavailableRepositoryError);
   });
 
   it("rechecks social privacy immediately before claiming the provider write", async () => {

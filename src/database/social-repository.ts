@@ -1253,7 +1253,7 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
             where profile.owner_user_id <> $1
               and privacy.discoverable = true
               and (
-                social_privacy.friend_requests = 'enabled'
+                coalesce(social_privacy.friend_requests, 'enabled') = 'enabled'
                 or friendship.friendship_id is not null
                 or pending.friend_request_id is not null
               )
@@ -1365,12 +1365,13 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
               from public.user_profiles as profile
               join public.privacy_preferences as privacy
                 on privacy.owner_user_id = profile.owner_user_id
-              join public.social_privacy_preferences as social_privacy
+              left join public.social_privacy_preferences as social_privacy
                 on social_privacy.owner_user_id = profile.owner_user_id
               where profile.public_profile_id = $1
                 and profile.alias is not null
                 and privacy.discoverable = true
-                and social_privacy.friend_requests = 'enabled'
+                and coalesce(social_privacy.friend_requests, 'enabled')
+                  = 'enabled'
               limit 1
             `,
             values: [input.targetPublicProfileId],

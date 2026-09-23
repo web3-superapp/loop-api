@@ -9,7 +9,11 @@ import type {
 /**
  * V2 profile persistence boundary. Alias and avatar reference are shared with
  * the frozen V1 `user_profiles` columns and CAS `record_version`; V2 privacy
- * lives in the independent `privacy_preferences_v2` relation.
+ * lives in the independent `privacy_preferences_v2` relation, and the three
+ * social gates (Decision 0070) in the V1 `social_privacy_preferences`
+ * relation, which every admission check reads. The resource `version` is the
+ * `privacy_preferences_v2` record version; a social-only change still bumps it
+ * because the write path always commits both relations together.
  */
 
 export interface ProfileV2Record extends ProfileV2Values {
@@ -24,8 +28,9 @@ export interface ProfileV2Record extends ProfileV2Values {
 
 export interface PrivacyV2Record extends PrivacyV2Values {
   readonly ownerUserId: string;
+  /** 0 when only a `social_privacy_preferences` row exists. */
   readonly version: number;
-  readonly updatedAt: string;
+  readonly updatedAt: string | null;
 }
 
 export interface ReplaceProfileV2RecordInput {
@@ -55,7 +60,10 @@ export interface ProfileV2Repository {
   activateProfile(
     input: ActivateProfileV2RecordInput,
   ): Promise<ProfileV2Record>;
-  /** Null when no privacy row exists (version-0 fail-closed default). */
+  /**
+   * Null when neither a `privacy_preferences_v2` nor a
+   * `social_privacy_preferences` row exists (the version-0 default).
+   */
   getPrivacy(ownerUserId: string): Promise<PrivacyV2Record | null>;
   replacePrivacy(
     input: ReplacePrivacyV2RecordInput,
@@ -119,5 +127,8 @@ export function privacyV2RecordValues(
     discoverable: record.discoverable,
     anonymousMode: record.anonymousMode,
     visibility: Object.freeze({ ...record.visibility }),
+    friendRequests: record.friendRequests,
+    groupInvites: record.groupInvites,
+    directMessages: record.directMessages,
   });
 }

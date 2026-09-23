@@ -23,6 +23,8 @@ import {
   maximumInterests,
   maximumRawTextLength,
   maximumRecordVersion,
+  privacyFriendGateValues,
+  privacyFriendRequestsValues,
   privacyVisibilityValues,
   profileInterestValues,
   profileStatusValues,
@@ -209,7 +211,14 @@ const visibilityValueSchema = {
 const privacyValuesSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["discoverable", "anonymousMode", "visibility"],
+  required: [
+    "discoverable",
+    "anonymousMode",
+    "visibility",
+    "friendRequests",
+    "groupInvites",
+    "directMessages",
+  ],
   properties: {
     discoverable: {
       type: "boolean",
@@ -229,6 +238,24 @@ const privacyValuesSchema = {
         communities: visibilityValueSchema,
         tradeHistory: visibilityValueSchema,
       },
+    },
+    friendRequests: {
+      type: "string",
+      enum: [...privacyFriendRequestsValues],
+      description:
+        "Whether strangers may send this account a message request (POST /v2/message-requests). Default enabled; the target must also be discoverable. Decision 0070.",
+    },
+    groupInvites: {
+      type: "string",
+      enum: [...privacyFriendGateValues],
+      description:
+        "Whether accepted friends may add this account to a small group (POST /v2/chat/groups). Default friends. Decision 0070.",
+    },
+    directMessages: {
+      type: "string",
+      enum: [...privacyFriendGateValues],
+      description:
+        "Whether accepted friends may open a direct channel with this account (POST /v2/chat/direct-channels). Default friends. Decision 0070.",
     },
   },
 } as const;
@@ -527,7 +554,7 @@ export const registerV2ProfileRoutes: V2ModuleRegistrar = (
         operationId: "getV2PrivacyPreferences",
         summary: "Get the authenticated LOOP privacy preferences",
         description:
-          "Returns fail-closed owner-only defaults (version 0) without creating a row. Preferences are presentation choices, never authorization.",
+          "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, every visibility self) while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
         tags: ["profile"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -557,7 +584,7 @@ export const registerV2ProfileRoutes: V2ModuleRegistrar = (
         operationId: "replaceV2PrivacyPreferences",
         summary: "Replace the authenticated LOOP privacy preferences",
         description:
-          "Compare-and-swap replacement keyed by expectedVersion, independent from the frozen V1 privacy resource. Idempotency-Key is not accepted.",
+          "Compare-and-swap full replacement keyed by expectedVersion, independent from the frozen V1 privacy resource. The three social gates are committed in the same transaction and a change to any of them bumps version. Idempotency-Key is not accepted.",
         tags: ["profile"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

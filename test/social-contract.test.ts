@@ -18,11 +18,11 @@ const targetPublicProfileId = "b0825ec2-a585-45c8-9e9f-5279c69d49b3";
 const friendRequestId = "28f34597-8bbd-4835-bff7-f7db654333b5";
 
 describe("social contract", () => {
-  it("keeps missing social privacy fail closed", () => {
+  it("treats missing social privacy as the open defaults (Decision 0070)", () => {
     expect(defaultSocialPrivacyValues).toEqual({
-      friend_requests: "disabled",
-      group_invites: "disabled",
-      direct_messages: "disabled",
+      friend_requests: "enabled",
+      group_invites: "friends",
+      direct_messages: "friends",
     });
     expect(Object.isFrozen(defaultSocialPrivacyValues)).toBe(true);
   });
