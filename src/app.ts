@@ -1576,6 +1576,7 @@ export async function buildApp(
           model: config.communityAi.model,
           timeoutMs: config.communityAi.timeoutMs,
           maximumOutputTokens: config.communityAi.maximumOutputTokens,
+          logger: app.log,
         }));
   const communityAiRepository =
     database.communityAi ?? createUnavailableCommunityAiRepository();

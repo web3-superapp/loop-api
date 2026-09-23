@@ -435,7 +435,55 @@ describe("Anthropic Community AI adapter (Decision 0066)", () => {
       type: "tool",
       name: "community_ai_answer",
     });
+    // A forced tool call needs no reasoning pass; with thinking on, the
+    // output budget can be spent on a thinking block before `tool_use`.
+    expect(sent["thinking"]).toEqual({ type: "disabled" });
     expect(JSON.stringify(sent)).not.toContain("sk-ant-secret");
+  });
+
+  it("rejects a reply truncated inside a thinking block and logs its shape only", async () => {
+    const warn = vi.fn();
+    const truncated = {
+      model: "qwen3.6-flash",
+      stop_reason: "max_tokens",
+      content: [{ type: "thinking", thinking: "SECRET-SHAPED-REASONING …" }],
+      usage: { input_tokens: 1_200, output_tokens: 800 },
+    };
+    const fetchImpl: AnthropicFetch = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(truncated)),
+      });
+    const gateway = createAnthropicCommunityAiGateway({
+      apiKey: "sk-ant-secret",
+      baseUrl: "https://api.anthropic.com",
+      model: "qwen3.6-flash",
+      timeoutMs: 1_000,
+      maximumOutputTokens: 800,
+      fetch: fetchImpl,
+      logger: { warn },
+    });
+    const call = gateway.complete({ system: "rules", userContent: "sources" });
+    await expect(call).rejects.toMatchObject({
+      reason: "COMMUNITY_AI_PROVIDER_MALFORMED",
+      diagnostics: {
+        stopReason: "max_tokens",
+        outputTokens: 800,
+        contentBlockTypes: ["thinking"],
+      },
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toEqual({
+      reason: "COMMUNITY_AI_PROVIDER_MALFORMED",
+      model: "qwen3.6-flash",
+      stopReason: "max_tokens",
+      outputTokens: 800,
+      contentBlockTypes: ["thinking"],
+      maxOutputTokens: 800,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("SECRET-SHAPED");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("sk-ant-secret");
   });
 
   it("derives the request URL from baseUrl and normalises a trailing slash", async () => {

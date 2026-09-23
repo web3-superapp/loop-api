@@ -127,7 +127,7 @@ Retention is not decided (§6.4 lists it as open). This step stores the minimum 
 ## 8. Red lines this module keeps
 
 - The API key never reaches a log, an error body, `detailsSafe`, or the OpenAPI document. It exists only in `AppConfig` and the adapter closure.
-- The user's question and the chat transcript never reach a log line. The routes log nothing beyond the standard request record; the adapter logs nothing at all.
+- The user's question and the chat transcript never reach a log line. The routes log nothing beyond the standard request record; the adapter logs one shape-only line per malformed answer (stop reason, token count, block types — see the S76d note under amendment 2) and nothing else.
 - A Provider failure is `CAPABILITY_UNAVAILABLE` with a reason. No canned answer, no cached other answer, no "based on general knowledge" fallback.
 - The model is given no tool that can write anything, and the backend exposes none.
 
@@ -189,6 +189,14 @@ key 取值规则：`COMMUNITY_AI_API_KEY` ⇒ 否则 `ANTHROPIC_API_KEY` ⇒ 两
    - 生成失败不抛到任何请求：按 §2 的 Provider 分类（`COMMUNITY_AI_PROVIDER_UNAVAILABLE / REJECTED / MALFORMED`）或配额拒绝（`COMMUNITY_AI_QUOTA_EXHAUSTED`，新）写入负缓存，随后的读返回该 reasonCode，`communityAiBriefRetrySeconds`（300 s）后才允许再触发一次。非 Provider、非配额的意外错误只记 warn 日志（communityId、requestId、错误类名；无 Provider body、无摘要、无消息原文），读继续显示 `COMMUNITY_AI_BRIEF_PENDING`，同样 300 s 后重试。
 3. **`brief.reasonCode` 收口为闭合枚举**（`communityAiBriefReasonCodes`，进入 OpenAPI enum）：`COMMUNITY_AI_MEMBERSHIP_REQUIRED`、`COMMUNITY_CHAT_NOT_CONNECTED`、`COMMUNITY_CHAT_NOT_OBSERVED`、`COMMUNITY_AI_BRIEF_PENDING`、`COMMUNITY_AI_PROVIDER_UNAVAILABLE`、`COMMUNITY_AI_PROVIDER_REJECTED`、`COMMUNITY_AI_PROVIDER_MALFORMED`、`COMMUNITY_AI_QUOTA_EXHAUSTED`。此前配额耗尽会把整个 overview 变成 `429 RATE_LIMITED`；现在 overview 永远 200，配额只影响 `brief`。
 4. **`COMMUNITY_AI_TIMEOUT_MS` 默认 20000 → 11000**（`communityAiDefaultTimeoutMs`）。`ask` 路径的预算：知识装配（观测约 2.4 s）+ `beginAsk`（DB，< 0.1 s）+ 模型 ≤ 11 s ≈ 13.5 s < 15 s。模型超时时 adapter 抛 `COMMUNITY_AI_PROVIDER_UNAVAILABLE`，客户端拿到干净的 `503 CAPABILITY_UNAVAILABLE`。剩余余量约 1.5 s：若知识装配本身超过约 4 s，15 s 的三个截止会同时到期，socket 关闭仍可能先于 503；这是配置上限，不是本修正能消除的竞争。
+
+### S76d 追加（2026-09-23）：请求体 `thinking: {type: "disabled"}`
+
+真机复验找到了 qwen 慢与偶发 `COMMUNITY_AI_PROVIDER_MALFORMED` 的根因：模型在回 `tool_use` 前先输出 2700+ 字的 `thinking` 块，`output_tokens` 889 贴着/超过 `COMMUNITY_AI_MAX_OUTPUT_TOKENS=800`，被截断（`stop_reason: "max_tokens"`）时回复里只剩 `thinking` 块、没有 `tool_use`，adapter 按 §2 正确判为 MALFORMED。实测 OnlyRouter `/v1/messages` 对 `qwen3.6-flash` 接受 `"thinking": {"type": "disabled"}`：`output_tokens` 50、无 thinking 块、一两秒返回。
+
+- adapter 请求体固定加 `thinking: {type: "disabled"}`。强制、schema 绑定的工具输出不需要推理步。Anthropic 官方 API 上 Fable 系拒绝 `disabled`，但它们本来就拒绝强制 `tool_choice`，§2 已排除；Sonnet 5 / Opus 5 接受。
+- 判定不变：只有 `thinking` 块、或 `stop_reason=max_tokens` 后缺 `tool_use`，仍是 MALFORMED，不半信任。
+- 诊断：`CommunityAiProviderError` 新增 `diagnostics: {stopReason, outputTokens, contentBlockTypes}`；adapter 接受可选 `logger`（app 注入 `app.log`），MALFORMED 时打**一条** warn，只含 `reason`、`model`、`stopReason`、`outputTokens`、`contentBlockTypes`、`maxOutputTokens`。§8「adapter 不写任何日志」相应修正为「adapter 只在 MALFORMED 时写一条不含任何文本的形状日志」：不含 Provider body、不含 thinking 文本、不含 tool input、不含 prompt、不含 key。
 
 ### 不变
 
