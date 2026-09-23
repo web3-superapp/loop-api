@@ -141,11 +141,13 @@ export async function provisionMissingCommunityChannels(
     for (const candidate of candidates) {
       try {
         provisioned.push(
-          await repository.verifyCommunity({
-            communityId: candidate.communityId,
-            requestId: randomUUID(),
-            reasonCode,
-          }),
+          (
+            await repository.verifyCommunity({
+              communityId: candidate.communityId,
+              requestId: randomUUID(),
+              reasonCode,
+            })
+          ).community,
         );
       } catch {
         // One refused community must not stop the rest; it is reported and

@@ -24,14 +24,17 @@ export const pushPlatforms = Object.freeze(["android", "ios"] as const);
 export type PushPlatform = (typeof pushPlatforms)[number];
 
 /**
- * First event batch. `security_event` is mandatory (03 §15.1: security
- * notifications may be forced on); the other two are gated by the owner's
- * `notification_preferences_v2` category and can be switched off.
+ * First event batch plus the Decision 0073 review events. `security_event`
+ * is mandatory (03 §15.1: security notifications may be forced on); every
+ * other event is gated by the owner's `notification_preferences_v2` category
+ * and can be switched off.
  */
 export const pushEventTypes = Object.freeze([
   "price_alert_triggered",
   "security_event",
   "community_voice_room_started",
+  "community_application_verified",
+  "community_application_rejected",
 ] as const);
 export type PushEventType = (typeof pushEventTypes)[number];
 
@@ -67,6 +70,25 @@ export const pushEventDictionary = Object.freeze({
     mandatory: false,
     titleLocKey: "push.communityVoiceRoomStarted.title",
     bodyLocKey: "push.communityVoiceRoomStarted.body",
+  }),
+  /**
+   * Decision 0073: the two review outcomes, addressed to the community's
+   * current owner. The pointer names the community; the reason stays in the
+   * feed row and on the detail resource.
+   */
+  community_application_verified: Object.freeze({
+    eventType: "community_application_verified",
+    category: "community.announcement",
+    mandatory: false,
+    titleLocKey: "push.communityApplicationVerified.title",
+    bodyLocKey: "push.communityApplicationVerified.body",
+  }),
+  community_application_rejected: Object.freeze({
+    eventType: "community_application_rejected",
+    category: "community.announcement",
+    mandatory: false,
+    titleLocKey: "push.communityApplicationRejected.title",
+    bodyLocKey: "push.communityApplicationRejected.body",
   }),
 } as const satisfies Readonly<Record<PushEventType, PushEventDefinition>>);
 

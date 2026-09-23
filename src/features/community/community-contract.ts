@@ -58,6 +58,7 @@ export const safeTextPatternSource =
 export const communityListLimits = Object.freeze({ default: 20, maximum: 50 });
 export const communityHomeDiscoverLimit = 5;
 export const communityHomeJoinedLimit = 50;
+export const communityHomeOwnedLimit = 50;
 export const searchResultLimits = Object.freeze({ default: 20, maximum: 20 });
 
 export const communityVerificationStatuses = [
@@ -97,7 +98,11 @@ export const communityActivityObservationMaxAgeSeconds = 6 * 60 * 60;
 export const communityVerificationFilters = ["verified", "all"] as const;
 export type CommunityVerificationFilter =
   (typeof communityVerificationFilters)[number];
-export const communityMembershipFilters = ["all", "joined"] as const;
+/**
+ * `joined` is the viewer's non-owner memberships; `owned` is the communities
+ * the viewer currently owns (Decision 0073). A community is in exactly one.
+ */
+export const communityMembershipFilters = ["all", "joined", "owned"] as const;
 export type CommunityMembershipFilter =
   (typeof communityMembershipFilters)[number];
 /**
@@ -255,6 +260,21 @@ export interface CommunitySummary {
   readonly createdAt: string;
   readonly configVersion: typeof communityConfigVersion;
 }
+
+/**
+ * The owner-only view of an application's review state (Decision 0073).
+ * `submittedAt` is the last (re)submission; `reviewedAt` and
+ * `rejectedReason` are null while pending; a verified application has a
+ * `reviewedAt` and no reason.
+ */
+export interface CommunityApplicationProjection {
+  readonly status: CommunityVerificationStatus;
+  readonly submittedAt: string;
+  readonly reviewedAt: string | null;
+  readonly rejectedReason: string | null;
+}
+
+export const maximumRejectedReasonCodePoints = 280;
 
 export interface MembershipProjection {
   readonly role: CommunityRole;

@@ -38,7 +38,11 @@ export type CommunityTargetAction = (typeof communityTargetActions)[number];
  * their own membership, and editing the community profile (owner only, the
  * "edit" right of the ruled matrix, delivered by `PATCH /v2/communities/{id}`).
  */
-export const communitySelfActions = ["leave", "editProfile"] as const;
+export const communitySelfActions = [
+  "leave",
+  "editProfile",
+  "resubmitApplication",
+] as const;
 export type CommunitySelfAction = (typeof communitySelfActions)[number];
 
 export type CommunityAction = CommunityTargetAction | CommunitySelfAction;
@@ -94,14 +98,27 @@ export const communityPermissionMatrix: Readonly<
 
 /**
  * Self actions per actor role: the owner must transfer before leaving, and
- * only the owner may edit the community profile.
+ * only the owner may edit the community profile or resubmit a rejected
+ * application (Decision 0073).
  */
 export const communitySelfPermissionMatrix: Readonly<
   Record<CommunityRole, Readonly<Record<CommunitySelfAction, boolean>>>
 > = Object.freeze({
-  owner: Object.freeze({ leave: false, editProfile: true }),
-  admin: Object.freeze({ leave: true, editProfile: false }),
-  member: Object.freeze({ leave: true, editProfile: false }),
+  owner: Object.freeze({
+    leave: false,
+    editProfile: true,
+    resubmitApplication: true,
+  }),
+  admin: Object.freeze({
+    leave: true,
+    editProfile: false,
+    resubmitApplication: false,
+  }),
+  member: Object.freeze({
+    leave: true,
+    editProfile: false,
+    resubmitApplication: false,
+  }),
 });
 
 export interface CommunityActorMembership {

@@ -284,9 +284,9 @@ describe("PostgreSQL market facts, pool lane, V2 alerts, and notifications", () 
     await pool.query({
       text: `
         insert into public.communities (
-          name, slug, verification_status, verified_at, bound_asset_key, created_by_user_id, member_count
+          name, slug, verification_status, verified_at, reviewed_at, bound_asset_key, created_by_user_id, member_count
         )
-        values ('WBNB Holders', $1, 'verified', clock_timestamp(), $2, $3, 12)
+        values ('WBNB Holders', $1, 'verified', clock_timestamp(), clock_timestamp(), $2, $3, 12)
       `,
       values: [`wbnb-${randomUUID().slice(0, 8)}`, wbnbAssetId, owner],
     });

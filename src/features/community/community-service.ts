@@ -51,6 +51,7 @@ import {
   communityDiscoverFilter,
   communityHomeDiscoverLimit,
   communityHomeJoinedLimit,
+  communityHomeOwnedLimit,
   communityListLimits,
   communityMembersFilter,
   communityRecommendationRuleVersion,
@@ -78,6 +79,7 @@ import {
   unavailableSearchDomains,
   communityUnavailableReasonCodes,
   type BlockKind,
+  type CommunityApplicationProjection,
   type CommunityMembershipFilter,
   type CommunitySort,
   type CommunitySummary,
@@ -246,6 +248,11 @@ export interface CommunityResource {
   readonly community: CommunitySummary;
   readonly viewer: ViewerProjection;
   /**
+   * The application's review state (Decision 0073), projected only to the
+   * current owner; every other viewer receives null.
+   */
+  readonly application: CommunityApplicationProjection | null;
+  /**
    * Official community channel state (Decision 0032). `available` requires a
    * provisioned Stream channel and a `synced` viewer membership, so a member
    * whose Stream side is still catching up sees "syncing" instead of a CID it
@@ -333,6 +340,8 @@ export type CommunityActivityProjection =
 export interface CommunityDiscoverItem extends CommunitySummary {
   readonly miningPower?: MiningPowerProjection;
   readonly activity?: CommunityActivityProjection;
+  /** Present only on `membership=owned` rows (Decision 0073). */
+  readonly application?: CommunityApplicationProjection;
 }
 
 export interface CommunityListResource {
@@ -359,8 +368,21 @@ export interface JoinedCommunitiesProjection {
   readonly truncated: boolean;
 }
 
+export interface OwnedCommunityProjection extends JoinedCommunityProjection {
+  readonly application: CommunityApplicationProjection;
+}
+
+export interface OwnedCommunitiesProjection {
+  readonly items: readonly OwnedCommunityProjection[];
+  /** Continue with `GET /v2/communities?membership=owned`. */
+  readonly truncated: boolean;
+}
+
 export interface CommunityHomeResource {
+  /** Non-owner memberships; the viewer's own communities are in `owned`. */
   readonly joined: JoinedCommunitiesProjection;
+  /** Communities the viewer currently owns, with review state (0072). */
+  readonly owned: OwnedCommunitiesProjection;
   readonly discover: readonly CommunitySummary[];
   readonly unread: UnavailableProjection;
   readonly liveVoice: UnavailableProjection;
@@ -518,6 +540,7 @@ export interface CommunityService {
   getCommunity(input: CommunityIdInput): Promise<CommunityResource>;
   joinCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
   leaveCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
+  resubmitCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
   listMembers(input: ListMembersInput): Promise<CommunityMemberListResource>;
   governMember(input: GovernMemberInput): Promise<CommunityMemberListResource>;
   follow(input: FollowInput): Promise<FollowResource>;
@@ -599,6 +622,26 @@ function mapFailure(error: unknown): never {
   throw error;
 }
 
+function applicationProjection(
+  record: CommunityRecord,
+): CommunityApplicationProjection {
+  return Object.freeze({
+    status: record.verificationStatus,
+    submittedAt: record.application.submittedAt,
+    reviewedAt: record.application.reviewedAt,
+    rejectedReason: record.application.rejectedReason,
+  });
+}
+
+/** The review state is the owner's alone (Decision 0073). */
+function ownerApplication(
+  record: CommunityDetailRecord,
+): CommunityApplicationProjection | null {
+  return record.viewerMembership?.role === "owner"
+    ? applicationProjection(record.community)
+    : null;
+}
+
 function summary(record: CommunityRecord): CommunitySummary {
   return Object.freeze({
     communityId: record.communityId,
@@ -646,8 +689,17 @@ function discoverItem(
   record: CommunityRecord,
   sort: CommunitySort,
   basis: CommunityOrderingBasis,
+  membershipFilter: CommunityMembershipFilter,
 ): CommunityDiscoverItem {
-  const base = summary(record);
+  // `membership=owned` rows are the viewer's own applications, so the
+  // review state travels with them; no other list row carries it.
+  const base: CommunityDiscoverItem =
+    membershipFilter === "owned"
+      ? Object.freeze({
+          ...summary(record),
+          application: applicationProjection(record),
+        })
+      : summary(record);
   if (sort === "miningPower" && basis.kind === "miningSnapshot") {
     const ordering = record.ordering;
     if (
@@ -885,6 +937,7 @@ function communityResource(
   return Object.freeze({
     community: summary(record.community),
     viewer: viewerProjection(record.viewerMembership),
+    application: ownerApplication(record),
     chat: chatProjection(channel),
     voice: voiceProjection(channel),
     miningPower,
@@ -1413,9 +1466,27 @@ export function createCommunityService(
         const record = await options.repository.getCommunityHome({
           viewerUserId: owner.userId,
           joinedLimit: communityHomeJoinedLimit,
+          ownedLimit: communityHomeOwnedLimit,
           discoverLimit: communityHomeDiscoverLimit,
         });
         return Object.freeze({
+          owned: Object.freeze({
+            items: Object.freeze(
+              record.owned.flatMap((entry) => {
+                const current = membership(entry.viewerMembership);
+                return current === null || current.role !== "owner"
+                  ? []
+                  : [
+                      Object.freeze({
+                        community: summary(entry.community),
+                        membership: current,
+                        application: applicationProjection(entry.community),
+                      }),
+                    ];
+              }),
+            ),
+            truncated: record.ownedTruncated,
+          }),
           joined: Object.freeze({
             items: Object.freeze(
               record.joined.flatMap((entry) => {
@@ -1462,7 +1533,7 @@ export function createCommunityService(
         );
         const membershipFilter = parseEnumValue<CommunityMembershipFilter>(
           input.membership,
-          ["all", "joined"],
+          ["all", "joined", "owned"],
           "all",
         );
         const filter = communityDiscoverFilter(
@@ -1522,7 +1593,9 @@ export function createCommunityService(
         const last = items.at(-1);
         return Object.freeze({
           items: Object.freeze(
-            items.map((record) => discoverItem(record, sort, basis.basis)),
+            items.map((record) =>
+              discoverItem(record, sort, basis.basis, membershipFilter),
+            ),
           ),
           nextCursor:
             last === undefined
@@ -1667,6 +1740,30 @@ export function createCommunityService(
           communityId,
           idempotencyKey: input.idempotencyKey,
           requestSha256: commandDigest("community", "leaveCommunity", [
+            communityId,
+          ]),
+          requestId: input.requestId,
+        });
+        return communityResource(
+          record,
+          await channelProjection(owner.userId, communityId),
+          await communityMiningPower(communityId),
+          communityPresenceNotObserved,
+        );
+      } catch (error) {
+        return mapFailure(error);
+      }
+    },
+
+    async resubmitCommunity(input) {
+      const owner = assertPrincipal(input.principal);
+      try {
+        const communityId = parseOpaqueUuid(input.communityId);
+        const record = await options.repository.resubmitCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: commandDigest("community", "resubmitCommunity", [
             communityId,
           ]),
           requestId: input.requestId,

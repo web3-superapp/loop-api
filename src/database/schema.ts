@@ -1,4 +1,4 @@
-export const latestMigrationName = "000038_social_gates_default_open";
+export const latestMigrationName = "000039_v2_community_application_review";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

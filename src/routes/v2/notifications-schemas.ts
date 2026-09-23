@@ -254,11 +254,11 @@ const notificationSchema = {
     payload: {
       type: "object",
       additionalProperties: {
-        anyOf: [{ type: "string", maxLength: 256 }, { type: "null" }],
+        anyOf: [{ type: "string", maxLength: 512 }, { type: "null" }],
       },
       maxProperties: 16,
       description:
-        "Display facts only; every value is a string with provenance in the same object.",
+        "Display facts only; every value is a string with provenance in the same object. The bound admits a 280-code-point community rejection reason (Decision 0073).",
     },
     source: {
       anyOf: [

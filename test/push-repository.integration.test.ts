@@ -412,6 +412,27 @@ describe("push repository (migration 000037)", () => {
     expect(stored.rows[0]?.completed_at).not.toBeNull();
   });
 
+  it("admits the two community review events of Decision 0073", async () => {
+    const owner = await createOwner();
+    const session = await createSession(owner);
+    const registered = await register(owner, session);
+    for (const eventType of [
+      "community_application_verified",
+      "community_application_rejected",
+    ] as const) {
+      const reservation = await push.reserveDelivery({
+        ownerUserId: owner,
+        pushTokenId: registered.token.pushTokenId,
+        eventType,
+        eventKey: `${eventType}:community:${randomUUID()}:${randomUUID()}`,
+        mandatory: false,
+        windowSeconds: 3_600,
+        limit: 20,
+      });
+      expect(reservation.outcome).toBe("reserved");
+    }
+  });
+
   it("applies the owner's category preference to an optional event only", async () => {
     const owner = await createOwner();
     const session = await createSession(owner);

@@ -19,6 +19,7 @@ import {
   maximumCommunityDescriptionCodePoints,
   maximumCommunityNameCodePoints,
   maximumRawTextLength,
+  maximumRejectedReasonCodePoints,
   memberRoleFilters,
   messageRequestDecisions,
   opaqueIdPatternSource,
@@ -322,6 +323,47 @@ export const communitySummarySchema = {
   },
 } as const;
 
+/**
+ * The owner's view of an application (Decision 0073). Projected only to the
+ * current owner: on the detail it is null for everyone else, and on lists it
+ * appears only on `home.owned` and `membership=owned` rows.
+ */
+export const communityApplicationSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "submittedAt", "reviewedAt", "rejectedReason"],
+  properties: {
+    status: {
+      type: "string",
+      enum: [...communityVerificationStatuses],
+      description:
+        "Same value as community.verificationStatus: pending is under review, rejected carries the reason when the operator gave one, verified is closed.",
+    },
+    submittedAt: {
+      type: "string",
+      format: "date-time",
+      description:
+        "When the current application was submitted; moves forward on resubmission.",
+    },
+    reviewedAt: {
+      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+      description:
+        "When the operator verified or rejected; null while pending.",
+    },
+    rejectedReason: {
+      anyOf: [
+        {
+          type: "string",
+          minLength: 1,
+          maxLength: maximumRawTextLength,
+          description: `Operator text, trimmed to 1-${maximumRejectedReasonCodePoints} Unicode code points. Present only while rejected and only to the owner.`,
+        },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
 export const membershipSchema = {
   type: "object",
   additionalProperties: false,
@@ -454,6 +496,7 @@ export const communityResourceSchema = {
   required: [
     "community",
     "viewer",
+    "application",
     "chat",
     "voice",
     "miningPower",
@@ -465,6 +508,11 @@ export const communityResourceSchema = {
   properties: {
     community: communitySummarySchema,
     viewer: viewerSchema,
+    application: {
+      anyOf: [communityApplicationSchema, { type: "null" }],
+      description:
+        "Review state of the application, only when the viewer is the current owner; null otherwise (Decision 0073).",
+    },
     chat: communityChatSchema,
     voice: communityVoiceSchema,
     miningPower: miningPowerSchema,
@@ -517,6 +565,7 @@ export const communityDiscoverItemSchema = {
     ...communitySummarySchema.properties,
     miningPower: miningPowerSchema,
     activity: communityActivitySchema,
+    application: communityApplicationSchema,
   },
 } as const;
 
@@ -636,6 +685,7 @@ export const communityHomeResourceSchema = {
   additionalProperties: false,
   required: [
     "joined",
+    "owned",
     "discover",
     "unread",
     "liveVoice",
@@ -648,6 +698,8 @@ export const communityHomeResourceSchema = {
       type: "object",
       additionalProperties: false,
       required: ["items", "truncated"],
+      description:
+        "Communities the account joined as admin or member. Communities it owns are in `owned`, never here (Decision 0073).",
       properties: {
         items: {
           type: "array",
@@ -666,6 +718,34 @@ export const communityHomeResourceSchema = {
           type: "boolean",
           description:
             "True when the account joined more communities than this aggregate carries; continue with GET /v2/communities?membership=joined.",
+        },
+      },
+    },
+    owned: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "truncated"],
+      description:
+        "Communities the account currently owns, newest submission first, each with its review state (Decision 0073).",
+      properties: {
+        items: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["community", "membership", "application"],
+            properties: {
+              community: communitySummarySchema,
+              membership: membershipSchema,
+              application: communityApplicationSchema,
+            },
+          },
+        },
+        truncated: {
+          type: "boolean",
+          description:
+            "True when the account owns more communities than this aggregate carries; continue with GET /v2/communities?membership=owned.",
         },
       },
     },
@@ -1169,7 +1249,7 @@ export const communityListQuerySchema = {
       type: "string",
       enum: [...communityMembershipFilters],
       description:
-        "`joined` narrows the page to the caller's own memberships; it is the cursor-paged continuation of the home aggregate.",
+        "`joined` narrows the page to the caller's admin/member memberships and `owned` to the communities the caller currently owns (each row then carries `application`); both are cursor-paged continuations of the home aggregate and a community is in exactly one of them (Decision 0073).",
     },
     cursor: cursorSchema,
     limit: listLimitSchema,

@@ -73,6 +73,7 @@ function communityResource(
       canMute: false,
       canBan: false,
     }),
+    application: null,
     chat: Object.freeze({
       status: "unavailable" as const,
       channelCid: null,

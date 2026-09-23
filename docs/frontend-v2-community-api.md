@@ -148,6 +148,30 @@ Privy ID、Stream ID**：
   D10 之前后端不解析它，前端也不得据此展示价格、市值、持有人等任何事实。
 - `memberCount` 来自 PostgreSQL，是唯一可信的成员数字。
 
+### 申请进度投影 `application`（S79b，决策 0073）
+
+```json
+{
+  "status": "rejected",
+  "submittedAt": "2026-09-22T01:00:00.000Z",
+  "reviewedAt": "2026-09-23T08:00:00.000Z",
+  "rejectedReason": "社区名与已上市代币冲突，请换一个名称"
+}
+```
+
+- 只下发给**当前 owner**：`GET /v2/communities/{id}` 对 owner 是这个对象、对其他人
+  固定 `null`；`home.owned[].application` 与 `GET /v2/communities?membership=owned`
+  每行的 `application` 必带。发现列表、搜索、成员目录**永远没有**这个字段。
+- `status` 与 `community.verificationStatus` 同值：`pending` 审核中、`rejected` 已驳回、
+  `verified` 已通过。
+- `submittedAt` 是本次申请的提交时间（重新提交后前移；首次等于 `createdAt`）。
+- `reviewedAt`：审核时间，`pending` 时为 `null`。
+- `rejectedReason`：运营填写的驳回原因（1–280 码点），只在 `rejected` 且运营给了原因时
+  非 `null`；`pending`/`verified` 恒 `null`。原文照显，不要拼接。
+- **文案建议**：`pending` →「审核中 · 提交于 {submittedAt}」；`rejected` →
+  「已驳回 · {reviewedAt}」+ 原因区块 + 「修改后重新提交」按钮；`verified` →
+  验证 stamp，不再显示申请状态。三态都不显示 fixture 数字。
+
 ### 分页 cursor
 
 列表返回 `nextCursor`（`string | null`）。规则：
@@ -166,7 +190,17 @@ Privy ID、Stream ID**：
 ```json
 {
   "joined": {
-    "items": [{ "community": { … }, "membership": { "role": "owner", "status": "active", "joinedAt": "…" } }],
+    "items": [{ "community": { … }, "membership": { "role": "member", "status": "active", "joinedAt": "…" } }],
+    "truncated": false
+  },
+  "owned": {
+    "items": [
+      {
+        "community": { "verificationStatus": "pending", … },
+        "membership": { "role": "owner", "status": "active", "joinedAt": "…" },
+        "application": { "status": "pending", "submittedAt": "…", "reviewedAt": null, "rejectedReason": null }
+      }
+    ],
     "truncated": false
   },
   "discover": [{ … }],
@@ -179,8 +213,15 @@ Privy ID、Stream ID**：
 ```
 
 `discover` 最多 5 条，只含 `verified` 且当前账号未加入的社区。
-`joined.truncated === true` 表示已加入的社区超过本聚合承载量，"查看全部"要走
-`GET /v2/communities?membership=joined`（游标分页）。主卡文案只能用
+
+**「我的社区」拆成两组（S79b，决策 0073）**：`joined` 是当前账号以 admin/member 身份
+加入的社区；`owned` 是当前账号**是 owner** 的社区（含 `pending`/`rejected`/`verified`），
+按 `application.submittedAt` 倒序，每行必带 `application`。同一社区只会出现在其中一组：
+自己创建的社区不再出现在 `joined` 里。「我」页「我的社区」= `joined` 组 +「我创建的」
+= `owned` 组，「我创建的」每行显示 `application.status` 对应的审核状态。转让所有权后
+该社区移到新 owner 的 `owned`。
+`joined.truncated`/`owned.truncated === true` 表示超过本聚合承载量（各 50），"查看全部"
+分别走 `GET /v2/communities?membership=joined` 与 `?membership=owned`（游标分页）。主卡文案只能用
 `joined.items.length` 与 `memberCount` 这类真实数字，没有数字时显示 `—`。
 消息面板的未读/语音/陌生人请求条目在 D7 之前显示 unavailable。
 
@@ -190,7 +231,7 @@ Privy ID、Stream ID**：
 | -------------- | ---------------------------------------------------- | ---------- |
 | `sort`         | `members` \| `newest` \| `miningPower` \| `activity` | `members`  |
 | `verification` | `verified` \| `all`                                  | `verified` |
-| `membership`   | `all` \| `joined`                                    | `all`      |
+| `membership`   | `all` \| `joined` \| `owned`                         | `all`      |
 | `limit`        | 1–50                                                 | 20         |
 | `cursor`       | 上一页 `nextCursor`                                  | —          |
 
@@ -198,8 +239,10 @@ Privy ID、Stream ID**：
 「算力最高」`miningPower`、「讨论最多」`activity`。**没有「增长最快」**——没有任何
 可观测来源，不要加这个 seg。
 `verification=all` 额外包含调用者自己创建或已加入的非 verified 社区；
-`membership=joined` 把结果收窄到调用者自己的社区，供 `community` 首页
-"查看全部已加入"使用。
+`membership=joined` 把结果收窄到调用者以 admin/member 身份加入的社区，
+`membership=owned` 收窄到调用者当前是 owner 的社区（每行多一个 `application`，
+通常配 `verification=all` 才能看到 `pending`/`rejected`），分别供 `community` 首页
+"查看全部已加入"与"我创建的"使用；同一社区只会出现在其中一个筛选里。
 
 响应 `{ items[], nextCursor, ordering, recommendation, contractVersion }`。
 `recommendation.ruleVersion` 固定 `rule:verified-members-v1`，前端如展示"推荐
@@ -350,7 +393,27 @@ Privy ID、Stream ID**：
 校验规则与创建一致。`slug` 与 `verificationStatus` **不可通过本接口修改**
 （出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。仅 owner 可调用，
 admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，服务端写一条
-`community_profile_updated` 审计。
+`community_profile_updated` 审计。`pending`/`rejected` 状态下同样可编辑，且编辑
+**不会**改变审核状态：被驳回后先 PATCH 改资料，再调 4.3c 重新提交。
+
+### 4.3c `POST /v2/communities/{communityId}/resubmit` — 重新提交申请（owner 专属）
+
+写接口（带 `Idempotency-Key`，**无 body、无 query**），只做一件事：把 `rejected` 的申请
+改回 `pending`——清空 `application.rejectedReason` 与 `reviewedAt`，`submittedAt` 改为现在，
+写一条 `community_resubmitted` 审计；驳回原因保留在审计里。返回 4.4 的社区资源
+（`application.status === "pending"`，`onlineCount` 固定 `STREAM_PRESENCE_NOT_OBSERVED`）。
+
+| 情况                                    | 响应                         |
+| --------------------------------------- | ---------------------------- |
+| 当前不是 `rejected`（pending/verified） | `409 DATA_STALE`（刷新详情） |
+| 非 owner、被封禁                        | `403 PERMISSION_DENIED`      |
+| 社区不存在 / 对调用者不可见             | `404 NOT_FOUND`              |
+| 带 body 或 query、缺 `Idempotency-Key`  | `400 INVALID_REQUEST`        |
+| 同 key 不同请求                         | `409 IDEMPOTENCY_CONFLICT`   |
+
+为什么不是 PATCH：PATCH 是资料编辑，契约写明 `verificationStatus` 不可经它改变；把状态
+迁移藏在一次改名里，会让「改个简介」意外触发重新审核。重新提交是一次明确的、可审计的
+状态命令，所以单独成接口。
 
 ### 4.4 `GET /v2/communities/{communityId}` — `community-profile` 页
 
@@ -363,6 +426,7 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
     "canMute": false,
     "canBan": false
   },
+  "application": null,
   "miningPower": { "status": "unavailable", "reasonCode": "MINING_FORMULA_BASELINE_PENDING" },
   "onlineCount": { "status": "unavailable", "reasonCode": "STREAM_PRESENCE_NOT_CONNECTED" },
   "announcements": { "status": "unavailable", "reasonCode": "COMMUNITY_ANNOUNCEMENTS_DEFERRED" },
@@ -430,6 +494,11 @@ fixture 顶替。写接口（create / patch / join / leave）返回的同一字�
 
 `viewer.membership === null` 表示未加入（显示"加入"按钮）。`status === "muted"`
 表示被禁言，`banned` 表示被封禁。
+
+`application`（S79b，决策 0073）：调用者是当前 owner 时为 §3 的申请进度对象，否则
+`null`。owner 视角的 `community-profile` 顶部按 `application.status` 显示「审核中」
+或「已驳回」横幅（驳回横幅带 `rejectedReason` 原文与「修改后重新提交」入口 → 4.3c）；
+非 owner 看到的 `pending` 社区只显示"审核中"标记，永远看不到原因。
 
 ### 4.5 `POST /v2/communities/{id}/join` / `DELETE /v2/communities/{id}/membership`
 
@@ -897,25 +966,25 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 
 ## 5. 错误码汇总
 
-| code                             | HTTP | 何时出现                                                  | 前端动作                       |
-| -------------------------------- | ---- | --------------------------------------------------------- | ------------------------------ |
-| `INVALID_REQUEST`                | 400  | 未知字段/header、非法 cursor、cursor+limit 同传、前缀太短 | 修正请求，列表回到第一页       |
-| `AUTH_REQUIRED` / `AUTH_INVALID` | 401  | 缺失或无效 Privy Bearer                                   | 重新登录                       |
-| `PERMISSION_DENIED`              | 403  | 越权治理、被封禁者加入、owner 退出                        | 显示无权限，不重试             |
-| `POLICY_BLOCKED`                 | 403  | 产品策略拒绝（本步暂未使用）                              | 显示说明                       |
-| `NOT_FOUND`                      | 404  | 社区/成员/请求不存在；目标不可发现或被屏蔽；模块未启用    | 统一"找不到"，不可枚举         |
-| `ACCOUNT_BOOTSTRAP_REQUIRED`     | 409  | Privy 主体没有 LOOP 账号                                  | 先 bootstrap                   |
-| `PROFILE_ACTIVATION_REQUIRED`    | 409  | 账号未完成 LOOP ID 激活                                   | 跳 `loop-id-setup` 后重试      |
-| `DATA_STALE`                     | 409  | 状态已变（已禁言/已处理/已过期/非成员）                   | 刷新后重新决定，禁止盲重试     |
-| `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                   | 换新 key 重发                  |
-| `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                     | 提示用户换 slug，不重试同值    |
-| `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                      | 升级客户端                     |
-| `VALIDATION_FAILED`              | 422  | 归一化后长度越界                                          | 提示用户改内容                 |
-| `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                            | 提示换名，不重试同名           |
-| `ALIAS_BLOCKED`                  | 422  | 社区名撞运营屏蔽词                                        | 同上                           |
-| `RATE_LIMITED`                   | 429  | 搜索配额耗尽                                              | 退避后重试                     |
-| `CAPABILITY_UNAVAILABLE`         | 503  | 仓储/cursor 密钥未配置；`kind=contract\|domain`           | 显示 unavailable，不回退假数据 |
-| `INTERNAL_ERROR`                 | 500  | 服务端异常                                                | 显示错误，可重试               |
+| code                             | HTTP | 何时出现                                                                | 前端动作                       |
+| -------------------------------- | ---- | ----------------------------------------------------------------------- | ------------------------------ |
+| `INVALID_REQUEST`                | 400  | 未知字段/header、非法 cursor、cursor+limit 同传、前缀太短               | 修正请求，列表回到第一页       |
+| `AUTH_REQUIRED` / `AUTH_INVALID` | 401  | 缺失或无效 Privy Bearer                                                 | 重新登录                       |
+| `PERMISSION_DENIED`              | 403  | 越权治理、被封禁者加入、owner 退出                                      | 显示无权限，不重试             |
+| `POLICY_BLOCKED`                 | 403  | 产品策略拒绝（本步暂未使用）                                            | 显示说明                       |
+| `NOT_FOUND`                      | 404  | 社区/成员/请求不存在；目标不可发现或被屏蔽；模块未启用                  | 统一"找不到"，不可枚举         |
+| `ACCOUNT_BOOTSTRAP_REQUIRED`     | 409  | Privy 主体没有 LOOP 账号                                                | 先 bootstrap                   |
+| `PROFILE_ACTIVATION_REQUIRED`    | 409  | 账号未完成 LOOP ID 激活                                                 | 跳 `loop-id-setup` 后重试      |
+| `DATA_STALE`                     | 409  | 状态已变（已禁言/已处理/已过期/非成员）；resubmit 时申请不是 `rejected` | 刷新后重新决定，禁止盲重试     |
+| `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                                 | 换新 key 重发                  |
+| `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                                   | 提示用户换 slug，不重试同值    |
+| `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                                    | 升级客户端                     |
+| `VALIDATION_FAILED`              | 422  | 归一化后长度越界                                                        | 提示用户改内容                 |
+| `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                                          | 提示换名，不重试同名           |
+| `ALIAS_BLOCKED`                  | 422  | 社区名撞运营屏蔽词                                                      | 同上                           |
+| `RATE_LIMITED`                   | 429  | 搜索配额耗尽                                                            | 退避后重试                     |
+| `CAPABILITY_UNAVAILABLE`         | 503  | 仓储/cursor 密钥未配置；`kind=contract\|domain`                         | 显示 unavailable，不回退假数据 |
+| `INTERNAL_ERROR`                 | 500  | 服务端异常                                                              | 显示错误，可重试               |
 
 ## 6. 联调准备（两个账号）
 
@@ -932,3 +1001,42 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 5. 账号 B `GET /v2/search?domain=communities&q=<前缀>` → `POST …/join`。
 6. A 任命 B 为 admin → B 禁言第三个成员 → 成员越权 403 → 封禁后取关与 DM 请求
    被拒 → cursor 跨账号失效 → 关闭模块后 404。
+
+## 7. 申请审核结果通知（S79b，决策 0073）
+
+运营用 `pnpm community:verify <id>` / `pnpm community:reject <id> --reason "…"` 审核后，
+后端向**当前 owner** 写一条站内通知（`GET /v2/notifications/feed`，类别
+`community.announcement`，**不受偏好开关影响**），并按决策 0067 触发推送（推送受
+`community.announcement` 偏好门控）。feed 行：
+
+```json
+{
+  "type": "community.announcement",
+  "entityRef": "community:3fa85f64-…",
+  "contextRoute": "community-profile",
+  "contextParams": { "communityId": "3fa85f64-…" },
+  "payload": {
+    "event": "community.application.rejected",
+    "communityId": "3fa85f64-…",
+    "communityName": "Frog Holders",
+    "reviewedAt": "2026-09-23T08:00:00.000Z",
+    "reason": "社区名与已上市代币冲突，请换一个名称"
+  },
+  "source": "loop_operator_review",
+  "observedAt": "2026-09-23T08:00:00.000Z"
+}
+```
+
+- `payload.event`：`community.application.verified` 或 `community.application.rejected`；
+  `reason` 在 verified 时为 `null`。
+- 点击 → 打开 `community-profile`（`contextParams.communityId`），再读 4.4 的 `application`
+  作为权威状态；payload 只用于列表展示。
+- 推送 `type`：`community_application_verified` / `community_application_rejected`，
+  `entityRef: community:<id>`，`contextRoute: community-profile`；本地化 key
+  `push.communityApplicationVerified.title/body`、`push.communityApplicationRejected.title/body`
+  （Android 为 `push_communityApplicationVerified_title` 等下划线拼写）。推送里**没有**
+  社区名与原因。
+- 文案建议：verified →「你创建的社区已通过审核」/「{communityName} 现在对所有人可见」；
+  rejected →「你创建的社区未通过审核」/「{communityName}：{reason}」（feed 行内用
+  payload 渲染；推送本地化文案不含变量）。
+- 同一社区被驳回、重新提交、再驳回会产生两条 feed 行（按审计事件去重），不是覆盖。
