@@ -383,7 +383,17 @@ spender 形状/自授权（`400`/`422`）→ 上限（`403`）。
 }
 ```
 
-`slippageBps` 默认 50，最大 300（超出 `400`）。响应：
+`slippageBps` 默认 50，最大 300（超出 `400`）。
+
+> **可用余额从哪里读（决策 0071）**：兑换页「可动用」的数字来自
+> `GET /v2/wallets/{walletId}/balances` → `items[].balance.spendableBalance`
+> （与钱包页同源、同 `freshness`），**不是**从报价响应读。报价只用同一份余额快照做
+> `409 INSUFFICIENT_BALANCE` 判定，不回显余额；而且 Development 下 Privy 未开 Swaps，
+> 报价本身是 `503 CAPABILITY_UNAVAILABLE`。所以：先选资产、再从 balances 取行；行是
+> `{status: "unavailable", reasonCode}` 时显示该 reasonCode 的文案；未选资产时提示
+> 「先选择资产」，不要显示「读不到可用余额」。
+
+响应：
 
 ```json
 {
@@ -483,22 +493,49 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 ### 7.1 `detailsSafe`（策略拒绝的原因槽位）
 
 七字段信封里 `detailsSafe` 平时为 `null`；以下拒绝带一个只含标量的对象，前端按
-`reasonCode` 选文案，其余字段用于渲染数字：
+`reasonCode` 选文案，其余字段用于渲染数字。**这组 `reasonCode` 自决策 0071 起是
+OpenAPI 枚举**（`openapi/loop-api.v2.json` 各资金操作路由的 `403` →
+`detailsSafe.reasonCode.enum`），不再只是文档约定；客户端的映射表必须覆盖全部七个，
+未知码才允许落到兜底文案。
 
-| HTTP / code             | `detailsSafe`                                                                                    | 出现位置                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_NOT_IN_CANARY_ALLOWLIST" }`                                              | send / approve / revoke / swap         |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_CEILING_EXCEEDED", "exposureUsd": "5.9976", "ceilingUsd": "5" }`        | send、精确额度 approve、swap（单笔）   |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_DAILY_CEILING_EXCEEDED", "exposureUsd": "27.5", "ceilingUsd": "25" }`   | send / approve / swap（滚动 24 小时）  |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST" }`                                       | send 收款人、approve spender           |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "UNLIMITED_EXPOSURE_EXCEEDS_CEILING", "exposureUsd": "…", "ceilingUsd": "20" }` | unlimited approve（按实际敞口）        |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_BLOCKED" }`                                                              | 注册表里 `status = blocked` 的资产     |
-| `403 POLICY_BLOCKED`    | `{ "reasonCode": "PRICE_IMPACT_BLOCKED" }`                                                       | swap（价格影响 ≥ 阈值）                |
-| `422 VALIDATION_FAILED` | `{ "reasonCode": "NATIVE_ASSET_NOT_APPROVABLE" }`                                                | approve / revoke 的 `eip155:56:native` |
+| HTTP / code             | `detailsSafe`                                                                                                                             | 出现位置                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST" }`                                                                                | send 收款人、approve spender           |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_CEILING_EXCEEDED", "exposureUsd": "5.9976", "ceilingUsd": "5" }`                                                 | send、精确额度 approve、swap（单笔）   |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "CANARY_DAILY_CEILING_EXCEEDED", "exposureUsd": "27.5", "ceilingUsd": "25", "spentUsd": "22.5", "remainingUsd": "2.5" }` | send / approve / swap（滚动 24 小时）  |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_NOT_IN_CANARY_ALLOWLIST" }`                                                                                       | send / approve / revoke / swap         |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "ASSET_BLOCKED" }`                                                                                                       | 注册表里 `status = blocked` 的资产     |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "UNLIMITED_EXPOSURE_EXCEEDS_CEILING", "exposureUsd": "…", "ceilingUsd": "20" }`                                          | unlimited approve（按实际敞口）        |
+| `403 POLICY_BLOCKED`    | `{ "reasonCode": "PRICE_IMPACT_BLOCKED" }`                                                                                                | swap（价格影响 ≥ 阈值）                |
+| `422 VALIDATION_FAILED` | `{ "reasonCode": "NATIVE_ASSET_NOT_APPROVABLE" }`                                                                                         | approve / revoke 的 `eip155:56:native` |
 
-`exposureUsd` / `ceilingUsd` 是十进制字符串（不是数字），`exposureUsd` 就是 prepare 时按
-新鲜行情算出的价值 / 实际敞口。其他 `VALIDATION_FAILED`、`POLICY_BLOCKED` 场景 `detailsSafe`
-仍为 `null`；前端不得依赖未列出的键。
+- 四个金额都是十进制字符串（不是数字）。`exposureUsd` 是这条规则比较的那个值：单笔上限
+  时是本笔价值；当日上限时是「当日已计入 + 本笔」；无限授权时是按当前余额算的敞口。
+- `spentUsd` / `remainingUsd` 只在 `CANARY_DAILY_CEILING_EXCEEDED` 出现：
+  `spentUsd` 是滚动 24 小时内已计入的金额（`awaiting_signature / submitted /
+confirmed / reverted / unknown` 的 intent，决策 0065），`remainingUsd =
+max(0, ceilingUsd − spentUsd)`。
+- gas 不足**不是策略**：仍是 `409 INSUFFICIENT_BALANCE`，不在这个枚举里。
+- 其他 `VALIDATION_FAILED`、`POLICY_BLOCKED` 场景 `detailsSafe` 仍为 `null`；前端不得
+  依赖未列出的键。
+
+#### 7.1.1 建议文案（zh-CN，按 `reasonCode`）
+
+服务端只给码，措辞归客户端；以下是 2026-09-23 走查后与主代理对齐的建议，重点是
+**说清是哪条规则**、**没有提交任何交易**、**用户能做什么**。`$X` 用等宽数字渲染。
+
+| `reasonCode`                           | 建议文案                                                                                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` | 收款方不在当前灰度名单里，这笔发送没有提交。开发环境只允许发到少数几个已登记的地址；请换一个已登记的收款地址。（approve：授权对象不在灰度名单里…） |
+| `CANARY_CEILING_EXCEEDED`              | 这笔金额 $`exposureUsd` 超过了当前单笔上限 $`ceilingUsd`，没有提交。这是 LOOP 的灰度限额，不是你设置的；请把金额降到 $`ceilingUsd` 以内。          |
+| `CANARY_DAILY_CEILING_EXCEEDED`        | 今天累计已用 $`spentUsd`，上限 $`ceilingUsd`，还剩 $`remainingUsd`；这笔 $(exposureUsd − spentUsd) 会超出，没有提交。请降低金额或 24 小时后再试。  |
+| `ASSET_NOT_IN_CANARY_ALLOWLIST`        | 这个资产还不在灰度可操作范围内，这笔操作没有提交。名单由 LOOP 维护，请换一个已开放的资产。                                                         |
+| `ASSET_BLOCKED`                        | 这个资产已被 LOOP 屏蔽，不能进行任何资金操作。                                                                                                     |
+| `UNLIMITED_EXPOSURE_EXCEEDS_CEILING`   | 无限授权按你当前余额 $`exposureUsd` 计算敞口，超过了上限 $`ceilingUsd`，没有提交。请改用限额授权。                                                 |
+| `PRICE_IMPACT_BLOCKED`                 | 这笔兑换的价格影响过大，已被阻止，没有提交。请减小金额或稍后再试。                                                                                 |
+| 兜底（未知码）                         | 当前策略不允许这笔操作，没有提交任何交易。                                                                                                         |
+
+「自定义上限还没有开放」这句只适合放在安全中心的限额入口，不要出现在拒绝文案里。
 
 ## 8. 本步明确 unavailable / pending 的项
 

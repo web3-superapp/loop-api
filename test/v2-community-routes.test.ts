@@ -6,6 +6,10 @@ import { loadConfig } from "../src/config.js";
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import {
+  createUnavailableChainRegistryRepository,
+  type AssetRecord,
+} from "../src/database/chain-registry-repository.js";
+import {
   createUnavailableControlPlaneRepository,
   IssuanceQuotaExceededError,
   type ControlPlaneRepository,
@@ -329,6 +333,67 @@ function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
     database,
     privyAccessTokenVerifier,
     verifyAccessToken,
+  };
+}
+
+const usdtAssetId = "eip155:56:0x55d398326f99059ff775485246999027b3197955";
+const usd1AssetId = "eip155:56:0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d";
+const wbnbAssetId = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+
+function registryAsset(input: {
+  readonly assetId: string;
+  readonly address: string | null;
+  readonly symbol: string;
+  readonly name: string;
+  readonly status?: AssetRecord["status"];
+}): AssetRecord {
+  return Object.freeze({
+    assetId: input.assetId,
+    chainId: "eip155:56",
+    address: input.address,
+    symbol: input.symbol,
+    name: input.name,
+    decimals: 18,
+    status: input.status ?? "pending",
+    sourceKind: input.address === null ? "chain_native" : "chain_call",
+    sourceBlockNumber: "1",
+    sourceVerifiedAt: null,
+    updatedAt: "2026-09-23T00:00:00.000Z",
+  });
+}
+
+/** Registry fake: the readable rows the search domain filters in memory. */
+function registryWithAssets() {
+  const assets: readonly AssetRecord[] = [
+    registryAsset({
+      assetId: "eip155:56:native",
+      address: null,
+      symbol: "BNB",
+      name: "BNB",
+    }),
+    registryAsset({
+      assetId: wbnbAssetId,
+      address: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      symbol: "WBNB",
+      name: "Wrapped BNB",
+    }),
+    registryAsset({
+      assetId: usdtAssetId,
+      address: "0x55d398326f99059ff775485246999027b3197955",
+      symbol: "USDT",
+      name: "Tether USD",
+    }),
+    registryAsset({
+      assetId: usd1AssetId,
+      address: "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+      symbol: "USD1",
+      name: "World Liberty Financial USD",
+      status: "verified",
+    }),
+  ];
+  return {
+    ...createUnavailableChainRegistryRepository(),
+    listReadableAssets: vi.fn(() => Promise.resolve(assets)),
   };
 }
 
@@ -969,12 +1034,11 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
   });
 
-  it("answers the three deferred search domains with 200 and status unavailable", async () => {
+  it("answers the two deferred search domains with 200, their own reason code, and no quota", async () => {
     const { app, consumeIssuanceQuota } = await createApp();
     for (const [domain, reasonCode] of [
-      ["assets", "ASSET_REGISTRY_DEFERRED"],
-      ["launch", "LAUNCH_MODULE_DEFERRED"],
-      ["dapps", "DAPP_DIRECTORY_DEFERRED"],
+      ["launch", "LAUNCH_PROJECT_DIRECTORY_PENDING"],
+      ["dapps", "DAPP_DIRECTORY_NOT_INTEGRATED"],
     ] as const) {
       const response = await app.inject({
         method: "GET",
@@ -992,6 +1056,169 @@ describe("LOOP API V2 community, social, and search modules", () => {
       });
     }
     expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("answers the assets domain unavailable when no Asset Registry is composed", async () => {
+    const { app, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=usdt",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      domain: "assets",
+      status: "unavailable",
+      reasonCode: "ASSET_REGISTRY_NOT_COMPOSED",
+      results: [],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("searches the Asset Registry by symbol, name, or address prefix without the alias quota", async () => {
+    const dependencies = fakes();
+    const { app, consumeIssuanceQuota } = await createApp({
+      ...dependencies,
+      database: {
+        ...dependencies.database,
+        chainRegistry: registryWithAssets(),
+      },
+    });
+
+    const bySymbol = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=US",
+      headers: commonHeaders(),
+    });
+    expect(bySymbol.statusCode).toBe(200);
+    expectOperationalHeaders(bySymbol);
+    expect(bySymbol.json()).toEqual({
+      domain: "assets",
+      status: "available",
+      reasonCode: null,
+      results: [
+        {
+          resultType: "asset",
+          stableId: usd1AssetId,
+          displaySnapshot: {
+            title: "USD1",
+            subtitle: "World Liberty Financial USD",
+            avatarRef: null,
+            memberCount: null,
+            verificationStatus: "verified",
+          },
+          destination: { kind: "assetDetail", assetId: usd1AssetId },
+        },
+        {
+          resultType: "asset",
+          stableId: usdtAssetId,
+          displaySnapshot: {
+            title: "USDT",
+            subtitle: "Tether USD",
+            avatarRef: null,
+            memberCount: null,
+            verificationStatus: "pending",
+          },
+          destination: { kind: "assetDetail", assetId: usdtAssetId },
+        },
+      ],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+
+    const byName = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=tether",
+      headers: commonHeaders(),
+    });
+    expect(byName.json()).toMatchObject({
+      status: "available",
+      results: [{ stableId: usdtAssetId }],
+    });
+
+    const byAddress = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=assets&q=${encodeURIComponent("0x55D398")}`,
+      headers: commonHeaders(),
+    });
+    expect(byAddress.json()).toMatchObject({
+      status: "available",
+      results: [{ stableId: usdtAssetId }],
+    });
+
+    const native = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=bnb",
+      headers: commonHeaders(),
+    });
+    expect(native.json()).toMatchObject({
+      results: [
+        { stableId: "eip155:56:native", displaySnapshot: { title: "BNB" } },
+        { stableId: wbnbAssetId, displaySnapshot: { title: "WBNB" } },
+      ],
+    });
+
+    const none = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=zzz",
+      headers: commonHeaders(),
+    });
+    expect(none.json()).toEqual({
+      domain: "assets",
+      status: "available",
+      reasonCode: null,
+      results: [],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("pages asset results with an owner-bound cursor and rejects a one-character query", async () => {
+    const dependencies = fakes();
+    const { app } = await createApp({
+      ...dependencies,
+      database: {
+        ...dependencies.database,
+        chainRegistry: registryWithAssets(),
+      },
+    });
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=bnb&limit=1",
+      headers: commonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{
+      results: { stableId: string }[];
+      nextCursor: string | null;
+    }>();
+    expect(firstBody.results.map((row) => row.stableId)).toEqual([
+      "eip155:56:native",
+    ]);
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+
+    const second = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=assets&q=bnb&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({
+      results: [{ stableId: wbnbAssetId }],
+      nextCursor: null,
+    });
+
+    const tooShort = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=u",
+      headers: commonHeaders(),
+    });
+    expect(tooShort.statusCode).toBe(400);
+    expect(tooShort.json()).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
   it("consumes the shared public search quota for users and communities", async () => {

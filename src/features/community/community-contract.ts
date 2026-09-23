@@ -296,9 +296,18 @@ export const communityUnavailableReasonCodes = Object.freeze({
   messagePreview: "MESSAGE_PREVIEW_DEFERRED",
   aiModeration: "AI_MODERATION_DEFERRED",
   blockKind: "BLOCK_KIND_DEFERRED",
-  searchAssets: "ASSET_REGISTRY_DEFERRED",
-  searchLaunch: "LAUNCH_MODULE_DEFERRED",
-  searchDapps: "DAPP_DIRECTORY_DEFERRED",
+  /**
+   * The `assets` search domain reads the Asset Registry (Decision 0071); it
+   * is unavailable only when no registry repository is composed.
+   */
+  searchAssets: "ASSET_REGISTRY_NOT_COMPOSED",
+  /**
+   * The Launch module is shipped but has no project directory to search until
+   * the contract product document (02) provides projects (Decision 0071).
+   */
+  searchLaunch: "LAUNCH_PROJECT_DIRECTORY_PENDING",
+  /** No DApp directory Provider is integrated (Decision 0071). */
+  searchDapps: "DAPP_DIRECTORY_NOT_INTEGRATED",
   referralEdges: "REFERRAL_GRAPH_DEFERRED",
   inviteCode: "INVITE_CODE_DEFERRED",
   /**
@@ -553,21 +562,32 @@ export const communityCursorRoutes = Object.freeze({
   messageRequests: "v2MessageRequests",
   searchUsers: "v2SearchUsers",
   searchCommunities: "v2SearchCommunities",
+  searchAssets: "v2SearchAssets",
 } as const);
 
-/** Search domains that have no selected backend in this step. */
+/**
+ * Search domains that have no selected backend. Each carries its own reason
+ * so the client can say why: Launch has no project directory yet, and no
+ * DApp directory is integrated (Decision 0071).
+ */
 export const unavailableSearchDomains = Object.freeze({
-  assets: communityUnavailableReasonCodes.searchAssets,
   launch: communityUnavailableReasonCodes.searchLaunch,
   dapps: communityUnavailableReasonCodes.searchDapps,
 } as const);
 
-export const searchResultTypes = ["user", "community"] as const;
+export const searchResultTypes = ["user", "community", "asset"] as const;
 export type SearchResultType = (typeof searchResultTypes)[number];
 
+/**
+ * `assetDetail` is the only destination that needs a parameter: the row's
+ * `stableId` is the canonical CAIP-19 `assetId` (Decision 0033), which is
+ * also repeated as `destination.assetId` so the client never derives a route
+ * from the symbol or the address text.
+ */
 export const searchDestinationKinds = [
   "publicProfile",
   "communityProfile",
+  "assetDetail",
 ] as const;
 export type SearchDestinationKind = (typeof searchDestinationKinds)[number];
 

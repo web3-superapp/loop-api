@@ -9,7 +9,12 @@ import {
   sealIntent,
   type IntentSource,
 } from "../src/features/wallet-intents/intent-contract.js";
+import { walletIntentRefusalReasonCodes } from "../src/features/wallet-intents/intent-contract.js";
 import { buildUnsignedTransaction } from "../src/features/wallet-intents/intent-preparation.js";
+import {
+  policyBlockedErrorSchema,
+  policyBlockedReasonCodes,
+} from "../src/routes/v2/wallet-intents-schemas.js";
 import { transactionMatchesPayload } from "../src/features/wallet-intents/wallet-intent-service.js";
 import { assessPriceImpact } from "../src/features/wallet-intents/swap-service.js";
 import {
@@ -403,5 +408,47 @@ describe("intent chain policy (Decision 0038)", () => {
     expect(
       transactionMatchesPayload({ ...observed, chainId: 56 }, testnetLaunch),
     ).toBe(false);
+  });
+});
+
+describe("403 POLICY_BLOCKED detailsSafe enumeration (Decision 0071)", () => {
+  it("lists every policy refusal code and nothing from the 422 family", () => {
+    const { nativeAssetNotApprovable, ...policy } =
+      walletIntentRefusalReasonCodes;
+    expect([...policyBlockedReasonCodes].sort()).toEqual(
+      Object.values(policy).sort(),
+    );
+    expect(policyBlockedReasonCodes).not.toContain(nativeAssetNotApprovable);
+  });
+
+  it("keeps the seven-field envelope and types the reason slot", () => {
+    expect(Object.keys(policyBlockedErrorSchema.properties).sort()).toEqual([
+      "category",
+      "code",
+      "correlationId",
+      "detailsSafe",
+      "providerReferenceSafe",
+      "retryable",
+      "userMessageKey",
+    ]);
+    const [typed, nullable] = policyBlockedErrorSchema.properties.detailsSafe
+      .anyOf as readonly [
+      {
+        readonly additionalProperties: boolean;
+        readonly required: readonly string[];
+        readonly properties: Record<string, unknown>;
+      },
+      { readonly type: string },
+    ];
+    expect(typed.additionalProperties).toBe(false);
+    expect(typed.required).toEqual(["reasonCode"]);
+    expect(Object.keys(typed.properties).sort()).toEqual([
+      "ceilingUsd",
+      "exposureUsd",
+      "reasonCode",
+      "remainingUsd",
+      "spentUsd",
+    ]);
+    expect(nullable).toEqual({ type: "null" });
   });
 });

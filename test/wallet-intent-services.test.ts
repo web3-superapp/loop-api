@@ -356,6 +356,8 @@ describe("send intent preparation", () => {
         reasonCode: "CANARY_DAILY_CEILING_EXCEEDED",
         exposureUsd: "4.5",
         ceilingUsd: "4",
+        spentUsd: "3",
+        remainingUsd: "1",
       },
     });
   });

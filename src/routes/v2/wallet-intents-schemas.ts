@@ -35,6 +35,7 @@ import {
   swapPolicy,
   walletIntentKinds,
   walletIntentListLimits,
+  walletIntentRefusalReasonCodes,
   walletIntentStates,
 } from "../../features/wallet-intents/intent-contract.js";
 
@@ -1050,12 +1051,81 @@ export const approvalDetailParamsSchema = {
   },
 } as const;
 
+/**
+ * The `detailsSafe.reasonCode` values a money-action `403 POLICY_BLOCKED`
+ * may carry (Decisions 0035, 0065, 0071). The client picks its copy by this
+ * code; the decimal-string figures are present only for the rules that
+ * compared them.
+ */
+export const policyBlockedReasonCodes = [
+  walletIntentRefusalReasonCodes.counterpartyNotInCanaryAllowlist,
+  walletIntentRefusalReasonCodes.canaryCeilingExceeded,
+  walletIntentRefusalReasonCodes.canaryDailyCeilingExceeded,
+  walletIntentRefusalReasonCodes.assetNotInCanaryAllowlist,
+  walletIntentRefusalReasonCodes.assetBlocked,
+  walletIntentRefusalReasonCodes.unlimitedExposureExceedsCeiling,
+  walletIntentRefusalReasonCodes.priceImpactBlocked,
+] as const;
+
+const policyBlockedErrorBase = v2ErrorResponseSchema(["POLICY_BLOCKED"]);
+
+/**
+ * `403 POLICY_BLOCKED` with a typed `detailsSafe`: the seven-field envelope
+ * is unchanged, but the reason slot enumerates every rule that can refuse a
+ * send, approval, revoke, or swap so the enumeration is part of the OpenAPI
+ * surface rather than prose. `null` remains the shape of a 403 that no
+ * money-action rule produced (for example a wallet-binding refusal).
+ */
+export const policyBlockedErrorSchema = {
+  ...policyBlockedErrorBase,
+  properties: {
+    ...policyBlockedErrorBase.properties,
+    detailsSafe: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["reasonCode"],
+          properties: {
+            reasonCode: {
+              type: "string",
+              enum: [...policyBlockedReasonCodes],
+              description:
+                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit.",
+            },
+            exposureUsd: {
+              ...decimalAmountSchema,
+              description:
+                "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure.",
+            },
+            ceilingUsd: {
+              ...decimalAmountSchema,
+              description: "The ceiling that refused it, in USD.",
+            },
+            spentUsd: {
+              ...decimalAmountSchema,
+              description:
+                "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent.",
+            },
+            remainingUsd: {
+              ...decimalAmountSchema,
+              description:
+                "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0.",
+            },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
 export const walletIntentReadErrors = {
   400: v2ErrorResponseSchema(["INVALID_REQUEST"]),
   401: v2ErrorResponseSchema(["AUTH_REQUIRED", "AUTH_INVALID"], {
     includeBearerChallenge: true,
   }),
-  403: v2ErrorResponseSchema(["POLICY_BLOCKED"]),
+  403: policyBlockedErrorSchema,
   404: v2ErrorResponseSchema(["NOT_FOUND"]),
   409: v2ErrorResponseSchema(["ACCOUNT_BOOTSTRAP_REQUIRED"]),
   422: v2ErrorResponseSchema(["CHAIN_MISMATCH", "VALIDATION_FAILED"]),

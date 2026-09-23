@@ -255,6 +255,18 @@ export function addDecimalStrings(left: string, right: string): string {
   );
 }
 
+/** Exact difference (`left - right`) of two canonical decimal strings. */
+export function subtractDecimalStrings(left: string, right: string): string {
+  const a = scaledParts(left);
+  const b = scaledParts(right);
+  const scale = Math.max(a.fractionDigits, b.fractionDigits);
+  return fromScaled(
+    a.digits * 10n ** BigInt(scale - a.fractionDigits) -
+      b.digits * 10n ** BigInt(scale - b.fractionDigits),
+    scale,
+  );
+}
+
 /**
  * Exact quotient of two canonical decimal strings, truncated to
  * `fractionDigits` places. `null` when the divisor is zero: a price is never

@@ -48,6 +48,7 @@ import {
   addDecimalStrings,
   compareDecimalStrings,
   multiplyDecimalStrings,
+  subtractDecimalStrings,
 } from "../market/market-contract.js";
 import type { MarketFactService } from "../market/market-fact-service.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
@@ -365,10 +366,18 @@ export async function enforceDailyCanaryCeiling(
   });
   const exposureUsd = addDecimalStrings(spentUsd, valueUsd);
   if (compareDecimalStrings(exposureUsd, ceilingUsd) > 0) {
+    // What the day already spent and what is left are the two numbers the
+    // refusal can honestly show ("today used $X of $Y, $Z left"); the
+    // remainder is floored at zero because a window that is already over the
+    // ceiling has nothing left, not a negative allowance (Decision 0071).
+    const remainingUsd = subtractDecimalStrings(ceilingUsd, spentUsd);
     throw V2ApiError.fromCode("POLICY_BLOCKED", {
       reasonCode: walletIntentRefusalReasonCodes.canaryDailyCeilingExceeded,
       exposureUsd,
       ceilingUsd,
+      spentUsd,
+      remainingUsd:
+        compareDecimalStrings(remainingUsd, "0") < 0 ? "0" : remainingUsd,
     });
   }
 }

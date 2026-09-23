@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addDecimalStrings,
+  subtractDecimalStrings,
   compareDecimalStrings,
   multiplyDecimalStrings,
   formatRational,
@@ -49,6 +50,10 @@ describe("market decimal contract", () => {
     expect(multiplyDecimalStrings("0", "747.39")).toBe("0");
     expect(addDecimalStrings("0", "1121.085")).toBe("1121.085");
     expect(addDecimalStrings("0.1", "0.2")).toBe("0.3");
+    expect(subtractDecimalStrings("25", "22.5")).toBe("2.5");
+    expect(subtractDecimalStrings("4", "4.5")).toBe("-0.5");
+    expect(subtractDecimalStrings("1.10", "0.1")).toBe("1");
+    expect(subtractDecimalStrings("0", "0")).toBe("0");
     expect(addDecimalStrings("1121.085", "5401795.9")).toBe("5402916.985");
   });
 
