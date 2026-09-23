@@ -178,6 +178,49 @@ describe("market Provider transport kernel", () => {
 });
 
 describe("DexScreener adapter", () => {
+  it("keeps info.imageUrl on an allow-listed host and drops any other (Decision 0072)", () => {
+    const pairJson = (imageUrl: string | null, pairAddress: string): string =>
+      `{"chainId":"bsc","dexId":"pancakeswap","pairAddress":"${pairAddress}","baseToken":{"address":"${wbnb}","symbol":"WBNB"},"quoteToken":{"address":"${usdt}","symbol":"USDT"},"priceUsd":"747.39","liquidity":{"usd":1},"info":{"imageUrl":${imageUrl === null ? "null" : `"${imageUrl}"`},"websites":[{"url":"https://example.invalid"}]}}`;
+    const snapshot = normalizeDexscreenerPairs(
+      parseJsonLossless(
+        `[${[
+          pairJson(
+            `https://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`,
+            "0x0000000000000000000000000000000000000001",
+          ),
+          pairJson(
+            "https://evil.example/ds-data/tokens/bsc/logo.png",
+            "0x0000000000000000000000000000000000000002",
+          ),
+          pairJson(
+            `http://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`,
+            "0x0000000000000000000000000000000000000003",
+          ),
+          pairJson(null, "0x0000000000000000000000000000000000000004"),
+          // No `info` block at all.
+          `{"chainId":"bsc","dexId":"pancakeswap","pairAddress":"0x0000000000000000000000000000000000000005","baseToken":{"address":"${wbnb}","symbol":"WBNB"},"quoteToken":{"address":"${usdt}","symbol":"USDT"},"priceUsd":"747.39"}`,
+          // A malformed `info` block is ignored, never a reason to refuse.
+          `{"chainId":"bsc","dexId":"pancakeswap","pairAddress":"0x0000000000000000000000000000000000000006","baseToken":{"address":"${wbnb}","symbol":"WBNB"},"quoteToken":{"address":"${usdt}","symbol":"USDT"},"priceUsd":"747.39","info":{"imageUrl":{"nested":true}}}`,
+        ].join(",")}]`,
+      ),
+      wbnb,
+    );
+    expect(snapshot.pairs.map((pair) => pair.imageUrl)).toEqual([
+      `https://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    // The rest of the pair is untouched by the gate.
+    expect(snapshot.pairs[1]).toMatchObject({
+      pairAddress: "0x0000000000000000000000000000000000000002",
+      priceUsd: "747.39",
+    });
+    expect(snapshot.unrepresentablePairCount).toBe(0);
+  });
+
   it("keeps the base token's display name for unregistered lookups (Decision 0058)", () => {
     const snapshot = normalizeDexscreenerPairs(
       parseJsonLossless(

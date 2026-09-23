@@ -13,6 +13,8 @@ import {
 } from "../src/database/market-fact-cache-repository.js";
 import { unlistedTokenLookupPolicy } from "../src/features/market/market-contract.js";
 import { marketFactKinds } from "../src/features/market/market-fact-service.js";
+import { providerImageUrlFromPairs } from "../src/features/market/token-logo.js";
+import type { TokenPairSnapshot } from "../src/integrations/market/market-data-provider.js";
 import {
   createUnlistedTokenLookupQuota,
   UnlistedTokenLookupRateLimitedError,
@@ -151,6 +153,88 @@ describe("unlisted token lookup persistence (Decision 0058)", () => {
         signal,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("round-trips a pair's gated imageUrl through the jsonb cache row, and reads a pre-0072 row as carrying no image (Decision 0072)", async () => {
+    const fetchedAt = new Date().toISOString();
+    const image = `https://dd.dexscreener.com/ds-data/tokens/bsc/${weth}.png`;
+    const pair = {
+      pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
+      dexId: "pancakeswap",
+      labels: ["v2"],
+      baseTokenAddress: weth,
+      baseTokenSymbol: "ETH",
+      baseTokenName: "Ethereum Token",
+      quoteTokenAddress: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      quoteTokenSymbol: "WBNB",
+      priceUsd: "2576.66",
+      priceNative: null,
+      liquidityUsd: "899550.52",
+      volumeH24: "2926215.92",
+      priceChangeH24: "-2.4",
+      fdv: null,
+      marketCap: null,
+      buysH24: null,
+      sellsH24: null,
+      pairCreatedAt: null,
+    };
+    await facts.put({
+      subjectKey: `token:${weth}`,
+      factKind: marketFactKinds.tokenPairs,
+      source: "dexscreener",
+      value: {
+        tokenAddress: weth,
+        pairs: [{ ...pair, imageUrl: image }],
+        unrepresentablePairCount: 0,
+      },
+      rawDigest: "a".repeat(64),
+      fetchedAt,
+      ttlSeconds: 30,
+    });
+    const stored = await facts.get(
+      `token:${weth}`,
+      marketFactKinds.tokenPairs,
+      "dexscreener",
+    );
+    expect(stored?.value).toMatchObject({
+      pairs: [{ pairAddress: pair.pairAddress, imageUrl: image }],
+    });
+    expect(
+      providerImageUrlFromPairs(
+        stored?.value as unknown as {
+          tokenAddress: string;
+          pairs: readonly TokenPairSnapshot[];
+        },
+      ),
+    ).toBe(image);
+
+    // A row written before the field existed: the projection treats the
+    // absent key as "no image", never as an error.
+    await facts.put({
+      subjectKey: `token:${weth}`,
+      factKind: marketFactKinds.tokenPairs,
+      source: "dexscreener",
+      value: { tokenAddress: weth, pairs: [pair] },
+      rawDigest: "b".repeat(64),
+      fetchedAt,
+      ttlSeconds: 30,
+    });
+    const legacy = await facts.get(
+      `token:${weth}`,
+      marketFactKinds.tokenPairs,
+      "dexscreener",
+    );
+    expect(
+      (legacy?.value as { pairs: readonly Record<string, unknown>[] }).pairs[0],
+    ).not.toHaveProperty("imageUrl");
+    expect(
+      providerImageUrlFromPairs(
+        legacy?.value as unknown as {
+          tokenAddress: string;
+          pairs: readonly TokenPairSnapshot[];
+        },
+      ),
+    ).toBeNull();
   });
 
   it("stores the identity and market snapshots under their own fact kinds and TTLs", async () => {

@@ -36,6 +36,10 @@ import {
   searchRegistryAssets,
 } from "./asset-search.js";
 import {
+  projectTokenLogoForAssetId,
+  type TokenLogoProjection,
+} from "../market/token-logo.js";
+import {
   communityPresenceNotObserved,
   type CommunityPresenceProjection,
   type CommunityPresenceReader,
@@ -482,6 +486,8 @@ export interface SearchDisplaySnapshot {
   readonly title: string;
   readonly subtitle: string | null;
   readonly avatarRef: string | null;
+  /** Token picture of an asset result (Decision 0072); `null` for users and communities. */
+  readonly logo: TokenLogoProjection | null;
   readonly memberCount: number | null;
   readonly verificationStatus: CommunitySummary["verificationStatus"] | null;
 }
@@ -1369,6 +1375,7 @@ export function createCommunityService(
               title: asset.symbol,
               subtitle: asset.name,
               avatarRef: null,
+              logo: projectTokenLogoForAssetId(asset.assetId),
               memberCount: null,
               verificationStatus:
                 asset.status === "verified"
@@ -2214,6 +2221,7 @@ export function createCommunityService(
                     title: profile.alias ?? profile.loopId,
                     subtitle: profile.loopId,
                     avatarRef: profile.avatarRef,
+                    logo: null,
                     memberCount: null,
                     verificationStatus: null,
                   }),
@@ -2266,6 +2274,7 @@ export function createCommunityService(
                   title: item.community.name,
                   subtitle: item.community.slug,
                   avatarRef: item.community.logoRef,
+                  logo: null,
                   memberCount: item.community.memberCount,
                   verificationStatus: item.community.verificationStatus,
                 }),

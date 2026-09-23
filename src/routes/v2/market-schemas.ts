@@ -21,6 +21,7 @@ import {
   tradeLimits,
 } from "../../features/market/market-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { tokenLogoSchema } from "./token-logo-schema.js";
 import { assetResourceSchema, unavailableSchema } from "./chain-schemas.js";
 
 /** A 32-byte hex identifier (Uniswap V4 pool id), lower-case and 0x-prefixed. */
@@ -107,10 +108,11 @@ const assetSummarySchema = {
 const marketAssetRowSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["assetId", "asset", "price", "priceChange24h"],
+  required: ["assetId", "asset", "logo", "price", "priceChange24h"],
   properties: {
     assetId: { type: "string", pattern: assetIdPatternSource },
     asset: assetSummarySchema,
+    logo: tokenLogoSchema,
     price: marketFactSchema,
     priceChange24h: marketFactSchema,
   },
@@ -320,6 +322,7 @@ export const marketAssetResourceSchema = {
     "marketCap",
     "fdv",
     "primaryPair",
+    "logo",
     "community",
     "security",
     "holderCount",
@@ -376,6 +379,7 @@ export const marketAssetResourceSchema = {
       description:
         "The deepest DexScreener pair in which the asset is the base token. Price facts above refer to this pair.",
     },
+    logo: tokenLogoSchema,
     community: {
       anyOf: [
         {
@@ -754,6 +758,7 @@ export const marketNewPairsResourceSchema = {
                   "baseTokenAddress",
                   "quoteTokenAddress",
                   "registryAssetId",
+                  "logo",
                   "createdAt",
                   "reserveUsd",
                   "volumeH24Usd",
@@ -810,6 +815,11 @@ export const marketNewPairsResourceSchema = {
                       { type: "string", pattern: assetIdPatternSource },
                       { type: "null" },
                     ],
+                  },
+                  logo: {
+                    ...tokenLogoSchema,
+                    description:
+                      "The base token's logo (Decision 0072): the Trust Wallet rule URL for baseTokenAddress, or unavailable (TOKEN_LOGO_ADDRESS_UNKNOWN) when the Provider named no base token.",
                   },
                   createdAt: nullableDateTimeSchema,
                   reserveUsd: { anyOf: [decimalSchema, { type: "null" }] },

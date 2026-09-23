@@ -49,6 +49,11 @@ import type {
   AssetPriceFact,
   MarketFactService,
 } from "../market/market-fact-service.js";
+import {
+  observedLogoImage,
+  projectTokenLogo,
+  type TokenLogoProjection,
+} from "../market/token-logo.js";
 
 /**
  * Read-only wallet projections for D12 (Decision 0033).
@@ -139,6 +144,8 @@ export interface WalletBalanceProjection {
   readonly name: string;
   readonly decimals: number;
   readonly address: string | null;
+  /** Display picture of the asset (Decision 0072); never an identifier. */
+  readonly logo: TokenLogoProjection;
   readonly balance: WalletBalanceAmounts | UnavailableProjection;
   readonly pending:
     | {
@@ -224,6 +231,8 @@ export interface LaunchChainNativeBalance {
   readonly assetId: string;
   readonly symbol: string;
   readonly decimals: number;
+  /** `unavailable` on the testnet: the rule covers BSC mainnet only (Decision 0072). */
+  readonly logo: TokenLogoProjection;
   readonly rawValue: string;
   readonly displayBalance: string;
   readonly availableBalance: string;
@@ -567,6 +576,7 @@ async function projectLaunchChainBalance(
       assetId,
       symbol: nativeSymbolForLaunchChain(chainId),
       decimals: bscNativeDecimals,
+      logo: projectTokenLogo({ chainId, address: null, providerImage: null }),
       rawValue: rawValue.toString(10),
       displayBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
       availableBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
@@ -1002,7 +1012,7 @@ export function createWalletReadService(
       // The cross-check, the pending totals, the per-asset prices, and the
       // audit snapshots all depend only on the one block already read, so
       // they observe the same facts whether they run in sequence or together.
-      const [pendingTotals, crossCheck, rowValuations, , launchChain] =
+      const [pendingTotals, crossCheck, prices, , launchChain] =
         await Promise.all([
           pendingPending,
           privyObservationPending.then((observation) =>
@@ -1012,15 +1022,7 @@ export function createWalletReadService(
               nativeAsset?.decimals ?? bscNativeDecimals,
             ),
           ),
-          pricesPending.then((prices) =>
-            assets.map((_asset, index) =>
-              valueRow(
-                prices?.[index] ?? null,
-                rowBalances[index] ??
-                  unavailable(walletReasonCodes.balanceCallFailed),
-              ),
-            ),
-          ),
+          pricesPending,
           timings.measure("snapshots", () =>
             Promise.all(
               assets.map(async (asset, index) => {
@@ -1035,18 +1037,43 @@ export function createWalletReadService(
           launchChainPending,
         ]);
 
+      const rowValuations = assets.map((_asset, index) =>
+        valueRow(
+          prices?.[index] ?? null,
+          rowBalances[index] ??
+            unavailable(walletReasonCodes.balanceCallFailed),
+        ),
+      );
+
       const balances: readonly WalletBalanceProjection[] = assets.map(
         (asset, index) => {
           const isNative = asset.address === null;
           const pendingRaw = pendingTotals?.find(
             (total) => total.assetId === asset.assetId,
           );
+          // The price fact already in hand carries DexScreener's picture of
+          // the asset's own base pair (Decision 0072); the native asset is
+          // never priced through a proxy here, so its `pair` is its own or
+          // null, and it takes the rule URL.
+          const price = prices?.[index] ?? null;
+          const logoImage =
+            price === null ||
+            price.proxyAsset !== null ||
+            price.pair === null ||
+            price.pair.baseTokenAddress !== asset.address
+              ? null
+              : observedLogoImage(price.pair.imageUrl, price.fact.fetchedAt);
           return Object.freeze({
             assetId: asset.assetId,
             symbol: asset.symbol,
             name: asset.name,
             decimals: asset.decimals,
             address: asset.address,
+            logo: projectTokenLogo({
+              chainId: asset.chainId,
+              address: asset.address,
+              providerImage: logoImage,
+            }),
             balance:
               rowBalances[index] ??
               unavailable(walletReasonCodes.balanceCallFailed),

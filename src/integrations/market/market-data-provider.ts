@@ -70,6 +70,14 @@ export interface TokenPairSnapshot {
   readonly buysH24: number | null;
   readonly sellsH24: number | null;
   readonly pairCreatedAt: string | null;
+  /**
+   * The base token's image as DexScreener reports it under `info.imageUrl`
+   * (Decision 0072), already reduced to an https URL on an allow-listed
+   * host; `null` when not reported or not admissible. It describes the
+   * *base* token only. Rows cached before that decision lack the field and
+   * read as `undefined`, which consumers treat as `null`.
+   */
+  readonly imageUrl?: string | null;
 }
 
 export interface TokenPairsSnapshot {

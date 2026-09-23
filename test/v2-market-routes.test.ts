@@ -965,6 +965,238 @@ describe("LOOP API V2 market module", () => {
     ]);
   });
 
+  describe("token logos (Decision 0072)", () => {
+    const trustWallet =
+      "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain";
+    const wbnbLogo = `${trustWallet}/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png`;
+    const usdtLogo = `${trustWallet}/assets/0x55d398326f99059fF775485246999027B3197955/logo.png`;
+    const nativeLogo = `${trustWallet}/info/logo.png`;
+    const dexscreenerImage = `https://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`;
+
+    /** The standard pairs fake with `imageUrl` on WBNB's deepest (v2) pair. */
+    function pairsProviderWithImage(
+      imageUrl: string,
+    ): MarketPairsProvider & { readonly calls: () => number } {
+      const base = pairsProviderFake();
+      const decorate = (snapshot: TokenPairsSnapshot): TokenPairsSnapshot => ({
+        ...snapshot,
+        pairs: snapshot.pairs.map((pair) =>
+          pair.pairAddress === "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae"
+            ? { ...pair, imageUrl }
+            : pair,
+        ),
+      });
+      return {
+        source: "dexscreener",
+        calls: () => base.calls(),
+        readPair: (pairAddress, options) => base.readPair(pairAddress, options),
+        readTokenPairs: async (tokenAddress, options) => {
+          const observation = await base.readTokenPairs(tokenAddress, options);
+          return { ...observation, value: decorate(observation.value) };
+        },
+        readTokenPairsBatch: async (addresses, options) => {
+          const observation = await base.readTokenPairsBatch(
+            addresses,
+            options,
+          );
+          return { ...observation, value: observation.value.map(decorate) };
+        },
+      };
+    }
+
+    it("publishes DexScreener's image on the overview rows of the asset it belongs to, and the rule URL on every other row", async () => {
+      const { app } = await createApp({
+        ...fakes(),
+        pairsProvider: pairsProviderWithImage(dexscreenerImage),
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/market/overview",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly watchlist: {
+          readonly items: readonly { assetId: string; logo: unknown }[];
+        };
+        readonly trending: {
+          readonly items: readonly { assetId: string; logo: unknown }[];
+        };
+      }>();
+      expect(body.watchlist.items.map((item) => item.assetId)).toEqual([
+        wbnbAssetId,
+        "eip155:56:native",
+      ]);
+      expect(body.watchlist.items[0]?.logo).toEqual({
+        status: "available",
+        url: dexscreenerImage,
+        source: "dexscreener",
+        observedAt: fetchedAt,
+      });
+      // Native BNB is priced through WBNB, but WBNB's picture is not its own.
+      expect(body.watchlist.items[1]?.logo).toEqual({
+        status: "available",
+        url: nativeLogo,
+        source: "trustwallet",
+        observedAt: null,
+      });
+      expect(body.trending.items[0]).toMatchObject({
+        assetId: wbnbAssetId,
+        logo: {
+          status: "available",
+          url: dexscreenerImage,
+          source: "dexscreener",
+        },
+      });
+    });
+
+    it("drops a Provider image off the host allow-list and publishes the rule URL", async () => {
+      const { app } = await createApp({
+        ...fakes(),
+        pairsProvider: pairsProviderWithImage("https://evil.example/logo.png"),
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain("evil.example");
+      expect(response.json()).toMatchObject({
+        price: { value: "746.63" },
+        logo: {
+          status: "available",
+          url: wbnbLogo,
+          source: "trustwallet",
+          observedAt: null,
+        },
+      });
+    });
+
+    it("publishes the logo on the asset page for a registered token, the native asset, and a token without a pair", async () => {
+      const { app } = await createApp({
+        ...fakes(),
+        pairsProvider: pairsProviderWithImage(dexscreenerImage),
+      });
+      const cases = [
+        [
+          wbnbAssetId,
+          {
+            url: dexscreenerImage,
+            source: "dexscreener",
+            observedAt: fetchedAt,
+          },
+        ],
+        [
+          "eip155:56:native",
+          { url: nativeLogo, source: "trustwallet", observedAt: null },
+        ],
+        [
+          usdtAssetId,
+          { url: usdtLogo, source: "trustwallet", observedAt: null },
+        ],
+      ] as const;
+      for (const [assetId, expected] of cases) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/market/assets/${assetId}`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode, assetId).toBe(200);
+        expect(response.json(), assetId).toMatchObject({
+          logo: { status: "available", ...expected },
+        });
+      }
+    });
+
+    it("publishes the rule URL even when no Provider is configured: a logo is not a market fact", async () => {
+      const { app } = await createApp(fakes({ providers: false }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.json()).toMatchObject({
+        price: { quality: "unavailable" },
+        logo: { status: "available", url: wbnbLogo, source: "trustwallet" },
+      });
+    });
+
+    it("publishes the base token's rule URL on new-pairs rows and unavailable when the Provider named no base token", async () => {
+      const { provider } = candlesProviderFake();
+      const candlesProvider: CandlesProvider = {
+        ...provider,
+        readNewPools: () =>
+          Promise.resolve({
+            value: {
+              pools: [
+                {
+                  poolRef: {
+                    kind: "address" as const,
+                    address: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+                  },
+                  dexId: "pancakeswap_v2",
+                  name: "WBNB / USDT",
+                  baseTokenAddress: wbnb,
+                  quoteTokenAddress: usdt,
+                  createdAt: "2026-09-17T06:44:36.000Z",
+                  reserveUsd: "13659.417",
+                  volumeH24Usd: "8957.0388621769",
+                },
+                {
+                  poolRef: {
+                    kind: "poolId" as const,
+                    poolId: `0x${"ab".repeat(32)}`,
+                  },
+                  dexId: "uniswap-v4-bsc",
+                  name: "? / USDT",
+                  baseTokenAddress: null,
+                  quoteTokenAddress: usdt,
+                  createdAt: null,
+                  reserveUsd: null,
+                  volumeH24Usd: null,
+                },
+              ],
+              omittedPoolCount: 0,
+            },
+            source: "geckoterminal" as const,
+            fetchedAt,
+            rawDigest: "d".repeat(64),
+          }),
+      };
+      const { app } = await createApp(fakes({ candlesProvider }));
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/market/new-pairs",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        newPairs: {
+          status: "available",
+          items: [
+            {
+              registryAssetId: wbnbAssetId,
+              logo: {
+                status: "available",
+                url: wbnbLogo,
+                source: "trustwallet",
+                observedAt: null,
+              },
+            },
+            {
+              registryAssetId: null,
+              logo: {
+                status: "unavailable",
+                reasonCode: "TOKEN_LOGO_ADDRESS_UNKNOWN",
+              },
+            },
+          ],
+        },
+      });
+    });
+  });
+
   it("charts native BNB through the WBNB pool and labels the candles proxied", async () => {
     const bucket: SwapCandleBucket = {
       bucketStart: "2026-09-08T00:00:00.000Z",
@@ -1512,6 +1744,7 @@ describe("LOOP API V2 market module", () => {
                   priceUsd: "2576.66",
                   liquidityUsd: "899550.52",
                   volumeH24: "2926215.92",
+                  imageUrl: `https://cdn.dexscreener.com/tokens/bsc/${weth}.png`,
                 },
               ],
             },
@@ -1541,6 +1774,13 @@ describe("LOOP API V2 market module", () => {
           pairAddress: "0x62fcb3c1794fb95bd8b1a97f6ad5d8a7e4943a1e",
           dexId: "pancakeswap",
           labels: ["v3"],
+        },
+        // The unregistered path carries DexScreener's picture too (Decision 0072).
+        logo: {
+          status: "available",
+          url: `https://cdn.dexscreener.com/tokens/bsc/${weth}.png`,
+          source: "dexscreener",
+          observedAt: fetchedAt,
         },
       });
     });

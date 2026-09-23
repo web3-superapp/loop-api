@@ -305,7 +305,9 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 ### 3.2 `GET /v2/mining/assets`（mining-assets）
 
 2026-09-15 Development 实际响应（账号 `cy`；`symbol`/`formula` 为 S22a 加法，值按同一库的 Registry 行与生效版本补入；
-`referencePricePairAddress` 为 S51c 加法，该次运行的行全部为 `null`）：
+`referencePricePairAddress` 为 S51c 加法，该次运行的行全部为 `null`；`logo` 为 S78c 加法（决策 0072），
+`included[]` 与 `excluded[]` 每行必填，本接口不读行情事实，一律是 Trust Wallet 规则 URL——
+形状、主机白名单与"加载失败 → monogram、不重试"见 `docs/frontend-v2-market-api.md` §2a，样例中只在第一行展开）：
 
 ```json
 {
@@ -314,6 +316,12 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
       "symbol": "Cake",
+      "logo": {
+        "status": "available",
+        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82/logo.png",
+        "source": "trustwallet",
+        "observedAt": null
+      },
       "holding": "0",
       "referencePriceUsd": "2.26",
       "referencePriceQuality": "fresh",
@@ -326,6 +334,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
       "symbol": "USDT",
+      "logo": { "…": "trustwallet 规则 URL" },
       "holding": "0",
       "referencePriceUsd": "0.9994",
       "referencePriceQuality": "fresh",
@@ -338,6 +347,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
       "symbol": "WBNB",
+      "logo": { "…": "trustwallet 规则 URL" },
       "holding": "0",
       "referencePriceUsd": "713.42",
       "referencePriceQuality": "fresh",
@@ -350,6 +360,12 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:native",
       "symbol": "BNB",
+      "logo": {
+        "status": "available",
+        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+        "source": "trustwallet",
+        "observedAt": null
+      },
       "holding": "0",
       "referencePriceUsd": "713.42",
       "referencePriceQuality": "proxied",

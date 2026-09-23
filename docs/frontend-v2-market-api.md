@@ -74,6 +74,52 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `MARKET_TOKEN_NOT_FOUND`                 | Provider 明确回答"没有这个 token"（只会出现在 `asset.status: unavailable` 的部分回答里；全部 Provider 都这么答时是 404）                                                                                                                                                                                                                                                    |
 | `MARKET_LOOKUP_PROVIDER_DISABLED`        | GeckoTerminal 与 DexScreener 都关闭，未登记地址无法解析                                                                                                                                                                                                                                                                                                                     |
 
+## 2a. 代币 logo：`logo` 字段（决策 0072）
+
+需求方 2026-09-23 裁定"token 都用真实的 logo"。从本步起，**每一处下发资产行的地方**都多一个必填
+`logo` 字段（严格 codec 必须把它加进键集合）：
+
+| 接口                                  | 位置                                                |
+| ------------------------------------- | --------------------------------------------------- |
+| `GET /v2/market/overview`             | `watchlist.items[].logo`、`trending.items[].logo`   |
+| `GET /v2/market/assets/{assetId}`     | 顶层 `logo`（已登记 / 未登记 / 原生 BNB 都有）      |
+| `GET /v2/market/new-pairs`            | `newPairs.items[].logo`（该池 **base token** 的）   |
+| `GET /v2/wallets/{walletId}/balances` | `balances[].logo`、`launchChain.nativeBalance.logo` |
+| `GET /v2/watchlist`                   | `groups[].items[].logo`                             |
+| `GET /v2/mining/assets`               | `included[].logo`、`excluded[].logo`                |
+| `GET /v2/search?domain=assets`        | `results[].displaySnapshot.logo`（其它域为 `null`） |
+
+社区详情的"绑定资产卡"没有独立投影（只有 `boundAssetKey`），用
+`GET /v2/market/assets/{assetId}` 的 `logo`。
+
+形状（两个变体，一个共享 schema）：
+
+```json
+{ "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "2026-09-23T08:00:00.000Z" }
+{ "status": "available", "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png", "source": "trustwallet", "observedAt": null }
+{ "status": "unavailable", "reasonCode": "TOKEN_LOGO_ADDRESS_UNKNOWN" }
+```
+
+- **主机白名单**：`url` 只会是 `https://` 且主机严格等于 `cdn.dexscreener.com`、
+  `dd.dexscreener.com`、`raw.githubusercontent.com` 三者之一（OpenAPI 的 `pattern` 已锚定）。
+  后端在 Provider 边界与投影两处各过一次门：其它主机、`http://`、带凭据/端口、超过 512
+  字符的 URL 一律丢弃，**不会**下发。客户端也不要放宽：不是这三个主机的 URL 不要加载。
+- `source: "dexscreener"`：该资产**自己作为 base token** 的 DexScreener 交易对上报的
+  `info.imageUrl`，随价格事实同一份缓存 / TTL 走，`observedAt` = 该事实的 `fetchedAt`。
+  作为 quote 出现的交易对的图片是对方代币的，不会用；原生 BNB 通过 WBNB 代理计价，
+  但 WBNB 的图片不是 BNB 的，原生行永远走下一条规则。
+- `source: "trustwallet"`：固定规则 URL
+  `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/<EIP-55 校验和地址>/logo.png`，原生 BNB 是
+  `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png`。**服务端不探测文件是否存在**，所以 `observedAt` 恒 `null`。
+- **logo 不是行情事实**：Provider 关闭 / 限速 / 不可达时价格块 unavailable，`logo` 仍然是
+  `trustwallet` 规则 URL。它也不能用来合并、匹配或识别资产（决策 0033：只有 `assetId` 是键）。
+- 只有两种 `unavailable`：`TOKEN_LOGO_ADDRESS_UNKNOWN`（new-pairs 里 Provider 没给 base
+  token 地址）、`TOKEN_LOGO_CHAIN_UNSUPPORTED`（Launch 槽 `eip155:97` 的 tBNB 余额行）。
+- **客户端回退规则**：直接加载 `url`（没有服务端图片代理）。任何加载失败（Trust Wallet
+  仓库没有这个代币的文件 → 404、DexScreener CDN 报错、断网）→ 该行回退到现有首字母
+  monogram，**每行每屏只尝试一次，不要循环重试、不要轰炸**。`unavailable` 一开始就画
+  monogram。`source` / `observedAt` 只用于来源展示与排障，不用于选 codec。
+
 ## 3. `GET /v2/market/overview` → `market` 页
 
 ```json
@@ -85,6 +131,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
       {
         "assetId": "eip155:56:0xbb4c…",
         "asset": { "symbol": "WBNB", "name": "Wrapped BNB", "decimals": 18, "status": "pending" },
+        "logo": { "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
         "price": { "value": "747.39", "source": "dexscreener", "fetchedAt": "…", "ttlSeconds": 30, "quality": "fresh", "reasonCode": null },
         "priceChange24h": { "value": "0.27", "source": "dexscreener", "…": "…" }
       }
@@ -94,7 +141,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "status": "available",
     "recommendationId": "5b1f…-uuid",
     "rules": { "configVersion": "marketTrendingV1", "effectiveAt": "2026-09-08T00:00:00.000Z", "ordering": "dexscreener_volume_h24_desc" },
-    "items": [ { "assetId": "…", "asset": {…}, "price": {…}, "priceChange24h": {…}, "volume24h": {…}, "liquidityUsd": {…} } ]
+    "items": [ { "assetId": "…", "asset": {…}, "logo": {…}, "price": {…}, "priceChange24h": {…}, "volume24h": {…}, "liquidityUsd": {…} } ]
   },
   "newPairs": { "status": "unavailable", "reasonCode": "MARKET_PROVIDER_GECKOTERMINAL_DISABLED" },
   "smartMoney": { "status": "unavailable", "reasonCode": "SMART_MONEY_RUNTIME_DEFERRED" },
@@ -104,7 +151,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 ```
 
 - `watchlist.items` 顺序 = 自选顺序（跨分组去重）；`asset: null` +
-  `price.reasonCode: ASSET_NOT_READABLE` 表示该资产已不可读。
+  `price.reasonCode: ASSET_NOT_READABLE` 表示该资产已不可读（这种行的 `logo` 仍是规则 URL）。
+- 每行必填 `logo`（§2a）。
 - `trending` 只是**按 DexScreener 24h 成交量排序的 registry 资产**（最多 20），
   `recommendationId` 每次响应新生成，UI 上报"看到了哪一份排序"时带上它。
   原型里的"成员数 / 算力倍数"没有后端，不要渲染或必须标 unavailable。
@@ -130,6 +178,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "pairAddress": "0x16b9…", "dexId": "pancakeswap", "labels": ["v2"],
     "quoteTokenAddress": "0x55d3…", "quoteTokenSymbol": "USDT", "pairCreatedAt": "2023-04-05T14:12:23.000Z"
   },
+  "logo": { "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
   "community": { "status": "unavailable", "reasonCode": "COMMUNITY_NOT_BOUND" },
   "security": {
     "status": "available", "source": "goplus", "fetchedAt": "…", "ttlSeconds": 600, "quality": "fresh", "reasonCode": null,
@@ -147,6 +196,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 - `capability.swappable` 恒 `false`；**Swap 入口不渲染**。`capability.value` 与
   `GET /v2/assets/{assetId}` 相同语义。
+- 顶层 `logo` 必填（§2a）：`primaryPair` 带图时是 `dexscreener`，否则（含原生 BNB、
+  Provider 关闭、未登记地址走 GeckoTerminal 路径）是 `trustwallet` 规则 URL。
 - 价格类事实全部来自 `primaryPair`（以该资产为 base、流动性最深的 DexScreener 交易对）。
   DexScreener 没有可用交易对时，整组事实改由 Provider 顶池查找提供（决策 0064，见 §4a
   末条）：来源在每个事实的 `source` 里自述，不会一个字段来自一个 Provider。仍然没有 →
@@ -448,6 +499,12 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
         "baseTokenAddress": "0x7d03759e5b41e36899833cb2e008455d69a24444",
         "quoteTokenAddress": "0xce24439f2d9c6a2289f741120fe202248b666666",
         "registryAssetId": null,
+        "logo": {
+          "status": "available",
+          "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x7d03759E5B41E36899833cb2E008455d69A24444/logo.png",
+          "source": "trustwallet",
+          "observedAt": null
+        },
         "createdAt": "2026-09-17T13:54:07.000Z",
         "reserveUsd": "4.4257",
         "volumeH24Usd": "3428.8481615718"
@@ -462,6 +519,12 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
         "baseTokenAddress": "0x…",
         "quoteTokenAddress": "0x…",
         "registryAssetId": null,
+        "logo": {
+          "status": "available",
+          "url": "…/assets/<EIP-55>/logo.png",
+          "source": "trustwallet",
+          "observedAt": null
+        },
         "createdAt": "…",
         "reserveUsd": "…",
         "volumeH24Usd": "…"
@@ -492,6 +555,10 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
   正常为 0；非 0 时页面可提示"另有 N 行无法识别"。
 - `registryAssetId` 只在 base token 已登记时非空（V4 池同样按 base token 解析）；`dexId` 是 GeckoTerminal 的
   字符串标识（`pancakeswap_v2`、`four-meme`、`uniswap-v4-bsc`……），不要当枚举解析。
+- `logo` 必填（§2a）：新币页没有 DexScreener 交易对事实，一律是 `baseTokenAddress` 的
+  `trustwallet` 规则 URL；`baseTokenAddress: null` 时是
+  `{status:"unavailable", reasonCode:"TOKEN_LOGO_ADDRESS_UNKNOWN"}`（画 monogram）。
+  新币多半还没进 Trust Wallet 仓库，加载 404 → monogram，属正常。
 
 ## 9. `GET /v2/market/smart-money` → `smart-money` 页
 

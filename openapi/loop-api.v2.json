@@ -45275,6 +45275,7 @@
                               "title",
                               "subtitle",
                               "avatarRef",
+                              "logo",
                               "memberCount",
                               "verificationStatus"
                             ],
@@ -45297,6 +45298,69 @@
                               "avatarRef": {
                                 "anyOf": [
                                   { "type": "string", "maxLength": 256 },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "logo": {
+                                "description": "The token picture of an asset result (Decision 0072); null for user and community results, whose picture is avatarRef.",
+                                "anyOf": [
+                                  {
+                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "url",
+                                          "source",
+                                          "observedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "maxLength": 512
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "trustwallet"
+                                            ]
+                                          },
+                                          "observedAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              { "type": "null" }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
                                   { "type": "null" }
                                 ]
                               },
@@ -45946,6 +46010,7 @@
                                 "required": [
                                   "assetId",
                                   "asset",
+                                  "logo",
                                   "price",
                                   "priceChange24h"
                                 ],
@@ -45992,6 +46057,63 @@
                                         }
                                       },
                                       { "type": "null" }
+                                    ]
+                                  },
+                                  "logo": {
+                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "url",
+                                          "source",
+                                          "observedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "maxLength": 512
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "trustwallet"
+                                            ]
+                                          },
+                                          "observedAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              { "type": "null" }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
                                     ]
                                   },
                                   "price": {
@@ -46263,6 +46385,63 @@
                                         }
                                       },
                                       { "type": "null" }
+                                    ]
+                                  },
+                                  "logo": {
+                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "url",
+                                          "source",
+                                          "observedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "maxLength": 512
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "trustwallet"
+                                            ]
+                                          },
+                                          "observedAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              { "type": "null" }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
                                     ]
                                   },
                                   "price": {
@@ -47211,6 +47390,7 @@
                     "marketCap",
                     "fdv",
                     "primaryPair",
+                    "logo",
                     "community",
                     "security",
                     "holderCount",
@@ -47942,6 +48122,52 @@
                         { "type": "null" }
                       ],
                       "description": "The deepest DexScreener pair in which the asset is the base token. Price facts above refer to this pair."
+                    },
+                    "logo": {
+                      "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "url", "source", "observedAt"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "url": {
+                              "type": "string",
+                              "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                              "maxLength": 512
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["dexscreener", "trustwallet"]
+                            },
+                            "observedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        }
+                      ]
                     },
                     "community": {
                       "anyOf": [
@@ -51165,6 +51391,7 @@
                                   "baseTokenAddress",
                                   "quoteTokenAddress",
                                   "registryAssetId",
+                                  "logo",
                                   "createdAt",
                                   "reserveUsd",
                                   "volumeH24Usd"
@@ -51240,6 +51467,63 @@
                                         "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
                                       },
                                       { "type": "null" }
+                                    ]
+                                  },
+                                  "logo": {
+                                    "description": "The base token's logo (Decision 0072): the Trust Wallet rule URL for baseTokenAddress, or unavailable (TOKEN_LOGO_ADDRESS_UNKNOWN) when the Provider named no base token.",
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "status",
+                                          "url",
+                                          "source",
+                                          "observedAt"
+                                        ],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["available"]
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "maxLength": 512
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "enum": [
+                                              "dexscreener",
+                                              "trustwallet"
+                                            ]
+                                          },
+                                          "observedAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              { "type": "null" }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["status", "reasonCode"],
+                                        "properties": {
+                                          "status": {
+                                            "type": "string",
+                                            "enum": ["unavailable"]
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                          }
+                                        }
+                                      }
                                     ]
                                   },
                                   "createdAt": {
@@ -55517,6 +55801,7 @@
                           "name",
                           "decimals",
                           "address",
+                          "logo",
                           "balance",
                           "pending",
                           "valuation",
@@ -55551,6 +55836,60 @@
                                 "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
                               },
                               { "type": "null" }
+                            ]
+                          },
+                          "logo": {
+                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "url",
+                                  "source",
+                                  "observedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "maxLength": 512
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["dexscreener", "trustwallet"]
+                                  },
+                                  "observedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
+                              }
                             ]
                           },
                           "balance": {
@@ -55897,6 +56236,7 @@
                                 "assetId",
                                 "symbol",
                                 "decimals",
+                                "logo",
                                 "rawValue",
                                 "displayBalance",
                                 "availableBalance",
@@ -55919,6 +56259,60 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 36
+                                },
+                                "logo": {
+                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "status",
+                                        "url",
+                                        "source",
+                                        "observedAt"
+                                      ],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["available"]
+                                        },
+                                        "url": {
+                                          "type": "string",
+                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "maxLength": 512
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": ["dexscreener", "trustwallet"]
+                                        },
+                                        "observedAt": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "format": "date-time"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["status", "reasonCode"],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["unavailable"]
+                                        },
+                                        "reasonCode": {
+                                          "type": "string",
+                                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 },
                                 "rawValue": {
                                   "type": "string",
@@ -93601,6 +93995,7 @@
                         "required": [
                           "assetId",
                           "symbol",
+                          "logo",
                           "holding",
                           "referencePriceUsd",
                           "referencePriceQuality",
@@ -93625,6 +94020,60 @@
                               { "type": "null" }
                             ],
                             "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
+                          },
+                          "logo": {
+                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "url",
+                                  "source",
+                                  "observedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "maxLength": 512
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["dexscreener", "trustwallet"]
+                                  },
+                                  "observedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
+                              }
+                            ]
                           },
                           "holding": {
                             "type": "string",
@@ -93681,7 +94130,7 @@
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["assetId", "symbol", "reasonCode"],
+                        "required": ["assetId", "symbol", "logo", "reasonCode"],
                         "properties": {
                           "assetId": {
                             "type": "string",
@@ -93697,6 +94146,60 @@
                               { "type": "null" }
                             ],
                             "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
+                          },
+                          "logo": {
+                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "url",
+                                  "source",
+                                  "observedAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "maxLength": 512
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["dexscreener", "trustwallet"]
+                                  },
+                                  "observedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
+                              }
+                            ]
                           },
                           "reasonCode": {
                             "type": "string",
@@ -109530,12 +110033,71 @@
                             "items": {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["assetId", "asset", "reasonCode"],
+                              "required": [
+                                "assetId",
+                                "asset",
+                                "logo",
+                                "reasonCode"
+                              ],
                               "properties": {
                                 "assetId": {
                                   "type": "string",
                                   "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
                                   "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                                },
+                                "logo": {
+                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "status",
+                                        "url",
+                                        "source",
+                                        "observedAt"
+                                      ],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["available"]
+                                        },
+                                        "url": {
+                                          "type": "string",
+                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "maxLength": 512
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": ["dexscreener", "trustwallet"]
+                                        },
+                                        "observedAt": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "format": "date-time"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["status", "reasonCode"],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["unavailable"]
+                                        },
+                                        "reasonCode": {
+                                          "type": "string",
+                                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 },
                                 "asset": {
                                   "anyOf": [
@@ -110253,12 +110815,71 @@
                             "items": {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["assetId", "asset", "reasonCode"],
+                              "required": [
+                                "assetId",
+                                "asset",
+                                "logo",
+                                "reasonCode"
+                              ],
                               "properties": {
                                 "assetId": {
                                   "type": "string",
                                   "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
                                   "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                                },
+                                "logo": {
+                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "status",
+                                        "url",
+                                        "source",
+                                        "observedAt"
+                                      ],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["available"]
+                                        },
+                                        "url": {
+                                          "type": "string",
+                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "maxLength": 512
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": ["dexscreener", "trustwallet"]
+                                        },
+                                        "observedAt": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "format": "date-time"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["status", "reasonCode"],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["unavailable"]
+                                        },
+                                        "reasonCode": {
+                                          "type": "string",
+                                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 },
                                 "asset": {
                                   "anyOf": [

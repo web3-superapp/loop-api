@@ -804,6 +804,12 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
       "title": "USDT",
       "subtitle": "Tether USD",
       "avatarRef": null,
+      "logo": {
+        "status": "available",
+        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x55d398326f99059fF775485246999027B3197955/logo.png",
+        "source": "trustwallet",
+        "observedAt": null
+      },
       "memberCount": null,
       "verificationStatus": "pending"
     },
@@ -818,7 +824,10 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   重复一份，**用它打开代币页**（`GET /v2/market/assets/{assetId}` 等）。
   `verificationStatus` 只有注册表 `verified` 的资产是 `verified`（当前只有 USD1），
   其余 `pending`——这是注册表核验状态，不是社区认证。`avatarRef` 恒 `null`（注册表
-  不存 logo）。排序：匹配等级 → symbol → assetId；分页与其他域一样用 `nextCursor`。
+  不存 logo）；代币图片在 **`displaySnapshot.logo`**（决策 0072，S78c 加法，所有域的
+  `displaySnapshot` 都多这个必填键：`users` / `communities` 为 `null`，`assets` 为 Trust Wallet
+  规则 URL——形状、主机白名单与"加载失败 → monogram、不重试"见
+  `docs/frontend-v2-market-api.md` §2a）。排序：匹配等级 → symbol → assetId；分页与其他域一样用 `nextCursor`。
   没有匹配时是 `status: "available"` + 空 `results`（不是 unavailable）。`assets` 域
   **不消耗**公共搜索配额。`ASSET_REGISTRY_NOT_COMPOSED` 只在后端没有组合注册表时出现。
 

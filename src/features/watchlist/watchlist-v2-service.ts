@@ -13,6 +13,10 @@ import {
 } from "../../database/watchlist-v2-repository.js";
 import { isAssetId, type AssetStatus } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import {
+  projectTokenLogoForAssetId,
+  type TokenLogoProjection,
+} from "../market/token-logo.js";
 
 /**
  * V2 Watchlist policy (D13, Decision 0033).
@@ -41,6 +45,8 @@ export interface WatchlistAssetProjection {
 export interface WatchlistItemProjection {
   readonly assetId: string;
   readonly asset: WatchlistAssetProjection | null;
+  /** Display picture of the asset (Decision 0072); never an identifier. */
+  readonly logo: TokenLogoProjection;
   readonly reasonCode: string | null;
 }
 
@@ -195,11 +201,13 @@ export function createWatchlistV2Service(
                   return Object.freeze({
                     assetId: item.assetId,
                     asset: null,
+                    logo: projectTokenLogoForAssetId(item.assetId),
                     reasonCode: watchlistV2ReasonCodes.assetNotReadable,
                   });
                 }
                 return Object.freeze({
                   assetId: item.assetId,
+                  logo: projectTokenLogoForAssetId(item.assetId),
                   asset: Object.freeze({
                     symbol: record.symbol,
                     name: record.name,
