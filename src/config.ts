@@ -173,13 +173,20 @@ const marketEnvironmentShape = {
 } as const;
 
 /**
- * Community AI Provider keys (Decision 0066). Without `ANTHROPIC_API_KEY`
+ * Community AI Provider keys (Decision 0066, amended 2026-09-23). The key is
+ * `COMMUNITY_AI_API_KEY`, falling back to `ANTHROPIC_API_KEY`; without either
  * the whole module is `null` here, the `communityAi` capability stays
  * `deferred`, and every AI route answers CAPABILITY_UNAVAILABLE. There is no
- * fixture answer and no second Provider.
+ * fixture answer and no second Provider. `COMMUNITY_AI_BASE_URL` selects the
+ * Anthropic-compatible endpoint (origin only; the adapter appends
+ * `/v1/messages`), defaulting to Anthropic itself.
  */
+export const defaultCommunityAiBaseUrl = "https://api.anthropic.com";
+
 const communityAiEnvironmentShape = {
   ANTHROPIC_API_KEY: optionalOpaqueSecret(8, 512),
+  COMMUNITY_AI_API_KEY: optionalOpaqueSecret(8, 512),
+  COMMUNITY_AI_BASE_URL: z.string().trim().min(1).max(2_048),
   COMMUNITY_AI_MODEL: z.string().trim().min(1).max(128),
   COMMUNITY_AI_TIMEOUT_MS: positiveIntegerString(1_000, 60_000),
   COMMUNITY_AI_MAX_OUTPUT_TOKENS: positiveIntegerString(64, 4_096),
@@ -193,6 +200,9 @@ function communityAiEnvironmentDefaults(
 ): Record<keyof typeof communityAiEnvironmentShape, string | undefined> {
   return {
     ANTHROPIC_API_KEY: environment["ANTHROPIC_API_KEY"],
+    COMMUNITY_AI_API_KEY: environment["COMMUNITY_AI_API_KEY"],
+    COMMUNITY_AI_BASE_URL:
+      environment["COMMUNITY_AI_BASE_URL"] ?? defaultCommunityAiBaseUrl,
     COMMUNITY_AI_MODEL: environment["COMMUNITY_AI_MODEL"] ?? "claude-sonnet-5",
     COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "20000",
     COMMUNITY_AI_MAX_OUTPUT_TOKENS:
@@ -206,8 +216,33 @@ function communityAiEnvironmentDefaults(
   };
 }
 
+/**
+ * The Provider origin: https, no credentials, no path, no query, no fragment.
+ * A trailing slash is normalised away (`URL.origin` also lower-cases the host
+ * and drops a default port), so `https://api.onlyrouter.ai/` and
+ * `https://api.onlyrouter.ai` are the same configuration. A path such as
+ * `/v1` is refused rather than silently doubled into `/v1/v1/messages`.
+ */
+function parseCommunityAiBaseUrl(fieldName: string, value: string): string {
+  const url = parseUrl(fieldName, value);
+  if (url.protocol !== "https:") {
+    throw new ConfigurationError([`${fieldName}: protocol must be https`]);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([`${fieldName}: credentials are not allowed`]);
+  }
+  if (url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new ConfigurationError([
+      `${fieldName}: must be an origin without path, query, or fragment`,
+    ]);
+  }
+  return url.origin;
+}
+
 function parseCommunityAiConfig(data: {
   readonly ANTHROPIC_API_KEY?: string | undefined;
+  readonly COMMUNITY_AI_API_KEY?: string | undefined;
+  readonly COMMUNITY_AI_BASE_URL: string;
   readonly COMMUNITY_AI_MODEL: string;
   readonly COMMUNITY_AI_TIMEOUT_MS: number;
   readonly COMMUNITY_AI_MAX_OUTPUT_TOKENS: number;
@@ -215,11 +250,20 @@ function parseCommunityAiConfig(data: {
   readonly COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: number;
   readonly COMMUNITY_AI_BRIEF_CACHE_SECONDS: number;
 }): CommunityAiConfig | null {
-  if (data.ANTHROPIC_API_KEY === undefined) {
+  // The endpoint is validated even when no key is present: a malformed
+  // COMMUNITY_AI_BASE_URL is a startup error, not something a later key
+  // discovers.
+  const baseUrl = parseCommunityAiBaseUrl(
+    "COMMUNITY_AI_BASE_URL",
+    data.COMMUNITY_AI_BASE_URL,
+  );
+  const apiKey = data.COMMUNITY_AI_API_KEY ?? data.ANTHROPIC_API_KEY;
+  if (apiKey === undefined) {
     return null;
   }
   return Object.freeze({
-    anthropicApiKey: data.ANTHROPIC_API_KEY,
+    apiKey,
+    baseUrl,
     model: data.COMMUNITY_AI_MODEL,
     timeoutMs: data.COMMUNITY_AI_TIMEOUT_MS,
     maximumOutputTokens: data.COMMUNITY_AI_MAX_OUTPUT_TOKENS,
@@ -862,12 +906,19 @@ export interface MarketConfig {
 }
 
 /**
- * Community AI runtime (Decision 0066). `null` means no API key was supplied:
- * the capability is `deferred` and no answer is ever produced.
+ * Community AI runtime (Decision 0066). `null` means no API key was supplied
+ * (neither `COMMUNITY_AI_API_KEY` nor `ANTHROPIC_API_KEY`): the capability is
+ * `deferred` and no answer is ever produced.
  */
 export interface CommunityAiConfig {
   /** Never logged, never echoed, never part of an error body. */
-  readonly anthropicApiKey: string;
+  readonly apiKey: string;
+  /**
+   * Anthropic-compatible Provider origin (`https://api.anthropic.com` or an
+   * Anthropic-compatible gateway such as `https://api.onlyrouter.ai`). Never
+   * published to a client; the adapter appends `/v1/messages`.
+   */
+  readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
   readonly maximumOutputTokens: number;

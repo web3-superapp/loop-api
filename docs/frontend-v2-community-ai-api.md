@@ -14,10 +14,10 @@
   `404 NOT_FOUND`（V2 错误体），且不会校验 Bearer。
 - 前端必须先读 `GET /v2/meta/capabilities`：
 
-| capabilityId  | 取值                                         | UI 含义                                                             |
-| ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| `communityAi` | `available`                                  | 入口可点，三条接口可调用                                            |
-| `communityAi` | `deferred` + `COMMUNITY_AI_RUNTIME_DEFERRED` | 后端没有配置 `ANTHROPIC_API_KEY`：入口置灰并显示「AI 助理尚未接入」 |
+| capabilityId  | 取值                                         | UI 含义                                                                                                      |
+| ------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `communityAi` | `available`                                  | 入口可点，三条接口可调用                                                                                     |
+| `communityAi` | `deferred` + `COMMUNITY_AI_RUNTIME_DEFERRED` | 后端没有配置 Provider key（`COMMUNITY_AI_API_KEY` / `ANTHROPIC_API_KEY`）：入口置灰并显示「AI 助理尚未接入」 |
 
 只有这两种状态，没有第三种。`deferred` 时不要调用本模块接口，也**不要**回退到
 任何本地文案、示例回答或缓存答案。

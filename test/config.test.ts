@@ -831,3 +831,111 @@ describe("audio-room user-role evidence reference (Decision 0039)", () => {
     }
   });
 });
+
+describe("Community AI Provider configuration (Decision 0066, amended 2026-09-23)", () => {
+  it("stays deferred when neither COMMUNITY_AI_API_KEY nor ANTHROPIC_API_KEY is set", () => {
+    const config = loadConfig(validEnvironment());
+
+    expect(config.communityAi).toBeNull();
+  });
+
+  it("treats a blank key as unset", () => {
+    const environment = validEnvironment();
+    environment["COMMUNITY_AI_API_KEY"] = "   ";
+    environment["ANTHROPIC_API_KEY"] = "";
+
+    expect(loadConfig(validEnvironment()).communityAi).toBeNull();
+    expect(loadConfig(environment).communityAi).toBeNull();
+  });
+
+  it("falls back to ANTHROPIC_API_KEY and to the Anthropic origin", () => {
+    const environment = validEnvironment();
+    environment["ANTHROPIC_API_KEY"] = "sk-ant-fallback-key";
+
+    const config = loadConfig(environment);
+
+    expect(config.communityAi).toMatchObject({
+      apiKey: "sk-ant-fallback-key",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude-sonnet-5",
+    });
+    expect(Object.isFrozen(config.communityAi)).toBe(true);
+  });
+
+  it("prefers COMMUNITY_AI_API_KEY over ANTHROPIC_API_KEY", () => {
+    const environment = validEnvironment();
+    environment["ANTHROPIC_API_KEY"] = "sk-ant-fallback-key";
+    environment["COMMUNITY_AI_API_KEY"] = "sk-or-primary-key";
+
+    expect(loadConfig(environment).communityAi?.apiKey).toBe(
+      "sk-or-primary-key",
+    );
+
+    const blankPrimary = validEnvironment();
+    blankPrimary["ANTHROPIC_API_KEY"] = "sk-ant-fallback-key";
+    blankPrimary["COMMUNITY_AI_API_KEY"] = "";
+
+    expect(loadConfig(blankPrimary).communityAi?.apiKey).toBe(
+      "sk-ant-fallback-key",
+    );
+  });
+
+  it("accepts an Anthropic-compatible gateway origin and normalises a trailing slash", () => {
+    const environment = validEnvironment();
+    environment["COMMUNITY_AI_API_KEY"] = "sk-or-primary-key";
+    environment["COMMUNITY_AI_BASE_URL"] = "https://api.onlyrouter.ai/";
+
+    expect(loadConfig(environment).communityAi?.baseUrl).toBe(
+      "https://api.onlyrouter.ai",
+    );
+
+    environment["COMMUNITY_AI_BASE_URL"] = "  https://API.OnlyRouter.ai  ";
+    expect(loadConfig(environment).communityAi?.baseUrl).toBe(
+      "https://api.onlyrouter.ai",
+    );
+  });
+
+  it.each([
+    ["http origin", "http://api.onlyrouter.ai", /protocol must be https/],
+    ["not a URL", "onlyrouter", /must be a valid URL/],
+    [
+      "credentials",
+      "https://user:pass@api.onlyrouter.ai",
+      /credentials are not allowed/,
+    ],
+    [
+      "path",
+      "https://api.onlyrouter.ai/v1",
+      /must be an origin without path, query, or fragment/,
+    ],
+    [
+      "messages path",
+      "https://api.onlyrouter.ai/v1/messages",
+      /must be an origin without path, query, or fragment/,
+    ],
+    [
+      "query",
+      "https://api.onlyrouter.ai/?x=1",
+      /must be an origin without path, query, or fragment/,
+    ],
+    [
+      "fragment",
+      "https://api.onlyrouter.ai/#frag",
+      /must be an origin without path, query, or fragment/,
+    ],
+  ])("rejects COMMUNITY_AI_BASE_URL with %s", (_label, value, message) => {
+    const environment = validEnvironment();
+    environment["COMMUNITY_AI_API_KEY"] = "sk-or-primary-key";
+    environment["COMMUNITY_AI_BASE_URL"] = value;
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+    expect(() => loadConfig(environment)).toThrowError(message);
+  });
+
+  it("rejects a malformed COMMUNITY_AI_BASE_URL even without a key", () => {
+    const environment = validEnvironment();
+    environment["COMMUNITY_AI_BASE_URL"] = "http://api.onlyrouter.ai";
+
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+  });
+});

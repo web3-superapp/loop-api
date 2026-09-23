@@ -232,7 +232,8 @@ export interface V2ProductPolicyRuntime {
   readonly supportRuntimeAvailable: boolean;
   /**
    * Community AI (Decision 0066): the `community` module is registered, the
-   * Community AI repository is composed, and `ANTHROPIC_API_KEY` is present.
+   * Community AI repository is composed, and a Provider key
+   * (`COMMUNITY_AI_API_KEY`, or `ANTHROPIC_API_KEY` as the fallback) is present.
    * Without the key the capability stays `deferred` — it is not "unavailable",
    * because no Provider was ever asked to answer.
    */

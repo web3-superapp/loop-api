@@ -1550,16 +1550,20 @@ export async function buildApp(
             database.referral ?? createUnavailableReferralRepository(),
         })
       : createUnavailableReferralService());
-  // Community AI (Decision 0066). The capability opens on one fact: an
-  // Anthropic API key. Without it the composed service is the closed one,
+  // Community AI (Decision 0066). The capability opens on one fact: a
+  // Provider API key (COMMUNITY_AI_API_KEY, falling back to
+  // ANTHROPIC_API_KEY). Without it the composed service is the closed one,
   // every AI route answers CAPABILITY_UNAVAILABLE, and the capability stays
-  // `deferred` - no fixture answer exists anywhere in this module.
+  // `deferred` - no fixture answer exists anywhere in this module. The
+  // endpoint is COMMUNITY_AI_BASE_URL: Anthropic or an Anthropic-compatible
+  // gateway; the key and the origin never reach a log or a response.
   const communityAiGateway =
     options.communityAiGateway ??
     (config.communityAi === null
       ? null
       : createAnthropicCommunityAiGateway({
-          apiKey: config.communityAi.anthropicApiKey,
+          apiKey: config.communityAi.apiKey,
+          baseUrl: config.communityAi.baseUrl,
           model: config.communityAi.model,
           timeoutMs: config.communityAi.timeoutMs,
           maximumOutputTokens: config.communityAi.maximumOutputTokens,
