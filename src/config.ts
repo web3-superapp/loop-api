@@ -204,7 +204,9 @@ function communityAiEnvironmentDefaults(
     COMMUNITY_AI_BASE_URL:
       environment["COMMUNITY_AI_BASE_URL"] ?? defaultCommunityAiBaseUrl,
     COMMUNITY_AI_MODEL: environment["COMMUNITY_AI_MODEL"] ?? "claude-sonnet-5",
-    COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "20000",
+    // Below the 15 s HTTP deadlines with room for knowledge assembly, so a
+    // slow model ends in a 503, not a closed socket (Decision 0066 (2)).
+    COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "11000",
     COMMUNITY_AI_MAX_OUTPUT_TOKENS:
       environment["COMMUNITY_AI_MAX_OUTPUT_TOKENS"] ?? "800",
     COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE:

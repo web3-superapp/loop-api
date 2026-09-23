@@ -19,6 +19,7 @@ import {
 import {
   createCommunityAiService,
   createUnavailableCommunityAiService,
+  type CommunityAiServiceOptions,
 } from "../src/features/community-ai/community-ai-service.js";
 import type { CommunityResource } from "../src/features/community/community-service.js";
 import type { CommunityService } from "../src/features/community/community-service.js";
@@ -534,14 +535,24 @@ describe("Community AI service (Decision 0066)", () => {
       readonly resource?: CommunityResource;
       readonly gateway?: ReturnType<typeof gatewayFake>;
       readonly repository?: CommunityAiRepository;
+      readonly clock?: () => Date;
+      readonly logger?: CommunityAiServiceOptions["logger"];
     } = {},
   ) {
     const resource = options.resource ?? communityResource(activeMembership);
     const { gateway, complete } = options.gateway ?? gatewayFake();
     const repository = options.repository ?? repositoryFake();
+    // Every background brief generation resolves one of these, so a test can
+    // wait for the detached work without racing it.
+    const settled: (() => void)[] = [];
+    const briefSettled = (): Promise<void> =>
+      new Promise((resolve) => {
+        settled.push(resolve);
+      });
     return {
       complete,
       repository,
+      briefSettled,
       service: createCommunityAiService({
         gateway,
         repository,
@@ -549,7 +560,14 @@ describe("Community AI service (Decision 0066)", () => {
         userRateLimitPerMinute: 6,
         communityDailyLimit: 200,
         briefCacheSeconds: 3_600,
-        now: () => now,
+        briefTimeoutMs: 1_000,
+        logger: options.logger,
+        now: options.clock ?? (() => now),
+        onBriefSettled: () => {
+          for (const resolve of settled.splice(0)) {
+            resolve();
+          }
+        },
       }),
     };
   }
@@ -717,13 +735,184 @@ describe("Community AI service (Decision 0066)", () => {
     });
   });
 
-  it("generates one brief per community per cache window", async () => {
-    const { service: instance, complete } = service();
+  it("answers a cache miss as pending at once and generates the brief in the background", async () => {
+    const reserveBrief = vi.fn(() =>
+      Promise.resolve({ usageId: idempotencyKey }),
+    );
+    const settleUsage = vi.fn(() => Promise.resolve());
+    const {
+      service: instance,
+      complete,
+      briefSettled,
+    } = service({ repository: repositoryFake({ reserveBrief, settleUsage }) });
+    const pending = briefSettled();
     const first = await instance.getOverview(readContext);
-    const second = await instance.getOverview(readContext);
-    expect(first.brief.status).toBe("available");
-    expect(second).toEqual(first);
+    expect(first.brief).toEqual({
+      status: "unavailable",
+      reasonCode: communityAiReasonCodes.briefPending,
+    });
+    // The read itself never called the model; the generation was started.
+    await pending;
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(reserveBrief).toHaveBeenCalledTimes(1);
+    expect(settleUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", inputTokens: 100 }),
+    );
+    const second = await instance.getOverview(readContext);
+    expect(second.brief).toEqual({
+      status: "available",
+      messageCount: 1,
+      bounded: false,
+      windowHours: 24,
+      summary: "社区现有 42 名成员 [s1]。",
+      model: "claude-sonnet-5",
+      generatedAt: now.toISOString(),
+    });
+    const third = await instance.getOverview(readContext);
+    expect(third).toEqual(second);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("never hands the request signal to the background generation", async () => {
+    const { service: instance, complete, briefSettled } = service();
+    const pending = briefSettled();
+    const controller = new AbortController();
+    await instance.getOverview({ ...readContext, signal: controller.signal });
+    controller.abort();
+    await pending;
+    expect(complete).toHaveBeenCalledTimes(1);
+    const request = complete.mock.calls[0]?.[0] as { signal?: AbortSignal };
+    expect(request.signal).toBeInstanceOf(AbortSignal);
+    expect(request.signal).not.toBe(controller.signal);
+    expect(request.signal?.aborted).toBe(false);
+  });
+
+  it("runs one generation for concurrent reads of the same community", async () => {
+    let release: (() => void) | null = null;
+    const complete = vi.fn(
+      () =>
+        new Promise<Awaited<ReturnType<CommunityAiGateway["complete"]>>>(
+          (resolve) => {
+            release = (): void => {
+              resolve({
+                answer: "摘要",
+                citations: [],
+                refusal: null,
+                model: "claude-sonnet-5",
+                inputTokens: 1,
+                outputTokens: 1,
+              });
+            };
+          },
+        ),
+    );
+    const reserveBrief = vi.fn(() =>
+      Promise.resolve({ usageId: idempotencyKey }),
+    );
+    const { service: instance, briefSettled } = service({
+      gateway: { gateway: { model: "claude-sonnet-5", complete }, complete },
+      repository: repositoryFake({ reserveBrief }),
+    });
+    const pending = briefSettled();
+    const [first, second] = await Promise.all([
+      instance.getOverview(readContext),
+      instance.getOverview(readContext),
+    ]);
+    expect(first.brief).toEqual({
+      status: "unavailable",
+      reasonCode: communityAiReasonCodes.briefPending,
+    });
+    expect(second.brief).toEqual(first.brief);
+    const third = await instance.getOverview(readContext);
+    expect(third.brief).toEqual(first.brief);
+    await Promise.resolve();
+    expect(reserveBrief).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+    (release as (() => void) | null)?.();
+    await pending;
+    const fourth = await instance.getOverview(readContext);
+    expect(fourth.brief).toMatchObject({
+      status: "available",
+      summary: "摘要",
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a failed generation under its Provider classification and retries only after the window", async () => {
+    let currentMs = now.getTime();
+    const complete = vi.fn(() =>
+      Promise.reject(
+        new CommunityAiProviderError("COMMUNITY_AI_PROVIDER_REJECTED"),
+      ),
+    );
+    const warn = vi.fn();
+    const settleUsage = vi.fn(() => Promise.resolve());
+    const { service: instance, briefSettled } = service({
+      gateway: { gateway: { model: "claude-sonnet-5", complete }, complete },
+      repository: repositoryFake({ settleUsage }),
+      clock: () => new Date(currentMs),
+      logger: { warn },
+    });
+    const pending = briefSettled();
+    const first = await instance.getOverview(readContext);
+    expect(first.brief).toEqual({
+      status: "unavailable",
+      reasonCode: communityAiReasonCodes.briefPending,
+    });
+    await pending;
+    expect(settleUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" }),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toEqual({
+      communityId,
+      requestId,
+      reasonCode: "COMMUNITY_AI_PROVIDER_REJECTED",
+      errorName: "CommunityAiProviderError",
+    });
+    const second = await instance.getOverview(readContext);
+    expect(second.brief).toEqual({
+      status: "unavailable",
+      reasonCode: "COMMUNITY_AI_PROVIDER_REJECTED",
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+    // Inside the retry window nothing is generated again.
+    currentMs += 299_000;
+    await instance.getOverview(readContext);
+    expect(complete).toHaveBeenCalledTimes(1);
+    // Past it, one more attempt is made and the read is pending again.
+    currentMs += 2_000;
+    const later = briefSettled();
+    const fourth = await instance.getOverview(readContext);
+    expect(fourth.brief).toEqual({
+      status: "unavailable",
+      reasonCode: communityAiReasonCodes.briefPending,
+    });
+    await later;
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes an exhausted quota as its own reason and never throws from the read", async () => {
+    const repository = repositoryFake({
+      reserveBrief: vi.fn(() =>
+        Promise.reject(new CommunityAiQuotaExceededError("community")),
+      ),
+    });
+    const {
+      service: instance,
+      complete,
+      briefSettled,
+    } = service({ repository });
+    const pending = briefSettled();
+    const first = await instance.getOverview(readContext);
+    expect(first.brief.status).toBe("unavailable");
+    await pending;
+    const second = await instance.getOverview(readContext);
+    expect(second.brief).toEqual({
+      status: "unavailable",
+      reasonCode: communityAiReasonCodes.quotaExhausted,
+    });
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("keeps the brief closed for a non-member", async () => {

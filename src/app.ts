@@ -144,7 +144,10 @@ import {
   createAnthropicCommunityAiGateway,
   type CommunityAiGateway,
 } from "./integrations/ai/anthropic-adapter.js";
-import { communityAiDefaultQuota } from "./features/community-ai/community-ai-contract.js";
+import {
+  communityAiDefaultQuota,
+  communityAiDefaultTimeoutMs,
+} from "./features/community-ai/community-ai-contract.js";
 import { createUnavailableCommunityAiRepository } from "./features/community-ai/community-ai-repository.js";
 import {
   createCommunityAiService,
@@ -604,7 +607,13 @@ export async function buildApp(
       },
     },
     bodyLimit: 1_048_576,
-    connectionTimeout: 10_000,
+    // Node's socket inactivity timeout (`server.timeout`). It must not be
+    // shorter than `handlerTimeout`, `requestTimeout`, and the request abort
+    // deadline below: a handler still inside its 15 s budget would otherwise
+    // have its socket closed under it at 10 s, and the client would see
+    // "other side closed" instead of the sanitized 503 the handler deadline
+    // produces (S76b: the Community AI overview died this way on device).
+    connectionTimeout: 15_000,
     exposeHeadRoutes: false,
     frameworkErrors(error, request, reply): void {
       if (isV2RequestPath(request.raw.url)) {
@@ -1607,6 +1616,9 @@ export async function buildApp(
           briefCacheSeconds:
             config.communityAi?.briefCacheSeconds ??
             communityAiDefaultQuota.briefCacheSeconds,
+          briefTimeoutMs:
+            config.communityAi?.timeoutMs ?? communityAiDefaultTimeoutMs,
+          logger: app.log,
         })
       : createUnavailableCommunityAiService());
 

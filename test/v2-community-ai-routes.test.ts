@@ -13,7 +13,10 @@ import { createUnavailableProfileRepository } from "../src/database/profile-repo
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import { V2ApiError } from "../src/core/http/v2-error.js";
 import { communityAiReasonCodes } from "../src/features/community-ai/community-ai-contract.js";
-import type { CommunityAiService } from "../src/features/community-ai/community-ai-service.js";
+import type {
+  CommunityAiOverviewResource,
+  CommunityAiService,
+} from "../src/features/community-ai/community-ai-service.js";
 import { createUnavailableCommunityRepository } from "../src/features/community/community-repository.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
@@ -436,6 +439,31 @@ describe("LOOP API V2 Community AI routes (Decision 0066)", () => {
       windowHours: 24,
     });
     expect(body).not.toHaveProperty("documentCount");
+  });
+
+  it("publishes a pending brief through the closed reason enum", async () => {
+    const available = await serviceFake().getOverview();
+    const pending: CommunityAiOverviewResource = {
+      ...available,
+      brief: {
+        status: "unavailable",
+        reasonCode: communityAiReasonCodes.briefPending,
+      },
+    };
+    const { service } = serviceFake({
+      getOverview: () => Promise.resolve(pending),
+    });
+    const app = await createApp({ service });
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/ai/overview`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<Record<string, unknown>>()["brief"]).toEqual({
+      status: "unavailable",
+      reasonCode: "COMMUNITY_AI_BRIEF_PENDING",
+    });
   });
 
   it("reports one answer and returns 404 for an answer of another account", async () => {

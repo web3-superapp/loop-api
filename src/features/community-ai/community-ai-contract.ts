@@ -39,6 +39,23 @@ export const communityAiChatWindowDays = 7;
 /** The window the brief's discussion count covers. */
 export const communityAiBriefWindowHours = 24;
 
+/**
+ * Provider call ceiling (Decision 0066, amended 2026-09-23 (2)). It must stay
+ * below the 15 s HTTP deadlines in `app.ts` and `request-abort-signal.ts` with
+ * room for knowledge assembly (~2.5 s observed) and the quota reservation, so
+ * an `ask` that outlives the model still answers a clean 503 instead of a
+ * closed socket. `COMMUNITY_AI_TIMEOUT_MS` overrides it; `config.ts` holds the
+ * same default as a string.
+ */
+export const communityAiDefaultTimeoutMs = 11_000;
+
+/**
+ * After a background brief generation fails, the failure is published for
+ * this long before a later read is allowed to trigger another model call. It
+ * bounds the quota a persistently failing Provider can burn per community.
+ */
+export const communityAiBriefRetrySeconds = 300;
+
 export const communityAiSourceKinds = [
   "communityProfile",
   "assetFacts",
@@ -97,7 +114,31 @@ export const communityAiReasonCodes = Object.freeze({
   miningUnavailable: "COMMUNITY_MINING_UNAVAILABLE",
   voiceUnavailable: "COMMUNITY_VOICE_ROOM_UNAVAILABLE",
   noSources: "COMMUNITY_AI_NO_KNOWLEDGE_SOURCE",
+  /** A brief for this community is being generated in the background. */
+  briefPending: "COMMUNITY_AI_BRIEF_PENDING",
+  /** The brief's quota reservation was refused (user or community budget). */
+  quotaExhausted: "COMMUNITY_AI_QUOTA_EXHAUSTED",
 } as const);
+
+/**
+ * The closed set of `brief.reasonCode` values (OpenAPI enum). A brief is
+ * `unavailable` for exactly one of: no membership, the chat source missing,
+ * a generation still running, a Provider failure classification, or an
+ * exhausted quota. Nothing else may reach the client under this field.
+ */
+export const communityAiBriefReasonCodes = [
+  communityAiReasonCodes.notAMember,
+  communityAiReasonCodes.chatNotConnected,
+  communityAiReasonCodes.chatNotObserved,
+  communityAiReasonCodes.briefPending,
+  "COMMUNITY_AI_PROVIDER_UNAVAILABLE",
+  "COMMUNITY_AI_PROVIDER_REJECTED",
+  "COMMUNITY_AI_PROVIDER_MALFORMED",
+  communityAiReasonCodes.quotaExhausted,
+] as const;
+
+export type CommunityAiBriefReasonCode =
+  (typeof communityAiBriefReasonCodes)[number];
 
 /**
  * The eight prototype abilities. `available` is published only where a live

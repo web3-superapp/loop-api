@@ -139,7 +139,7 @@ Retention is not decided (§6.4 lists it as open). This step stores the minimum 
 | `ANTHROPIC_API_KEY`                       | unset                       | fallback key when `COMMUNITY_AI_API_KEY` is unset; both unset ⇒ `communityAi` stays `deferred` |
 | `COMMUNITY_AI_BASE_URL`                   | `https://api.anthropic.com` | Anthropic-compatible Provider origin; see the amendment                                        |
 | `COMMUNITY_AI_MODEL`                      | `claude-sonnet-5`           | model published in every answer                                                                |
-| `COMMUNITY_AI_TIMEOUT_MS`                 | `20000`                     | 1000–60000                                                                                     |
+| `COMMUNITY_AI_TIMEOUT_MS`                 | `11000`                     | 1000–60000; default lowered from 20000 by the 2026-09-23 (2) amendment                         |
 | `COMMUNITY_AI_MAX_OUTPUT_TOKENS`          | `800`                       | 64–4096                                                                                        |
 | `COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE` | `6`                         | 1–60                                                                                           |
 | `COMMUNITY_AI_COMMUNITY_DAILY_LIMIT`      | `200`                       | 1–10000                                                                                        |
@@ -168,3 +168,29 @@ key 取值规则：`COMMUNITY_AI_API_KEY` ⇒ 否则 `ANTHROPIC_API_KEY` ⇒ 两
 
 - OnlyRouter 对 `tool_choice: {type: "tool", name: ...}` 与 `tools[].input_schema.additionalProperties: false` 是否完整透传。若网关退化为纯文本回复，adapter 会按 §2 判为 `COMMUNITY_AI_PROVIDER_MALFORMED`，不会半信任答案。
 - `COMMUNITY_AI_MODEL` 在 OnlyRouter 侧的可用模型名（其示例为 `claude-sonnet-4-6`；默认值 `claude-sonnet-5` 是否被该网关接受未验证）。
+
+## Amendment 2026-09-23 (2)：overview brief 非阻塞
+
+### 事故
+
+真机上 `GET /v2/communities/{id}/ai/overview` 整页不可用。根因有两层：
+
+1. `src/app.ts` 的 `connectionTimeout`（Node `server.timeout`，socket 空闲超时）是 10 s，而 `handlerTimeout`、`requestTimeout` 与 `requestAbortDeadlineMilliseconds` 都是 15 s。任何 handler 超过 10 s 未写响应，Node 先关 socket，客户端收到 "other side closed"，handler 截止产生的 503 永远到不了客户端。`app.inject()` 没有真 socket，测不出来。
+2. overview 在 brief cache miss 时同步调用模型：知识装配约 2.4 s + `qwen3.6-flash` 摘要约 9 s ≈ 12 s，必然越过 10 s。`COMMUNITY_AI_TIMEOUT_MS` 默认 20 s 大于所有 HTTP 截止，等于没有上限。
+
+### 裁决
+
+1. **socket 空闲超时不得短于 handler 截止。** `connectionTimeout` 对齐为 15 s，与 `handlerTimeout`、`requestTimeout`、`requestAbortDeadlineMilliseconds` 一致；`test/app.test.ts` 断言四者一致。
+2. **brief 读取不再等待模型。** `getOverview` 只读缓存：
+   - 有未过期摘要 ⇒ `brief.status: "available"`，行为不变；
+   - 无缓存且无生成在跑 ⇒ 立即返回 `{status: "unavailable", reasonCode: "COMMUNITY_AI_BRIEF_PENDING"}`（新 reasonCode），并**启动一次**后台生成。生成按 `communityId` 去重：同一社区并发读只跑一次；
+   - 后台生成复用本次请求已装配好的知识（不再重复装配），照旧先 `reserveBrief` 扣触发成员的配额、再调模型、再 `settleUsage`；模型调用挂在**独立的** `AbortSignal.timeout(COMMUNITY_AI_TIMEOUT_MS)` 上，不挂在请求 signal 上（请求早已返回）；进程关闭不等待它（timer unref，promise 无人 await）；
+   - 生成失败不抛到任何请求：按 §2 的 Provider 分类（`COMMUNITY_AI_PROVIDER_UNAVAILABLE / REJECTED / MALFORMED`）或配额拒绝（`COMMUNITY_AI_QUOTA_EXHAUSTED`，新）写入负缓存，随后的读返回该 reasonCode，`communityAiBriefRetrySeconds`（300 s）后才允许再触发一次。非 Provider、非配额的意外错误只记 warn 日志（communityId、requestId、错误类名；无 Provider body、无摘要、无消息原文），读继续显示 `COMMUNITY_AI_BRIEF_PENDING`，同样 300 s 后重试。
+3. **`brief.reasonCode` 收口为闭合枚举**（`communityAiBriefReasonCodes`，进入 OpenAPI enum）：`COMMUNITY_AI_MEMBERSHIP_REQUIRED`、`COMMUNITY_CHAT_NOT_CONNECTED`、`COMMUNITY_CHAT_NOT_OBSERVED`、`COMMUNITY_AI_BRIEF_PENDING`、`COMMUNITY_AI_PROVIDER_UNAVAILABLE`、`COMMUNITY_AI_PROVIDER_REJECTED`、`COMMUNITY_AI_PROVIDER_MALFORMED`、`COMMUNITY_AI_QUOTA_EXHAUSTED`。此前配额耗尽会把整个 overview 变成 `429 RATE_LIMITED`；现在 overview 永远 200，配额只影响 `brief`。
+4. **`COMMUNITY_AI_TIMEOUT_MS` 默认 20000 → 11000**（`communityAiDefaultTimeoutMs`）。`ask` 路径的预算：知识装配（观测约 2.4 s）+ `beginAsk`（DB，< 0.1 s）+ 模型 ≤ 11 s ≈ 13.5 s < 15 s。模型超时时 adapter 抛 `COMMUNITY_AI_PROVIDER_UNAVAILABLE`，客户端拿到干净的 `503 CAPABILITY_UNAVAILABLE`。剩余余量约 1.5 s：若知识装配本身超过约 4 s，15 s 的三个截止会同时到期，socket 关闭仍可能先于 503；这是配置上限，不是本修正能消除的竞争。
+
+### 不变
+
+- 模型不变（`COMMUNITY_AI_MODEL` 由用户按价格选定）。
+- §5 配额语义不变：brief 仍是一次模型调用，由触发它的成员付费，失败也计数。
+- §8 红线不变：后台失败日志不含 Provider body、问题、消息或摘要。

@@ -18191,7 +18191,17 @@
                             },
                             "reasonCode": {
                               "type": "string",
-                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              "enum": [
+                                "COMMUNITY_AI_MEMBERSHIP_REQUIRED",
+                                "COMMUNITY_CHAT_NOT_CONNECTED",
+                                "COMMUNITY_CHAT_NOT_OBSERVED",
+                                "COMMUNITY_AI_BRIEF_PENDING",
+                                "COMMUNITY_AI_PROVIDER_UNAVAILABLE",
+                                "COMMUNITY_AI_PROVIDER_REJECTED",
+                                "COMMUNITY_AI_PROVIDER_MALFORMED",
+                                "COMMUNITY_AI_QUOTA_EXHAUSTED"
+                              ],
+                              "description": "COMMUNITY_AI_BRIEF_PENDING means a summary is being generated in the background; re-read the overview later. The Provider codes classify the last failed generation."
                             }
                           }
                         }

@@ -123,17 +123,30 @@ Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
    `summary`；`bounded === true` 时文案必须是「至少 {messageCount} 条」。
    `brief.status === "unavailable"` 时按 `reasonCode` 显示空态，不要显示 0 条。
 5. `brief` 是模型生成的，必须带 AI 生成标识与 `disclaimer`。
+6. **brief 是异步生成的（2026-09-23 (2) 修正）。** 一小时缓存过期后的第一次
+   读会立即得到 `reasonCode: "COMMUNITY_AI_BRIEF_PENDING"`，服务端同时在后台
+   生成（约 10–15 s）。客户端显示「摘要生成中，稍后下拉刷新」，**不要**自动
+   轮询、不要把它当错误、不要显示重试按钮；用户下拉刷新即重新读取 overview。
+   同一社区多人同时读只会触发一次生成。整页其余字段（能力清单、知识源、示例
+   问题）在 PENDING 时都是完整的，正常渲染。
 
 ### `brief.reasonCode` 一览
 
-| reasonCode                          | 含义                                 |
-| ----------------------------------- | ------------------------------------ |
-| `COMMUNITY_AI_MEMBERSHIP_REQUIRED`  | 未加入该社区（先引导加入）           |
-| `COMMUNITY_CHAT_NOT_CONNECTED`      | 官方群还没开通 / Stream 未接         |
-| `COMMUNITY_CHAT_NOT_OBSERVED`       | 本次读取官方群失败                   |
-| `COMMUNITY_AI_PROVIDER_UNAVAILABLE` | 模型调用失败（可重试）               |
-| `COMMUNITY_AI_PROVIDER_REJECTED`    | 模型确定性拒绝（不要重试，联系后端） |
-| `COMMUNITY_AI_PROVIDER_MALFORMED`   | 模型返回不符合契约                   |
+这是 OpenAPI 里的闭合枚举，不会出现表外的值。
+
+| reasonCode                          | 含义                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| `COMMUNITY_AI_MEMBERSHIP_REQUIRED`  | 未加入该社区（先引导加入）                                                |
+| `COMMUNITY_CHAT_NOT_CONNECTED`      | 官方群还没开通 / Stream 未接                                              |
+| `COMMUNITY_CHAT_NOT_OBSERVED`       | 本次读取官方群失败                                                        |
+| `COMMUNITY_AI_BRIEF_PENDING`        | 摘要正在后台生成：显示「摘要生成中，稍后下拉刷新」，不轮询、不当错误      |
+| `COMMUNITY_AI_PROVIDER_UNAVAILABLE` | 上一次后台生成模型调用失败；服务端 5 分钟后才会再试，期间下拉刷新看到同值 |
+| `COMMUNITY_AI_PROVIDER_REJECTED`    | 模型确定性拒绝（不要重试，联系后端）                                      |
+| `COMMUNITY_AI_PROVIDER_MALFORMED`   | 模型返回不符合契约                                                        |
+| `COMMUNITY_AI_QUOTA_EXHAUSTED`      | 本社区/本账户的 AI 配额已用完，摘要暂不生成；overview 其余字段照常        |
+
+`brief` 的失败永远不会让 overview 整体报错：配额用完、模型失败都只体现在
+`brief.reasonCode`，HTTP 仍是 200。
 
 ## 3. `POST /v2/communities/{communityId}/ai/ask`
 
