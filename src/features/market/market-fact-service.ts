@@ -181,7 +181,30 @@ export interface MarketFactService {
     tokenAddress: string,
     options?: ReadFactOptions,
   ): Promise<UnlistedTokenFact>;
+  /**
+   * The 24h change DexScreener last reported for this token's primary pair
+   * (Decision 0074 §4), for a snapshot in which the Provider skipped the
+   * field. `null` unless the remembered value belongs to the same pair and
+   * is still inside its TTL plus the stale grace window. The caller
+   * publishes it as `stale` with the remembered `fetchedAt`.
+   */
+  recallPrimaryPairPriceChange(
+    tokenAddress: string,
+    pairAddress: string,
+  ): Promise<RememberedPriceChange | null>;
   readonly candlesProviderEnabled: boolean;
+}
+
+export interface RememberedPriceChange {
+  readonly value: string;
+  readonly fetchedAt: string;
+  readonly ttlSeconds: number;
+}
+
+/** Cache codec of the remembered 24h change (Decision 0074 §4). */
+interface PriceChangeMemoryValue {
+  readonly pairAddress: string;
+  readonly priceChangeH24: string;
 }
 
 export interface CreateMarketFactServiceInput {
@@ -214,6 +237,8 @@ export const marketFactKinds = Object.freeze({
   tokenLookup: "token_lookup",
   /** Identity of an unregistered token as one Provider reported it (metadata TTL). */
   tokenIdentity: "token_identity",
+  /** The primary pair's last reported 24h change (Decision 0074 §4; price TTL). */
+  pairPriceChangeH24: "pair_price_change_h24",
 } as const);
 
 function unavailableFact<T>(
@@ -296,6 +321,8 @@ export function createMarketFactService(
     readonly disabledReasonCode: string;
     readonly fetch: (() => Promise<ProviderObservation<T>>) | null;
     readonly options: ReadFactOptions;
+    /** Runs after a fresh Provider observation was cached (never for a cache hit). */
+    readonly onFresh?: (observation: ProviderObservation<T>) => Promise<void>;
   }): Promise<CachedFact<T>> {
     if (request.fetch === null) {
       return unavailableFact(
@@ -379,6 +406,9 @@ export function createMarketFactService(
       }
       // A cache write failure does not invalidate the fact just observed.
     }
+    if (request.onFresh !== undefined) {
+      await request.onFresh(observation);
+    }
     return Object.freeze({
       value: observation.value,
       source: request.source,
@@ -388,6 +418,42 @@ export function createMarketFactService(
       reasonCode: null,
       rawDigest: observation.rawDigest,
     });
+  }
+
+  /**
+   * Remember the primary pair's 24h change from a fresh DexScreener
+   * snapshot (Decision 0074 §4), so the next snapshot in which the Provider
+   * skips the field can still show the number it last reported for the
+   * same pair, labelled stale. Nothing is remembered when the field is
+   * absent: the memory only ever holds what the Provider said.
+   */
+  async function rememberPriceChange(
+    snapshot: TokenPairsSnapshot,
+    observation: Pick<ProviderObservation<unknown>, "rawDigest" | "fetchedAt">,
+  ): Promise<void> {
+    const pair = selectPrimaryPair(snapshot);
+    if (pair === null || pair.priceChangeH24 === null) {
+      return;
+    }
+    const value: PriceChangeMemoryValue = {
+      pairAddress: pair.pairAddress,
+      priceChangeH24: pair.priceChangeH24,
+    };
+    try {
+      await input.cache.put({
+        subjectKey: `token:${snapshot.tokenAddress}`,
+        factKind: marketFactKinds.pairPriceChangeH24,
+        source: "dexscreener",
+        value: { ...value },
+        rawDigest: observation.rawDigest,
+        fetchedAt: observation.fetchedAt,
+        ttlSeconds: input.config.priceTtlSeconds,
+      });
+    } catch (error) {
+      if (!(error instanceof MarketFactCacheUnavailableError)) {
+        throw error;
+      }
+    }
   }
 
   function pairsFact(
@@ -431,6 +497,8 @@ export function createMarketFactService(
                     : { signal: options.signal },
                 ),
         options,
+        onFresh: (observation) =>
+          rememberPriceChange(observation.value, observation),
       }),
     );
   }
@@ -572,6 +640,7 @@ export function createMarketFactService(
                 throw error;
               }
             }
+            await rememberPriceChange(snapshot, observation);
             results.set(
               miss.address,
               Object.freeze({
@@ -954,6 +1023,48 @@ export function createMarketFactService(
         ),
         market,
         notFound,
+      });
+    },
+
+    async recallPrimaryPairPriceChange(
+      tokenAddress: string,
+      pairAddress: string,
+    ): Promise<RememberedPriceChange | null> {
+      let cached: MarketFactCacheRecord | null;
+      try {
+        cached = await input.cache.get(
+          `token:${tokenAddress}`,
+          marketFactKinds.pairPriceChangeH24,
+          "dexscreener",
+        );
+      } catch (error) {
+        if (!(error instanceof MarketFactCacheUnavailableError)) {
+          throw error;
+        }
+        return null;
+      }
+      if (cached === null) {
+        return null;
+      }
+      const remembered = cached.value as Partial<PriceChangeMemoryValue>;
+      if (
+        remembered.pairAddress !== pairAddress ||
+        typeof remembered.priceChangeH24 !== "string"
+      ) {
+        return null;
+      }
+      const ageSeconds =
+        (now().getTime() - Date.parse(cached.fetchedAt)) / 1_000;
+      if (
+        !(ageSeconds >= 0) ||
+        ageSeconds >= cached.ttlSeconds + input.config.staleGraceSeconds
+      ) {
+        return null;
+      }
+      return Object.freeze({
+        value: remembered.priceChangeH24,
+        fetchedAt: cached.fetchedAt,
+        ttlSeconds: cached.ttlSeconds,
       });
     },
 

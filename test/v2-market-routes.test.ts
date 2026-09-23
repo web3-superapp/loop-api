@@ -313,6 +313,19 @@ function cacheFake(): MarketFactCacheRepository {
     get: vi.fn((subjectKey: string, factKind: string, source: string) =>
       Promise.resolve(rows.get(`${subjectKey}|${factKind}|${source}`) ?? null),
     ),
+    getMany: vi.fn(
+      (subjectKeys: readonly string[], factKind: string, source: string) =>
+        Promise.resolve(
+          new Map(
+            subjectKeys.flatMap((subjectKey) => {
+              const record = rows.get(`${subjectKey}|${factKind}|${source}`);
+              return record === undefined
+                ? []
+                : [[subjectKey, record] as const];
+            }),
+          ),
+        ),
+    ),
     put: vi.fn((input: MarketFactCacheRecord) => {
       const record: MarketFactCacheRecord = { ...input };
       rows.set(`${input.subjectKey}|${input.factKind}|${input.source}`, record);
@@ -426,6 +439,7 @@ function watchlistFake(): WatchlistV2Repository {
       }),
     ),
     replace: vi.fn(() => Promise.reject(new Error("not used"))),
+    listDistinctAssetIds: vi.fn(() => Promise.resolve([])),
   };
 }
 
@@ -455,10 +469,14 @@ function readClientFake(): BscReadClient {
   };
 }
 
-function pairsProviderFake(): MarketPairsProvider & {
+function pairsProviderFake(
+  overrides: { readonly wbnb?: TokenPairsSnapshot } = {},
+): MarketPairsProvider & {
   readonly calls: () => number;
 } {
   let calls = 0;
+  const wbnbSnapshot = (): TokenPairsSnapshot =>
+    overrides.wbnb ?? pairsSnapshot();
   return {
     source: "dexscreener",
     calls: () => calls,
@@ -466,7 +484,7 @@ function pairsProviderFake(): MarketPairsProvider & {
       calls += 1;
       return Promise.resolve({
         value: addresses.map((tokenAddress) =>
-          tokenAddress === wbnb ? pairsSnapshot() : { tokenAddress, pairs: [] },
+          tokenAddress === wbnb ? wbnbSnapshot() : { tokenAddress, pairs: [] },
         ),
         source: "dexscreener" as const,
         fetchedAt,
@@ -484,7 +502,7 @@ function pairsProviderFake(): MarketPairsProvider & {
         });
       }
       return Promise.resolve({
-        value: pairsSnapshot(),
+        value: wbnbSnapshot(),
         source: "dexscreener" as const,
         fetchedAt,
         rawDigest: "a".repeat(64),
@@ -605,6 +623,7 @@ function fakes(
     readonly candlesProvider?: CandlesProvider;
     readonly tokenLookupProvider?: TokenLookupProvider | null;
     readonly controlPlane?: ControlPlaneRepository;
+    readonly pairsProvider?: ReturnType<typeof pairsProviderFake>;
   } = {},
 ) {
   const database = {
@@ -637,7 +656,9 @@ function fakes(
     ),
   } satisfies PrivyAccessTokenVerifier;
   const pairsProvider =
-    options.providers === false ? null : pairsProviderFake();
+    options.providers === false
+      ? null
+      : (options.pairsProvider ?? pairsProviderFake());
   const securityProvider =
     options.providers === false ? null : securityProviderFake();
   return {
@@ -2211,6 +2232,381 @@ describe("LOOP API V2 market module", () => {
           database.controlPlane as ReturnType<typeof controlPlaneFake>
         ).consumed(),
       ).toBe(0);
+    });
+  });
+
+  describe("row sparklines (Decision 0074)", () => {
+    const overviewRequest = {
+      method: "GET" as const,
+      url: "/v2/market/overview",
+      headers: commonHeaders(),
+    };
+    const secondsAgo = (seconds: number): string =>
+      new Date(Date.now() - seconds * 1_000).toISOString();
+
+    function sparklineRow(
+      address: string,
+      rowFetchedAt: string,
+      closes: readonly string[] = ["747.12", "747.48"],
+    ): MarketFactCacheRecord {
+      return {
+        subjectKey: `token:${address}`,
+        factKind: "sparkline_1h",
+        source: "geckoterminal",
+        value: {
+          interval: "1h",
+          poolAddress,
+          poolOrigin: "registry",
+          poolChosenAt: rowFetchedAt,
+          closes: [...closes],
+          candleCount: closes.length,
+          high: closes.length === 0 ? null : "748.9",
+          low: closes.length === 0 ? null : "746.5",
+        },
+        rawDigest: "c".repeat(64),
+        fetchedAt: rowFetchedAt,
+        ttlSeconds: 300,
+      };
+    }
+
+    interface SparklineBody {
+      readonly watchlist: {
+        readonly items: readonly {
+          readonly assetId: string;
+          readonly sparkline: Record<string, unknown>;
+        }[];
+      };
+      readonly trending: {
+        readonly items: readonly {
+          readonly assetId: string;
+          readonly sparkline: Record<string, unknown>;
+        }[];
+      };
+    }
+
+    it("projects every row's line from the cache alone: fresh for the token, proxied for native, never a Provider call", async () => {
+      const candles = candlesProviderFake();
+      const { app, database } = await createApp(
+        fakes({ candlesProvider: candles.provider }),
+      );
+      const rowFetchedAt = secondsAgo(60);
+      await database.marketFacts.put(sparklineRow(wbnb, rowFetchedAt));
+
+      const response = await app.inject(overviewRequest);
+      expect(response.statusCode).toBe(200);
+      const body = response.json<SparklineBody>();
+      expect(body.watchlist.items[0]).toMatchObject({
+        assetId: wbnbAssetId,
+        sparkline: {
+          status: "available",
+          interval: "1h",
+          closes: ["747.12", "747.48"],
+          observedAt: rowFetchedAt,
+          source: "geckoterminal",
+          quality: "fresh",
+        },
+      });
+      expect(body.watchlist.items[1]).toMatchObject({
+        assetId: "eip155:56:native",
+        sparkline: { closes: ["747.12", "747.48"], quality: "proxied" },
+      });
+      expect(body.trending.items[0]).toMatchObject({
+        assetId: wbnbAssetId,
+        sparkline: { status: "available", quality: "fresh" },
+      });
+      expect(candles.readPoolOhlcv).not.toHaveBeenCalled();
+    });
+
+    it("is stale inside the grace window, expired past it, and empty for a pool the Provider answered without candles", async () => {
+      const candles = candlesProviderFake();
+      const { app, database } = await createApp(
+        fakes({ candlesProvider: candles.provider }),
+      );
+      const sparklineOf = async (): Promise<Record<string, unknown>> => {
+        const response = await app.inject(overviewRequest);
+        expect(response.statusCode).toBe(200);
+        const row = response.json<SparklineBody>().watchlist.items[0];
+        if (row === undefined) {
+          throw new Error("no watchlist row");
+        }
+        return row.sparkline;
+      };
+
+      await database.marketFacts.put(sparklineRow(wbnb, secondsAgo(400)));
+      expect(await sparklineOf()).toMatchObject({
+        status: "available",
+        quality: "stale",
+      });
+
+      await database.marketFacts.put(sparklineRow(wbnb, secondsAgo(1_300)));
+      expect(await sparklineOf()).toEqual({
+        status: "unavailable",
+        reasonCode: "MARKET_SPARKLINE_EXPIRED",
+      });
+
+      await database.marketFacts.put(sparklineRow(wbnb, secondsAgo(1), []));
+      expect(await sparklineOf()).toEqual({
+        status: "unavailable",
+        reasonCode: "MARKET_SPARKLINE_EMPTY",
+      });
+      expect(candles.readPoolOhlcv).not.toHaveBeenCalled();
+    });
+
+    it("publishes the token page's 24h range from the same row: fresh for the token, proxied for native, not cached without one, disabled without the Provider", async () => {
+      const candles = candlesProviderFake();
+      const { app, database } = await createApp(
+        fakes({ candlesProvider: candles.provider }),
+      );
+      const rowFetchedAt = secondsAgo(60);
+      await database.marketFacts.put(sparklineRow(wbnb, rowFetchedAt));
+
+      const token = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(token.statusCode).toBe(200);
+      expect(token.json()).toMatchObject({
+        range24h: {
+          status: "available",
+          high: "748.9",
+          low: "746.5",
+          bars: 2,
+          observedAt: rowFetchedAt,
+          source: "geckoterminal",
+          quality: "fresh",
+        },
+      });
+
+      const native = await app.inject({
+        method: "GET",
+        url: "/v2/market/assets/eip155:56:native",
+        headers: commonHeaders(),
+      });
+      expect(native.statusCode).toBe(200);
+      expect(native.json()).toMatchObject({
+        range24h: { status: "available", high: "748.9", quality: "proxied" },
+      });
+
+      const unwarmed = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${usdtAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(unwarmed.statusCode).toBe(200);
+      expect(unwarmed.json()).toMatchObject({
+        range24h: {
+          status: "unavailable",
+          reasonCode: "MARKET_SPARKLINE_NOT_CACHED",
+        },
+      });
+      expect(candles.readPoolOhlcv).not.toHaveBeenCalled();
+
+      const { app: withoutProvider } = await createApp();
+      const disabled = await withoutProvider.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(disabled.statusCode).toBe(200);
+      expect(disabled.json()).toMatchObject({
+        range24h: {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_GECKOTERMINAL_DISABLED",
+        },
+      });
+    });
+
+    it("says the Provider is disabled without GeckoTerminal, and not cached before the lane has run", async () => {
+      const disabled = await createApp();
+      const withoutProvider = disabled.app;
+      let response = await withoutProvider.inject(overviewRequest);
+      expect(response.statusCode).toBe(200);
+      expect(
+        response
+          .json<SparklineBody>()
+          .watchlist.items.map((item) => item.sparkline),
+      ).toEqual([
+        {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_GECKOTERMINAL_DISABLED",
+        },
+        {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_GECKOTERMINAL_DISABLED",
+        },
+      ]);
+
+      const { app } = await createApp(
+        fakes({ candlesProvider: candlesProviderFake().provider }),
+      );
+      response = await app.inject(overviewRequest);
+      expect(response.statusCode).toBe(200);
+      expect(
+        response.json<SparklineBody>().watchlist.items[0]?.sparkline,
+      ).toEqual({
+        status: "unavailable",
+        reasonCode: "MARKET_SPARKLINE_NOT_CACHED",
+      });
+    });
+  });
+
+  describe("a 24h change the Provider skipped (Decision 0074 §4, §5)", () => {
+    const deepest = "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae";
+    const overviewRequest = {
+      method: "GET" as const,
+      url: "/v2/market/overview",
+      headers: commonHeaders(),
+    };
+
+    /** DexScreener answered the pairs, this time without `priceChange.h24`. */
+    function withoutChange(): TokenPairsSnapshot {
+      const base = pairsSnapshot();
+      return {
+        ...base,
+        pairs: base.pairs.map((pair) => ({ ...pair, priceChangeH24: null })),
+      };
+    }
+
+    function remembered(
+      pairAddress: string,
+      rememberedAt: string,
+    ): MarketFactCacheRecord {
+      return {
+        subjectKey: `token:${wbnb}`,
+        factKind: "pair_price_change_h24",
+        source: "dexscreener",
+        value: { pairAddress, priceChangeH24: "-0.31" },
+        rawDigest: "b".repeat(64),
+        fetchedAt: rememberedAt,
+        ttlSeconds: 30,
+      };
+    }
+
+    interface ChangeBody {
+      readonly watchlist: {
+        readonly items: readonly {
+          readonly price: Record<string, unknown>;
+          readonly priceChange24h: Record<string, unknown>;
+        }[];
+      };
+    }
+
+    it("publishes the value DexScreener last reported for the same pair as stale, with the time it was reported", async () => {
+      const { app, database } = await createApp(
+        fakes({ pairsProvider: pairsProviderFake({ wbnb: withoutChange() }) }),
+      );
+      const rememberedAt = new Date(Date.now() - 100_000).toISOString();
+      await database.marketFacts.put(remembered(deepest, rememberedAt));
+
+      const overview = await app.inject(overviewRequest);
+      expect(overview.statusCode).toBe(200);
+      const row = overview.json<ChangeBody>().watchlist.items[0];
+      expect(row?.price).toMatchObject({ value: "746.63", quality: "fresh" });
+      expect(row?.priceChange24h).toEqual({
+        value: "-0.31",
+        source: "dexscreener",
+        fetchedAt: rememberedAt,
+        ttlSeconds: 30,
+        quality: "stale",
+        reasonCode: "MARKET_FACT_NOT_REPORTED",
+      });
+
+      // The asset page goes through the same rule.
+      const page = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      expect(page.statusCode).toBe(200);
+      expect(page.json()).toMatchObject({
+        priceChange24h: { value: "-0.31", quality: "stale" },
+      });
+    });
+
+    it("stays MARKET_FACT_NOT_REPORTED when the memory names another pair or is past the grace window", async () => {
+      for (const memory of [
+        remembered(
+          "0x172fcd41e0913e95784454622d1c3724f546f849",
+          new Date(Date.now() - 100_000).toISOString(),
+        ),
+        remembered(deepest, new Date(Date.now() - 1_000_000).toISOString()),
+      ]) {
+        const { app, database } = await createApp(
+          fakes({
+            pairsProvider: pairsProviderFake({ wbnb: withoutChange() }),
+          }),
+        );
+        await database.marketFacts.put(memory);
+        const overview = await app.inject(overviewRequest);
+        expect(overview.statusCode).toBe(200);
+        expect(
+          overview.json<ChangeBody>().watchlist.items[0]?.priceChange24h,
+        ).toMatchObject({
+          value: null,
+          quality: "unavailable",
+          reasonCode: "MARKET_FACT_NOT_REPORTED",
+        });
+      }
+    });
+
+    it("remembers the change from the overview's batch read for the next skipped answer", async () => {
+      const { app, database } = await createApp();
+      const overview = await app.inject(overviewRequest);
+      expect(overview.statusCode).toBe(200);
+      await expect(
+        database.marketFacts.get(
+          `token:${wbnb}`,
+          "pair_price_change_h24",
+          "dexscreener",
+        ),
+      ).resolves.toMatchObject({
+        fetchedAt,
+        value: { pairAddress: deepest, priceChangeH24: "0.27" },
+      });
+    });
+
+    it("names an unrepresentable base pair rather than claiming the Provider knows none (§5)", async () => {
+      const dropped = await createApp(
+        fakes({
+          pairsProvider: pairsProviderFake({
+            wbnb: {
+              tokenAddress: wbnb,
+              pairs: [],
+              unrepresentablePairCount: 1,
+              unrepresentableBasePairCount: 1,
+            },
+          }),
+        }),
+      );
+      let overview = await dropped.app.inject(overviewRequest);
+      expect(overview.statusCode).toBe(200);
+      expect(
+        overview.json<ChangeBody>().watchlist.items[0]?.price,
+      ).toMatchObject({
+        quality: "unavailable",
+        reasonCode: "MARKET_PAIR_UNREPRESENTABLE",
+      });
+
+      const none = await createApp(
+        fakes({
+          pairsProvider: pairsProviderFake({
+            wbnb: {
+              tokenAddress: wbnb,
+              pairs: [],
+              unrepresentablePairCount: 1,
+              unrepresentableBasePairCount: 0,
+            },
+          }),
+        }),
+      );
+      overview = await none.app.inject(overviewRequest);
+      expect(
+        overview.json<ChangeBody>().watchlist.items[0]?.price,
+      ).toMatchObject({
+        quality: "unavailable",
+        reasonCode: "MARKET_PAIR_NOT_FOUND",
+      });
     });
   });
 });

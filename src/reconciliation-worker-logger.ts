@@ -19,7 +19,11 @@ const safeWorkerIdPattern =
 const safeAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/;
 /** A host name only: no scheme, port, path, query, or user-info (Decision 0068). */
 const safeHostPattern = /^[A-Za-z0-9.-]{1,253}$/;
-const indexerLanes = new Set(["erc20_transfer", "pool_event"]);
+const indexerLanes = new Set([
+  "erc20_transfer",
+  "pool_event",
+  "market_sparkline_warm",
+]);
 
 export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker started"
@@ -36,7 +40,9 @@ export type ReconciliationWorkerLogMessage =
   | "Community persona projection was not confirmed"
   | "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published"
   | "LOOP push channel stays deferred: the Firebase service account is unusable"
-  | "LOOP push delivery was not confirmed";
+  | "LOOP push delivery was not confirmed"
+  | "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled"
+  | "LOOP market sparkline warm lane could not refresh an asset";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -70,6 +76,8 @@ export interface ReconciliationWorkerLogFields {
    */
   readonly lane?: string;
   readonly state?: "unavailable" | "recovered";
+  /** Decision 0074 sparkline lane: the asset that could not be refreshed, by id only. */
+  readonly assetId?: string;
   readonly errorClass?: string | null;
   readonly rpcStatus?: number | null;
   readonly rpcCode?: number | null;
@@ -179,6 +187,10 @@ function sanitizeFields(
     safeHostPattern.test(fields.rpcUrlHost)
       ? fields.rpcUrlHost
       : undefined;
+  const assetId =
+    fields.assetId !== undefined && safeAssetIdPattern.test(fields.assetId)
+      ? fields.assetId
+      : undefined;
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -206,6 +218,7 @@ function sanitizeFields(
       : { unreadInputs: Object.freeze(unreadInputs) }),
     ...(lane === undefined ? {} : { lane }),
     ...(state === undefined ? {} : { state }),
+    ...(assetId === undefined ? {} : { assetId }),
     ...(errorClass === undefined ? {} : { errorClass }),
     ...(rpcStatus === undefined ? {} : { rpcStatus }),
     ...(rpcCode === undefined ? {} : { rpcCode }),

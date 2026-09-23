@@ -678,6 +678,8 @@ describe("GeckoTerminal adapter", () => {
     const snapshot = normalizeDexscreenerPairs(parseJsonLossless(body), btcb);
     expect(snapshot.pairs).toHaveLength(1);
     expect(snapshot.unrepresentablePairCount).toBe(1);
+    // The dropped pool had BTCB as its base (Decision 0074 §5).
+    expect(snapshot.unrepresentableBasePairCount).toBe(1);
     const [kept] = snapshot.pairs;
     expect(kept).toMatchObject({
       pairAddress: "0x6bbc40579ad1bbd243895ca0acb086bb6300d636",
@@ -748,6 +750,10 @@ describe("GeckoTerminal adapter", () => {
     );
     expect(wbnbSnapshot?.unrepresentablePairCount).toBe(0);
     expect(usdtSnapshot?.unrepresentablePairCount).toBe(1);
+    // USDT was only the quote of the dropped pool: it still has no
+    // unrepresentable *base* pair of its own (Decision 0074 §5).
+    expect(usdtSnapshot?.unrepresentableBasePairCount).toBe(0);
+    expect(wbnbSnapshot?.unrepresentableBasePairCount).toBe(0);
   });
 
   it("answers no pair when the declared pool itself cannot be represented", async () => {

@@ -16,6 +16,10 @@ import {
   type WorkerShutdownSignal,
   type WorkerSignalSource,
 } from "../src/worker-runtime.js";
+import type { ChainRegistryRepository } from "../src/database/chain-registry-repository.js";
+import type { MarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
+import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
+import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-sparkline-warm-worker.js";
 
 const workerId = "33b40904-4487-49cd-8481-7075d9025713";
 
@@ -753,5 +757,136 @@ describe("reconciliation worker runtime", () => {
       },
       "LOOP reconciliation worker infrastructure retry scheduled",
     );
+  });
+});
+
+describe("market sparkline warm lane composition (Decision 0074)", () => {
+  function laneConfig(overrides: Readonly<Record<string, string>> = {}) {
+    return loadReconciliationWorkerConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "silent",
+      DATABASE_URL:
+        "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+      SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+      ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+      ...overrides,
+    });
+  }
+
+  function laneDatabase(events: string[]) {
+    const watchlistsV2 = {} as WatchlistV2Repository;
+    return {
+      database: {
+        ...fakeDatabase(events),
+        chainRegistry: {} as ChainRegistryRepository,
+        marketFacts: {} as MarketFactCacheRepository,
+        watchlistsV2,
+      } satisfies ReconciliationWorkerDatabase,
+      watchlistsV2,
+    };
+  }
+
+  it("runs the lane with the worker's GeckoTerminal share when the Provider is enabled", async () => {
+    const events: string[] = [];
+    const { database, watchlistsV2 } = laneDatabase(events);
+    const createMarketSparklineWarmWorker = vi.fn(
+      (options: CreateMarketSparklineWarmWorkerOptions) => {
+        expect(options).toMatchObject({
+          chainId: "eip155:56",
+          intervalMs: 4_000,
+          sparklineTtlSeconds: 300,
+          poolRevalidationSeconds: 3_600,
+        });
+        expect(options.watchlist).toBe(watchlistsV2);
+        expect(options.cache).toBe(database.marketFacts);
+        expect(options.facts.candlesProviderEnabled).toBe(true);
+        return {
+          workerId,
+          lane: "market_sparkline_warm" as const,
+          runOnce: vi.fn(() =>
+            Promise.resolve({ kind: "idle" as const, skippedFreshCount: 0 }),
+          ),
+          run: () => {
+            events.push("run-sparkline-warm");
+            return Promise.resolve();
+          },
+        };
+      },
+    );
+
+    await runReconciliationWorker({
+      config: laneConfig({ MARKET_PROVIDER_GECKOTERMINAL_ENABLED: "true" }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () =>
+        fakeWorker(
+          vi.fn(() => {
+            events.push("run-reconciliation");
+            return Promise.resolve();
+          }),
+        ),
+      createMarketSparklineWarmWorker,
+    });
+
+    expect(createMarketSparklineWarmWorker).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "ping",
+      "run-reconciliation",
+      "run-sparkline-warm",
+      "close",
+    ]);
+  });
+
+  it("leaves the lane out and says so once when the OHLCV Provider is disabled", async () => {
+    const events: string[] = [];
+    const { database } = laneDatabase(events);
+    const logger = fakeLogger();
+    const createMarketSparklineWarmWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig(),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMarketSparklineWarmWorker,
+    });
+
+    expect(createMarketSparklineWarmWorker).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        lane: "market_sparkline_warm",
+        reasonCode: "MARKET_PROVIDER_GECKOTERMINAL_DISABLED",
+      },
+      "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled",
+    );
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("does not construct the lane when its switch is off", async () => {
+    const events: string[] = [];
+    const { database } = laneDatabase(events);
+    const logger = fakeLogger();
+    const createMarketSparklineWarmWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig({
+        MARKET_PROVIDER_GECKOTERMINAL_ENABLED: "true",
+        MARKET_SPARKLINE_WARM_ENABLED: "false",
+      }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMarketSparklineWarmWorker,
+    });
+
+    expect(createMarketSparklineWarmWorker).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lane: "market_sparkline_warm" }),
+      expect.anything(),
+    );
+    expect(events).toEqual(["ping", "close"]);
   });
 });

@@ -89,6 +89,33 @@ export const marketReasonCodes = Object.freeze({
   identityFieldMissing: "MARKET_IDENTITY_FIELD_NOT_REPORTED",
   /** No Provider that could answer an unregistered lookup is enabled. */
   lookupProviderDisabled: "MARKET_LOOKUP_PROVIDER_DISABLED",
+  /**
+   * The Provider reported base pairs for the token but every one carried a
+   * value this codebase refuses (Decisions 0060/0062), so none was published.
+   * Distinct from `pairNotFound`: the Provider does know a pair (0074 §5).
+   */
+  pairUnrepresentable: "MARKET_PAIR_UNREPRESENTABLE",
+  /** The warm lane has not written a sparkline row for this asset yet (0074). */
+  sparklineNotCached: "MARKET_SPARKLINE_NOT_CACHED",
+  /** The sparkline row is older than its TTL plus the stale grace window. */
+  sparklineExpired: "MARKET_SPARKLINE_EXPIRED",
+  /** The Provider answered the pool with no candles at all. */
+  sparklineEmpty: "MARKET_SPARKLINE_EMPTY",
+} as const);
+
+/**
+ * Row sparkline policy (Decision 0074): the last 24 hourly closes of one
+ * pool, projected from a cache row the worker lane keeps warm. The request
+ * path never reads the Provider for it.
+ */
+export const marketSparklinePolicy = Object.freeze({
+  interval: "1h",
+  /** Candles requested per refresh; also the maximum `closes` length. */
+  pointLimit: 24,
+  /** Cache fact kind of the projected row. */
+  factKind: "sparkline_1h",
+  /** Targets a single lane pass will consider, watchlist assets first. */
+  maximumTargets: 100,
 } as const);
 
 /**

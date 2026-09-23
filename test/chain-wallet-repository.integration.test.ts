@@ -22,6 +22,7 @@ import {
 } from "../src/database/chain-registry-repository.js";
 import {
   createPostgresWatchlistV2Repository,
+  WatchlistV2UnavailableError,
   WatchlistV2VersionConflictError,
   type WatchlistV2Repository,
 } from "../src/database/watchlist-v2-repository.js";
@@ -708,6 +709,54 @@ describe("PostgreSQL chain registry, wallet, indexer, and V2 watchlist", () => {
       ],
     });
     expect(idempotent.version).toBe(2);
+  });
+
+  it("lists the distinct watchlisted V2 asset ids, most watched first, without owners (Decision 0074)", async () => {
+    for (const [assetId, address, symbol] of [
+      [wbnbAssetId, wbnb, "WBNB"],
+      [usd1AssetId, usd1, "USD1"],
+    ] as const) {
+      await registry.upsertAsset({
+        assetId,
+        chainId: bscChainId,
+        address,
+        symbol,
+        name: symbol,
+        decimals: 18,
+        status: "pending",
+        sourceBlockNumber: "43000000",
+      });
+    }
+    expect(await watchlistV2.listDistinctAssetIds(10)).toEqual([]);
+    const first = await createOwner();
+    const second = await createOwner();
+    await watchlistV2.replace({
+      ownerUserId: first,
+      expectedVersion: 0,
+      groups: [
+        {
+          key: "all",
+          name: "All",
+          items: [{ assetId: usd1AssetId }, { assetId: wbnbAssetId }],
+        },
+      ],
+    });
+    await watchlistV2.replace({
+      ownerUserId: second,
+      expectedVersion: 0,
+      groups: [
+        { key: "all", name: "All", items: [{ assetId: wbnbAssetId }] },
+        { key: "more", name: "More", items: [{ assetId: wbnbAssetId }] },
+      ],
+    });
+    expect(await watchlistV2.listDistinctAssetIds(10)).toEqual([
+      wbnbAssetId,
+      usd1AssetId,
+    ]);
+    expect(await watchlistV2.listDistinctAssetIds(1)).toEqual([wbnbAssetId]);
+    await expect(watchlistV2.listDistinctAssetIds(0)).rejects.toBeInstanceOf(
+      WatchlistV2UnavailableError,
+    );
   });
 
   it("refuses to archive an inventory when the observation is empty", async () => {

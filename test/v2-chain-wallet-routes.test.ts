@@ -289,6 +289,7 @@ function watchlistRepositoryFake(
   const repository: WatchlistV2Repository = {
     get: vi.fn(() => Promise.resolve(snapshot)),
     replace,
+    listDistinctAssetIds: vi.fn(() => Promise.resolve([])),
   };
   return { repository, replace };
 }
@@ -1304,6 +1305,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       });
     return {
       readTokenPairs: vi.fn(() => Promise.resolve(fact)),
+      recallPrimaryPairPriceChange: vi.fn(() => Promise.resolve(null)),
       readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
       readPair: vi.fn(() => Promise.reject(new Error("not used"))),
       readAssetPrice: vi.fn(assetPrice),

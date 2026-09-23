@@ -168,6 +168,7 @@ function marketFactsFake(available = true): MarketFactService {
     readTokenPairs: vi.fn((address: string) =>
       Promise.resolve(pairsFor(address)),
     ),
+    recallPrimaryPairPriceChange: vi.fn(() => Promise.resolve(null)),
     readTokenPairsBatch: vi.fn(() => Promise.reject(new Error("not used"))),
     readPair: vi.fn(() => Promise.reject(new Error("not used"))),
     readAssetPrice: vi.fn(assetPrice),

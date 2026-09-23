@@ -92,6 +92,15 @@ export interface TokenPairsSnapshot {
    * count was zero.
    */
   readonly unrepresentablePairCount?: number | undefined;
+  /**
+   * The subset of `unrepresentablePairCount` in which this token was the
+   * base token (Decision 0074 §5). When no base pair could be published but
+   * this is positive, the Provider does know a pair for the token and the
+   * projection says `MARKET_PAIR_UNREPRESENTABLE` rather than
+   * `MARKET_PAIR_NOT_FOUND`. `undefined` on rows cached before that decision,
+   * which readers treat as 0.
+   */
+  readonly unrepresentableBasePairCount?: number | undefined;
 }
 
 /**

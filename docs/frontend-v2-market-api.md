@@ -42,13 +42,13 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 }
 ```
 
-| `quality`     | 含义                                                                           | UI                                |
-| ------------- | ------------------------------------------------------------------------------ | --------------------------------- |
-| `fresh`       | 在 TTL 内由 Provider 报告                                                      | 正常显示，附来源与 `fetchedAt`    |
-| `proxied`     | 原生 BNB 通过 WBNB 代理（价格事实与 K 线，只此一种代理）                       | 显示并标注"以 WBNB 计价"          |
-| `stale`       | 已过 TTL，但 Provider 暂时不可达/被限速，仍在宽限期内（`reasonCode` 给出原因） | 显示数值 + "数据可能过期"标记     |
-| `derived`     | LOOP 由链上事件聚合（只用于 K 线）                                             | 显示并标注"链上成交聚合"          |
-| `unavailable` | `value` 为 `null`，`reasonCode` 说明原因                                       | 该块 unavailable，不要显示 0 或 — |
+| `quality`     | 含义                                                                                                                                                                     | UI                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `fresh`       | 在 TTL 内由 Provider 报告                                                                                                                                                | 正常显示，附来源与 `fetchedAt`    |
+| `proxied`     | 原生 BNB 通过 WBNB 代理（价格事实与 K 线，只此一种代理）                                                                                                                 | 显示并标注"以 WBNB 计价"          |
+| `stale`       | 已过 TTL，但 Provider 暂时不可达/被限速，仍在宽限期内；或 Provider 这次答了交易对却漏了这个字段，下发的是它上次为同一交易对报的值（`reasonCode` 给出原因，决策 0074 §4） | 显示数值 + "数据可能过期"标记     |
+| `derived`     | LOOP 由链上事件聚合（只用于 K 线）                                                                                                                                       | 显示并标注"链上成交聚合"          |
+| `unavailable` | `value` 为 `null`，`reasonCode` 说明原因                                                                                                                                 | 该块 unavailable，不要显示 0 或 — |
 
 `source` 取值：`dexscreener`、`goplus`、`geckoterminal`、`loop_indexer`；
 `value` 一律是十进制字符串，用 `Decimal` 解析，绝不用 `double`。
@@ -73,6 +73,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `ASSET_NOT_REGISTERED`                   | （`capability.reasonCode`）该地址不在 registry，身份来自 Provider 查找（§4a）                                                                                                                                                                                                                                                                                               |
 | `MARKET_TOKEN_NOT_FOUND`                 | Provider 明确回答"没有这个 token"（只会出现在 `asset.status: unavailable` 的部分回答里；全部 Provider 都这么答时是 404）                                                                                                                                                                                                                                                    |
 | `MARKET_LOOKUP_PROVIDER_DISABLED`        | GeckoTerminal 与 DexScreener 都关闭，未登记地址无法解析                                                                                                                                                                                                                                                                                                                     |
+| `MARKET_PAIR_UNREPRESENTABLE`            | （决策 0074 §5）Provider **给了**以该资产为 base 的交易对，但每一条都带着本端拒绝的值（池标识不是地址、数字不是规范十进制），所以一条都没发布。与 `MARKET_PAIR_NOT_FOUND`（Provider 不知道任何交易对）区分：前者是"解析失败"，后者是"没有"                                                                                                                                  |
+| `MARKET_SPARKLINE_*`                     | 行折线专用，见 §3a                                                                                                                                                                                                                                                                                                                                                          |
 
 ## 2a. 代币 logo：`logo` 字段（决策 0072）
 
@@ -133,7 +135,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
         "asset": { "symbol": "WBNB", "name": "Wrapped BNB", "decimals": 18, "status": "pending" },
         "logo": { "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
         "price": { "value": "747.39", "source": "dexscreener", "fetchedAt": "…", "ttlSeconds": 30, "quality": "fresh", "reasonCode": null },
-        "priceChange24h": { "value": "0.27", "source": "dexscreener", "…": "…" }
+        "priceChange24h": { "value": "0.27", "source": "dexscreener", "…": "…" },
+        "sparkline": { "status": "available", "interval": "1h", "closes": ["747.12", "747.48", "…"], "observedAt": "2026-09-23T11:00:00.000Z", "source": "geckoterminal", "quality": "fresh" }
       }
     ]
   },
@@ -141,7 +144,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "status": "available",
     "recommendationId": "5b1f…-uuid",
     "rules": { "configVersion": "marketTrendingV1", "effectiveAt": "2026-09-08T00:00:00.000Z", "ordering": "dexscreener_volume_h24_desc" },
-    "items": [ { "assetId": "…", "asset": {…}, "logo": {…}, "price": {…}, "priceChange24h": {…}, "volume24h": {…}, "liquidityUsd": {…} } ]
+    "items": [ { "assetId": "…", "asset": {…}, "logo": {…}, "price": {…}, "priceChange24h": {…}, "sparkline": {…}, "volume24h": {…}, "liquidityUsd": {…} } ]
   },
   "newPairs": { "status": "unavailable", "reasonCode": "MARKET_PROVIDER_GECKOTERMINAL_DISABLED" },
   "smartMoney": { "status": "unavailable", "reasonCode": "SMART_MONEY_RUNTIME_DEFERRED" },
@@ -157,6 +160,16 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
   `recommendationId` 每次响应新生成，UI 上报"看到了哪一份排序"时带上它。
   原型里的"成员数 / 算力倍数"没有后端，不要渲染或必须标 unavailable。
 - `priceChange24h.value` 可能为负数字符串（`"-3.2"`）。
+- **`priceChange24h` 的 `stale`（决策 0074 §4）**：DexScreener 会对某个池**间歇性**不报
+  `priceChange.h24`（2026-09-23 实测：LINK 主池连续约 100 秒没有该键，然后恢复；BTCB 的
+  两个池在 5 分钟内各缺失一次）。此时后端下发它**上一次为同一交易对**报的数值：
+  `{ "value": "-0.31", "source": "dexscreener", "fetchedAt": "<上次报出的时间>", "ttlSeconds": 30, "quality": "stale", "reasonCode": "MARKET_FACT_NOT_REPORTED" }`。
+  客户端按 §2 的 `stale` 规则显示数值并加"数据可能过期"标记，不要把它当成 unavailable。
+  只有当上次的值也不存在、属于另一个交易对、或已超过 TTL + 宽限期（默认 30 s + 900 s），
+  才是 `{ "value": null, "quality": "unavailable", "reasonCode": "MARKET_FACT_NOT_REPORTED" }`
+  （Provider 确实没给）。`MARKET_PAIR_UNREPRESENTABLE` 则是"Provider 给了交易对但每一条
+  都解析失败"（§2 表）。
+- **每行必填 `sparkline`（决策 0074，见 §3a）。严格 codec 必须把它加进两种行的键集合。**
 - **`newPairs`（决策 0053）**：可用变体是 `{ "status": "available", "omittedCount": 0 }`，
   `omittedCount` **必填**、与 `GET /v2/market/new-pairs` 的 `newPairs.omittedCount`
   **同源同值**（同一份 GeckoTerminal 缓存 fact）。`available` 现在意味着新币页此刻
@@ -166,6 +179,48 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
   报的一致。行情 Tab 卡片可以印 `omittedCount`（正常为 0，表示"有 N 条池子因标识
   畸形没列出"）；`items` 不在总览里，进页再读。**严格 codec 必须把 `omittedCount`
   加进可用变体的键集合。**
+
+## 3a. 行折线：`watchlist.items[].sparkline` / `trending.items[].sparkline`（决策 0074）
+
+用户 2026-09-23 真机反馈：热门榜 11 行只有 4 行有小折线。原因是客户端
+`MarketRowSparkline(assetId)` 逐行调 `GET /v2/market/assets/{id}/candles?interval=1h`，
+每行都打 GeckoTerminal（30 次/分钟），一屏就把配额用完，后半屏全部
+`MARKET_PROVIDER_RATE_LIMITED`。从本步起：
+
+- **行折线由服务端投影**，随 `overview` 一起下发；**客户端不要再逐行调 `/candles`**。
+  Token 页自己的图表仍用 `/candles`。
+- 数据来自 worker 预热的缓存行（`market_fact_cache` 的 `sparkline_1h`，每个资产一行，
+  来自该资产一个池的最近 24 根 1H K 线）。**请求路径只读缓存、不打 Provider**，所以它
+  要么马上有、要么 `unavailable`，绝不会因为限流而一半有一半没有。
+
+形状：
+
+```json
+{ "status": "available", "interval": "1h", "closes": ["747.12", "747.48", "…"], "observedAt": "2026-09-23T11:00:00.000Z", "source": "geckoterminal", "quality": "fresh" }
+{ "status": "unavailable", "reasonCode": "MARKET_SPARKLINE_NOT_CACHED" }
+```
+
+| 字段         | 说明                                                                                                                                                |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interval`   | 恒 `"1h"`                                                                                                                                           |
+| `closes`     | 1–24 个十进制**字符串**，按时间从旧到新，最后一个是当前未收盘的小时；用 `Decimal` 解析。不补零、不插值；少于 24 个就画少于 24 个点                  |
+| `observedAt` | 这批 K 线从 GeckoTerminal 取到的时间                                                                                                                |
+| `source`     | 恒 `"geckoterminal"`                                                                                                                                |
+| `quality`    | `fresh`（TTL 内，默认 300 s）/ `stale`（过 TTL 但在宽限期内，仍可画）/ `proxied`（原生 BNB 读 WBNB 的行，与价格事实同一代理规则，不会同时是 stale） |
+
+`unavailable` 的 `reasonCode`：
+
+| reasonCode                               | 含义                                                 | UI       |
+| ---------------------------------------- | ---------------------------------------------------- | -------- |
+| `MARKET_PROVIDER_GECKOTERMINAL_DISABLED` | 后端关闭了 GeckoTerminal（生产默认）                 | 留空占位 |
+| `MARKET_SPARKLINE_NOT_CACHED`            | 预热 lane 还没写过这个资产（刚部署/刚登记）          | 留空占位 |
+| `MARKET_SPARKLINE_EXPIRED`               | 缓存行超过 TTL + 宽限期（lane 停了或该资产持续失败） | 留空占位 |
+| `MARKET_SPARKLINE_EMPTY`                 | Provider 对该池没有任何 K 线                         | 留空占位 |
+| `MARKET_FACT_CACHE_UNAVAILABLE`          | 缓存读不到                                           | 留空占位 |
+| `ASSET_NOT_READABLE` / `ASSET_BLOCKED`   | 与该行 `price` 相同                                  | 留空占位 |
+
+客户端规则：有 `closes` 就画（`quality` 只影响可选的"可能过期"标记）；`unavailable` 留空
+占位，不要重试、不要回退到 `/candles`。原因不必在行内展示，Token 页有空间说明。
 
 ## 4. `GET /v2/market/assets/{assetId}` → `token` 页
 
@@ -212,6 +267,30 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 - 挖矿数据块（Mining Weight、预估/日）没有后端（D19），整块 unavailable。
 - 非 56 链 → `422 CHAIN_MISMATCH`。**不在 registry 的地址不再 404**：走 §4a 的
   Provider 查找。只有 `eip155:56:native` 未登记时仍是 `404`。
+
+### 4.1 顶层 `range24h`：24h 高 / 24h 低（决策 0074 §1b）
+
+交易所式代币页首屏的两格，**客户端不要自己从 K 线算**。与 §3a 的行折线**同一份缓存行**
+（同一个池的最近 24 根 1H K 线），请求路径不打 Provider：
+
+```json
+"range24h": { "status": "available", "high": "748.9", "low": "746.5", "bars": 24, "observedAt": "2026-09-23T11:00:00.000Z", "source": "geckoterminal", "quality": "fresh" }
+"range24h": { "status": "unavailable", "reasonCode": "MARKET_SPARKLINE_NOT_CACHED" }
+```
+
+| 字段         | 说明                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| `high`/`low` | 这 24 根 K 线里最高的 high / 最低的 low，十进制**字符串**，用 `Decimal` 解析                            |
+| `bars`       | 覆盖了几根 K 线（1–24）。**不足 24 根也是 `available`**，`bars` 说明只有 N 小时历史；UI 可标"仅 N 小时" |
+| `observedAt` | 这批 K 线从 GeckoTerminal 取到的时间                                                                    |
+| `quality`    | 与 §3a 相同：`fresh` / `stale`（可显示 + "可能过期"）/ `proxied`（原生 BNB 读 WBNB 的行）               |
+
+`unavailable` 的 `reasonCode` 与 §3a 同一张表（同一行）：`MARKET_PROVIDER_GECKOTERMINAL_DISABLED`、
+`MARKET_SPARKLINE_NOT_CACHED`（预热 lane 还没写这个资产；**未登记地址**（§4a）不在预热范围，
+恒为此码）、`MARKET_SPARKLINE_EXPIRED`、`MARKET_SPARKLINE_EMPTY`、`MARKET_FACT_CACHE_UNAVAILABLE`、
+`ASSET_BLOCKED`。unavailable 时两格留空占位，不要回退到 `/candles` 自己算。
+**严格 codec 必须把 `range24h` 加进 `GET /v2/market/assets/{assetId}` 的键集合**（已登记、
+未登记、原生三种都有）。
 
 ## 4a. 聊天里贴出的合约地址 → `GET /v2/market/assets/{assetId}` → Token Card（决策 0058）
 
