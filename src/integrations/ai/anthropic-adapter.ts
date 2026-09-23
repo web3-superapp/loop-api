@@ -40,15 +40,35 @@ export type CommunityAiProviderFailureReason =
   /** 5xx, 408/409/429, transport failure, or the local timeout. */
   | "COMMUNITY_AI_PROVIDER_UNAVAILABLE";
 
+/**
+ * What a malformed answer looked like, without the answer: enough to tell a
+ * truncated reply (`stop_reason: "max_tokens"`, only a `thinking` block) from
+ * a model that ignored the tool. Never a text, never an input.
+ */
+export interface CommunityAiProviderDiagnostics {
+  readonly stopReason: string | null;
+  readonly outputTokens: number | null;
+  readonly contentBlockTypes: readonly string[];
+}
+
 export class CommunityAiProviderError extends Error {
   readonly reason: CommunityAiProviderFailureReason;
+  readonly diagnostics: CommunityAiProviderDiagnostics | null;
 
-  constructor(reason: CommunityAiProviderFailureReason) {
+  constructor(
+    reason: CommunityAiProviderFailureReason,
+    diagnostics: CommunityAiProviderDiagnostics | null = null,
+  ) {
     // The message is the reason code only: no Provider body, no prompt, no key.
     super(reason);
     this.name = "CommunityAiProviderError";
     this.reason = reason;
+    this.diagnostics = diagnostics;
   }
+}
+
+export interface CommunityAiGatewayLogger {
+  warn(context: Record<string, unknown>, message: string): void;
 }
 
 export interface CommunityAiCitationDraft {
@@ -108,6 +128,11 @@ export interface CreateAnthropicCommunityAiGatewayInput {
   readonly maximumOutputTokens: number;
   /** Injected so tests never reach the network. */
   readonly fetch?: AnthropicFetch | undefined;
+  /**
+   * Receives one sanitized line per malformed answer (reason, stop reason,
+   * output tokens, block types). Absent means silence (tests, scripts).
+   */
+  readonly logger?: CommunityAiGatewayLogger | undefined;
 }
 
 /**
@@ -166,8 +191,39 @@ function tokenCount(value: unknown): number | null {
     : null;
 }
 
-function malformed(): never {
-  throw new CommunityAiProviderError("COMMUNITY_AI_PROVIDER_MALFORMED");
+function diagnose(body: unknown): CommunityAiProviderDiagnostics {
+  if (!isRecord(body)) {
+    return Object.freeze({
+      stopReason: null,
+      outputTokens: null,
+      contentBlockTypes: Object.freeze([]),
+    });
+  }
+  const usage = isRecord(body["usage"]) ? body["usage"] : {};
+  const content = Array.isArray(body["content"])
+    ? (body["content"] as unknown[])
+    : [];
+  return Object.freeze({
+    stopReason:
+      typeof body["stop_reason"] === "string"
+        ? body["stop_reason"].slice(0, 32)
+        : null,
+    outputTokens: tokenCount(usage["output_tokens"]),
+    contentBlockTypes: Object.freeze(
+      content.map((block) =>
+        isRecord(block) && typeof block["type"] === "string"
+          ? block["type"].slice(0, 32)
+          : "unknown",
+      ),
+    ),
+  });
+}
+
+function malformed(body: unknown): never {
+  throw new CommunityAiProviderError(
+    "COMMUNITY_AI_PROVIDER_MALFORMED",
+    diagnose(body),
+  );
 }
 
 /**
@@ -181,45 +237,45 @@ export function parseCommunityAiCompletion(
   fallbackModel: string,
 ): CommunityAiCompletion {
   if (!isRecord(body) || !Array.isArray(body["content"])) {
-    return malformed();
+    return malformed(body);
   }
   const toolBlocks = (body["content"] as unknown[]).filter(
     (block): block is Record<string, unknown> =>
       isRecord(block) && block["type"] === "tool_use",
   );
   if (toolBlocks.length !== 1) {
-    return malformed();
+    return malformed(body);
   }
   const block = toolBlocks[0];
   if (block === undefined || block["name"] !== communityAiToolName) {
-    return malformed();
+    return malformed(body);
   }
   const input = block["input"];
   if (!isRecord(input)) {
-    return malformed();
+    return malformed(body);
   }
   for (const key of Object.keys(input)) {
     if (!["answer", "citations", "refusal"].includes(key)) {
-      return malformed();
+      return malformed(body);
     }
   }
   const answer = input["answer"];
   const citations = input["citations"];
   const refusal = input["refusal"];
   if (typeof answer !== "string" || !Array.isArray(citations)) {
-    return malformed();
+    return malformed(body);
   }
   if (refusal !== undefined && typeof refusal !== "string") {
-    return malformed();
+    return malformed(body);
   }
   const parsedCitations: CommunityAiCitationDraft[] = [];
   for (const citation of citations as unknown[]) {
     if (!isRecord(citation) || typeof citation["sourceId"] !== "string") {
-      return malformed();
+      return malformed(body);
     }
     for (const key of Object.keys(citation)) {
       if (key !== "sourceId") {
-        return malformed();
+        return malformed(body);
       }
     }
     parsedCitations.push(Object.freeze({ sourceId: citation["sourceId"] }));
@@ -227,7 +283,7 @@ export function parseCommunityAiCompletion(
   const trimmedRefusal = typeof refusal === "string" ? refusal.trim() : "";
   const trimmedAnswer = answer.trim();
   if (trimmedAnswer === "" && trimmedRefusal === "") {
-    return malformed();
+    return malformed(body);
   }
   const usage = isRecord(body["usage"]) ? body["usage"] : {};
   const model =
@@ -308,6 +364,11 @@ export function createAnthropicCommunityAiGateway(
             system: request.system,
             tools: [communityAiTool],
             tool_choice: { type: "tool", name: communityAiToolName },
+            // A forced, schema-bound tool call needs no reasoning pass. With
+            // thinking on, some models spend the whole `max_tokens` budget on
+            // a `thinking` block and the reply is cut before `tool_use`,
+            // which this adapter (rightly) rejects as malformed (S76d).
+            thinking: { type: "disabled" },
             messages: [{ role: "user", content: request.userContent }],
           }),
           signal,
@@ -334,7 +395,26 @@ export function createAnthropicCommunityAiGateway(
       } catch {
         throw new CommunityAiProviderError("COMMUNITY_AI_PROVIDER_MALFORMED");
       }
-      return parseCommunityAiCompletion(parsed, input.model);
+      try {
+        return parseCommunityAiCompletion(parsed, input.model);
+      } catch (error) {
+        if (error instanceof CommunityAiProviderError) {
+          // Shape only: stop reason, token count, block types. Never the
+          // text of a block, never the tool input, never the prompt.
+          input.logger?.warn(
+            {
+              reason: error.reason,
+              model: input.model,
+              stopReason: error.diagnostics?.stopReason ?? null,
+              outputTokens: error.diagnostics?.outputTokens ?? null,
+              contentBlockTypes: error.diagnostics?.contentBlockTypes ?? [],
+              maxOutputTokens: input.maximumOutputTokens,
+            },
+            "Community AI Provider answer was malformed",
+          );
+        }
+        throw error;
+      }
     },
   });
 }
