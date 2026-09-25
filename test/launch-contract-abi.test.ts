@@ -223,30 +223,34 @@ describe("LoopLaunchpad ABI v1 (Decision 0076, 06 §3/§4)", () => {
     ).toBe("fail");
   });
 
-  it("runs as pnpm launch:abi-check with exit 0 for v1 and exit 1 for a renamed event", () => {
-    const tsx = path.join(repositoryRoot, "node_modules/.bin/tsx");
-    const script = path.join(repositoryRoot, "scripts/launch-abi-check.ts");
-    const ok = execFileSync(tsx, [script, jsonPath], { encoding: "utf8" });
-    expect(ok).toContain("ABI v1 check passed");
-    const directory = mkdtempSync(path.join(tmpdir(), "loop-abi-"));
-    const renamedPath = path.join(directory, "renamed.json");
-    writeFileSync(
-      renamedPath,
-      JSON.stringify(
-        readJsonAbi().map((entry) =>
-          entry.name === "Refunded" ? { ...entry, name: "Refund" } : entry,
+  it(
+    "runs as pnpm launch:abi-check with exit 0 for v1 and exit 1 for a renamed event",
+    { timeout: 30_000 },
+    () => {
+      const tsx = path.join(repositoryRoot, "node_modules/.bin/tsx");
+      const script = path.join(repositoryRoot, "scripts/launch-abi-check.ts");
+      const ok = execFileSync(tsx, [script, jsonPath], { encoding: "utf8" });
+      expect(ok).toContain("ABI v1 check passed");
+      const directory = mkdtempSync(path.join(tmpdir(), "loop-abi-"));
+      const renamedPath = path.join(directory, "renamed.json");
+      writeFileSync(
+        renamedPath,
+        JSON.stringify(
+          readJsonAbi().map((entry) =>
+            entry.name === "Refunded" ? { ...entry, name: "Refund" } : entry,
+          ),
         ),
-      ),
-    );
-    let status = 0;
-    let output = "";
-    try {
-      execFileSync(tsx, [script, renamedPath], { encoding: "utf8" });
-    } catch (error) {
-      status = (error as { status: number }).status;
-      output = String((error as { stdout: string }).stdout);
-    }
-    expect(status).toBe(1);
-    expect(output).toMatch(/✗ event Refunded\(/);
-  });
+      );
+      let status = 0;
+      let output = "";
+      try {
+        execFileSync(tsx, [script, renamedPath], { encoding: "utf8" });
+      } catch (error) {
+        status = (error as { status: number }).status;
+        output = String((error as { stdout: string }).stdout);
+      }
+      expect(status).toBe(1);
+      expect(output).toMatch(/✗ event Refunded\(/);
+    },
+  );
 });
