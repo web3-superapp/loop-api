@@ -143,3 +143,10 @@ intent settled from its receipt`, with `launchIntentId`, `toState`,
   later Purchased log is idempotent with it.
 - Open for the main agent: whether `revertReason` should be dropped from the
   wire until a trace-capable Provider exists (it is always null today).
+
+## Main-agent rulings (2026-09-25)
+
+1. `revertReason` stays on the wire as an optional field that is null until a Provider with trace support exists; the client decodes it as optional.
+2. Expiry graces accepted: 5 minutes past the deadline with no trace, 60 minutes while the node still shows the transaction pending.
+3. A `Purchased` log for an expired Intent moves it to `confirmed`: kept. The chain is the authority.
+4. `reverted` keeps counting toward the canary daily exposure, as wallet Intents do.
