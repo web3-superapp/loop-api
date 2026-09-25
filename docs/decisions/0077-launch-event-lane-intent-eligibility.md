@@ -274,3 +274,13 @@ launch:register-sale … --rescan` (resets the lane). A dedicated
    could be extended to `launch_intents`.
 5. `holderCount` counts distinct buyers of surviving `Purchased` logs, not
    current token holders (the project token is not indexed).
+
+## Main-agent rulings on the S83b report (2026-09-25)
+
+1. **Activity tier.** Keep publishing `tier: community` for `tierModeV1 = activity`; the response's `mode` already says `activity`, and adding an enum value would break strict decoders. Revisit when a tier enum change is scheduled.
+2. **Revoke on 97.** Accepted: revoke of USD1 → Launch contract is admitted alongside approve.
+3. **Late-linked wallets.** No dedicated re-projection command now; `register-sale --rescan` is the documented path. Follow-up when it happens for real.
+4. **Reverted buys.** Extend the 0035 reconcile lane to `launch_intents` (receipt status → `reverted`) before the testnet closed loop. Tracked as S83b2 in `docs/modules/S83-launch-contract-readiness.md`.
+5. **Project token record.** The confirmed configuration's `projectTokenAddress` is LOOP's record; `LAUNCH_PROJECT_TOKEN_UNRECORDED` when absent. Accepted.
+6. **Production rule.** Confirmed: without `--confirm` the script is always a dry run; under `NODE_ENV=production` it refuses without `--confirm`.
+7. **`holderCount` = distinct buyers.** Accepted; the client copy must say 参与人数, not 持有人 (frontend follow-up).
