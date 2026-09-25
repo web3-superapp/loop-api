@@ -1,4 +1,4 @@
-export const latestMigrationName = "000041_v2_launch_contract_adapter";
+export const latestMigrationName = "000042_v2_launch_event_lane";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -110,4 +110,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.device_push_token_commands",
   "public.push_deliveries",
   "public.indexer_wallet_coverage",
+  "public.launch_indexed_events",
+  "public.launch_allowlists",
+  "public.launch_round_allowlist_roots",
 ] as const);

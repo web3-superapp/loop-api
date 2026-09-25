@@ -27,6 +27,7 @@ import type { V2RouteDependencies } from "./index.js";
 import {
   createProjectRequestSchema,
   economyResourceSchema,
+  eligibilityQuerySchema,
   eligibilityResourceSchema,
   historyResourceSchema,
   holdersResourceSchema,
@@ -34,6 +35,10 @@ import {
   launchDetailResourceSchema,
   launchIdParamsSchema,
   launchIntentRequestSchema,
+  launchIntentErrors,
+  launchIntentParamsSchema,
+  launchIntentReportRequestSchema,
+  launchIntentReportResourceSchema,
   launchIntentResourceSchema,
   launchReadErrors,
   milestonesResourceSchema,
@@ -107,7 +112,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchOverview",
         summary: "Get the Launch landing catalog",
         description:
-          "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
+          "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. Each onChainState is the launch_event lane's getState projection (source chain) once the lane has a checkpoint (Decision 0077); otherwise unavailable with the reason. 'Graduated', eligibility, and staking stay unavailable. No supply, tax, or contract suffix is published.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -353,18 +358,22 @@ export function registerV2LaunchRoutes(
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
         params: launchIdParamsSchema,
-        querystring: emptyQueryStringSchema,
+        querystring: eligibilityQuerySchema,
         response: { 200: eligibilityResourceSchema, ...launchReadErrors },
       },
       onRequest: validateCommonHeaders,
-      preValidation: assertNoBodyOrQueryV2,
+      preValidation: assertNoBodyV2,
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
       const params = request.params as LaunchParams;
+      const query = request.query as { readonly roundIndex?: unknown };
       const resource = await service.getEligibility({
         principal: requireAuthenticatedLoopPrincipal(request),
         launchId: params.launchId,
+        ...(query.roundIndex === undefined
+          ? {}
+          : { roundIndex: query.roundIndex }),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
@@ -376,9 +385,9 @@ export function registerV2LaunchRoutes(
     {
       schema: {
         operationId: "getV2LaunchHolders",
-        summary: "Get internal-market holder facts (unavailable)",
+        summary: "Get internal-market holder facts",
         description:
-          "Holder distribution, the caller's position, and the wallet cap all come from the Launch contract, which has no baseline; every block is unavailable and no fixture replaces it.",
+          "holders: distinct buyers indexed by the launch_event lane at indexedBlockNumber. myPosition and walletCap: getPosition / getSaleConfig / getRounds / getRoundPosition for the caller's active wallet at one block (Decision 0077). Without a configured contract every block is unavailable exactly as before.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -392,7 +401,10 @@ export function registerV2LaunchRoutes(
     },
     async (request, reply) => {
       const params = request.params as LaunchParams;
-      const resource = await service.getHolders({ launchId: params.launchId });
+      const resource = await service.getHolders({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        launchId: params.launchId,
+      });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
     },
@@ -405,7 +417,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchHistory",
         summary: "Get the caller's participation records for a launch",
         description:
-          "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3). Without an indexer for the Launch contract every list is empty and `source` is unavailable; an empty list here is never 'no participation'.",
+          "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -433,27 +445,70 @@ export function registerV2LaunchRoutes(
     {
       schema: {
         operationId: "prepareV2LaunchIntent",
-        summary: "Prepare a Launch purchase Intent (unavailable)",
+        summary: "Prepare a Launch purchase Intent",
         description:
-          "Still always 503 CAPABILITY_UNAVAILABLE (the error body is unchanged). No payload, digest, or launch_intents row is produced; the request shape and the 201 launchIntent shape document the eventual Intent (03 §8.2, Decision 0076), which stays fully separate from wallet intents. S83b implements the prepare.",
+          "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
         params: launchIdParamsSchema,
         querystring: emptyQueryStringSchema,
         body: launchIntentRequestSchema,
-        response: { 201: launchIntentResourceSchema, ...launchCommandErrors },
+        response: { 201: launchIntentResourceSchema, ...launchIntentErrors },
       },
       onRequest: validateCommandHeaders,
       preValidation: [assertNoQuery, assertDecimalStringFields(["payAmount"])],
       preHandler: authenticateLoopBearer,
     },
-    (request): never => {
+    async (request, reply) => {
       const params = request.params as LaunchParams;
-      return service.prepareIntent({
+      const { resource } = await service.prepareIntent({
         principal: requireAuthenticatedLoopPrincipal(request),
         launchId: params.launchId,
+        body: request.body,
+        ...commandContext(request),
       });
+      reply.header("cache-control", "no-store");
+      return reply.code(201).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch/:launchId/intents/:launchIntentId/broadcast-report",
+    {
+      schema: {
+        operationId: "reportV2LaunchIntentBroadcast",
+        summary: "Report the device broadcast of a Launch purchase Intent",
+        description:
+          "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed only when the launch_event lane indexes a Purchased log of that transaction, and history always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launchIntentParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launchIntentReportRequestSchema,
+        response: {
+          200: launchIntentReportResourceSchema,
+          ...launchIntentErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as {
+        readonly launchId: string;
+        readonly launchIntentId: string;
+      };
+      const resource = await service.reportIntent({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        launchId: params.launchId,
+        launchIntentId: params.launchIntentId,
+        body: request.body,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
     },
   );
 
@@ -488,7 +543,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchEconomy",
         summary: "Get the public LOOP economy ledger",
         description:
-          "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
+          "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. While a Launch contract is configured, onChain adds registered sales, total SUCCEEDED raise, and locked LP count from the launch_event lane (source loop_indexer, checkpoint block; Decision 0077). Total supply, distribution, and ecosystem tax are unavailable.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

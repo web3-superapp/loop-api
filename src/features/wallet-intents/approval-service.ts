@@ -24,6 +24,7 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   approvalIntentTtlSeconds,
   intentRequestDigest,
+  isIntentChainAllowed,
   sealIntent,
   walletIntentPayloadVersions,
   walletIntentRefusalReasonCodes,
@@ -53,6 +54,7 @@ import {
   requireWallet,
   requireCanaryCounterparty,
   requireWriteAdmission,
+  runtimeForChain,
   valueInUsd,
   withPrepareIdempotency,
   type UsdValuation,
@@ -182,8 +184,9 @@ export function projectDecodedApprove(data: Hex): DecodedCallReview {
 }
 
 export function createApprovalService(
-  runtime: WalletIntentRuntime,
+  baseRuntime: WalletIntentRuntime,
 ): ApprovalService {
+  const runtime = baseRuntime;
   async function prepareAllowanceIntent(input: {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly idempotencyKey: string;
@@ -200,6 +203,31 @@ export function createApprovalService(
     readonly created: boolean;
     readonly resource: WalletIntentResource;
   }> {
+    // Decision 0077: the launch slot's testnet admits exactly one allowance
+    // target — USD1 towards the Launch contract. Every other asset of that
+    // chain, and every other kind, stays CHAIN_MISMATCH.
+    const slot = baseRuntime.launchSlot ?? null;
+    const allowedChains =
+      slot === null ? [bscChainId] : [bscChainId, slot.chainId];
+    const admittedAny = await requireAdmittedAsset(
+      baseRuntime,
+      input.assetId,
+      allowedChains,
+    );
+    const launchTarget =
+      slot !== null && admittedAny.chainId === slot.chainId ? slot : null;
+    const onLaunchSlot = launchTarget !== null;
+    // The chain rule is decided before the canary: on the launch slot only
+    // USD1 has an allowance surface LOOP will build.
+    if (
+      launchTarget !== null &&
+      admittedAny.address !== launchTarget.usd1Address
+    ) {
+      throw V2ApiError.fromCode("CHAIN_MISMATCH");
+    }
+    const runtime = onLaunchSlot
+      ? runtimeForChain(baseRuntime, admittedAny.chainId)
+      : baseRuntime;
     const writes = await requireWriteAdmission(runtime);
     const wallet = await requireSignableWallet(
       runtime,
@@ -209,7 +237,7 @@ export function createApprovalService(
     // Order (S6 finding 2): shape → native → allowlist → ceiling. The native
     // asset has no allowance surface, so that is a request-shape fact
     // (422) and is decided before the canary allowlist (403).
-    const admitted = await requireAdmittedAsset(runtime, input.assetId);
+    const admitted = admittedAny;
     if (admitted.address === null) {
       throw V2ApiError.fromCode("VALIDATION_FAILED", {
         reasonCode: walletIntentRefusalReasonCodes.nativeAssetNotApprovable,
@@ -220,6 +248,25 @@ export function createApprovalService(
     const spender = parseSpender(input.spenderAddress);
     if (spender === wallet.address) {
       throw V2ApiError.fromCode("VALIDATION_FAILED");
+    }
+    const launchAllowance =
+      launchTarget !== null
+        ? Object.freeze({
+            token: tokenAddress,
+            spender,
+            launchContractAddress: launchTarget.contractAddress,
+            launchUsd1Address: launchTarget.usd1Address,
+          })
+        : null;
+    if (
+      onLaunchSlot &&
+      !isIntentChainAllowed(
+        input.kind,
+        runtime.readClient.chainReference,
+        launchAllowance,
+      )
+    ) {
+      throw V2ApiError.fromCode("CHAIN_MISMATCH");
     }
     // A spender is a counterparty that can move funds, so it walks the same
     // allowlist as a send recipient (Decision 0065). Revoke passes through:
@@ -258,12 +305,15 @@ export function createApprovalService(
           allowanceRaw < balance.rawBalance ? allowanceRaw : balance.rawBalance;
         let valuation: UsdValuation | null = null;
         if (allowanceRaw > 0n) {
-          valuation = await valueInUsd(
-            runtime,
-            asset,
-            exposureRaw,
-            input.signal,
-          );
+          // USD1 on the launch slot is valued at par (Decision 0077): the
+          // testnet has no market, and the canary must still bound it.
+          valuation = onLaunchSlot
+            ? Object.freeze({
+                valueUsd: formatDecimalAmount(exposureRaw, asset.decimals),
+                priceSource: "usd1_par",
+                fetchedAt: runtime.now().toISOString(),
+              })
+            : await valueInUsd(runtime, asset, exposureRaw, input.signal);
           enforceCanaryCeiling(
             writes,
             valuation.valueUsd,
@@ -314,7 +364,7 @@ export function createApprovalService(
           version: walletIntentPayloadVersions[input.kind],
           intentId,
           kind: input.kind,
-          chainId: bscChainId,
+          chainId: runtime.readClient.chainId,
           walletId: wallet.walletId,
           from: wallet.address,
           asset: assetSnapshot(asset),
@@ -329,7 +379,10 @@ export function createApprovalService(
           decodedCall: projectDecodedApprove(call.data),
           transaction: buildUnsignedTransaction({
             kind: input.kind,
-            chainReference: bscChainReference,
+            chainReference: onLaunchSlot
+              ? runtime.readClient.chainReference
+              : bscChainReference,
+            launchAllowance,
             from: wallet.address,
             to: call.to,
             data: call.data,
@@ -362,7 +415,7 @@ export function createApprovalService(
           providerOperationId: operationId,
           kind: input.kind,
           state: intentStateForSimulation(execution.simulation),
-          chainId: bscChainId,
+          chainId: runtime.readClient.chainId,
           canonicalPayload: sealed.canonicalPayload,
           publicReview: sealed.publicReview,
           reviewSha256: sealed.reviewSha256,

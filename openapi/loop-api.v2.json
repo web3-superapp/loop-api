@@ -58132,6 +58132,24 @@
                             { "type": "null" }
                           ]
                         },
+                        "usd1": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["balance", "allowance"],
+                          "properties": {
+                            "balance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$",
+                              "description": "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals)."
+                            },
+                            "allowance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$",
+                              "description": "USD1 allowance(wallet, LAUNCH_CONTRACT_ADDRESS), base units: what buy() may pull."
+                            }
+                          },
+                          "description": "Optional (Decision 0077, shape frozen by 0088): present only when LAUNCH_USD1_ADDRESS is configured AND both values were read at the same block; absent otherwise (never null, never a guess)."
+                        },
                         "nativeBalance": {
                           "anyOf": [
                             {
@@ -61091,7 +61109,8 @@
                                 "properties": {
                                   "chainId": {
                                     "type": "integer",
-                                    "enum": [56]
+                                    "enum": [56, 97],
+                                    "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
                                   },
                                   "from": {
                                     "type": "string",
@@ -62883,7 +62902,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -64653,7 +64676,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -66449,7 +66476,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -69278,7 +69309,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -70377,7 +70412,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -72175,7 +72214,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -74765,7 +74808,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -75864,7 +75911,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -77692,7 +77743,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -78791,7 +78846,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -80585,7 +80644,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -81684,7 +81747,11 @@
                             "gasPrice"
                           ],
                           "properties": {
-                            "chainId": { "type": "integer", "enum": [56] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                            },
                             "from": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -84368,7 +84435,7 @@
         "operationId": "getV2LaunchOverview",
         "summary": "Get the Launch landing catalog",
         "tags": ["launch"],
-        "description": "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. 'Graduated' is a projection of the on-chain liquidity axis and stays unavailable (LAUNCH_CONTRACT_BASELINE_PENDING); eligibility and staking are unavailable. No supply, tax, or contract suffix is published.",
+        "description": "Approved launches grouped by scheduleStatus from PostgreSQL: live, upcoming (scheduled), awaitingSchedule (approved but unscheduled, never shown as upcoming), ended. Each onChainState is the launch_event lane's getState projection (source chain) once the lane has a checkpoint (Decision 0077); otherwise unavailable with the reason. 'Graduated', eligibility, and staking stay unavailable. No supply, tax, or contract suffix is published.",
         "parameters": [
           {
             "schema": {
@@ -84554,7 +84621,9 @@
                                           "LAUNCH_CONTRACT_READ_FAILED",
                                           "LAUNCH_CONTRACT_READ_INVALID",
                                           "LAUNCH_SNAPSHOT_REORGED",
-                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+                                          "LAUNCH_WALLET_NOT_FOUND"
                                         ],
                                         "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
                                       }
@@ -84785,7 +84854,9 @@
                                           "LAUNCH_CONTRACT_READ_FAILED",
                                           "LAUNCH_CONTRACT_READ_INVALID",
                                           "LAUNCH_SNAPSHOT_REORGED",
-                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+                                          "LAUNCH_WALLET_NOT_FOUND"
                                         ],
                                         "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
                                       }
@@ -85017,7 +85088,9 @@
                                           "LAUNCH_CONTRACT_READ_FAILED",
                                           "LAUNCH_CONTRACT_READ_INVALID",
                                           "LAUNCH_SNAPSHOT_REORGED",
-                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+                                          "LAUNCH_WALLET_NOT_FOUND"
                                         ],
                                         "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
                                       }
@@ -85249,7 +85322,9 @@
                                           "LAUNCH_CONTRACT_READ_FAILED",
                                           "LAUNCH_CONTRACT_READ_INVALID",
                                           "LAUNCH_SNAPSHOT_REORGED",
-                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+                                          "LAUNCH_WALLET_NOT_FOUND"
                                         ],
                                         "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
                                       }
@@ -90873,7 +90948,9 @@
                                     "LAUNCH_CONTRACT_READ_FAILED",
                                     "LAUNCH_CONTRACT_READ_INVALID",
                                     "LAUNCH_SNAPSHOT_REORGED",
-                                    "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                    "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+                                    "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+                                    "LAUNCH_WALLET_NOT_FOUND"
                                   ],
                                   "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
                                 }
@@ -92173,6 +92250,13 @@
         "description": "mode comes from the confirmed configuration slot tierModeV1 (whitelist | community | activity); without a confirmed configuration it is unavailable with TIER_MODE_PENDING. The result is a server fact for a snapshot, never a tier upgrade, and never depends on staking.",
         "parameters": [
           {
+            "schema": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "in": "query",
+            "name": "roundIndex",
+            "required": false,
+            "description": "Optional (Decision 0077): the on-chain round to evaluate. Default: the round open now, else the next one, else the last."
+          },
+          {
             "schema": {
               "type": "string",
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -92318,7 +92402,7 @@
                           }
                         }
                       ],
-                      "description": "The unchanged Decision 0036 object while no evaluator exists; the status=available branch is reserved for the S83b evaluators (Decision 0076) and is not emitted yet."
+                      "description": "The unchanged Decision 0036 object while no contract is configured, the mode is pending, or the evaluation is refused (reasonCode names why, e.g. LAUNCH_ALLOWLIST_ROOT_MISMATCH). status=available (Decision 0077): the round's on-chain allowlistRoot selected LOOP's stored allowlist at snapshotBlock; tier null with LAUNCH_WALLET_NOT_ELIGIBLE means the wallet is not a member; an all-zero root means an open round (tier public, empty proof)."
                     },
                     "configVersion": {
                       "anyOf": [
@@ -92792,9 +92876,9 @@
     "/v2/launch/{launchId}/holders": {
       "get": {
         "operationId": "getV2LaunchHolders",
-        "summary": "Get internal-market holder facts (unavailable)",
+        "summary": "Get internal-market holder facts",
         "tags": ["launch"],
-        "description": "Holder distribution, the caller's position, and the wallet cap all come from the Launch contract, which has no baseline; every block is unavailable and no fixture replaces it.",
+        "description": "holders: distinct buyers indexed by the launch_event lane at indexedBlockNumber. myPosition and walletCap: getPosition / getSaleConfig / getRounds / getRoundPosition for the caller's active wallet at one block (Decision 0077). Without a configured contract every block is unavailable exactly as before.",
         "parameters": [
           {
             "schema": {
@@ -93508,7 +93592,7 @@
         "operationId": "getV2LaunchHistory",
         "summary": "Get the caller's participation records for a launch",
         "tags": ["launch"],
-        "description": "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3). Without an indexer for the Launch contract every list is empty and `source` is unavailable; an empty list here is never 'no participation'.",
+        "description": "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'.",
         "parameters": [
           {
             "schema": {
@@ -93644,7 +93728,7 @@
                           }
                         }
                       },
-                      "description": "Always empty while source is unavailable."
+                      "description": "Always empty while source is unavailable. Otherwise the caller's Purchased events observed by the launch_event lane (reorged rows are kept with confirmationState reorged)."
                     },
                     "entitlements": {
                       "type": "array",
@@ -93783,7 +93867,7 @@
                           }
                         }
                       ],
-                      "description": "unavailable until the S83b launch_event lane indexes the sale (Decision 0076)."
+                      "description": "unavailable until the launch_event lane has a checkpoint and the sale is registered; then the lane's last indexed block (Decision 0077)."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -94237,9 +94321,9 @@
     "/v2/launch/{launchId}/intents": {
       "post": {
         "operationId": "prepareV2LaunchIntent",
-        "summary": "Prepare a Launch purchase Intent (unavailable)",
+        "summary": "Prepare a Launch purchase Intent",
         "tags": ["launch"],
-        "description": "Still always 503 CAPABILITY_UNAVAILABLE (the error body is unchanged). No payload, digest, or launch_intents row is produced; the request shape and the 201 launchIntent shape document the eventual Intent (03 §8.2, Decision 0076), which stays fully separate from wallet intents. S83b implements the prepare.",
+        "description": "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists.",
         "requestBody": {
           "required": true,
           "content": {
@@ -94468,14 +94552,162 @@
                               "type": "string",
                               "pattern": "^0x([0-9a-f]{2})*$"
                             },
-                            "value": { "type": "string", "enum": ["0x0"] }
+                            "value": { "type": "string", "enum": ["0x0"] },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "description": "Optional (Decision 0077): the signing wallet; the device passes the whole object to eth_sendTransaction."
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
                           }
                         },
                         "expiresAt": {
                           "type": "string",
                           "format": "date-time"
                         },
-                        "createdAt": { "type": "string", "format": "date-time" }
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "projectAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "description": "Optional (0077): the project token's asset ID on the launch chain."
+                        },
+                        "saleId": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "walletRoundCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getRounds walletRoundCapUsd1 of this round at snapshotBlockNumber, for display before signing."
+                        },
+                        "walletProjectCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getSaleConfig walletProjectCapUsd1 at snapshotBlockNumber, for display before signing."
+                        },
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ],
+                          "description": "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it."
+                        },
+                        "simulation": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["passed", "reverted", "unavailable"]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): eth_call + estimateGas of the exact buy() payload at prepare."
+                        },
+                        "policy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "configVersion",
+                            "canaryMaxUsd",
+                            "valueUsd",
+                            "priceSource"
+                          ],
+                          "properties": {
+                            "configVersion": {
+                              "type": "string",
+                              "enum": ["bscWriteCanaryV1"]
+                            },
+                            "canaryMaxUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "valueUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "priceSource": {
+                              "type": "string",
+                              "description": "USD1 is valued at exactly 1 USD for the canary.",
+                              "enum": ["usd1_par"]
+                            }
+                          },
+                          "description": "Optional (0077): the Decision 0065 canary facts this Intent was admitted under."
+                        },
+                        "signing": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["mode", "allowed", "reasonCode"],
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": ["device_eth_send_transaction"]
+                            },
+                            "allowed": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): true only in awaiting_signature and before expiresAt."
+                        }
                       }
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
@@ -94810,6 +95042,998 @@
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report": {
+      "post": {
+        "operationId": "reportV2LaunchIntentBroadcast",
+        "summary": "Report the device broadcast of a Launch purchase Intent",
+        "tags": ["launch"],
+        "description": "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed only when the launch_event lane indexes a Purchased log of that transaction, and history always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["txHash"],
+                "properties": {
+                  "txHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{64}$",
+                    "description": "The hash eth_sendTransaction returned on the device."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "launchId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "launchIntentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["launchIntent", "contractVersion"],
+                  "properties": {
+                    "launchIntent": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "launchIntentId",
+                        "state",
+                        "launchId",
+                        "projectId",
+                        "walletId",
+                        "roundId",
+                        "roundIndex",
+                        "chainId",
+                        "contractAddress",
+                        "quoteAssetId",
+                        "usd1Amount",
+                        "expectedTokenAmount",
+                        "minTokenAmount",
+                        "walletCumulativeUsd1",
+                        "deadline",
+                        "eligibilityProof",
+                        "configVersion",
+                        "stateTupleDigest",
+                        "snapshotBlockNumber",
+                        "snapshotBlockHash",
+                        "payloadDigest",
+                        "unsignedTransaction",
+                        "expiresAt",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "launchIntentId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "prepared",
+                            "awaiting_signature",
+                            "submitted",
+                            "confirmed",
+                            "reverted",
+                            "failed",
+                            "unknown",
+                            "cancelled",
+                            "expired"
+                          ]
+                        },
+                        "launchId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundIndex": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 65535,
+                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "quoteAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "usd1Amount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "expectedTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "quote() at the snapshot block."
+                        },
+                        "minTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "walletCumulativeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "eligibilityProof": {
+                          "type": "array",
+                          "maxItems": 64,
+                          "items": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          }
+                        },
+                        "configVersion": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "stateTupleDigest": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "snapshotBlockNumber": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,19})$"
+                        },
+                        "snapshotBlockHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "payloadDigest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "unsignedTransaction": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["chainId", "to", "data", "value"],
+                          "properties": {
+                            "chainId": { "type": "integer", "enum": [56, 97] },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x([0-9a-f]{2})*$"
+                            },
+                            "value": { "type": "string", "enum": ["0x0"] },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "description": "Optional (Decision 0077): the signing wallet; the device passes the whole object to eth_sendTransaction."
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "projectAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "description": "Optional (0077): the project token's asset ID on the launch chain."
+                        },
+                        "saleId": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "walletRoundCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getRounds walletRoundCapUsd1 of this round at snapshotBlockNumber, for display before signing."
+                        },
+                        "walletProjectCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getSaleConfig walletProjectCapUsd1 at snapshotBlockNumber, for display before signing."
+                        },
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ],
+                          "description": "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it."
+                        },
+                        "simulation": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["passed", "reverted", "unavailable"]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): eth_call + estimateGas of the exact buy() payload at prepare."
+                        },
+                        "policy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "configVersion",
+                            "canaryMaxUsd",
+                            "valueUsd",
+                            "priceSource"
+                          ],
+                          "properties": {
+                            "configVersion": {
+                              "type": "string",
+                              "enum": ["bscWriteCanaryV1"]
+                            },
+                            "canaryMaxUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "valueUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "priceSource": {
+                              "type": "string",
+                              "description": "USD1 is valued at exactly 1 USD for the canary.",
+                              "enum": ["usd1_par"]
+                            }
+                          },
+                          "description": "Optional (0077): the Decision 0065 canary facts this Intent was admitted under."
+                        },
+                        "signing": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["mode", "allowed", "reasonCode"],
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": ["device_eth_send_transaction"]
+                            },
+                            "allowed": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): true only in awaiting_signature and before expiresAt."
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
                         "VERSION_CONFLICT"
                       ]
                     },
@@ -95588,7 +96812,7 @@
         "operationId": "getV2LaunchEconomy",
         "summary": "Get the public LOOP economy ledger",
         "tags": ["launch"],
-        "description": "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. Total supply, distribution, and ecosystem tax are unavailable.",
+        "description": "Only counts that PostgreSQL can prove: projects by review status, launches by schedule status, confirmed rounds, with source loop and observedAt. While a Launch contract is configured, onChain adds registered sales, total SUCCEEDED raise, and locked LP count from the launch_event lane (source loop_indexer, checkpoint block; Decision 0077). Total supply, distribution, and ecosystem tax are unavailable.",
         "parameters": [
           {
             "schema": {
@@ -95706,6 +96930,71 @@
                           "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                         }
                       }
+                    },
+                    "onChain": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "registeredSaleCount",
+                            "totalRaisedUsd1",
+                            "lockedLpCount",
+                            "source",
+                            "indexedBlockNumber",
+                            "indexedBlockHash"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "registeredSaleCount": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "totalRaisedUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$",
+                              "description": "Sum of SaleFinalized.totalRaisedUsd1 with outcome SUCCEEDED (USD1 base units)."
+                            },
+                            "lockedLpCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Sales with a surviving LPNFTLocked event."
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["loop_indexer"]
+                            },
+                            "indexedBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "indexedBlockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          }
+                        }
+                      ],
+                      "description": "Optional (Decision 0077): present only while a Launch contract is configured; absent otherwise, so the document is byte-identical to before."
                     },
                     "source": {
                       "type": "string",

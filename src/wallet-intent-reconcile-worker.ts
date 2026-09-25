@@ -38,6 +38,8 @@ export interface CreateWalletIntentReconcileWorkerOptions {
   readonly repository: WalletIntentRepository;
   readonly wallets: AccountWalletRepository;
   readonly readClient: BscChainCallClient;
+  /** Launch slot client for intents recorded on it (Decision 0077). */
+  readonly launchReadClient?: BscChainCallClient | null;
   readonly swapAdapter: PrivySwapAdapter;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
@@ -71,6 +73,7 @@ export function createWalletIntentReconcileWorker(
     repository: options.repository,
     wallets: options.wallets,
     readClient: options.readClient,
+    launchReadClient: options.launchReadClient ?? null,
     swapAdapter: options.swapAdapter,
     createUuid,
   });

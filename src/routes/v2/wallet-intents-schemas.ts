@@ -392,7 +392,12 @@ const unsignedTransactionSchema = {
     "gasPrice",
   ],
   properties: {
-    chainId: { type: "integer", const: 56 },
+    chainId: {
+      type: "integer",
+      enum: [56, 97],
+      description:
+        "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077).",
+    },
     from: addressSchema,
     to: addressSchema,
     data: hexDataSchema,

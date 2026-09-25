@@ -22,6 +22,7 @@ const safeHostPattern = /^[A-Za-z0-9.-]{1,253}$/;
 const indexerLanes = new Set([
   "erc20_transfer",
   "pool_event",
+  "launch_event",
   "market_sparkline_warm",
 ]);
 
@@ -32,6 +33,8 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker infrastructure retry scheduled"
   | "LOOP BSC indexer lane is unavailable"
   | "LOOP BSC indexer lane recovered"
+  | "LOOP launch_event lane skipped a fact"
+  | "LOOP launch_event lane is idle"
   | "LOOP reconciliation worker failed to start"
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
@@ -83,6 +86,10 @@ export interface ReconciliationWorkerLogFields {
   readonly rpcCode?: number | null;
   readonly rpcUrlHost?: string | null;
   readonly method?: string | null;
+  /** Decision 0077 launch_event lane: a contract saleId and a block, decimal strings. */
+  readonly saleId?: string | null;
+  readonly blockNumber?: string;
+  readonly detailReasonCode?: string | null;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -191,6 +198,17 @@ function sanitizeFields(
     fields.assetId !== undefined && safeAssetIdPattern.test(fields.assetId)
       ? fields.assetId
       : undefined;
+  const saleId =
+    typeof fields.saleId === "string" &&
+    /^[1-9][0-9]{0,77}$/.test(fields.saleId)
+      ? fields.saleId
+      : undefined;
+  const blockNumber =
+    typeof fields.blockNumber === "string" &&
+    /^(0|[1-9][0-9]{0,19})$/.test(fields.blockNumber)
+      ? fields.blockNumber
+      : undefined;
+  const detailReasonCode = safeCode(fields.detailReasonCode ?? undefined);
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -224,6 +242,9 @@ function sanitizeFields(
     ...(rpcCode === undefined ? {} : { rpcCode }),
     ...(rpcUrlHost === undefined ? {} : { rpcUrlHost }),
     ...(method === undefined ? {} : { method }),
+    ...(saleId === undefined ? {} : { saleId }),
+    ...(blockNumber === undefined ? {} : { blockNumber }),
+    ...(detailReasonCode === undefined ? {} : { detailReasonCode }),
   });
 }
 

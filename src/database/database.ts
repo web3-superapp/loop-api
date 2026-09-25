@@ -57,6 +57,8 @@ import { createPostgresLaunchRepository } from "./launch-repository.js";
 import { createPostgresMiningRepository } from "./mining-repository.js";
 import { createPostgresReferralRepository } from "./referral-repository.js";
 import type { LaunchRepository } from "../features/launch/launch-repository.js";
+import type { LaunchChainRepository } from "../features/launch/launch-chain-repository.js";
+import { createPostgresLaunchChainRepository } from "./launch-chain-repository.js";
 import type { MiningRepository } from "../features/mining/mining-repository.js";
 import type { ReferralRepository } from "../features/referral/referral-repository.js";
 import type {
@@ -175,6 +177,8 @@ export interface Database {
   readonly supportTickets?: SupportTicketRepository;
   /** Launch off-chain catalog and review (Decision 0036). */
   readonly launch?: LaunchRepository;
+  /** Launch chain facts: lane, projections, allowlist roots, Intents (Decision 0077). */
+  readonly launchChain?: LaunchChainRepository;
   /** Mining formula versions, weights, and snapshots (Decision 0036). */
   readonly mining?: MiningRepository;
   /** Invite codes and referral edges (Decision 0036). */
@@ -376,6 +380,7 @@ export function createPostgresDatabase(
     supportTickets,
     communityAi,
     launch,
+    launchChain: createPostgresLaunchChainRepository(pool),
     mining,
     referral,
     async ping(): Promise<void> {

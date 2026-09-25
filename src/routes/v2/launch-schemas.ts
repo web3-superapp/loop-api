@@ -63,6 +63,17 @@ const uintStringSchema = {
   pattern: "^(0|[1-9][0-9]{0,77})$",
 } as const;
 
+const hexQuantityPattern = "^0x(0|[1-9a-f][0-9a-f]{0,63})$";
+
+const nullableHexQuantitySchema = {
+  anyOf: [{ type: "string", pattern: hexQuantityPattern }, { type: "null" }],
+} as const;
+
+const decimalStringSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+} as const;
+
 const blockNumberStringSchema = {
   type: "string",
   pattern: "^(0|[1-9][0-9]{0,19})$",
@@ -832,7 +843,7 @@ export const eligibilityResourceSchema = {
         },
       ],
       description:
-        "The unchanged Decision 0036 object while no evaluator exists; the status=available branch is reserved for the S83b evaluators (Decision 0076) and is not emitted yet.",
+        "The unchanged Decision 0036 object while no contract is configured, the mode is pending, or the evaluation is refused (reasonCode names why, e.g. LAUNCH_ALLOWLIST_ROOT_MISMATCH). status=available (Decision 0077): the round's on-chain allowlistRoot selected LOOP's stored allowlist at snapshotBlock; tier null with LAUNCH_WALLET_NOT_ELIGIBLE means the wallet is not a member; an all-zero root means an open round (tier public, empty proof).",
     },
     configVersion: {
       anyOf: [
@@ -1071,7 +1082,8 @@ export const historyResourceSchema = {
       type: "array",
       maxItems: 500,
       items: purchaseRecordSchema,
-      description: "Always empty while source is unavailable.",
+      description:
+        "Always empty while source is unavailable. Otherwise the caller's Purchased events observed by the launch_event lane (reorged rows are kept with confirmationState reorged).",
     },
     entitlements: {
       type: "array",
@@ -1100,7 +1112,7 @@ export const historyResourceSchema = {
         },
       ],
       description:
-        "unavailable until the S83b launch_event lane indexes the sale (Decision 0076).",
+        "unavailable until the launch_event lane has a checkpoint and the sale is registered; then the lane's last indexed block (Decision 0077).",
     },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
@@ -1295,10 +1307,99 @@ export const launchIntentResourceSchema = {
             to: addressSchema,
             data: { type: "string", pattern: "^0x([0-9a-f]{2})*$" },
             value: { type: "string", const: "0x0" },
+            from: {
+              ...addressSchema,
+              description:
+                "Optional (Decision 0077): the signing wallet; the device passes the whole object to eth_sendTransaction.",
+            },
+            gas: { type: "string", pattern: hexQuantityPattern },
+            nonce: { type: "string", pattern: hexQuantityPattern },
+            type: { type: "string", enum: ["eip1559", "legacy"] },
+            maxFeePerGas: nullableHexQuantitySchema,
+            maxPriorityFeePerGas: nullableHexQuantitySchema,
+            gasPrice: nullableHexQuantitySchema,
           },
         },
         expiresAt: { type: "string", format: "date-time" },
         createdAt: { type: "string", format: "date-time" },
+        projectAssetId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "Optional (0077): the project token's asset ID on the launch chain.",
+        },
+        saleId: {
+          ...uintStringSchema,
+          description:
+            "Optional (0077): the contract's saleId, decimal string.",
+        },
+        walletRoundCapUsd1: {
+          ...uintStringSchema,
+          description:
+            "Optional (0077/0088): getRounds walletRoundCapUsd1 of this round at snapshotBlockNumber, for display before signing.",
+        },
+        walletProjectCapUsd1: {
+          ...uintStringSchema,
+          description:
+            "Optional (0077/0088): getSaleConfig walletProjectCapUsd1 at snapshotBlockNumber, for display before signing.",
+        },
+        transactionHash: {
+          anyOf: [
+            { type: "string", pattern: transactionHashPatternSource },
+            { type: "null" },
+          ],
+          description:
+            "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it.",
+        },
+        simulation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "reasonCode"],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["passed", "reverted", "unavailable"],
+            },
+            reasonCode: { anyOf: [reasonCodeSchema, { type: "null" }] },
+          },
+          description:
+            "Optional (0077): eth_call + estimateGas of the exact buy() payload at prepare.",
+        },
+        policy: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "configVersion",
+            "canaryMaxUsd",
+            "valueUsd",
+            "priceSource",
+          ],
+          properties: {
+            configVersion: { type: "string", const: "bscWriteCanaryV1" },
+            canaryMaxUsd: decimalStringSchema,
+            valueUsd: decimalStringSchema,
+            priceSource: {
+              type: "string",
+              const: "usd1_par",
+              description: "USD1 is valued at exactly 1 USD for the canary.",
+            },
+          },
+          description:
+            "Optional (0077): the Decision 0065 canary facts this Intent was admitted under.",
+        },
+        signing: {
+          type: "object",
+          additionalProperties: false,
+          required: ["mode", "allowed", "reasonCode"],
+          properties: {
+            mode: { type: "string", const: "device_eth_send_transaction" },
+            allowed: { type: "boolean" },
+            reasonCode: { anyOf: [reasonCodeSchema, { type: "null" }] },
+          },
+          description:
+            "Optional (0077): true only in awaiting_signature and before expiresAt.",
+        },
       },
     },
     contractVersion: { type: "string", const: v2ContractVersion },
@@ -1349,6 +1450,43 @@ export const economyResourceSchema = {
     totalSupply: unavailableSchema,
     distributed: unavailableSchema,
     ecosystemTax: unavailableSchema,
+    onChain: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "registeredSaleCount",
+            "totalRaisedUsd1",
+            "lockedLpCount",
+            "source",
+            "indexedBlockNumber",
+            "indexedBlockHash",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            registeredSaleCount: { type: "integer", minimum: 0 },
+            totalRaisedUsd1: {
+              ...uintStringSchema,
+              description:
+                "Sum of SaleFinalized.totalRaisedUsd1 with outcome SUCCEEDED (USD1 base units).",
+            },
+            lockedLpCount: {
+              type: "integer",
+              minimum: 0,
+              description: "Sales with a surviving LPNFTLocked event.",
+            },
+            source: { type: "string", const: "loop_indexer" },
+            indexedBlockNumber: blockNumberStringSchema,
+            indexedBlockHash: bytes32Schema,
+          },
+        },
+      ],
+      description:
+        "Optional (Decision 0077): present only while a Launch contract is configured; absent otherwise, so the document is byte-identical to before.",
+    },
     source: {
       type: "string",
       const: "loop",
@@ -1366,6 +1504,47 @@ export const projectIdParamsSchema = {
   required: ["projectId"],
   properties: {
     projectId: { type: "string", pattern: opaqueIdPatternSource },
+  },
+} as const;
+
+export const launchIntentParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["launchId", "launchIntentId"],
+  properties: {
+    launchId: { type: "string", pattern: opaqueIdPatternSource },
+    launchIntentId: { type: "string", pattern: opaqueIdPatternSource },
+  },
+} as const;
+
+export const launchIntentReportRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["txHash"],
+  properties: {
+    txHash: {
+      type: "string",
+      pattern: "^0x[0-9a-fA-F]{64}$",
+      description: "The hash eth_sendTransaction returned on the device.",
+    },
+  },
+} as const;
+
+export const launchIntentReportResourceSchema = {
+  ...launchIntentResourceSchema,
+} as const;
+
+export const eligibilityQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    roundIndex: {
+      type: "integer",
+      minimum: 0,
+      maximum: 65_535,
+      description:
+        "Optional (Decision 0077): the on-chain round to evaluate. Default: the round open now, else the next one, else the last.",
+    },
   },
 } as const;
 
@@ -1406,4 +1585,20 @@ export const launchCommandErrors = {
     "VERSION_CONFLICT",
   ]),
   422: v2ErrorResponseSchema(["VALIDATION_FAILED"]),
+} as const;
+
+/**
+ * Errors of the Launch Intent prepare (Decision 0077). `detailsSafe.reasonCode`
+ * names the rule; the full list is in docs/frontend-v2-launch-api.md §S83b.
+ */
+export const launchIntentErrors = {
+  ...launchCommandErrors,
+  403: v2ErrorResponseSchema(["PERMISSION_DENIED", "POLICY_BLOCKED"]),
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "DATA_STALE",
+    "IDEMPOTENCY_CONFLICT",
+    "INSUFFICIENT_BALANCE",
+    "VERSION_CONFLICT",
+  ]),
 } as const;

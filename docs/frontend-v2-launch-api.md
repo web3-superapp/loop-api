@@ -637,3 +637,380 @@ deadline, eligibilityProof)`（06 §4.1 顺序）。本单仍恒 `503`。
 
 无新增 header、无新增错误码；错误体仍是七字段。S83a 新增的 reasonCode 只出现在
 `onChainState.reasonCode`（上表），不会出现在错误体里。
+
+## S83b：事件索引、购买 Intent、资格证明、USD1 授权（决策 0077）
+
+机器契约以 `openapi/loop-api.v2.json` 为准。S83b **只加可选字段**（下文逐项列出），
+S83a 的所有 `unavailable` 分支字节不变（回归测试照旧通过）。
+
+### S83b.1 何时会出现 `available`
+
+| 条件                                                                   | 影响                                                                      |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 四个 `LAUNCH_*` 键全空                                                 | 一切与 S83a 之前相同；Intent 两个路由 `503`；无 `onChain`、无 `usd1`      |
+| 键已配，合约代码已观测，sale 已由 `pnpm launch:register-sale` 登记     | 详情页读链（S83a）；其余接口看下一行                                      |
+| 另外 worker 开了 `LAUNCH_INDEXER_ENABLED`，`launch_event` 检查点已存在 | overview 四轴、holders.holders、history、economy.onChain 变为 `available` |
+| 另外 `BSC_WRITES_ENABLED=true`                                         | `POST …/intents` 与 `…/broadcast-report` 开放                             |
+
+Base URL：`https://api-dev.<域名>`（与其它 V2 模块相同）。Headers：读接口
+`Authorization: Bearer <Privy token>`、`X-Loop-Client-Version`、`X-Loop-Contract-Version: 2.0`；
+写接口另加 `Idempotency-Key: <UUIDv4>`。
+
+### S83b.2 `GET /v2/launch/overview`
+
+列表项的 `onChainState` 读 `launches` 投影（索引 lane 每段末尾 `getState` 的结果），
+`source: "chain"`，形状与详情页相同：
+
+```json
+{
+  "saleState": "LIVE",
+  "entitlementState": "NONE",
+  "liquidityState": "NOT_STARTED",
+  "operationalState": "ACTIVE",
+  "stateTupleDigest": "0xcdcd…cd",
+  "snapshotBlockNumber": "950",
+  "snapshotBlockHash": "0xbbbb…3b6",
+  "configVersion": "0xabab…ab",
+  "source": "chain",
+  "reasonCode": null
+}
+```
+
+`unavailable` 的新 reasonCode：`LAUNCH_ONCHAIN_STATE_NOT_INDEXED`（索引 lane 尚无检查点）、
+`LAUNCH_ONCHAIN_STATE_NOT_PROJECTED`（有检查点但这个 sale 还没投影到），其余沿用 S83a。
+`snapshotBlockNumber` 是投影区块，可能落后链头几个块。
+
+### S83b.3 `GET /v2/launch/{launchId}/holders`
+
+```json
+{
+  "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "holders": {
+    "status": "available",
+    "holderCount": 3,
+    "indexedBlockNumber": "950"
+  },
+  "myPosition": {
+    "status": "available",
+    "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+    "cumulativeUsd1": "100000000000000000000",
+    "purchasedTokens": "10000000000000000000000",
+    "entitledTokens": "0",
+    "claimableTokens": "0",
+    "claimedTokens": "0",
+    "refundableUsd1": "0",
+    "refundedUsd1": "0",
+    "snapshotBlockNumber": "900",
+    "snapshotBlockHash": "0xbbbb…384"
+  },
+  "walletCap": {
+    "status": "available",
+    "walletProjectCapUsd1": "1000000000000000000000",
+    "rounds": [
+      {
+        "roundIndex": 1,
+        "walletRoundCapUsd1": "500000000000000000000",
+        "cumulativeUsd1": "100000000000000000000"
+      }
+    ],
+    "snapshotBlockNumber": "900",
+    "snapshotBlockHash": "0xbbbb…384"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- `holderCount` = 该 sale 未被重组掉的 `Purchased` 事件的不同买家地址数（含非 LOOP 钱包），不是代币当前持有人数。
+- `myPosition` / `walletCap` 取**当前账户的活跃钱包**，同一区块读 `getPosition` / `getSaleConfig` / `getRounds` / `getRoundPosition`。
+- 没有活跃钱包：两块都是 `unavailable` + `LAUNCH_WALLET_NOT_FOUND`。合约不可读：三块都是 `unavailable` + S83a 的原因码。
+
+### S83b.4 `GET /v2/launch/{launchId}/history`
+
+三个数组只含**当前账户**的钱包；`source` 是索引检查点：
+
+```json
+{
+  "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "purchaseRecords": [
+    {
+      "purchaseRecordId": "5b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+      "roundId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "roundIndex": 1,
+      "usd1Amount": "10000000000000000000",
+      "tokenAmount": "1000000000000000000000",
+      "transactionHash": "0xaaaa…aa",
+      "logIndex": 0,
+      "blockNumber": "940",
+      "blockHash": "0xbbbb…3ac",
+      "confirmationState": "confirmed",
+      "observedAt": "2026-09-25T01:00:00.000Z"
+    }
+  ],
+  "entitlements": [],
+  "refunds": [],
+  "source": {
+    "status": "available",
+    "indexedBlockNumber": "950",
+    "indexedBlockHash": "0xbbbb…3b6"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- `confirmationState`：`pending`（未满确认数）→ `confirmed`；被重组的行保留为 `reorged`。
+- `entitlements` 只在 `SaleFinalized(SUCCEEDED)` + `VestingScheduleCreated` 都被索引后出现；
+  `entitledTokens` 是冻结总额，**不等于可领取额**（可领取看 holders.myPosition.claimableTokens）。
+- `refunds` 只在失败/取消后出现，一钱包一条。
+- `source` 为 `unavailable` 时三个数组恒空，空数组不代表"没参与"。
+
+### S83b.5 `GET /v2/launch/{launchId}/eligibility[?roundIndex=n]`
+
+新增可选 query `roundIndex`（0–65535）。缺省：当前时间窗内的轮次，否则下一轮，否则最后一轮。
+
+```json
+{
+  "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "mode": "whitelist",
+  "result": {
+    "status": "available",
+    "tier": "priority",
+    "reasonCode": null,
+    "snapshotBlock": "880",
+    "roundIndex": 1,
+    "allowlistRoot": "0x5f1c…",
+    "eligibilityProof": ["0x8e3a…", "0x12bc…"]
+  },
+  "configVersion": "launchMoonCatV1",
+  "effectiveAt": "2026-09-08T01:00:00.000Z",
+  "dependsOnStaking": false,
+  "contractVersion": "2.0"
+}
+```
+
+- 链上该轮 `allowlistRoot` 全零：开放轮，`tier` = 轮次配置的 tier 或 `public`，`eligibilityProof: []`，`snapshotBlock` 为读链区块。
+- 不在名单：`status: available`、`tier: null`、`reasonCode: "LAUNCH_WALLET_NOT_ELIGIBLE"`、`eligibilityProof: []`。
+- 拒绝（旧结构 `{tier: null, reasonCode, snapshotBlock: null}`）：`TIER_MODE_PENDING`、
+  `LAUNCH_ALLOWLIST_NOT_COMPUTED`、`LAUNCH_ALLOWLIST_ROOT_MISMATCH`（链上根与 LOOP 计算的根不一致，
+  **此时 Intent 也会被拒**）、`LAUNCH_ALLOWLIST_MODE_MISMATCH`、`LAUNCH_ROUND_NOT_FOUND`、
+  `LAUNCH_WALLET_NOT_FOUND`、S83a 的合约原因码。
+- `eligibilityProof` 与 Intent 里的同名字段一致，原样作为 `buy()` 最后一个参数（后端已编进 calldata，前端不需自己拼）。
+
+### S83b.6 `POST /v2/launch/{launchId}/intents`
+
+请求（金额是 USD1 十进制字符串，最多 18 位小数；JSON 数字 → `400`）：
+
+```http
+POST /v2/launch/9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f/intents
+Authorization: Bearer <token>
+X-Loop-Client-Version: 1.2.3
+X-Loop-Contract-Version: 2.0
+Idempotency-Key: 0f8a0c33-6f7e-4f53-9d8f-3b1f5c2e9a10
+Content-Type: application/json
+
+{ "walletId": "d64786bb-408d-415d-8a69-6277d56c921b", "roundId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e", "payAmount": "10" }
+```
+
+`201`（`*` 为 S83b 新增的可选字段）：
+
+```json
+{
+  "launchIntent": {
+    "launchIntentId": "7a2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "state": "awaiting_signature",
+    "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+    "projectId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+    "roundId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "roundIndex": 1,
+    "chainId": "eip155:97",
+    "contractAddress": "0x1111111111111111111111111111111111111111",
+    "quoteAssetId": "eip155:97:0x2222222222222222222222222222222222222222",
+    "usd1Amount": "10000000000000000000",
+    "expectedTokenAmount": "1000000000000000000000",
+    "minTokenAmount": "1000000000000000000000",
+    "walletCumulativeUsd1": "100000000000000000000",
+    "deadline": "2026-09-22T00:02:00.000Z",
+    "eligibilityProof": [],
+    "configVersion": "0xabab…ab",
+    "stateTupleDigest": "0xcdcd…cd",
+    "snapshotBlockNumber": "900",
+    "snapshotBlockHash": "0xbbbb…384",
+    "payloadDigest": "3f1e…(64 hex)",
+    "unsignedTransaction": {
+      "chainId": 97,
+      "to": "0x1111111111111111111111111111111111111111",
+      "data": "0x…buy(saleId, roundId, usd1Amount, minTokenAmount, deadline, eligibilityProof)",
+      "value": "0x0",
+      "from*": "0x…钱包地址",
+      "gas*": "0x1d4c0",
+      "nonce*": "0x3",
+      "type*": "legacy",
+      "maxFeePerGas*": null,
+      "maxPriorityFeePerGas*": null,
+      "gasPrice*": "0x3b9aca00"
+    },
+    "expiresAt": "2026-09-22T00:02:00.000Z",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "projectAssetId*": "eip155:97:0x3333333333333333333333333333333333333333",
+    "saleId*": "7",
+    "walletRoundCapUsd1*": "500000000000000000000",
+    "walletProjectCapUsd1*": "1000000000000000000000",
+    "transactionHash*": null,
+    "simulation*": { "status": "passed", "reasonCode": null },
+    "policy*": {
+      "configVersion": "bscWriteCanaryV1",
+      "canaryMaxUsd": "5",
+      "valueUsd": "10",
+      "priceSource": "usd1_par"
+    },
+    "signing*": {
+      "mode": "device_eth_send_transaction",
+      "allowed": true,
+      "reasonCode": null
+    }
+  },
+  "contractVersion": "2.0"
+}
+```
+
+（示例键名里的 `*` 只是标记，真实键名没有星号。）
+
+- 签名出口：设备把 `unsignedTransaction`（含 `from/gas/nonce/fee`）交给 Privy 嵌入式钱包
+  `eth_sendTransaction`；只有 `signing.allowed = true`（`awaiting_signature` 且未过 `expiresAt`）才可签。
+- `walletRoundCapUsd1` / `walletProjectCapUsd1` 与所有检查同一快照块，签名前展示用。
+- 同一 `Idempotency-Key` 同一请求体：返回同一个 Intent（不再读链）；不同请求体：`409 IDEMPOTENCY_CONFLICT`。
+- 模拟失败：仍返回 `201`，`state: "prepared"`，`signing.allowed: false`，
+  `reasonCode` 为 `LAUNCH_SIMULATION_REVERTED` / `LAUNCH_SIMULATION_UNAVAILABLE`。
+- `state` 可能值：`prepared` / `awaiting_signature` / `submitted`（已回报）/ `confirmed`（索引看到对应 `Purchased`）/ `expired`（未回报且过期）。
+
+错误（七字段错误体，`detailsSafe.reasonCode` 指明规则；除 `detailsSafe` 外字段均为固定值）：
+
+| HTTP / code                  | `detailsSafe.reasonCode`（附加字段）                                                                                                                                                                                                                                                                                                   | 前端建议                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `400 INVALID_REQUEST`        | —                                                                                                                                                                                                                                                                                                                                      | 修正输入                         |
+| `404 NOT_FOUND`              | —（launch / 钱包 / 轮次不存在或不属于你）                                                                                                                                                                                                                                                                                              | 刷新                             |
+| `409 DATA_STALE`             | `LAUNCH_SALE_NOT_LIVE`（`saleState`）、`LAUNCH_ROUND_NOT_ON_CHAIN`、`LAUNCH_ROUND_NOT_OPEN`、`LAUNCH_SALE_PAUSED`、`LAUNCH_DEADLINE_TOO_CLOSE`、`LAUNCH_CONFIG_VERSION_MISMATCH`                                                                                                                                                       | 刷新状态后重试                   |
+| `409 INSUFFICIENT_BALANCE`   | `LAUNCH_USD1_BALANCE_INSUFFICIENT`、`LAUNCH_USD1_ALLOWANCE_INSUFFICIENT`（`allowanceUsd1`）、`LAUNCH_GAS_INSUFFICIENT`                                                                                                                                                                                                                 | 充值 / 先授权（S83b.8）/ 充 tBNB |
+| `409 IDEMPOTENCY_CONFLICT`   | —                                                                                                                                                                                                                                                                                                                                      | 新 key                           |
+| `422 VALIDATION_FAILED`      | `LAUNCH_BELOW_MIN_PURCHASE`（`minPurchaseUsd1`）、`LAUNCH_WALLET_ROUND_CAP_EXCEEDED`、`LAUNCH_WALLET_PROJECT_CAP_EXCEEDED`、`LAUNCH_ROUND_CAP_EXCEEDED`、`LAUNCH_HARD_CAP_EXCEEDED`（均带 `remainingUsd1`）、`LAUNCH_QUOTE_ZERO`；无 reasonCode = 非嵌入式钱包                                                                         | 调整金额                         |
+| `403 POLICY_BLOCKED`         | `LAUNCH_ALLOWLIST_NOT_COMPUTED`、`LAUNCH_ALLOWLIST_ROOT_MISMATCH`、`LAUNCH_ALLOWLIST_MODE_MISMATCH`、`LAUNCH_WALLET_NOT_ELIGIBLE`、`ASSET_NOT_IN_CANARY_ALLOWLIST`、`COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`、`CANARY_CEILING_EXCEEDED`（`exposureUsd`,`ceilingUsd`）、`CANARY_DAILY_CEILING_EXCEEDED`（另加 `spentUsd`,`remainingUsd`） | 不可重试                         |
+| `503 CAPABILITY_UNAVAILABLE` | 无 `detailsSafe`：写开关关闭或合约键为空（与 S83a 字节相同）；有 reasonCode：S83a 合约原因码、`LAUNCH_SALE_ASSETS_UNREGISTERED`、`LAUNCH_CONTRACT_READ_FAILED`                                                                                                                                                                         | 稍后重试                         |
+
+金额附加字段（`*Usd1`）都是 USD1 最小单位十进制字符串；canary 字段（`*Usd`）是美元十进制字符串（USD1 按 1 USD 计）。
+
+### S83b.7 `POST /v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report`
+
+设备 `eth_sendTransaction` 拿到 hash 后回报（与钱包 Intent 的 broadcast-report 同型，写接口 headers）：
+
+```json
+{
+  "txHash": "0x7777777777777777777777777777777777777777777777777777777777777777"
+}
+```
+
+`200` 返回与 `201` 相同形状的 `{launchIntent, contractVersion}`，`state: "submitted"`、
+`transactionHash` 为回报值、`signing.allowed: false`（`LAUNCH_INTENT_ALREADY_REPORTED`）。
+回报只是 pending 证据：当 `launch_event` 索引到该交易的 `Purchased` 事件后 `state` 变
+`confirmed`，history 以索引为准。
+
+| HTTP / code                  | reasonCode                                                                                                                         |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `200`                        | 同一 hash 重复回报：原样返回（幂等）                                                                                               |
+| `400 INVALID_REQUEST`        | hash 不是 32 字节十六进制                                                                                                          |
+| `404 NOT_FOUND`              | Intent 不存在或不属于你                                                                                                            |
+| `409 DATA_STALE`             | `LAUNCH_INTENT_ALREADY_REPORTED`（另一个 hash）、`LAUNCH_INTENT_NOT_SIGNABLE`、`LAUNCH_INTENT_EXPIRED`（过期且链上还看不到该交易） |
+| `422 VALIDATION_FAILED`      | `LAUNCH_TX_PAYLOAD_MISMATCH`（链上交易与签名载荷不一致）                                                                           |
+| `503 CAPABILITY_UNAVAILABLE` | 写开关关闭 / 合约键为空（无 detailsSafe）；读链失败（`LAUNCH_CONTRACT_READ_FAILED`）                                               |
+
+### S83b.8 USD1 授权（allowance 不足时）
+
+用现有 `POST /v2/wallet-intents/approve`（`sendApprovals` 模块），**不新增字段**：链由
+`assetId` 决定，写成 launch 槽位上的 USD1：
+
+```json
+{
+  "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+  "assetId": "eip155:97:0x2222222222222222222222222222222222222222",
+  "spenderAddress": "0x1111111111111111111111111111111111111111",
+  "allowance": { "mode": "exact", "amount": "10" }
+}
+```
+
+`201` 是普通钱包 Intent（节选）：
+
+```json
+{
+  "intentId": "…",
+  "kind": "approve",
+  "state": "awaiting_signature",
+  "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+  "chainId": "eip155:97",
+  "policy": {
+    "configVersion": "bscWriteCanaryV1",
+    "valueUsd": "10",
+    "priceSource": "usd1_par",
+    "…": "…"
+  },
+  "unsignedTransaction": {
+    "chainId": 97,
+    "from": "0x…",
+    "to": "0x2222222222222222222222222222222222222222",
+    "data": "0x095ea7b3…",
+    "value": "0x0",
+    "…": "…"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- 只放行 **USD1 → Launch 合约**这一对；97 上的其他资产、其他 spender、或 launch 槽位与主链相同
+  → `422 CHAIN_MISMATCH`（在 canary 之前判断）。revoke（`/v2/wallet-intents/revoke`）同样只放行这一对。
+- 走完整 canary：97 的 USD1 资产 ID 必须在 `BSC_WRITE_CANARY_ASSETS`，金额按 1 USD 估值，与 Launch Intent
+  共享每日上限。签名后照常调用 `POST /v2/wallet-intents/{intentId}/broadcast-report`；后端按 Intent 记录的链
+  （97）读交易和回执。
+- 钱包 Intent 的 `unsignedTransaction.chainId` 取值从 `56` 放宽为 `56 | 97`。
+
+### S83b.9 `GET /v2/wallets/{walletId}/balances` → `launchChain.usd1`
+
+形状冻结（决策 0088）：
+
+```json
+"launchChain": {
+  "chainId": "eip155:97",
+  "availability": "available",
+  "reasonCode": null,
+  "nativeBalance": { "…": "…" },
+  "usd1": { "balance": "7000000000000000000", "allowance": "5000000000000000000" }
+}
+```
+
+- `balance` = USD1 余额，`allowance` = 对 `LAUNCH_CONTRACT_ADDRESS` 的授权额，都是 18 位最小单位十进制字符串。
+- 仅当后端配置了 `LAUNCH_USD1_ADDRESS`、`launchChain` 块存在、且两个值在同一区块读到时出现；否则整个 `usd1` 键缺席（不会是 `null`）。
+- 不出现在 Intent `201` 里。
+
+### S83b.10 `GET /v2/launch/economy` → `onChain`
+
+仅在合约键已配置时出现（否则无此键，字节与之前相同）：
+
+```json
+"onChain": {
+  "status": "available",
+  "registeredSaleCount": 1,
+  "totalRaisedUsd1": "170000000000000000000",
+  "lockedLpCount": 1,
+  "source": "loop_indexer",
+  "indexedBlockNumber": "950",
+  "indexedBlockHash": "0xbbbb…3b6"
+}
+```
+
+`totalRaisedUsd1` 只计 `SUCCEEDED` 的 `SaleFinalized`；无检查点时为 `{"status": "unavailable", "reasonCode": "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"}`。
+
+### S83b.11 运营脚本（Dev）
+
+- `pnpm launch:register-sale --launch <launchId> --sale-id <n> [--confirm] [--rescan]`：读 `getSaleConfig`
+  核对 USD1 与项目代币（取已确认配置里的 `projectTokenAddress`），无 `--confirm` 只演练。
+- `pnpm launch:allowlist import <csv> --launch <id> --round <n> [--source <tag>]`：每行一个地址（可有表头 `address`）。
+- `pnpm launch:allowlist compute --launch <id> --round <n> --snapshot-block <n> [--confirm]`：输出 Merkle 根，
+  由运营写入链上轮次；后端不写链。

@@ -962,6 +962,95 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(bscRead?.availability).toBe("available");
   });
 
+  it("adds USD1 balance and allowance to launchChain only when LAUNCH_USD1_ADDRESS is configured (Decision 0077)", async () => {
+    const usd1 = "0x2222222222222222222222222222222222222222";
+    const launchContract = "0x1111111111111111111111111111111111111111";
+    const base = launchClientFake();
+    const client = {
+      ...base,
+      readBalances: (
+        owner: string,
+        items: readonly { assetId: string; address: string | null }[],
+      ) =>
+        items.some((item) => item.address === usd1)
+          ? Promise.resolve({
+              head: {
+                blockNumber: launchHeadNumber,
+                blockHash: launchHeadHash,
+                observedAt,
+              },
+              balances: items.map((item) => ({
+                assetId: item.assetId,
+                rawValue: 7_000_000_000_000_000_000n,
+                reasonCode: null,
+              })),
+            })
+          : base.readBalances(owner, items),
+      readAllowances: (
+        _owner: string,
+        items: readonly { assetId: string; spender: string }[],
+      ) =>
+        Promise.resolve({
+          head: {
+            blockNumber: launchHeadNumber,
+            blockHash: launchHeadHash,
+            observedAt,
+          },
+          allowances: items.map((item) => ({
+            assetId: item.assetId,
+            spender: item.spender,
+            rawValue: 5_000_000_000_000_000_000n,
+            reasonCode: null,
+          })),
+        }),
+    } as unknown as BscReadClient;
+    const { app } = await createApp(
+      { ...fakes(), launchChainReadClient: client },
+      {
+        LAUNCH_CHAIN_ID: "97",
+        LAUNCH_CONTRACT_ADDRESS: launchContract,
+        LAUNCH_CONTRACT_VERSION: "1.0.0",
+        LAUNCH_CONTRACT_START_BLOCK: "1",
+        LAUNCH_USD1_ADDRESS: usd1,
+      },
+    );
+    const balances = await app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(balances.statusCode).toBe(200);
+    const launchChain = balances.json<{
+      readonly launchChain: Record<string, unknown>;
+    }>().launchChain;
+    expect(launchChain["usd1"]).toEqual({
+      balance: "7000000000000000000",
+      allowance: "5000000000000000000",
+    });
+    // Additive: every pre-existing key is unchanged.
+    expect(Object.keys(launchChain).sort()).toEqual([
+      "availability",
+      "chainId",
+      "nativeBalance",
+      "reasonCode",
+      "usd1",
+    ]);
+    // Without the keys the block is absent (previous test: byte shape unchanged).
+    const { app: blank } = await createApp(
+      { ...fakes(), launchChainReadClient: client },
+      { LAUNCH_CHAIN_ID: "97" },
+    );
+    const plain = await blank.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/balances`,
+      headers: commonHeaders(),
+    });
+    expect(
+      plain.json<{ readonly launchChain: Record<string, unknown> }>()
+        .launchChain,
+    ).not.toHaveProperty("usd1");
+  });
+
   it("reports the launch slot's failures inside launchChain without failing the primary reads", async () => {
     const cases: readonly {
       readonly client: BscReadClient;

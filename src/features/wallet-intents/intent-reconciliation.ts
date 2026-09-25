@@ -46,6 +46,11 @@ export interface CreateWalletIntentReconcilerOptions {
   readonly repository: WalletIntentRepository;
   readonly wallets: AccountWalletRepository;
   readonly readClient: BscChainCallClient;
+  /**
+   * The launch slot's client (Decision 0077): an approve/revoke recorded on
+   * that chain is reconciled against it, never against the primary chain.
+   */
+  readonly launchReadClient?: BscChainCallClient | null;
   readonly swapAdapter: PrivySwapAdapter;
   readonly createUuid: () => string;
   readonly now?: () => Date;
@@ -59,6 +64,14 @@ export function createWalletIntentReconciler(
   options: CreateWalletIntentReconcilerOptions,
 ): WalletIntentReconciler {
   const now = options.now ?? ((): Date => new Date());
+  function clientFor(chainId: string): BscChainCallClient {
+    const launch = options.launchReadClient ?? null;
+    return launch !== null &&
+      chainId === launch.chainId &&
+      chainId !== options.readClient.chainId
+      ? launch
+      : options.readClient;
+  }
 
   async function transition(
     record: WalletIntentRecord,
@@ -151,6 +164,7 @@ export function createWalletIntentReconciler(
   async function reconcileDeviceBroadcast(
     record: WalletIntentRecord,
   ): Promise<WalletIntentRecord | null> {
+    const readClient = clientFor(record.chainId);
     const transaction = record.canonicalPayload.transaction;
     const hash = record.transactionHash;
     if (hash === null || transaction === null) {
@@ -166,7 +180,7 @@ export function createWalletIntentReconciler(
     // only evidence the lane trusts.
     let payloadVerified = record.payloadVerified;
     if (!payloadVerified) {
-      const observed = await options.readClient.getTransaction(hash);
+      const observed = await readClient.getTransaction(hash);
       if (observed === null) {
         return budgetExhausted(record);
       }
@@ -182,7 +196,7 @@ export function createWalletIntentReconciler(
     }
     let receipt;
     try {
-      receipt = await options.readClient.getTransactionReceipt(hash);
+      receipt = await readClient.getTransactionReceipt(hash);
     } catch (error) {
       if (isRpcForbiddenError(error)) {
         // The endpoint refuses eth_getTransactionReceipt (publicnode 403);
@@ -230,7 +244,7 @@ export function createWalletIntentReconciler(
       }
       return null;
     }
-    const head = await options.readClient.getHead();
+    const head = await readClient.getHead();
     const confirmations = Number(head.blockNumber - receipt.blockNumber + 1n);
     const receiptFact: IntentReceipt = Object.freeze({
       status: receipt.status,
@@ -240,7 +254,7 @@ export function createWalletIntentReconciler(
       effectiveGasPrice: receipt.effectiveGasPrice.toString(10),
       observedAt: now().toISOString(),
     });
-    if (confirmations < options.readClient.confirmations) {
+    if (confirmations < readClient.confirmations) {
       return transition(record, {
         toState: "submitted",
         eventType: "receipt_observed",

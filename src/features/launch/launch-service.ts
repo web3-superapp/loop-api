@@ -29,6 +29,7 @@ import {
   venueMilestoneTracks,
   type LaunchContractReasonCode,
   type LaunchEligibilityMode,
+  type LaunchEligibilityTier,
   type LaunchGraduationStep,
   type LaunchOnChainStateAvailable,
   type LaunchOnChainStateProjection,
@@ -46,6 +47,23 @@ import {
   type LaunchContractRound,
   type LaunchContractSaleConfig,
 } from "../../integrations/launch/launch-contract-adapter.js";
+import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
+import type {
+  LaunchChainRepository,
+  LaunchCheckpointRecord,
+  LaunchStateProjectionRecord,
+} from "./launch-chain-repository.js";
+import {
+  decideEligibility,
+  launchEligibilityReasonCodes,
+  tierForMember,
+} from "./launch-eligibility.js";
+import {
+  prepareLaunchIntent,
+  reportLaunchIntentBroadcast,
+  type LaunchIntentResource,
+  type LaunchIntentRuntime,
+} from "./launch-intent-service.js";
 import {
   LaunchDataStaleError,
   LaunchIdempotencyConflictError,
@@ -77,6 +95,16 @@ export interface LaunchServiceDependencies {
    * every on-chain slot byte-identical to Decision 0036.
    */
   readonly contract?: LaunchContractAdapter | null;
+  /**
+   * Launch chain facts (Decision 0077): the lane checkpoint and projections,
+   * allowlist roots, and the Intent namespace. Absent keeps every chain slot
+   * on its Decision 0076 reason.
+   */
+  readonly chain?: LaunchChainRepository | null;
+  /** The caller's wallets (active wallet for position and eligibility). */
+  readonly wallets?: AccountWalletRepository | null;
+  /** Intent prepare runtime; absent keeps the Intent route 503. */
+  readonly intentRuntime?: LaunchIntentRuntime | null;
   readonly now?: () => Date;
 }
 
@@ -228,14 +256,26 @@ export interface LaunchDetailResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+export type LaunchEligibilityResult =
+  | {
+      readonly tier: null;
+      readonly reasonCode: string;
+      readonly snapshotBlock: null;
+    }
+  | {
+      readonly status: "available";
+      readonly tier: LaunchEligibilityTier | null;
+      readonly reasonCode: string | null;
+      readonly snapshotBlock: string;
+      readonly roundIndex: number;
+      readonly allowlistRoot: string;
+      readonly eligibilityProof: readonly string[];
+    };
+
 export interface LaunchEligibilityResource {
   readonly launchId: string;
   readonly mode: LaunchEligibilityMode;
-  readonly result: {
-    readonly tier: null;
-    readonly reasonCode: string;
-    readonly snapshotBlock: null;
-  };
+  readonly result: LaunchEligibilityResult;
   readonly configVersion: string | null;
   readonly effectiveAt: string | null;
   readonly dependsOnStaking: false;
@@ -244,18 +284,30 @@ export interface LaunchEligibilityResource {
 
 export interface LaunchHoldersResource {
   readonly launchId: string;
-  readonly holders: UnavailableProjection;
-  readonly myPosition: UnavailableProjection;
-  readonly walletCap: UnavailableProjection;
+  readonly holders:
+    | UnavailableProjection
+    | {
+        readonly status: "available";
+        readonly holderCount: number;
+        readonly indexedBlockNumber: string;
+      };
+  readonly myPosition: UnavailableProjection | Record<string, unknown>;
+  readonly walletCap: UnavailableProjection | Record<string, unknown>;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
 export interface LaunchHistoryResource {
   readonly launchId: string;
-  readonly purchaseRecords: readonly never[];
-  readonly entitlements: readonly never[];
-  readonly refunds: readonly never[];
-  readonly source: UnavailableProjection;
+  readonly purchaseRecords: readonly unknown[];
+  readonly entitlements: readonly unknown[];
+  readonly refunds: readonly unknown[];
+  readonly source:
+    | UnavailableProjection
+    | {
+        readonly status: "available";
+        readonly indexedBlockNumber: string;
+        readonly indexedBlockHash: string;
+      };
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -296,6 +348,21 @@ export interface LaunchEconomyResource {
   readonly totalSupply: UnavailableProjection;
   readonly distributed: UnavailableProjection;
   readonly ecosystemTax: UnavailableProjection;
+  /**
+   * Provable on-chain counts from the `launch_event` lane (Decision 0077);
+   * present only while a Launch contract is configured.
+   */
+  readonly onChain?:
+    | UnavailableProjection
+    | {
+        readonly status: "available";
+        readonly registeredSaleCount: number;
+        readonly totalRaisedUsd1: string;
+        readonly lockedLpCount: number;
+        readonly source: "loop_indexer";
+        readonly indexedBlockNumber: string;
+        readonly indexedBlockHash: string;
+      };
   /** Where the counts come from: LOOP's own ledger (Decision 0049). */
   readonly source: "loop";
   readonly observedAt: string;
@@ -331,11 +398,14 @@ export interface LaunchService {
     readonly launchId: string;
   }): Promise<LaunchDetailResource>;
   getEligibility(
-    input: PrincipalInput & { readonly launchId: string },
+    input: PrincipalInput & {
+      readonly launchId: string;
+      readonly roundIndex?: unknown;
+    },
   ): Promise<LaunchEligibilityResource>;
-  getHolders(input: {
-    readonly launchId: string;
-  }): Promise<LaunchHoldersResource>;
+  getHolders(
+    input: PrincipalInput & { readonly launchId: string },
+  ): Promise<LaunchHoldersResource>;
   getHistory(
     input: PrincipalInput & { readonly launchId: string },
   ): Promise<LaunchHistoryResource>;
@@ -343,8 +413,27 @@ export interface LaunchService {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly projectId: string;
   }): Promise<LaunchMilestonesResource>;
-  /** Always CAPABILITY_UNAVAILABLE: no Launch transaction is ever built here. */
-  prepareIntent(input: PrincipalInput & { readonly launchId: string }): never;
+  /**
+   * Launch purchase Intent prepare (Decision 0077). CAPABILITY_UNAVAILABLE,
+   * byte for byte as before, while BSC_WRITES_ENABLED is off or the contract
+   * keys are blank.
+   */
+  prepareIntent(
+    input: CommandInput & {
+      readonly launchId: string;
+      readonly body: unknown;
+    },
+  ): Promise<{
+    readonly created: boolean;
+    readonly resource: LaunchIntentResource;
+  }>;
+  /** Device broadcast report of a prepared Intent (Decision 0077). */
+  reportIntent(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly launchId: string;
+    readonly launchIntentId: string;
+    readonly body: unknown;
+  }): Promise<LaunchIntentResource>;
   getStake(): LaunchStakeResource;
   getEconomy(): Promise<LaunchEconomyResource>;
 }
@@ -567,6 +656,22 @@ function eligibilityMode(
     : "unavailable";
 }
 
+function parseRoundIndexQuery(value: unknown): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^(0|[1-9][0-9]{0,4})$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw V2ApiError.invalidRequest();
+  }
+  return parsed;
+}
+
 /** Largest unix second `Date` can represent (year 275760). */
 const maximumUnixSeconds = 8_640_000_000_000n;
 
@@ -639,7 +744,47 @@ export function createLaunchService(
 ): LaunchService {
   const { repository } = dependencies;
   const contract = dependencies.contract ?? null;
+  const chain = dependencies.chain ?? null;
+  const wallets = dependencies.wallets ?? null;
+  const intentRuntime = dependencies.intentRuntime ?? null;
   const now = dependencies.now ?? ((): Date => new Date());
+
+  /** The lane checkpoint of the launch chain, or null (never throws). */
+  async function readCheckpoint(): Promise<LaunchCheckpointRecord | null> {
+    if (chain === null || contract === null || contract.contract === null) {
+      return null;
+    }
+    try {
+      return await chain.getCheckpoint(contract.chainId);
+    } catch {
+      return null;
+    }
+  }
+
+  async function activeWallet(
+    principal: AuthenticatedLoopPrincipal,
+  ): Promise<{ readonly walletId: string; readonly address: string } | null> {
+    if (wallets === null) {
+      return null;
+    }
+    const list = await wallets.list(principal.userId);
+    return (
+      list.find((wallet) => wallet.isActive && wallet.status === "active") ??
+      null
+    );
+  }
+
+  /** Why the chain cannot be read for this launch, or null (probes). */
+  async function chainReason(
+    launch: LaunchRecord,
+  ): Promise<LaunchContractReasonCode | null> {
+    const refused = registryReason(launch);
+    if (contract === null || refused !== null) {
+      return refused ?? launchContractReasonCodes.baselinePending;
+    }
+    const state = await contract.availability();
+    return state.status === "unavailable" ? state.reasonCode : null;
+  }
 
   /**
    * Why this launch's sale cannot be read, from configuration and the
@@ -682,6 +827,8 @@ export function createLaunchService(
    */
   function listOnChainState(
     launch: LaunchRecord,
+    checkpoint: LaunchCheckpointRecord | null,
+    projections: ReadonlyMap<string, LaunchStateProjectionRecord>,
   ): LaunchOnChainStateProjection {
     if (contract === null) {
       return unavailableOnChainState;
@@ -690,10 +837,34 @@ export function createLaunchService(
     if (state.status === "unavailable") {
       return unavailableOnChainStateFor(state.reasonCode);
     }
-    return unavailableOnChainStateFor(
-      registryReason(launch) ??
+    const refused = registryReason(launch);
+    if (refused !== null) {
+      return unavailableOnChainStateFor(refused);
+    }
+    // Decision 0077: lists read the lane's projection, never the chain.
+    if (checkpoint === null) {
+      return unavailableOnChainStateFor(
         launchContractReasonCodes.onChainStateNotIndexed,
-    );
+      );
+    }
+    const projection = projections.get(launch.launchId);
+    if (projection === undefined) {
+      return unavailableOnChainStateFor(
+        launchContractReasonCodes.onChainStateNotProjected,
+      );
+    }
+    return Object.freeze({
+      saleState: projection.saleState,
+      entitlementState: projection.entitlementState,
+      liquidityState: projection.liquidityState,
+      operationalState: projection.operationalState,
+      stateTupleDigest: projection.stateTupleDigest,
+      snapshotBlockNumber: projection.snapshotBlockNumber,
+      snapshotBlockHash: projection.snapshotBlockHash,
+      configVersion: projection.configVersion,
+      source: "chain" as const,
+      reasonCode: null,
+    });
   }
 
   /**
@@ -777,6 +948,206 @@ export function createLaunchService(
     }
   }
 
+  async function economyOnChain(): Promise<NonNullable<
+    LaunchEconomyResource["onChain"]
+  > | null> {
+    const configured = contract?.contract ?? null;
+    if (contract === null || configured === null) {
+      return null;
+    }
+    const checkpoint = await readCheckpoint();
+    if (checkpoint === null || chain === null) {
+      return unavailable(launchContractReasonCodes.onChainStateNotIndexed);
+    }
+    const counts = await chain.getEconomyChain({
+      chainId: contract.chainId,
+      contractAddress: configured.address,
+      contractVersion: configured.version,
+    });
+    return Object.freeze({
+      status: "available" as const,
+      registeredSaleCount: counts.registeredSaleCount,
+      totalRaisedUsd1: counts.totalRaisedUsd1,
+      lockedLpCount: counts.lockedLpCount,
+      source: "loop_indexer" as const,
+      indexedBlockNumber: checkpoint.lastBlockNumber,
+      indexedBlockHash: checkpoint.lastBlockHash,
+    });
+  }
+
+  /**
+   * `getPosition` and the wallet caps at one snapshot (06 §4.2): the caller's
+   * active wallet, `getSaleConfig`, `getRounds`, and `getRoundPosition` per
+   * round. Any failure is the named reason on both blocks.
+   */
+  async function readPosition(
+    detail: LaunchDetailRecord,
+    principal: AuthenticatedLoopPrincipal,
+  ): Promise<{
+    readonly myPosition: UnavailableProjection | Record<string, unknown>;
+    readonly walletCap: UnavailableProjection | Record<string, unknown>;
+  }> {
+    const wallet = await activeWallet(principal);
+    if (wallet === null || contract === null) {
+      const missing = unavailable(launchContractReasonCodes.walletNotFound);
+      return { myPosition: missing, walletCap: missing };
+    }
+    const saleId = BigInt(detail.launch.saleId as string);
+    try {
+      const snapshot = await contract.takeSnapshot();
+      const [state, config, rounds, position] = await Promise.all([
+        contract.getState(saleId, snapshot),
+        contract.getSaleConfig(saleId, snapshot),
+        contract.getRounds(saleId, snapshot),
+        contract.getPosition({ saleId, wallet: wallet.address }, snapshot),
+      ]);
+      const perRound = await Promise.all(
+        rounds.value.map((round) =>
+          contract.getRoundPosition(
+            { saleId, roundId: round.roundId, wallet: wallet.address },
+            snapshot,
+          ),
+        ),
+      );
+      await contract.confirmSnapshot(snapshot);
+      if (isZeroBytes32(state.value.configVersion)) {
+        const missing = unavailable(launchContractReasonCodes.saleNotFound);
+        return { myPosition: missing, walletCap: missing };
+      }
+      const block = {
+        snapshotBlockNumber: snapshot.blockNumber.toString(),
+        snapshotBlockHash: snapshot.blockHash,
+      };
+      return {
+        myPosition: Object.freeze({
+          status: "available" as const,
+          walletId: wallet.walletId,
+          cumulativeUsd1: position.value.cumulativeUsd1.toString(),
+          purchasedTokens: position.value.purchasedTokens.toString(),
+          entitledTokens: position.value.entitledTokens.toString(),
+          claimableTokens: position.value.claimableTokens.toString(),
+          claimedTokens: position.value.claimedTokens.toString(),
+          refundableUsd1: position.value.refundableUsd1.toString(),
+          refundedUsd1: position.value.refundedUsd1.toString(),
+          ...block,
+        }),
+        walletCap: Object.freeze({
+          status: "available" as const,
+          walletProjectCapUsd1: config.value.walletProjectCapUsd1.toString(),
+          rounds: Object.freeze(
+            rounds.value.map((round, index) =>
+              Object.freeze({
+                roundIndex: round.roundId,
+                walletRoundCapUsd1: round.walletRoundCapUsd1.toString(),
+                cumulativeUsd1: (perRound[index]?.value ?? 0n).toString(),
+              }),
+            ),
+          ),
+          ...block,
+        }),
+      };
+    } catch (error) {
+      const reason =
+        error instanceof LaunchContractUnavailableError
+          ? error.reasonCode
+          : launchContractReasonCodes.readFailed;
+      return {
+        myPosition: unavailable(reason),
+        walletCap: unavailable(reason),
+      };
+    }
+  }
+
+  /**
+   * One round's eligibility for the caller's active wallet (Decision 0077):
+   * the chain's `allowlistRoot` at one snapshot selects the stored set.
+   */
+  async function evaluateEligibility(
+    detail: LaunchDetailRecord,
+    mode: Exclude<LaunchEligibilityMode, "unavailable">,
+    principal: AuthenticatedLoopPrincipal,
+    requestedRound: number | null,
+  ): Promise<LaunchEligibilityResult> {
+    const refusedResult = (reasonCode: string): LaunchEligibilityResult =>
+      Object.freeze({ tier: null, reasonCode, snapshotBlock: null });
+    const reason = await chainReason(detail.launch);
+    if (reason !== null || contract === null) {
+      return refusedResult(reason ?? launchContractReasonCodes.baselinePending);
+    }
+    const wallet = await activeWallet(principal);
+    if (wallet === null) {
+      return refusedResult(launchContractReasonCodes.walletNotFound);
+    }
+    const saleId = BigInt(detail.launch.saleId as string);
+    const snapshot = await contract.takeSnapshot();
+    const rounds = await contract.getRounds(saleId, snapshot);
+    await contract.confirmSnapshot(snapshot);
+    const nowSeconds = BigInt(Math.floor(now().getTime() / 1000));
+    const round =
+      requestedRound !== null
+        ? rounds.value.find((item) => item.roundId === requestedRound)
+        : (rounds.value.find(
+            (item) => item.startAt <= nowSeconds && nowSeconds < item.endAt,
+          ) ??
+          rounds.value.find((item) => item.startAt > nowSeconds) ??
+          rounds.value.at(-1));
+    if (round === undefined) {
+      return refusedResult(launchEligibilityReasonCodes.roundNotFound);
+    }
+    const roots =
+      chain === null
+        ? []
+        : await chain.listAllowlistRoots(detail.launch.launchId, round.roundId);
+    const decision = decideEligibility({
+      chainRoot: round.allowlistRoot,
+      roots,
+      mode,
+      walletAddress: wallet.address,
+    });
+    const offChainRound = detail.rounds.find(
+      (item) => item.roundIndex === round.roundId,
+    );
+    const roundTier = offChainRound?.eligibilityTier ?? null;
+    switch (decision.status) {
+      case "refused": {
+        return refusedResult(decision.reasonCode);
+      }
+      case "open": {
+        return Object.freeze({
+          status: "available" as const,
+          tier: roundTier ?? ("public" as const),
+          reasonCode: null,
+          snapshotBlock: snapshot.blockNumber.toString(),
+          roundIndex: round.roundId,
+          allowlistRoot: round.allowlistRoot,
+          eligibilityProof: Object.freeze([]),
+        });
+      }
+      case "member": {
+        return Object.freeze({
+          status: "available" as const,
+          tier: tierForMember(mode, roundTier),
+          reasonCode: null,
+          snapshotBlock: decision.root.snapshotBlock,
+          roundIndex: round.roundId,
+          allowlistRoot: round.allowlistRoot,
+          eligibilityProof: decision.proof,
+        });
+      }
+      case "not_member": {
+        return Object.freeze({
+          status: "available" as const,
+          tier: null,
+          reasonCode: launchEligibilityReasonCodes.walletNotEligible,
+          snapshotBlock: decision.root.snapshotBlock,
+          roundIndex: round.roundId,
+          allowlistRoot: round.allowlistRoot,
+          eligibilityProof: Object.freeze([]),
+        });
+      }
+    }
+  }
+
   function requireCursorCodec(): V2CursorCodec {
     if (dependencies.cursorCodec === null) {
       throw V2ApiError.capabilityUnavailable();
@@ -811,10 +1182,22 @@ export function createLaunchService(
     async getOverview() {
       try {
         const launches = await repository.listLaunches();
+        const checkpoint = await readCheckpoint();
+        let projections: ReadonlyMap<string, LaunchStateProjectionRecord> =
+          new Map();
+        if (checkpoint !== null && chain !== null) {
+          try {
+            projections = await chain.listStateProjections(
+              launches.map((record) => record.launch.launchId),
+            );
+          } catch {
+            projections = new Map();
+          }
+        }
         const summaries = launches.map((record) =>
           summaryProjection(
             record,
-            listOnChainState(record.launch),
+            listOnChainState(record.launch, checkpoint, projections),
             publishedContractAddress(record.launch),
           ),
         );
@@ -1078,19 +1461,33 @@ export function createLaunchService(
         const detail = await requireLaunch(input.launchId);
         const { config, pending } = selectConfig(detail);
         const mode = eligibilityMode(pending ? null : config);
+        const requestedRound = parseRoundIndexQuery(input.roundIndex);
+        const refusedResult = (reasonCode: string): LaunchEligibilityResult =>
+          Object.freeze({ tier: null, reasonCode, snapshotBlock: null });
+        let result: LaunchEligibilityResult;
+        if (mode === "unavailable") {
+          result = refusedResult(launchReasonCodes.tierModePending);
+        } else if (contract === null || contract.contract === null) {
+          // Unchanged Decision 0036 bytes while no contract is configured.
+          result = refusedResult(launchReasonCodes.contractBaselinePending);
+        } else {
+          result = await evaluateEligibility(
+            detail,
+            mode,
+            input.principal,
+            requestedRound,
+          ).catch((error: unknown) => {
+            if (error instanceof LaunchContractUnavailableError) {
+              return refusedResult(error.reasonCode);
+            }
+            throw error;
+          });
+        }
         return Object.freeze({
           launchId: detail.launch.launchId,
           mode,
-          // No mode is confirmed for any launch in this step, and eligibility
-          // never depends on staking (main-agent ruling).
-          result: Object.freeze({
-            tier: null,
-            reasonCode:
-              mode === "unavailable"
-                ? launchReasonCodes.tierModePending
-                : launchReasonCodes.contractBaselinePending,
-            snapshotBlock: null,
-          }),
+          // Eligibility never depends on staking (main-agent ruling).
+          result,
           configVersion: config?.configVersion ?? null,
           effectiveAt: config?.effectiveAt ?? null,
           dependsOnStaking: false as const,
@@ -1104,11 +1501,40 @@ export function createLaunchService(
     async getHolders(input: Parameters<LaunchService["getHolders"]>[0]) {
       try {
         const detail = await requireLaunch(input.launchId);
+        if (contract === null || contract.contract === null) {
+          return Object.freeze({
+            launchId: detail.launch.launchId,
+            holders: unavailable(launchReasonCodes.contractBaselinePending),
+            myPosition: unavailable(launchReasonCodes.contractBaselinePending),
+            walletCap: unavailable(launchReasonCodes.configPendingConfirmation),
+            contractVersion: v2ContractVersion,
+          });
+        }
+        const reason = await chainReason(detail.launch);
+        if (reason !== null) {
+          return Object.freeze({
+            launchId: detail.launch.launchId,
+            holders: unavailable(reason),
+            myPosition: unavailable(reason),
+            walletCap: unavailable(reason),
+            contractVersion: v2ContractVersion,
+          });
+        }
+        const checkpoint = await readCheckpoint();
+        const holders =
+          checkpoint === null || chain === null
+            ? unavailable(launchContractReasonCodes.onChainStateNotIndexed)
+            : Object.freeze({
+                status: "available" as const,
+                holderCount: await chain.countHolders(detail.launch.launchId),
+                indexedBlockNumber: checkpoint.lastBlockNumber,
+              });
+        const position = await readPosition(detail, input.principal);
         return Object.freeze({
           launchId: detail.launch.launchId,
-          holders: unavailable(launchReasonCodes.contractBaselinePending),
-          myPosition: unavailable(launchReasonCodes.contractBaselinePending),
-          walletCap: unavailable(launchReasonCodes.configPendingConfirmation),
+          holders,
+          myPosition: position.myPosition,
+          walletCap: position.walletCap,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -1119,12 +1545,43 @@ export function createLaunchService(
     async getHistory(input: Parameters<LaunchService["getHistory"]>[0]) {
       try {
         const detail = await requireLaunch(input.launchId);
+        const empty = (reasonCode: string): LaunchHistoryResource =>
+          Object.freeze({
+            launchId: detail.launch.launchId,
+            purchaseRecords: Object.freeze([]),
+            entitlements: Object.freeze([]),
+            refunds: Object.freeze([]),
+            source: unavailable(reasonCode),
+            contractVersion: v2ContractVersion,
+          });
+        if (contract === null || contract.contract === null) {
+          return empty(launchReasonCodes.contractBaselinePending);
+        }
+        // The history is the lane's index; it needs the registry, not a
+        // reachable endpoint (a read of LOOP's own rows).
+        const refused = registryReason(detail.launch);
+        if (refused !== null) {
+          return empty(refused);
+        }
+        const checkpoint = await readCheckpoint();
+        if (checkpoint === null || chain === null) {
+          return empty(launchContractReasonCodes.onChainStateNotIndexed);
+        }
+        const records = await chain.listHistory({
+          launchId: detail.launch.launchId,
+          ownerUserId: input.principal.userId,
+          limit: 500,
+        });
         return Object.freeze({
           launchId: detail.launch.launchId,
-          purchaseRecords: Object.freeze([]),
-          entitlements: Object.freeze([]),
-          refunds: Object.freeze([]),
-          source: unavailable(launchReasonCodes.contractBaselinePending),
+          purchaseRecords: records.purchaseRecords,
+          entitlements: records.entitlements,
+          refunds: records.refunds,
+          source: Object.freeze({
+            status: "available" as const,
+            indexedBlockNumber: checkpoint.lastBlockNumber,
+            indexedBlockHash: checkpoint.lastBlockHash,
+          }),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -1149,10 +1606,59 @@ export function createLaunchService(
       }
     },
 
-    prepareIntent() {
-      // No Launch contract baseline: no payload, no digest, no row. The
-      // launch_intents relation exists as structure only (03 §8.2).
-      throw V2ApiError.capabilityUnavailable();
+    async prepareIntent(input: Parameters<LaunchService["prepareIntent"]>[0]) {
+      if (
+        intentRuntime === null ||
+        chain === null ||
+        contract === null ||
+        contract.contract === null ||
+        intentRuntime.writes === null
+      ) {
+        // Unchanged bytes: no switch, no contract, no Intent.
+        throw V2ApiError.capabilityUnavailable();
+      }
+      try {
+        return await prepareLaunchIntent(
+          {
+            repository,
+            chain,
+            contract,
+            runtime: intentRuntime,
+            registryReason: (detail) => registryReason(detail.launch),
+            eligibilityMode: (detail) => {
+              const selected = selectConfig(detail);
+              return eligibilityMode(selected.pending ? null : selected.config);
+            },
+          },
+          {
+            principal: input.principal,
+            launchId: parseLaunchOpaqueId(input.launchId),
+            body: input.body,
+            idempotencyKey: input.idempotencyKey,
+          },
+        );
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async reportIntent(input: Parameters<LaunchService["reportIntent"]>[0]) {
+      if (intentRuntime === null || chain === null || contract === null) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      try {
+        return await reportLaunchIntentBroadcast(
+          { chain, contract, runtime: intentRuntime },
+          {
+            principal: input.principal,
+            launchId: parseLaunchOpaqueId(input.launchId),
+            launchIntentId: parseLaunchOpaqueId(input.launchIntentId),
+            body: input.body,
+          },
+        );
+      } catch (error) {
+        return translate(error);
+      }
     },
 
     getStake() {
@@ -1166,6 +1672,7 @@ export function createLaunchService(
     async getEconomy() {
       try {
         const counts = await repository.getEconomyCounts();
+        const onChain = await economyOnChain();
         return Object.freeze({
           projects: counts.projectsByStatus,
           launches: counts.launchesByScheduleStatus,
@@ -1173,6 +1680,7 @@ export function createLaunchService(
           totalSupply: unavailable(launchReasonCodes.economyUnavailable),
           distributed: unavailable(launchReasonCodes.economyUnavailable),
           ecosystemTax: unavailable(launchReasonCodes.economyUnavailable),
+          ...(onChain === null ? {} : { onChain }),
           source: "loop" as const,
           observedAt: counts.observedAt,
           contractVersion: v2ContractVersion,
@@ -1199,9 +1707,8 @@ export function createUnavailableLaunchService(): LaunchService {
     getHolders: unavailableService,
     getHistory: unavailableService,
     getMilestones: unavailableService,
-    prepareIntent(): never {
-      throw V2ApiError.capabilityUnavailable();
-    },
+    prepareIntent: unavailableService,
+    reportIntent: unavailableService,
     getStake() {
       return Object.freeze({
         stake: unavailable(launchReasonCodes.stakingContractPending),

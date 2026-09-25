@@ -62,6 +62,7 @@ import {
   type CanaryPolicyFact,
   type ChainBoundIntentKind,
   type ExposureBasis,
+  type LaunchSlotAllowanceTarget,
   type IntentAssetSnapshot,
   type IntentBalanceFact,
   type IntentFeeFact,
@@ -91,8 +92,22 @@ export interface WalletIntentRuntimeConfig {
   readonly gasReserveRawWei: bigint;
 }
 
+/**
+ * The launch chain slot as an allowance target (Decision 0077): present only
+ * when the slot is not the primary chain and the Launch contract is
+ * configured. Approve/revoke of USD1 towards the contract run on it.
+ */
+export interface LaunchSlotWriteTarget {
+  readonly chainId: string;
+  readonly readClient: BscChainCallClient;
+  readonly contractAddress: string;
+  readonly usd1Address: string;
+}
+
 export interface WalletIntentRuntime {
   readonly config: WalletIntentRuntimeConfig;
+  /** Decision 0077; absent or null keeps every intent on the primary chain. */
+  readonly launchSlot?: LaunchSlotWriteTarget | null;
   readonly repository: WalletIntentRepository;
   readonly wallets: AccountWalletRepository;
   readonly registry: ChainRegistryRepository;
@@ -111,6 +126,21 @@ const nativeTransferGas = 21_000n;
 const gasHeadroomNumerator = 12n;
 const gasHeadroomDenominator = 10n;
 const fallbackContractGas = 120_000n;
+
+/**
+ * The runtime whose read client serves `chainId`: the launch slot's for an
+ * intent recorded on it, the primary one otherwise.
+ */
+export function runtimeForChain(
+  runtime: WalletIntentRuntime,
+  chainId: string,
+): WalletIntentRuntime {
+  const slot = runtime.launchSlot ?? null;
+  if (slot === null || chainId === bscChainId || chainId !== slot.chainId) {
+    return runtime;
+  }
+  return Object.freeze({ ...runtime, readClient: slot.readClient });
+}
 
 export function chainUnavailable(error: unknown): never {
   if (
@@ -179,6 +209,7 @@ export async function requireSignableWallet(
 export async function requireAdmittedAsset(
   runtime: WalletIntentRuntime,
   assetId: unknown,
+  allowedChainIds: readonly string[] = [bscChainId],
 ): Promise<AssetRecord> {
   if (!isAssetId(assetId)) {
     throw V2ApiError.invalidRequest();
@@ -192,7 +223,7 @@ export async function requireAdmittedAsset(
     }
     throw error;
   }
-  if (parsed.chainId !== bscChainId) {
+  if (!allowedChainIds.includes(parsed.chainId)) {
     throw V2ApiError.fromCode("CHAIN_MISMATCH");
   }
   const asset = await runtime.registry.getAsset(assetId);
@@ -414,7 +445,7 @@ export async function readBalanceSnapshot(
   wallet: AccountWalletRecord,
   asset: AssetRecord,
 ): Promise<BalanceSnapshot> {
-  const nativeAssetId = `${bscChainId}:native`;
+  const nativeAssetId = `${asset.chainId}:native`;
   const items =
     asset.address === null
       ? [{ assetId: asset.assetId, address: null }]
@@ -609,8 +640,15 @@ export function buildUnsignedTransaction(input: {
   readonly gasLimit: bigint;
   readonly nonce: number;
   readonly feeData: BscFeeData;
+  readonly launchAllowance?: LaunchSlotAllowanceTarget | null;
 }): UnsignedTransaction {
-  if (!isIntentChainAllowed(input.kind, input.chainReference)) {
+  if (
+    !isIntentChainAllowed(
+      input.kind,
+      input.chainReference,
+      input.launchAllowance ?? null,
+    )
+  ) {
     throw new InvalidTransactionArgumentError();
   }
   return Object.freeze({

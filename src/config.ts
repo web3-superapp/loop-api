@@ -650,6 +650,7 @@ const reconciliationWorkerEnvironmentSchema = z
     HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
     BSC_INDEXER_ENABLED: booleanString,
+    LAUNCH_INDEXER_ENABLED: booleanString,
     BSC_INDEXER_START_BLOCK: z.coerce
       .number()
       .int()
@@ -1121,8 +1122,14 @@ export interface ReconciliationWorkerConfig {
    * lane until the 02 contract document lands.
    */
   readonly launchChain: LaunchChainConfig;
-  /** Decision 0076, parsed identically; no worker lane reads it yet (S83b). */
+  /** Decision 0076, parsed identically; the `launch_event` lane reads it. */
   readonly launchContract: LaunchContractConfig | null;
+  /**
+   * `launch_event` lane switch (Decision 0077), default false like
+   * BSC_INDEXER_ENABLED. On, with the four contract keys blank, the lane
+   * idles with LAUNCH_CONTRACT_BASELINE_PENDING.
+   */
+  readonly launchIndexerEnabled: boolean;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -2127,6 +2134,7 @@ export function loadReconciliationWorkerConfig(
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
       environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
     BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
+    LAUNCH_INDEXER_ENABLED: environment["LAUNCH_INDEXER_ENABLED"] ?? "false",
     BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
     BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE:
       environment["BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE"] ?? "200",
@@ -2233,6 +2241,7 @@ export function loadReconciliationWorkerConfig(
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
+    launchIndexerEnabled: parsed.data.LAUNCH_INDEXER_ENABLED,
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED

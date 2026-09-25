@@ -321,7 +321,28 @@ export interface LaunchContractAdapter {
   encodeClaimRefund(saleId: bigint): LaunchContractCall;
   /** Decodes logs emitted by the configured contract; others are refused. */
   decodeEvents(logs: readonly LaunchContractLog[]): LaunchContractDecodeResult;
+  /**
+   * Raw `eth_getLogs` of the configured contract over an inclusive block
+   * range of at most `launchContractMaximumLogRange` blocks (Decision 0077).
+   */
+  readLogs(range: {
+    readonly fromBlock: bigint;
+    readonly toBlock: bigint;
+  }): Promise<readonly LaunchContractLog[]>;
+  /** One block header: number, hash, and unix-second timestamp. */
+  readBlock(blockNumber: bigint): Promise<LaunchContractBlock>;
 }
+
+export interface LaunchContractBlock {
+  readonly blockNumber: bigint;
+  /** Lowercase 0x + 64 hex. */
+  readonly blockHash: string;
+  /** Unix seconds. */
+  readonly timestamp: bigint;
+}
+
+/** Maximum block span of one `readLogs` request (same bound as 0034). */
+export const launchContractMaximumLogRange = 2_000n;
 
 export class LaunchContractUnavailableError extends Error {
   readonly code = "launch_contract_unavailable";
@@ -1088,6 +1109,56 @@ export function createLaunchContractAdapter(
 
     encodeClaimRefund(saleId) {
       return call(encodeLaunchClaimRefundCalldata(saleId));
+    },
+
+    async readLogs(range) {
+      if (
+        range.toBlock < range.fromBlock ||
+        range.toBlock - range.fromBlock + 1n > launchContractMaximumLogRange
+      ) {
+        throw new RangeError("readLogs range is invalid");
+      }
+      const { client: readClient, address } = await requireReadable();
+      let logs;
+      try {
+        logs = await readClient.getLogs({
+          address,
+          fromBlock: range.fromBlock,
+          toBlock: range.toBlock,
+        });
+      } catch (error) {
+        return readFailed(error);
+      }
+      const mapped: LaunchContractLog[] = [];
+      for (const log of logs) {
+        mapped.push(
+          Object.freeze({
+            address: lower(log.address),
+            topics: Object.freeze(log.topics.map((topic) => lower(topic))),
+            data: lower(log.data),
+            blockNumber: log.blockNumber,
+            blockHash: lower(log.blockHash),
+            transactionHash: lower(log.transactionHash),
+            logIndex: log.logIndex,
+            removed: log.removed,
+          }),
+        );
+      }
+      return Object.freeze(mapped);
+    },
+
+    async readBlock(blockNumber) {
+      const { client: readClient } = await requireReadable();
+      try {
+        const block = await readClient.getBlock({ blockNumber });
+        return Object.freeze({
+          blockNumber: block.number,
+          blockHash: lower(block.hash),
+          timestamp: block.timestamp,
+        });
+      } catch (error) {
+        return readFailed(error);
+      }
     },
 
     decodeEvents(logs) {

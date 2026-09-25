@@ -49,19 +49,49 @@ export type WalletIntentState = (typeof walletIntentStates)[number];
 export type ChainBoundIntentKind = WalletIntentKind | "launch";
 
 /**
+ * The Launch settlement pair an allowance intent may target on the launch
+ * slot's testnet (Decision 0077): only USD1 (`LAUNCH_USD1_ADDRESS`) towards
+ * the Launch contract (`LAUNCH_CONTRACT_ADDRESS`).
+ */
+export interface LaunchSlotAllowanceTarget {
+  /** The token the allowance is set on (lowercase). */
+  readonly token: string;
+  /** The spender (lowercase). */
+  readonly spender: string;
+  readonly launchContractAddress: string;
+  readonly launchUsd1Address: string;
+}
+
+/**
  * The single chain rule for signable payloads: every intent may bind the
  * primary chain (56); only a Launch intent may bind the launch slot's testnet
- * (97). Send, approve, revoke, and swap therefore never leave mainnet even
- * when `LAUNCH_CHAIN_ID=97`.
+ * (97) — plus, since Decision 0077, an approve/revoke whose token is the
+ * configured USD1 and whose spender is the configured Launch contract, so a
+ * buyer can grant (and withdraw) exactly the allowance `buy` needs. Send,
+ * swap, and every other approval never leave mainnet.
  */
 export function isIntentChainAllowed(
   kind: ChainBoundIntentKind,
   chainReference: number,
+  launchAllowance: LaunchSlotAllowanceTarget | null = null,
 ): chainReference is LaunchChainReference {
   if (chainReference === bscChainReference) {
     return true;
   }
-  return chainReference === bscTestnetChainReference && kind === "launch";
+  if (chainReference !== bscTestnetChainReference) {
+    return false;
+  }
+  if (kind === "launch") {
+    return true;
+  }
+  return (
+    (kind === "approve" || kind === "revoke") &&
+    launchAllowance !== null &&
+    launchAllowance.token.toLowerCase() ===
+      launchAllowance.launchUsd1Address.toLowerCase() &&
+    launchAllowance.spender.toLowerCase() ===
+      launchAllowance.launchContractAddress.toLowerCase()
+  );
 }
 
 /** States from which nothing further can happen. */

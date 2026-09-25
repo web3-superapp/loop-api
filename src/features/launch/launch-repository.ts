@@ -52,6 +52,12 @@ export interface LaunchRecord {
   readonly saleId: string | null;
   readonly contractVersion: string | null;
   readonly configVersionOnchain: string | null;
+  /**
+   * The registered sale's USD1 and project token asset IDs on the launch
+   * chain (Decision 0077); null until `pnpm launch:register-sale`.
+   */
+  readonly quoteAssetId?: string | null;
+  readonly projectAssetId?: string | null;
   readonly configDigest: string | null;
   readonly scheduleStatus: LaunchScheduleStatus;
   readonly createdAt: string;

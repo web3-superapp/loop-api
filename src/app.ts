@@ -1429,6 +1429,13 @@ export async function buildApp(
       chainName: "BNB Smart Chain",
       chainReference: bscChainReference,
       launchChainReadClient,
+      launchUsd1:
+        config.launchContract === null
+          ? null
+          : Object.freeze({
+              usd1Address: config.launchContract.usd1Address,
+              spender: config.launchContract.address,
+            }),
       logger: app.log,
     });
   const marketReadService =
@@ -1514,6 +1521,17 @@ export async function buildApp(
     registry: chainRegistryRepository,
     indexer: bscIndexerRepository,
     readClient: asChainCallClient(bscReadClient),
+    // Decision 0077: USD1 approve/revoke towards the Launch contract runs on
+    // the launch slot when it is a separate chain and the contract is set.
+    launchSlot:
+      launchChainReadClient === null || config.launchContract === null
+        ? null
+        : Object.freeze({
+            chainId: launchChainReadClient.chainId,
+            readClient: asChainCallClient(launchChainReadClient),
+            contractAddress: config.launchContract.address,
+            usd1Address: config.launchContract.usd1Address,
+          }),
     controlPlane: database.controlPlane,
     marketFacts:
       options.marketFactService !== undefined || marketRuntimeAvailable
@@ -1561,6 +1579,29 @@ export async function buildApp(
           repository: database.launch ?? createUnavailableLaunchRepository(),
           cursorCodec: v2CursorCodec,
           contract: launchContractAdapter,
+          chain: database.launchChain ?? null,
+          wallets: database.accountWallets ?? null,
+          // Decision 0077: the Intent prepare reads the launch slot and
+          // walks the Decision 0065 canary; BSC_WRITES_ENABLED stays the
+          // only switch.
+          intentRuntime:
+            database.launchChain === undefined ||
+            database.accountWallets === undefined
+              ? null
+              : Object.freeze({
+                  writes: config.bscWrites,
+                  readClient: asChainCallClient(
+                    launchChainReadClient ?? bscReadClient,
+                  ),
+                  wallets: database.accountWallets,
+                  walletIntentExposureUsd: (input: {
+                    readonly ownerUserId: string;
+                    readonly since: string;
+                  }) =>
+                    walletIntentRuntime.repository.sumRecentExposureUsd(input),
+                  now: options.walletIntentNow ?? ((): Date => new Date()),
+                  createUuid: randomUUID,
+                }),
         })
       : createUnavailableLaunchService());
   if (launchRuntimeAvailable && launchContractAdapter.contract !== null) {

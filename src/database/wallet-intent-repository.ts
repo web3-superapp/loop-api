@@ -629,14 +629,23 @@ export function createPostgresWalletIntentRepository(
     }): Promise<string> {
       const result = await pool.query<{ readonly total: string }>({
         text: `
-          select coalesce(
-                   sum((canonical_payload -> 'policy' ->> 'valueUsd')::numeric),
-                   0
-                 )::text as total
-          from public.wallet_intents
-          where owner_user_id = $1
-            and created_at >= $2::timestamptz
-            and state = any($3::text[])
+          -- Launch purchase Intents (Decision 0077) share the account's
+          -- rolling canary window; USD1 is sealed at par in policy.valueUsd.
+          select coalesce(sum(value_usd), 0)::text as total
+          from (
+            select (canonical_payload -> 'policy' ->> 'valueUsd')::numeric as value_usd
+            from public.wallet_intents
+            where owner_user_id = $1
+              and created_at >= $2::timestamptz
+              and state = any($3::text[])
+            union all
+            select (policy ->> 'valueUsd')::numeric
+            from public.launch_intents
+            where owner_user_id = $1
+              and created_at >= $2::timestamptz
+              and state = any($3::text[])
+              and policy ? 'valueUsd'
+          ) as exposure
         `,
         values: [input.ownerUserId, input.since, [...dailyCeilingStates]],
       });

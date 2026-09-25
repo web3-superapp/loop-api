@@ -427,6 +427,27 @@ const launchChainBalanceSchema = {
     chainId: { type: "string", enum: [...launchChainIds] },
     availability: { type: "string", enum: ["available", "unavailable"] },
     reasonCode: nullableReasonCodeSchema,
+    usd1: {
+      type: "object",
+      additionalProperties: false,
+      required: ["balance", "allowance"],
+      properties: {
+        balance: {
+          type: "string",
+          pattern: "^(0|[1-9][0-9]{0,77})$",
+          description:
+            "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals).",
+        },
+        allowance: {
+          type: "string",
+          pattern: "^(0|[1-9][0-9]{0,77})$",
+          description:
+            "USD1 allowance(wallet, LAUNCH_CONTRACT_ADDRESS), base units: what buy() may pull.",
+        },
+      },
+      description:
+        "Optional (Decision 0077, shape frozen by 0088): present only when LAUNCH_USD1_ADDRESS is configured AND both values were read at the same block; absent otherwise (never null, never a guess).",
+    },
     nativeBalance: {
       anyOf: [
         {

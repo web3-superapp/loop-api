@@ -21,6 +21,7 @@ import {
   isElapsed,
   projectIntent,
   requireWriteAdmission,
+  runtimeForChain,
   type WalletIntentResource,
   type WalletIntentRuntime,
 } from "./intent-preparation.js";
@@ -98,9 +99,11 @@ export function createWalletIntentService(
     return record;
   }
 
-  async function headBlock(): Promise<bigint | null> {
+  async function headBlock(
+    chainRuntime: WalletIntentRuntime = runtime,
+  ): Promise<bigint | null> {
     try {
-      return (await runtime.readClient.getHead()).blockNumber;
+      return (await chainRuntime.readClient.getHead()).blockNumber;
     } catch {
       return null;
     }
@@ -138,12 +141,15 @@ export function createWalletIntentService(
   const service: WalletIntentService = {
     async get({ principal, intentId }) {
       const record = await requireIntent(principal, intentId);
-      const head = record.receipt === null ? null : await headBlock();
+      // An intent recorded on the launch slot (0077) reads that chain.
+      const chainRuntime = runtimeForChain(runtime, record.chainId);
+      const head =
+        record.receipt === null ? null : await headBlock(chainRuntime);
       return projectIntent(
         record,
         runtime.now(),
         head,
-        runtime.readClient.confirmations,
+        chainRuntime.readClient.confirmations,
       );
     },
 
@@ -327,9 +333,10 @@ export function createWalletIntentService(
       }
       // Write admission is re-checked before any Provider/RPC call; when it
       // fails the refusal is recorded and nothing else is read.
+      const chainRuntime = runtimeForChain(runtime, record.chainId);
       let writes;
       try {
-        writes = await requireWriteAdmission(runtime);
+        writes = await requireWriteAdmission(chainRuntime);
       } catch (error) {
         await runtime.repository.recordEvent({
           ownerUserId: principal.userId,
@@ -352,7 +359,7 @@ export function createWalletIntentService(
 
       let observed: BscTransactionObservation | null;
       try {
-        observed = await runtime.readClient.getTransaction(txHash);
+        observed = await chainRuntime.readClient.getTransaction(txHash);
       } catch {
         throw V2ApiError.capabilityUnavailable();
       }

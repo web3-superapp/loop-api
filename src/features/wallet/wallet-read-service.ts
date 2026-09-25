@@ -16,9 +16,11 @@ import {
 import type { BscIndexerRepository } from "../../database/bsc-indexer-repository.js";
 import type { AssetRecord } from "../../database/chain-registry-repository.js";
 import {
+  asChainCallClient,
   BscChainMismatchError,
   BscReadUnavailableError,
   type BscBalanceReadResult,
+  type BscChainCallClient,
   type BscReadClient,
 } from "../../integrations/bsc/rpc-client.js";
 import type {
@@ -246,11 +248,26 @@ export interface LaunchChainNativeBalance {
   };
 }
 
+/** Frozen by Decision 0088: base-unit decimal strings, nothing else. */
+export interface LaunchChainUsd1Balance {
+  readonly balance: string;
+  /** Allowance to LAUNCH_CONTRACT_ADDRESS. */
+  readonly allowance: string;
+}
+
 export interface LaunchChainBalanceProjection {
   readonly chainId: LaunchChainId;
   readonly availability: "available" | "unavailable";
   readonly reasonCode: string | null;
+  /** Decision 0077; only when LAUNCH_USD1_ADDRESS is configured. */
+  readonly usd1?: LaunchChainUsd1Balance;
   readonly nativeBalance: LaunchChainNativeBalance | null;
+}
+
+/** USD1 and the Launch contract on the launch slot (Decision 0077). */
+export interface LaunchChainUsd1Target {
+  readonly usd1Address: string;
+  readonly spender: string;
 }
 
 export interface WalletActivityItem {
@@ -349,6 +366,8 @@ export interface CreateWalletReadServiceInput {
   readonly chainReference: number;
   /** The launch slot's own read client, or `null` when shared with primary. */
   readonly launchChainReadClient: BscReadClient | null;
+  /** Decision 0077: USD1 balance/allowance on the launch slot; absent = none. */
+  readonly launchUsd1?: LaunchChainUsd1Target | null;
   /** Absent means the segment timings are not logged (tests, scripts). */
   readonly logger?: WalletReadServiceLogger;
   /**
@@ -519,11 +538,99 @@ async function projectLaunchChainBalance(
   client: BscReadClient | null,
   address: string,
   gasReserveRawWei: bigint,
+  usd1Target: LaunchChainUsd1Target | null = null,
   deadlineMs: number = launchChainReadDeadlineMs,
 ): Promise<LaunchChainBalanceProjection | null> {
   if (client === null) {
     return null;
   }
+  const native = await projectLaunchChainNative(
+    client,
+    address,
+    gasReserveRawWei,
+    deadlineMs,
+  );
+  if (usd1Target === null) {
+    return native;
+  }
+  const usd1 = await readLaunchChainUsd1(
+    client,
+    address,
+    usd1Target,
+    deadlineMs,
+  );
+  if (usd1 === null) {
+    return native;
+  }
+  return Object.freeze({
+    chainId: native.chainId,
+    availability: native.availability,
+    reasonCode: native.reasonCode,
+    usd1,
+    nativeBalance: native.nativeBalance,
+  });
+}
+
+async function readLaunchChainUsd1(
+  client: BscReadClient,
+  address: string,
+  target: LaunchChainUsd1Target,
+  deadlineMs: number,
+): Promise<LaunchChainUsd1Balance | null> {
+  if (client.endpointRefs.length === 0) {
+    return null;
+  }
+  const assetId = `${client.chainId}:${target.usd1Address}`;
+  // Only the allowance read is needed beyond the read surface; a client
+  // without it yields no block rather than a guessed value.
+  const allowanceClient =
+    "readAllowances" in client &&
+    typeof (client as Partial<BscChainCallClient>).readAllowances === "function"
+      ? (client as BscChainCallClient)
+      : asChainCallClient(client);
+  try {
+    const [balances, allowances] = await withDeadline(
+      Promise.all([
+        client.readBalances(address, [
+          { assetId, address: target.usd1Address },
+        ]),
+        allowanceClient.readAllowances(address, [
+          { assetId, token: target.usd1Address, spender: target.spender },
+        ]),
+      ]),
+      deadlineMs,
+    );
+    const balance = balances.balances[0]?.rawValue ?? null;
+    const allowance = allowances.allowances[0]?.rawValue ?? null;
+    if (
+      balance === null ||
+      allowance === null ||
+      balances.head.blockNumber !== allowances.head.blockNumber
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      balance: balance.toString(10),
+      allowance: allowance.toString(10),
+    });
+  } catch (error) {
+    if (
+      error instanceof ReadDeadlineExceededError ||
+      error instanceof BscChainMismatchError ||
+      error instanceof BscReadUnavailableError
+    ) {
+      return null;
+    }
+    throw error as Error;
+  }
+}
+
+async function projectLaunchChainNative(
+  client: BscReadClient,
+  address: string,
+  gasReserveRawWei: bigint,
+  deadlineMs: number,
+): Promise<LaunchChainBalanceProjection> {
   const chainId = client.chainId;
   if (client.endpointRefs.length === 0) {
     return unavailableLaunchChain(
@@ -912,6 +1019,7 @@ export function createWalletReadService(
           input.launchChainReadClient,
           wallet.address,
           input.gasReserveRawWei,
+          input.launchUsd1 ?? null,
         ),
       );
       const checkpointPending = timings.measure("indexerCheckpoint", () =>

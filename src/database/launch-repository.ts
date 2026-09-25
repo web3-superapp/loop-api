@@ -128,6 +128,8 @@ const launchRowSchema = z
       .nullable(),
     contract_version: z.string().nullable(),
     config_version_onchain: z.string().nullable(),
+    quote_asset_id: z.string().nullable(),
+    project_asset_id: z.string().nullable(),
     config_digest: z.string().nullable(),
     schedule_status: z.enum(launchScheduleStatuses),
     created_at: dateSchema,
@@ -251,6 +253,8 @@ function mapLaunch(row: z.infer<typeof launchRowSchema>): LaunchRecord {
     saleId: row.sale_id,
     contractVersion: row.contract_version,
     configVersionOnchain: row.config_version_onchain,
+    quoteAssetId: row.quote_asset_id,
+    projectAssetId: row.project_asset_id,
     configDigest: row.config_digest,
     scheduleStatus: row.schedule_status,
     createdAt: toIsoString(row.created_at),
@@ -715,7 +719,7 @@ export function createPostgresLaunchRepository(
                 on conflict (project_id) do nothing
                 returning
                   launch_id, project_id, chain_id, contract_address, sale_id::text as sale_id,
-                  contract_version, config_version_onchain, config_digest,
+                  contract_version, config_version_onchain, quote_asset_id, project_asset_id, config_digest,
                   schedule_status, created_at, updated_at
               `,
               values: [launchId, projectId, launchChainId],
@@ -753,6 +757,7 @@ export function createPostgresLaunchRepository(
             select
               l.launch_id, l.project_id, l.chain_id, l.contract_address,
               l.sale_id::text as sale_id, l.contract_version, l.config_version_onchain,
+              l.quote_asset_id, l.project_asset_id,
               l.config_digest, l.schedule_status, l.created_at, l.updated_at,
               p.name as project_name,
               p.ticker as project_ticker,
@@ -789,7 +794,7 @@ export function createPostgresLaunchRepository(
           text: `
             select
               launch_id, project_id, chain_id, contract_address, sale_id::text as sale_id,
-                  contract_version, config_version_onchain, config_digest,
+                  contract_version, config_version_onchain, quote_asset_id, project_asset_id, config_digest,
               schedule_status, created_at, updated_at
             from public.launches
             where launch_id = $1

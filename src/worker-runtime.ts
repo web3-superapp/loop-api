@@ -10,6 +10,13 @@ import {
   type CreateBscPoolIndexerWorkerOptions,
 } from "./bsc-pool-indexer-worker.js";
 import {
+  createLaunchIndexerWorker,
+  type CreateLaunchIndexerWorkerOptions,
+  type LaunchIndexerWorker,
+} from "./bsc-launch-indexer-worker.js";
+import type { LaunchChainRepository } from "./features/launch/launch-chain-repository.js";
+import { createLaunchContractAdapter } from "./integrations/launch/launch-contract-adapter.js";
+import {
   createAlertEvaluatorWorker,
   type AlertEvaluatorWorker,
   type CreateAlertEvaluatorWorkerOptions,
@@ -68,6 +75,7 @@ import { bscChainId } from "./features/chain/chain-contract.js";
 import {
   asChainCallClient,
   createBscReadClient,
+  createUnavailableBscReadClient,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 import {
@@ -145,6 +153,8 @@ export interface ReconciliationWorkerDatabase {
   readonly accountWallets?: AccountWalletRepository;
   readonly walletIntents?: WalletIntentRepository;
   readonly mining?: MiningRepository;
+  /** `launch_event` lane persistence (Decision 0077); absent keeps it off. */
+  readonly launchChain?: LaunchChainRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   readonly ping: () => Promise<void>;
@@ -175,6 +185,10 @@ export type BscIndexerWorkerFactory = (
 export type BscPoolIndexerWorkerFactory = (
   options: CreateBscPoolIndexerWorkerOptions,
 ) => BscPoolIndexerWorker;
+
+export type LaunchIndexerWorkerFactory = (
+  options: CreateLaunchIndexerWorkerOptions,
+) => LaunchIndexerWorker;
 
 export type AlertEvaluatorWorkerFactory = (
   options: CreateAlertEvaluatorWorkerOptions,
@@ -209,6 +223,11 @@ export interface RunReconciliationWorkerOptions {
   readonly createQuotaRetentionWorker?: IssuanceQuotaRetentionWorkerFactory;
   readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
   readonly createBscPoolIndexerWorker?: BscPoolIndexerWorkerFactory;
+  readonly createLaunchIndexerWorker?: LaunchIndexerWorkerFactory;
+  /** Test seam for the launch slot's read client (Decision 0077). */
+  readonly createLaunchReadClient?: (
+    config: ReconciliationWorkerConfig["launchChain"],
+  ) => BscReadClient;
   readonly createAlertEvaluatorWorker?: AlertEvaluatorWorkerFactory;
   readonly createWalletIntentReconcileWorker?: WalletIntentReconcileWorkerFactory;
   readonly createMiningSnapshotWorker?: MiningSnapshotWorkerFactory;
@@ -430,6 +449,62 @@ export async function runReconciliationWorker(
             },
             onLaneAvailability,
           });
+    // The `launch_event` lane (Decision 0077) is default-off and reads the
+    // launch chain slot, which may be the BSC testnet while every other lane
+    // stays on 56. With the four contract keys blank it idles with
+    // LAUNCH_CONTRACT_BASELINE_PENDING; it never signs or submits.
+    const launchChainConfig = options.config.launchChain;
+    const launchIndexerWorker = ((): LaunchIndexerWorker | null => {
+      if (
+        !options.config.launchIndexerEnabled ||
+        database.launchChain === undefined
+      ) {
+        return null;
+      }
+      const launchReadClient =
+        options.createLaunchReadClient !== undefined
+          ? options.createLaunchReadClient(launchChainConfig)
+          : launchChainConfig.sharedWithPrimary && indexerReadClient !== null
+            ? indexerReadClient
+            : launchChainConfig.rpcUrls.length === 0
+              ? createUnavailableBscReadClient({
+                  chainId: launchChainConfig.chainId,
+                  chainReference: launchChainConfig.chainReference,
+                  confirmations: launchChainConfig.confirmations,
+                  reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
+                  reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                })
+              : createBscReadClient({ config: launchChainConfig });
+      const adapter = createLaunchContractAdapter({
+        contract: options.config.launchContract,
+        chain: launchChainConfig,
+        verifyChain: () => launchReadClient.verifyChain(),
+      });
+      return (options.createLaunchIndexerWorker ?? createLaunchIndexerWorker)({
+        repository: database.launchChain,
+        readClient: launchReadClient,
+        adapter,
+        chainId: launchChainConfig.chainId,
+        onWarning: (warning) => {
+          options.logger.warn(
+            { ...logFields(), lane: "launch_event", ...warning },
+            "LOOP launch_event lane skipped a fact",
+          );
+        },
+        onUnavailable: (reasonCode) => {
+          options.logger.warn(
+            { ...logFields(), lane: "launch_event", reasonCode },
+            "LOOP launch_event lane is idle",
+          );
+        },
+        onInfrastructureBackoff: (event) => {
+          options.logger.warn(
+            { ...logFields(), ...event },
+            "LOOP reconciliation worker infrastructure retry scheduled",
+          );
+        },
+      });
+    })();
     // Push channel (Decision 0067). The worker sends only when a Firebase
     // credential and the push repository are both present; an unusable
     // credential file leaves the lane feed-only and is logged by reason code.
@@ -527,6 +602,16 @@ export async function runReconciliationWorker(
             repository: database.walletIntents,
             wallets: database.accountWallets,
             readClient: asChainCallClient(indexerReadClient),
+            // Decision 0077: approvals recorded on the launch slot.
+            launchReadClient:
+              options.config.launchChain.sharedWithPrimary ||
+              options.config.launchChain.rpcUrls.length === 0
+                ? null
+                : asChainCallClient(
+                    createBscReadClient({
+                      config: options.config.launchChain,
+                    }),
+                  ),
             swapAdapter:
               walletIntentConfig.privy === null
                 ? createUnavailablePrivySwapAdapter()
@@ -722,6 +807,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               poolIndexerWorker.run(controller.signal),
+            ),
+          ]),
+      ...(launchIndexerWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              launchIndexerWorker.run(controller.signal),
             ),
           ]),
       ...(alertEvaluatorWorker === null

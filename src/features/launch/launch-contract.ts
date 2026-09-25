@@ -55,8 +55,12 @@ export const launchContractReasonCodes = Object.freeze({
   readFailed: "LAUNCH_CONTRACT_READ_FAILED",
   readInvalid: "LAUNCH_CONTRACT_READ_INVALID",
   snapshotReorged: "LAUNCH_SNAPSHOT_REORGED",
-  /** Lists do not read the chain; the S83b event lane will project it. */
+  /** No `launch_event` checkpoint exists yet for the launch chain (0077). */
   onChainStateNotIndexed: "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+  /** The lane runs but has not yet projected this sale's getState (0077). */
+  onChainStateNotProjected: "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+  /** The caller has no active wallet to read a position for (0077). */
+  walletNotFound: "LAUNCH_WALLET_NOT_FOUND",
 } as const);
 export type LaunchContractReasonCode =
   (typeof launchContractReasonCodes)[keyof typeof launchContractReasonCodes];

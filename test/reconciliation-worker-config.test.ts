@@ -43,6 +43,7 @@ describe("loadReconciliationWorkerConfig", () => {
         sharedWithPrimary: true,
       },
       launchContract: null,
+      launchIndexerEnabled: false,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
