@@ -107,3 +107,9 @@ body), never `LAUNCH_INTENT_ALREADY_REPORTED`. No code change.
   the app cannot yet raise it through `POST /v2/wallet-intents/approve`.
   Opening that pair on chain 56 would touch BSC Mainnet signing, which stays
   closed; it is not done here.
+
+## Main-agent rulings (2026-09-25)
+
+1. On a shared slot the allowance is readable but not raisable in the app: kept. Raising it is a mainnet write and waits for the production signing decision.
+2. The broadcast-report store failure stays a generic 500 for now (bytes unchanged); revisit with the next Launch contract change.
+3. `chat-channel-repository.integration.test.ts` "converges opposite direct requests" has now flaked in three separate worktrees today; tracked as a standalone fix (S85), not a Launch item.
