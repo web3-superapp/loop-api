@@ -40,6 +40,7 @@ describe("loadReconciliationWorkerConfig", () => {
         rpcUrls: [],
         confirmations: 15,
         reorgDepthBlocks: 64,
+        logAddressChunkSize: 8,
         sharedWithPrimary: true,
       },
       launchContract: null,
@@ -264,6 +265,19 @@ describe("loadReconciliationWorkerConfig", () => {
     );
   });
 
+  it("hands the worker BSC client the configured log address chunk (Decision 0078)", () => {
+    const environment = validEnvironment();
+    environment["BSC_RPC_URLS"] = "https://rpc-a.example/";
+    environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] = "4";
+    const config = loadReconciliationWorkerConfig(environment);
+    expect(config.bscChain?.logAddressChunkSize).toBe(4);
+    expect(config.launchChain.logAddressChunkSize).toBe(4);
+    environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] = "101";
+    expect(() => loadReconciliationWorkerConfig(environment)).toThrow(
+      /BSC_LOG_ADDRESS_CHUNK_SIZE/,
+    );
+  });
+
   it("parses the launch chain slot with the API rules so one environment file behaves identically (Decision 0038)", () => {
     const testnet = validEnvironment();
     testnet["LAUNCH_CHAIN_ID"] = "97";
@@ -274,6 +288,7 @@ describe("loadReconciliationWorkerConfig", () => {
       rpcUrls: ["https://bsc-testnet-rpc.example/"],
       confirmations: 5,
       reorgDepthBlocks: 15,
+      logAddressChunkSize: 8,
       sharedWithPrimary: false,
     });
     // The indexer lane keeps driving only the primary chain: it needs

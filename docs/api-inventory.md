@@ -331,14 +331,19 @@ never an API field): `BSC_RPC_UNREACHABLE`, `BSC_CHAIN_ID_MISMATCH`,
 Decision 0068 `BSC_LOG_QUERY_REJECTED` (every endpoint refused even a
 single-address, single-block `eth_getLogs`) and
 `BSC_LOG_QUERY_BUDGET_EXHAUSTED` (narrowing a segment would exceed 512
-client-side reads, each at most endpoints × 4 HTTP attempts); since
+client-side reads, each one HTTP attempt per endpoint since Decision 0078); since
 Decision 0075 `INDEXER_WALLET_SET_EMPTY` (no active `account_wallets`
 row: the segment commits empty and the checkpoint advances) and
 `BSC_LOG_WALLET_FILTER_INVALID` (malformed wallet filter or chunk size). A _shape_
 refusal (HTTP 413, JSON-RPC -32602/-32005 typed or in a 4xx body, or
-`limit exceeded` / `Request blocked` / `block range` / `more than` text) is
-narrowed by block range, then by address, with the learned limits kept on
-the client for the next segment; a _throttle_ (HTTP 429, `rate limit` /
+`limit exceeded` / `Request blocked` / `block range` / `more than` text,
+from the endpoint whose error viem rethrows or any earlier endpoint in the
+list) is narrowed along the dimension its text names, otherwise addresses
+first, then the wallet topic array, then the block range (Decision 0078).
+Token addresses are sent at most `BSC_LOG_ADDRESS_CHUNK_SIZE` (default 8)
+per request; learned limits are kept on the client across ticks and probed
+wider only after 16 consecutive refusal-free segment reads. No new reason
+code. A _throttle_ (HTTP 429, `rate limit` /
 `too many` / `quota` / `usage limit` text, which is the only reading of
 -32001) is not narrowed and goes to the retry loop's exponential backoff.
 A lane idling on either refusal code backs off 1 s → 30 s between ticks.
