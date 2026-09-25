@@ -229,3 +229,9 @@ run, so the rate budget was shared.
   and a reset) on every tick, and cannot catch up without an archive-capable
   endpoint. Classifying it as its own non-narrowable refusal is left to a
   follow-up decision.
+
+## Main-agent rulings (2026-09-25)
+
+1. **Throttle reset kept.** The addition beyond the task sheet stays: the live run showed a client parked at the floor never leaves it under a per-second rate limit without this rule.
+2. **Archive boundary** (publicnode "Archive requests require a personal token", 403 -32602): to be classified on its own and never narrowed, with the lane reporting "behind the provider's window, reseed"; tracked as S82d. Until then the runbook remedy is `ops/indexer-reseed.sh`.
+3. **Endpoint hygiene is configuration.** A permanently throttled or quota-exhausted endpoint must be removed from `BSC_RPC_URLS` / `LAUNCH_BSC_RPC_URLS`; the client cannot tell it from a transient limit. Recorded in the ops runbook.
