@@ -12,6 +12,7 @@ import { createBscPoolIndexerWorker } from "../src/bsc-pool-indexer-worker.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
 import {
   createPostgresBscIndexerRepository,
+  createPostgresBscIndexerWalletSetRepository,
   indexerLanes,
   type IndexerLane,
 } from "../src/database/bsc-indexer-repository.js";
@@ -128,6 +129,7 @@ export async function runBackfill(
     const laneOptions = {
       repository: createPostgresBscIndexerRepository(pool),
       registry: createPostgresChainRegistryRepository(pool),
+      walletSet: createPostgresBscIndexerWalletSetRepository(pool),
       readClient: createBscReadClient({ config: chainConfig }),
       chainId: bscChainId,
       startBlockNumber: request.fromBlockNumber,

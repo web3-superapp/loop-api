@@ -809,6 +809,34 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
     expect(
       classifyLogQueryError(new LimitExceededRpcError(new Error("quota"))),
     ).toBe("throttle");
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 400,
+          url: keyedEndpointUrl,
+          details: '{"code":-32000,"message":"too many requests"}',
+        }),
+      ),
+    ).toBe("throttle");
+    // A too-long topic or address array is a shape refusal (Decision 0075).
+    for (const message of [
+      "too many topics",
+      "too many sub-topics",
+      "too many addresses",
+      "exceed max topics",
+      // go-ethereum / bnb-chain/bsc eth/filters: maxSubTopics = 1000.
+      "exceed max addresses or topics per search position",
+    ]) {
+      expect(
+        classifyLogQueryError(
+          new HttpRequestError({
+            status: 400,
+            url: keyedEndpointUrl,
+            details: `{"code":-32000,"message":"${message}"}`,
+          }),
+        ),
+      ).toBe("shape");
+    }
     // -32001 is "resource not found" in EIP-1474; only a usage-limit text
     // makes it a refusal.
     expect(
@@ -1328,5 +1356,415 @@ describe("endpointLabelFor", () => {
 
   it("falls back to the opaque ref when the URL cannot be parsed", () => {
     expect(endpointLabelFor("not a url")).toBe(endpointRefFor("not a url"));
+  });
+});
+
+describe("BSC read client — wallet-scoped ERC-20 logs (Decision 0075)", () => {
+  const transferTopic =
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+  const approvalTopic =
+    "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
+  const wallets = [1, 2, 3, 4, 5].map(
+    (index) => `0x${"0".repeat(38)}b${String(index)}`,
+  );
+  const outsider = `0x${"0".repeat(38)}ee`;
+
+  function padTopic(address: string): string {
+    return `0x000000000000000000000000${address.slice(2)}`;
+  }
+
+  function unpadTopic(topic: string): string {
+    return `0x${topic.slice(26)}`.toLowerCase();
+  }
+
+  interface LogFilter {
+    readonly address: string | string[];
+    readonly topics?: readonly (string | readonly string[] | null)[];
+    readonly fromBlock: string;
+    readonly toBlock: string;
+  }
+
+  /** Topic position `index` of a filter as a lowercase address list, or null. */
+  function topicAddresses(filter: LogFilter, index: number): string[] | null {
+    const topic = filter.topics?.[index] ?? null;
+    if (topic === null) {
+      return null;
+    }
+    return (Array.isArray(topic) ? topic : [topic]).map((value: string) =>
+      unpadTopic(value),
+    );
+  }
+
+  function logTransport(
+    respond: (filter: LogFilter) => Promise<unknown>,
+  ): Transport {
+    return custom({
+      request: (request: RpcRequest): Promise<unknown> => {
+        if (request.method === "eth_chainId") {
+          return Promise.resolve("0x38");
+        }
+        if (request.method !== "eth_getLogs") {
+          return Promise.reject(new Error(`unmocked ${request.method}`));
+        }
+        const [filter] = request.params as readonly [LogFilter];
+        return respond(filter);
+      },
+    });
+  }
+
+  function rawLog(options: {
+    readonly topic0: string;
+    readonly first: string;
+    readonly second: string;
+    readonly blockNumber: bigint;
+    readonly logIndex: number;
+  }): unknown {
+    return {
+      address: wbnb,
+      blockHash: headHash,
+      blockNumber: numberToHex(options.blockNumber),
+      data: numberToHex(1_000n, { size: 32 }),
+      logIndex: numberToHex(BigInt(options.logIndex)),
+      removed: false,
+      topics: [
+        options.topic0,
+        padTopic(options.first),
+        padTopic(options.second),
+      ],
+      transactionHash: `0x${options.blockNumber.toString(16).padStart(62, "0")}${String(options.logIndex).padStart(2, "0")}`,
+      transactionIndex: "0x0",
+    };
+  }
+
+  it("reads from ∈ W and to ∈ W separately and returns a wallet-to-wallet transfer once, in block order", async () => {
+    const filters: LogFilter[] = [];
+    const [first, second] = wallets as [string, string];
+    const outgoing = rawLog({
+      topic0: transferTopic,
+      first,
+      second: outsider,
+      blockNumber: 12n,
+      logIndex: 0,
+    });
+    const incoming = rawLog({
+      topic0: transferTopic,
+      first: outsider,
+      second,
+      blockNumber: 10n,
+      logIndex: 3,
+    });
+    const internal = rawLog({
+      topic0: transferTopic,
+      first,
+      second,
+      blockNumber: 11n,
+      logIndex: 1,
+    });
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport((filter) => {
+          filters.push(filter);
+          if (topicAddresses(filter, 1) !== null) {
+            return Promise.resolve([outgoing, internal]);
+          }
+          return Promise.resolve([internal, incoming]);
+        }),
+    });
+
+    const logs = await client.readTransferLogs({
+      addresses: [wbnb],
+      fromBlock: 10n,
+      toBlock: 12n,
+      walletFilter: {
+        walletAddresses: [second, first.toUpperCase().replace("0X", "0x")],
+        topicChunkSize: 200,
+      },
+    });
+
+    expect(filters).toHaveLength(2);
+    const [fromFilter, toFilter] = filters as [LogFilter, LogFilter];
+    expect(fromFilter.topics?.[0]).toBe(transferTopic);
+    expect(topicAddresses(fromFilter, 1)).toEqual([first, second]);
+    expect(topicAddresses(fromFilter, 2)).toBeNull();
+    expect(toFilter.topics?.[0]).toBe(transferTopic);
+    expect(topicAddresses(toFilter, 1)).toBeNull();
+    expect(topicAddresses(toFilter, 2)).toEqual([first, second]);
+    // The token filter is kept on both reads.
+    expect(fromFilter.address).toEqual([wbnb]);
+    expect(toFilter.address).toEqual([wbnb]);
+
+    expect(
+      logs.map((log) => [log.blockNumber, log.logIndex, log.from, log.to]),
+    ).toEqual([
+      [10n, 3, outsider, second],
+      [11n, 1, first, second],
+      [12n, 0, first, outsider],
+    ]);
+  });
+
+  it("chunks the wallet set into topic arrays of the configured size on every side", async () => {
+    const transferFilters: LogFilter[] = [];
+    const approvalFilters: LogFilter[] = [];
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport((filter) => {
+          (filter.topics?.[0] === approvalTopic
+            ? approvalFilters
+            : transferFilters
+          ).push(filter);
+          return Promise.resolve([]);
+        }),
+    });
+    const walletFilter = { walletAddresses: wallets, topicChunkSize: 2 };
+
+    await client.readTransferLogs({
+      addresses: [wbnb],
+      fromBlock: 1n,
+      toBlock: 5n,
+      walletFilter,
+    });
+    await client.readApprovalLogs({
+      addresses: [wbnb],
+      fromBlock: 1n,
+      toBlock: 5n,
+      walletFilter,
+    });
+
+    const fromChunks = transferFilters.flatMap((filter) => {
+      const chunk = topicAddresses(filter, 1);
+      return chunk === null ? [] : [chunk];
+    });
+    const toChunks = transferFilters.flatMap((filter) => {
+      const chunk = topicAddresses(filter, 2);
+      return chunk === null ? [] : [chunk];
+    });
+    const expectedChunks = [
+      wallets.slice(0, 2),
+      wallets.slice(2, 4),
+      [wallets[4]],
+    ];
+    expect(fromChunks).toEqual(expectedChunks);
+    expect(toChunks).toEqual(expectedChunks);
+    expect(transferFilters).toHaveLength(6);
+    // Approvals are scoped to `owner` only.
+    expect(approvalFilters.map((filter) => topicAddresses(filter, 1))).toEqual(
+      expectedChunks,
+    );
+    expect(
+      approvalFilters.every((filter) => topicAddresses(filter, 2) === null),
+    ).toBe(true);
+    // Every request covers the whole range: chunking never trims blocks.
+    for (const filter of [...transferFilters, ...approvalFilters]) {
+      expect(BigInt(filter.fromBlock)).toBe(1n);
+      expect(BigInt(filter.toBlock)).toBe(5n);
+    }
+  });
+
+  it("reads nothing for an empty wallet set", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport(() => {
+          requestCount += 1;
+          return Promise.resolve([]);
+        }),
+    });
+    const walletFilter = { walletAddresses: [], topicChunkSize: 200 };
+
+    await expect(
+      client.readTransferLogs({
+        addresses: [wbnb],
+        fromBlock: 1n,
+        toBlock: 5n,
+        walletFilter,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      client.readApprovalLogs({
+        addresses: [wbnb],
+        fromBlock: 1n,
+        toBlock: 5n,
+        walletFilter,
+      }),
+    ).resolves.toEqual([]);
+    expect(requestCount).toBe(0);
+  });
+
+  it("halves a refused topic array and still covers every wallet exactly once", async () => {
+    const accepted: string[][] = [];
+    let refusals = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport((filter) => {
+          const chunk = topicAddresses(filter, 1);
+          if (chunk === null) {
+            return Promise.resolve([]);
+          }
+          // The Provider caps one topic position at two sub-topics.
+          if (chunk.length > 2) {
+            refusals += 1;
+            return Promise.reject(
+              Object.assign(new Error("too many topics"), { code: -32602 }),
+            );
+          }
+          accepted.push(chunk);
+          return Promise.resolve([]);
+        }),
+    });
+
+    await client.readTransferLogs({
+      addresses: [wbnb],
+      fromBlock: 7n,
+      toBlock: 7n,
+      walletFilter: { walletAddresses: wallets, topicChunkSize: 5 },
+    });
+
+    expect(accepted.every((chunk) => chunk.length <= 2)).toBe(true);
+    expect(accepted.flat().sort()).toEqual([...wallets].sort());
+    // One refusal (5 → 3) and one more (3 → 2) to learn the cap; the
+    // learned size is applied to the rest without another refusal.
+    expect(refusals).toBe(2);
+  });
+
+  it("fails closed as BSC_LOG_QUERY_REJECTED when a single-wallet, single-address, single-block request is still refused, never dropping the chunk", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport((filter) => {
+          requestCount += 1;
+          // The first chunk is accepted; every request of the second chunk
+          // is refused however narrow it gets.
+          const chunk = topicAddresses(filter, 1) ?? [];
+          if (chunk.every((address) => wallets.slice(0, 2).includes(address))) {
+            return Promise.resolve([
+              rawLog({
+                topic0: transferTopic,
+                first: wallets[0] ?? "",
+                second: outsider,
+                blockNumber: 7n,
+                logIndex: 0,
+              }),
+            ]);
+          }
+          return Promise.reject(
+            requestBlocked({ method: "eth_getLogs", params: [filter] }),
+          );
+        }),
+    });
+
+    const failure = await client
+      .readTransferLogs({
+        addresses: [wbnb],
+        fromBlock: 7n,
+        toBlock: 7n,
+        walletFilter: { walletAddresses: wallets, topicChunkSize: 2 },
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(BscReadUnavailableError);
+    expect(failure).toMatchObject({
+      reasonCode: "BSC_LOG_QUERY_REJECTED",
+      rpcError: {
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+      },
+    });
+    const serialised = JSON.stringify(
+      (failure as BscReadUnavailableError).rpcError,
+    );
+    expect(serialised).not.toContain(wallets[2]?.slice(2) ?? "unused");
+    expect(requestCount).toBeGreaterThan(1);
+  });
+
+  it("rejects a malformed wallet filter instead of widening or narrowing the scope", async () => {
+    let requestCount = 0;
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport(() => {
+          requestCount += 1;
+          return Promise.resolve([]);
+        }),
+    });
+
+    for (const walletFilter of [
+      { walletAddresses: wallets, topicChunkSize: 0 },
+      { walletAddresses: wallets, topicChunkSize: 1_001 },
+      { walletAddresses: wallets, topicChunkSize: 1.5 },
+      { walletAddresses: ["0x1234"], topicChunkSize: 200 },
+    ]) {
+      await expect(
+        client.readTransferLogs({
+          addresses: [wbnb],
+          fromBlock: 1n,
+          toBlock: 1n,
+          walletFilter,
+        }),
+      ).rejects.toMatchObject({
+        reasonCode: "BSC_LOG_WALLET_FILTER_INVALID",
+      });
+      await expect(
+        client.readApprovalLogs({
+          addresses: [wbnb],
+          fromBlock: 1n,
+          toBlock: 1n,
+          walletFilter,
+        }),
+      ).rejects.toMatchObject({
+        reasonCode: "BSC_LOG_WALLET_FILTER_INVALID",
+      });
+    }
+    expect(requestCount).toBe(0);
+  });
+
+  it("keeps narrowing the block range of a wallet-scoped read that the Provider refuses by span", async () => {
+    const accepted: { from: bigint; to: bigint; side: "from" | "to" }[] = [];
+    const client = createBscReadClient({
+      config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
+      transportFactory: () =>
+        logTransport((filter) => {
+          const from = BigInt(filter.fromBlock);
+          const to = BigInt(filter.toBlock);
+          if (to - from + 1n > 500n) {
+            return Promise.reject(
+              new LimitExceededRpcError(new Error("limit exceeded")),
+            );
+          }
+          accepted.push({
+            from,
+            to,
+            side: topicAddresses(filter, 1) === null ? "to" : "from",
+          });
+          return Promise.resolve([]);
+        }),
+    });
+
+    await client.readTransferLogs({
+      addresses: [wbnb],
+      fromBlock: 1n,
+      toBlock: 2_000n,
+      walletFilter: { walletAddresses: wallets, topicChunkSize: 200 },
+    });
+
+    for (const side of ["from", "to"] as const) {
+      let expectedNext = 1n;
+      for (const range of accepted.filter((entry) => entry.side === side)) {
+        expect(range.from).toBe(expectedNext);
+        expect(range.to - range.from + 1n).toBeLessThanOrEqual(500n);
+        expectedNext = range.to + 1n;
+      }
+      expect(expectedNext).toBe(2_001n);
+    }
   });
 });

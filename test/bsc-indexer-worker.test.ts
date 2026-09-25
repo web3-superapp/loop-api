@@ -8,6 +8,7 @@ import {
 } from "../src/bsc-indexer-worker.js";
 import type {
   BscIndexerRepository,
+  BscIndexerWalletSetRepository,
   CommitApprovalCoverageSegmentInput,
   CommitTransferSegmentInput,
   IndexerCheckpointRecord,
@@ -60,6 +61,20 @@ function registryFake(
     upsertAsset: vi.fn(() => Promise.reject(new Error("not used"))),
     listPools: vi.fn(() => Promise.resolve([])),
     upsertPool: vi.fn(() => Promise.reject(new Error("not used"))),
+  };
+}
+
+/** Active LOOP wallet addresses as `account_wallets` would report them. */
+function walletSetFake(
+  addresses: readonly string[] = [owner],
+): BscIndexerWalletSetRepository & { reads: () => number } {
+  let reads = 0;
+  return {
+    listActiveWalletAddresses: () => {
+      reads += 1;
+      return Promise.resolve(addresses);
+    },
+    reads: () => reads,
   };
 }
 
@@ -237,6 +252,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake([]),
+      walletSet: walletSetFake(),
       readClient: readClientFake({ head: 100n }),
       chainId: bscChainId,
       startBlockNumber: null,
@@ -254,6 +270,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({ head: 100n, headUnavailable: true }),
       chainId: bscChainId,
       startBlockNumber: null,
@@ -272,6 +289,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({
         head: 10_000n,
         logsFor: (query) => {
@@ -324,6 +342,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({
         head: 9_999n,
         approvalLogsFor: (query) => {
@@ -388,6 +407,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({ head: 9_999n }),
       chainId: bscChainId,
       startBlockNumber: 1_000,
@@ -408,6 +428,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const options = {
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient,
       chainId: bscChainId,
       startBlockNumber: 500,
@@ -442,6 +463,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({
         head: 1_000n,
         blockHashFor: (blockNumber) => blockHash(blockNumber, fork),
@@ -473,6 +495,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({
         head: 950n,
         blockHashFor: (blockNumber) => blockHash(blockNumber, fork),
@@ -494,6 +517,7 @@ describe("BSC ERC-20 indexer lane", () => {
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({ head: 300n }),
       chainId: bscChainId,
       startBlockNumber: 300,
@@ -569,6 +593,7 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: readClientFake({
         head: 100n,
         transferLogsError: requestBlocked,
@@ -653,6 +678,7 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake([wbnbAsset, cakeAsset]),
+      walletSet: walletSetFake(),
       readClient,
       chainId: bscChainId,
       // One block: viem retries a 403 three times per refusal, so the
@@ -683,6 +709,7 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
     const worker = createBscIndexerWorker({
       repository: storage.repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: {
         ...readClientFake({ head: 100n }),
         readTransferLogs: () =>
@@ -776,6 +803,7 @@ describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 00
       const worker = createBscIndexerWorker({
         repository: repositoryFake().repository,
         registry: registryFake(),
+        walletSet: walletSetFake(),
         readClient: {
           ...readClientFake({ head: 100n }),
           getHead: () => {
@@ -813,6 +841,7 @@ describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 00
     const worker = createBscIndexerWorker({
       repository: repositoryFake().repository,
       registry: registryFake(),
+      walletSet: walletSetFake(),
       readClient: {
         ...readClientFake({ head: 100n }),
         readTransferLogs: () => Promise.reject(hostile),
@@ -835,5 +864,289 @@ describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 00
       rpcUrlHost: null,
       method: null,
     });
+  });
+});
+
+describe("BSC ERC-20 indexer lane — wallet scope (Decision 0075)", () => {
+  const walletA = "0x00000000000000000000000000000000000000b1";
+  const walletB = "0x00000000000000000000000000000000000000b2";
+
+  it("advances the checkpoint without any log read while no wallet is active, and says why", async () => {
+    const storage = repositoryFake();
+    const reads: string[] = [];
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([]),
+      readClient: {
+        ...readClientFake({ head: 10_000n }),
+        readTransferLogs: () => {
+          reads.push("transfer");
+          return Promise.resolve([]);
+        },
+        readApprovalLogs: () => {
+          reads.push("approval");
+          return Promise.resolve([]);
+        },
+      },
+      chainId: bscChainId,
+      startBlockNumber: 1_000,
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      kind: "idle",
+      fromBlockNumber: "1000",
+      toBlockNumber: "2999",
+      transferCount: 0,
+      reasonCode: "INDEXER_WALLET_SET_EMPTY",
+    });
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "idle",
+      fromBlockNumber: "3000",
+      toBlockNumber: "4999",
+      reasonCode: "INDEXER_WALLET_SET_EMPTY",
+    });
+    expect(reads).toEqual([]);
+    expect(storage.current()).toMatchObject({
+      lastBlockNumber: "4999",
+      startedFromBlockNumber: "1000",
+      approvalCoverageFromBlockNumber: "1000",
+    });
+    expect(storage.commits.map((commit) => commit.transfers)).toEqual([[], []]);
+    expect(storage.commits.map((commit) => commit.walletCoverage)).toEqual([
+      { addresses: [], fromBlockNumber: "1000" },
+      { addresses: [], fromBlockNumber: "3000" },
+    ]);
+  });
+
+  it("passes the normalised wallet set and chunk size to both reads and records coverage with the checkpoint", async () => {
+    const storage = repositoryFake();
+    const transferQueries: BscTransferLogQuery[] = [];
+    const approvalQueries: BscTransferLogQuery[] = [];
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([walletB, walletA.toUpperCase(), walletB]),
+      walletTopicChunkSize: 50,
+      readClient: readClientFake({
+        head: 1_500n,
+        logsFor: (query) => {
+          transferQueries.push(query);
+          return [transferLog(1_200n, 0)];
+        },
+        approvalLogsFor: (query) => {
+          approvalQueries.push(query);
+          return [];
+        },
+      }),
+      chainId: bscChainId,
+      startBlockNumber: 1_000,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "seeded",
+      fromBlockNumber: "1000",
+      toBlockNumber: "1500",
+      transferCount: 1,
+      reasonCode: null,
+    });
+    const expectedFilter = {
+      walletAddresses: [walletA, walletB],
+      topicChunkSize: 50,
+    };
+    expect(transferQueries).toEqual([
+      {
+        addresses: [wbnb],
+        fromBlock: 1_000n,
+        toBlock: 1_500n,
+        walletFilter: expectedFilter,
+      },
+    ]);
+    expect(approvalQueries).toEqual(transferQueries);
+    expect(storage.commits[0]?.walletCoverage).toEqual({
+      addresses: [walletA, walletB],
+      fromBlockNumber: "1000",
+    });
+    expect(storage.rows.size).toBe(1);
+  });
+
+  it("uses the default topic chunk size when none is configured", async () => {
+    const queries: BscTransferLogQuery[] = [];
+    const worker = createBscIndexerWorker({
+      repository: repositoryFake().repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([walletA]),
+      readClient: readClientFake({
+        head: 100n,
+        logsFor: (query) => {
+          queries.push(query);
+          return [];
+        },
+      }),
+      chainId: bscChainId,
+      startBlockNumber: 100,
+    });
+    await worker.runOnce();
+    expect(queries[0]?.walletFilter?.topicChunkSize).toBe(200);
+  });
+
+  it("re-reads the wallet set every tick, so a new wallet is covered from the tick it appears in", async () => {
+    const storage = repositoryFake();
+    let active: readonly string[] = [walletA];
+    const walletSet = {
+      listActiveWalletAddresses: () => Promise.resolve(active),
+    };
+    const queries: BscTransferLogQuery[] = [];
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet,
+      readClient: readClientFake({
+        head: 10_000n,
+        logsFor: (query) => {
+          queries.push(query);
+          return [];
+        },
+      }),
+      chainId: bscChainId,
+      startBlockNumber: 1_000,
+    });
+
+    await worker.runOnce();
+    active = [walletA, walletB];
+    await worker.runOnce();
+
+    expect(queries.map((query) => query.walletFilter?.walletAddresses)).toEqual(
+      [[walletA], [walletA, walletB]],
+    );
+    // The repository writes a row only for an address it has not seen, so
+    // walletA keeps 1000 and walletB starts at the second segment.
+    expect(storage.commits.map((commit) => commit.walletCoverage)).toEqual([
+      { addresses: [walletA], fromBlockNumber: "1000" },
+      { addresses: [walletA, walletB], fromBlockNumber: "3000" },
+    ]);
+  });
+
+  it("replays a reorged range with the same wallet filter and records coverage from the rewind point", async () => {
+    const storage = repositoryFake();
+    let fork = "a";
+    const queries: BscTransferLogQuery[] = [];
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([walletA]),
+      readClient: readClientFake({
+        head: 1_000n,
+        blockHashFor: (blockNumber) => blockHash(blockNumber, fork),
+        logsFor: (query) => {
+          queries.push(query);
+          return [];
+        },
+      }),
+      chainId: bscChainId,
+      startBlockNumber: 900,
+    });
+
+    await worker.runOnce();
+    fork = "b";
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "reorged",
+      fromBlockNumber: "936",
+    });
+    expect(queries.at(-1)).toEqual({
+      addresses: [wbnb],
+      fromBlock: 936n,
+      toBlock: 1_000n,
+      walletFilter: { walletAddresses: [walletA], topicChunkSize: 200 },
+    });
+    expect(storage.commits.at(-1)).toMatchObject({
+      rewindFromBlockNumber: "936",
+      walletCoverage: { addresses: [walletA], fromBlockNumber: "936" },
+    });
+  });
+
+  it("commits nothing, coverage included, when a wallet-scoped read is refused", async () => {
+    const storage = repositoryFake();
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([walletA]),
+      readClient: {
+        ...readClientFake({ head: 100n }),
+        readApprovalLogs: () =>
+          Promise.reject(new BscReadUnavailableError("BSC_LOG_QUERY_REJECTED")),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "unavailable",
+      reasonCode: "BSC_LOG_QUERY_REJECTED",
+    });
+    expect(storage.commits).toEqual([]);
+    expect(storage.current()).toBeNull();
+  });
+
+  it("scopes the approval coverage backfill to the active wallets and idles without them", async () => {
+    const seeded: IndexerCheckpointRecord = {
+      lastBlockNumber: "9999",
+      lastBlockHash: blockHash(9_999n),
+      startedFromBlockNumber: "1000",
+      approvalCoverageFromBlockNumber: "8000",
+      reorgCount: 0,
+      updatedAt: "2026-09-08T00:00:00.000Z",
+    };
+    const queries: BscTransferLogQuery[] = [];
+    const readClient = readClientFake({
+      head: 9_999n,
+      approvalLogsFor: (query) => {
+        queries.push(query);
+        return [];
+      },
+    });
+
+    const empty = repositoryFake();
+    empty.seed(seeded);
+    const idleWorker = createBscIndexerWorker({
+      repository: empty.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([]),
+      readClient,
+      chainId: bscChainId,
+      startBlockNumber: null,
+    });
+    await expect(
+      idleWorker.backfillApprovalCoverageOnce(7_000n),
+    ).resolves.toMatchObject({
+      kind: "idle",
+      reasonCode: "INDEXER_WALLET_SET_EMPTY",
+    });
+    expect(empty.coverageCommits).toHaveLength(0);
+
+    const storage = repositoryFake();
+    storage.seed(seeded);
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake([walletB, walletA]),
+      readClient,
+      chainId: bscChainId,
+      startBlockNumber: null,
+    });
+    await expect(
+      worker.backfillApprovalCoverageOnce(7_000n),
+    ).resolves.toMatchObject({ kind: "covered", fromBlockNumber: "7000" });
+    expect(queries).toEqual([
+      {
+        addresses: [wbnb],
+        fromBlock: 7_000n,
+        toBlock: 7_999n,
+        walletFilter: {
+          walletAddresses: [walletA, walletB],
+          topicChunkSize: 200,
+        },
+      },
+    ]);
   });
 });

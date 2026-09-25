@@ -118,10 +118,27 @@ export interface BscTransferLog {
   readonly removed: boolean;
 }
 
-export interface BscTransferLogQuery {
+/** Contract addresses and an inclusive block range of one log read. */
+export interface BscLogRangeQuery {
   readonly addresses: readonly string[];
   readonly fromBlock: bigint;
   readonly toBlock: bigint;
+}
+
+/**
+ * Wallet scope of an ERC-20 log read (Decision 0075). Only logs whose indexed
+ * wallet topic (`Transfer.from`, `Transfer.to`, `Approval.owner`) is one of
+ * `walletAddresses` are returned. The set is sent as topic OR arrays of at
+ * most `topicChunkSize` entries per request; an empty set reads nothing.
+ */
+export interface BscWalletLogFilter {
+  readonly walletAddresses: readonly string[];
+  readonly topicChunkSize: number;
+}
+
+export interface BscTransferLogQuery extends BscLogRangeQuery {
+  /** Absent: every log of `addresses` (no wallet scope). */
+  readonly walletFilter?: BscWalletLogFilter;
 }
 
 export type BscPoolEventKind = "swap" | "mint" | "burn";
@@ -259,9 +276,12 @@ export interface BscReadClient {
     query: BscTransferLogQuery,
   ): Promise<readonly BscTransferLog[]>;
   readPoolEventLogs(
-    query: BscTransferLogQuery,
+    query: BscLogRangeQuery,
   ): Promise<readonly BscPoolEventLog[]>;
-  /** ERC-20 `Approval` logs for the same addresses and range as the transfer lane. */
+  /**
+   * ERC-20 `Approval` logs for the same addresses and range as the transfer
+   * lane; a wallet filter scopes them to `owner` (Decision 0075).
+   */
   readApprovalLogs(
     query: BscTransferLogQuery,
   ): Promise<readonly BscApprovalLog[]>;
@@ -361,6 +381,19 @@ const bscLogRangeSplitFloor = 1n;
  */
 export const bscMaximumLogRequestsPerSegment = 512;
 export const bscLogQueryRejectedReasonCode = "BSC_LOG_QUERY_REJECTED";
+/**
+ * Default number of wallet addresses in one topic position's OR array
+ * (Decision 0075). go-ethereum and bnb-chain/bsc filters cap one position at
+ * 1,000 sub-topics and some gateways refuse large request bodies; 200 keeps a 5x
+ * margin under that cap, a request body around 14 KB, and today's wallet set
+ * (360 addresses) at two requests per side. A Provider that still refuses a
+ * chunk is narrowed like any other shape refusal and fails closed as
+ * `BSC_LOG_QUERY_REJECTED`; it never drops the chunk.
+ */
+export const defaultBscWalletTopicChunkSize = 200;
+export const maximumBscWalletTopicChunkSize = 1_000;
+export const bscLogWalletFilterInvalidReasonCode =
+  "BSC_LOG_WALLET_FILTER_INVALID";
 export const bscLogQueryBudgetExhaustedReasonCode =
   "BSC_LOG_QUERY_BUDGET_EXHAUSTED";
 /** Mirrors the BSC_CONFIRMATIONS and BSC_REORG_DEPTH_BLOCKS defaults. */
@@ -420,6 +453,17 @@ export interface CreateBscReadClientOptions {
 
 type ViemClient = PublicClient<Transport, Chain>;
 
+/**
+ * One `eth_getLogs` request of a segment read. `topics` is the wallet topic
+ * OR array of a wallet-scoped read (Decision 0075), `null` otherwise.
+ */
+interface LogRangeRequest {
+  readonly from: bigint;
+  readonly to: bigint;
+  readonly addresses: readonly Address[];
+  readonly topics: readonly Address[] | null;
+}
+
 function defaultTransport(
   url: string,
   options: { readonly timeoutMs: number },
@@ -442,6 +486,72 @@ function asAddress(value: string): Address {
 
 function normalizeHex(value: string): string {
   return value.toLowerCase();
+}
+
+const walletAddressPattern = /^0x[0-9a-f]{40}$/;
+
+/**
+ * Splits a wallet filter into topic OR arrays (Decision 0075): `null` when the
+ * read is not wallet-scoped, `[]` when the scope is empty. Addresses are
+ * lower-cased, de-duplicated, and sorted so the chunking is deterministic.
+ * A malformed address or chunk size fails the read closed rather than
+ * widening or narrowing the scope.
+ */
+function walletTopicGroups(
+  filter: BscWalletLogFilter | undefined,
+): (readonly Address[])[] | null {
+  if (filter === undefined) {
+    return null;
+  }
+  const size = filter.topicChunkSize;
+  if (
+    !Number.isSafeInteger(size) ||
+    size < 1 ||
+    size > maximumBscWalletTopicChunkSize
+  ) {
+    throw new BscReadUnavailableError(bscLogWalletFilterInvalidReasonCode);
+  }
+  const wallets = [
+    ...new Set(filter.walletAddresses.map((address) => normalizeHex(address))),
+  ].sort();
+  if (wallets.some((address) => !walletAddressPattern.test(address))) {
+    throw new BscReadUnavailableError(bscLogWalletFilterInvalidReasonCode);
+  }
+  const groups: (readonly Address[])[] = [];
+  for (let index = 0; index < wallets.length; index += size) {
+    groups.push(wallets.slice(index, index + size).map(asAddress));
+  }
+  return groups;
+}
+
+/**
+ * Merges the per-side reads of one wallet-scoped query. A transfer between
+ * two indexed wallets matches both the `from` and the `to` read; it is kept
+ * once, keyed by (transaction hash, log index), and the result is in block
+ * and log order.
+ */
+function mergeLogSides<
+  T extends {
+    readonly transactionHash: string;
+    readonly blockNumber: bigint;
+    readonly logIndex: number;
+  },
+>(sides: readonly (readonly T[])[]): T[] {
+  const unique = new Map<string, T>();
+  for (const side of sides) {
+    for (const log of side) {
+      unique.set(
+        `${normalizeHex(log.transactionHash)}:${String(log.logIndex)}`,
+        log,
+      );
+    }
+  }
+  return [...unique.values()].sort((left, right) => {
+    if (left.blockNumber !== right.blockNumber) {
+      return left.blockNumber < right.blockNumber ? -1 : 1;
+    }
+    return left.logIndex - right.logIndex;
+  });
 }
 
 /**
@@ -643,9 +753,20 @@ const shapeCodes = new Set<number>([
   LimitExceededRpcError.code, // -32005: result cap
 ]);
 const throttleStatuses = new Set([429]);
-const throttlePattern = /rate limit|too many|quota|usage limit/i;
-const shapePattern =
-  /limit exceeded|request blocked|block range|more than|too wide|too large|exceed/i;
+/**
+ * "too many" is a rate objection ("too many requests") except when it names
+ * a part of the filter: a topic or address array a Provider finds too long
+ * is a shape refusal that narrowing fixes (Decision 0075).
+ */
+const filterPartPattern = "(?:sub-?)?topics|addresses|logs|results";
+const throttlePattern = new RegExp(
+  `rate limit|too many(?! (?:${filterPartPattern}))|quota|usage limit`,
+  "i",
+);
+const shapePattern = new RegExp(
+  `limit exceeded|request blocked|block range|more than|too wide|too large|exceed|too many (?:${filterPartPattern})`,
+  "i",
+);
 
 /**
  * The refusal text a candidate error is allowed to contribute: the
@@ -772,6 +893,8 @@ export function createBscReadClient(
    */
   let learnedRangeLimit: bigint = bscMaximumLogRange;
   let learnedAddressGroupLimit: number = Number.MAX_SAFE_INTEGER;
+  /** Same discipline for wallet topic OR arrays (Decision 0075). */
+  let learnedTopicGroupLimit: number = Number.MAX_SAFE_INTEGER;
 
   async function probeVerification(): Promise<ChainVerificationState> {
     try {
@@ -814,12 +937,14 @@ export function createBscReadClient(
   /**
    * Reads one segment, narrowing the request whenever the Provider refuses
    * its shape (Decision 0068). The walk is iterative and bounded: the block
-   * range is halved down to one block, then the address list is halved down
-   * to one address, and the whole read fails closed — never a partial page —
-   * when a single-address, single-block request is still refused or when the
-   * read budget runs out. Limits learned here are kept on the client (see
-   * `learnedRangeLimit`). A throttle refusal, a timeout, or a transport
-   * failure propagates unchanged after the first occurrence.
+   * range is halved down to one block, then a wallet topic OR array (when the
+   * read is wallet-scoped, Decision 0075) is halved down to one wallet, then
+   * the address list is halved down to one address, and the whole read fails
+   * closed — never a partial page — when a single-wallet, single-address,
+   * single-block request is still refused or when the read budget runs out.
+   * Limits learned here are kept on the client (see `learnedRangeLimit`). A
+   * throttle refusal, a timeout, or a transport failure propagates unchanged
+   * after the first occurrence.
    * Collected logs are returned in block order regardless of split order.
    */
   async function readLogRangeWith<
@@ -828,20 +953,21 @@ export function createBscReadClient(
       readonly logIndex: number | null;
     },
   >(
-    read: (request: {
-      readonly from: bigint;
-      readonly to: bigint;
-      readonly addresses: readonly Address[];
-    }) => Promise<readonly T[]>,
+    read: (request: LogRangeRequest) => Promise<readonly T[]>,
     addresses: readonly Address[],
     fromBlock: bigint,
     toBlock: bigint,
+    topicGroups: readonly (readonly Address[])[] | null = null,
   ): Promise<T[]> {
-    const pending: {
-      readonly from: bigint;
-      readonly to: bigint;
-      readonly addresses: readonly Address[];
-    }[] = [{ from: fromBlock, to: toBlock, addresses }];
+    const pending: LogRangeRequest[] =
+      topicGroups === null
+        ? [{ from: fromBlock, to: toBlock, addresses, topics: null }]
+        : topicGroups.map((topics) => ({
+            from: fromBlock,
+            to: toBlock,
+            addresses,
+            topics,
+          }));
     const collected: T[] = [];
     let requestCount = 0;
     let refused = false;
@@ -856,6 +982,13 @@ export function createBscReadClient(
           { ...request, to: middle },
           { ...request, from: middle + 1n },
         );
+        continue;
+      }
+      if (
+        request.topics !== null &&
+        request.topics.length > learnedTopicGroupLimit
+      ) {
+        pending.unshift(...splitTopics(request, learnedTopicGroupLimit));
         continue;
       }
       if (request.addresses.length > learnedAddressGroupLimit) {
@@ -881,6 +1014,14 @@ export function createBscReadClient(
           pending.unshift(request);
           continue;
         }
+        if (request.topics !== null && request.topics.length > 1) {
+          learnedTopicGroupLimit = Math.min(
+            learnedTopicGroupLimit,
+            Math.ceil(request.topics.length / 2),
+          );
+          pending.unshift(request);
+          continue;
+        }
         if (request.addresses.length > 1) {
           learnedAddressGroupLimit = Math.min(
             learnedAddressGroupLimit,
@@ -903,6 +1044,10 @@ export function createBscReadClient(
         learnedAddressGroupLimit >= Number.MAX_SAFE_INTEGER / 2
           ? Number.MAX_SAFE_INTEGER
           : learnedAddressGroupLimit * 2;
+      learnedTopicGroupLimit =
+        learnedTopicGroupLimit >= Number.MAX_SAFE_INTEGER / 2
+          ? Number.MAX_SAFE_INTEGER
+          : learnedTopicGroupLimit * 2;
     }
     return collected.sort((left, right) => {
       const leftBlock = left.blockNumber ?? -1n;
@@ -912,6 +1057,21 @@ export function createBscReadClient(
       }
       return (left.logIndex ?? -1) - (right.logIndex ?? -1);
     });
+  }
+
+  function splitTopics(
+    request: LogRangeRequest,
+    groupSize: number,
+  ): LogRangeRequest[] {
+    const topics = request.topics ?? [];
+    const groups: LogRangeRequest[] = [];
+    for (let index = 0; index < topics.length; index += groupSize) {
+      groups.push({
+        ...request,
+        topics: topics.slice(index, index + groupSize),
+      });
+    }
+    return groups;
   }
 
   function splitAddresses<R extends { readonly addresses: readonly Address[] }>(
@@ -1095,22 +1255,39 @@ export function createBscReadClient(
       if (query.toBlock - query.fromBlock + 1n > bscMaximumLogRange) {
         throw new BscReadUnavailableError("BSC_LOG_RANGE_TOO_WIDE");
       }
-      if (query.addresses.length === 0) {
+      const walletGroups = walletTopicGroups(query.walletFilter);
+      if (
+        query.addresses.length === 0 ||
+        (walletGroups !== null && walletGroups.length === 0)
+      ) {
         return Object.freeze([]);
       }
-      const logs = await readLogRangeWith(
-        (request) =>
-          aggregate.getLogs({
-            address: [...request.addresses],
-            event: erc20TransferEvent,
-            fromBlock: request.from,
-            toBlock: request.to,
-          }),
-        [...query.addresses].map(asAddress),
-        query.fromBlock,
-        query.toBlock,
-      );
-      return Object.freeze(
+      const tokens = [...query.addresses].map(asAddress);
+      // A wallet-scoped read is two topic-filtered reads, `from ∈ W` and
+      // `to ∈ W`, merged on (transaction hash, log index) (Decision 0075).
+      const readSide = (side: "from" | "to" | null) =>
+        readLogRangeWith(
+          (request) =>
+            aggregate.getLogs({
+              address: [...request.addresses],
+              event: erc20TransferEvent,
+              args:
+                side === null || request.topics === null
+                  ? {}
+                  : side === "from"
+                    ? { from: [...request.topics] }
+                    : { to: [...request.topics] },
+              fromBlock: request.from,
+              toBlock: request.to,
+            }),
+          tokens,
+          query.fromBlock,
+          query.toBlock,
+          side === null ? null : walletGroups,
+        );
+      const decode = (
+        logs: Awaited<ReturnType<typeof readSide>>,
+      ): BscTransferLog[] =>
         logs.flatMap((log): BscTransferLog[] => {
           const from = log.args.from;
           const to = log.args.to;
@@ -1131,12 +1308,17 @@ export function createBscReadClient(
               removed: log.removed,
             }),
           ];
-        }),
-      );
+        });
+      if (walletGroups === null) {
+        return Object.freeze(decode(await readSide(null)));
+      }
+      const fromSide = decode(await readSide("from"));
+      const toSide = decode(await readSide("to"));
+      return Object.freeze(mergeLogSides([fromSide, toSide]));
     },
 
     async readPoolEventLogs(
-      query: BscTransferLogQuery,
+      query: BscLogRangeQuery,
     ): Promise<readonly BscPoolEventLog[]> {
       await requireVerifiedChain();
       if (query.toBlock < query.fromBlock) {
@@ -1230,20 +1412,28 @@ export function createBscReadClient(
       if (query.toBlock - query.fromBlock + 1n > bscMaximumLogRange) {
         throw new BscReadUnavailableError("BSC_LOG_RANGE_TOO_WIDE");
       }
-      if (query.addresses.length === 0) {
+      const walletGroups = walletTopicGroups(query.walletFilter);
+      if (
+        query.addresses.length === 0 ||
+        (walletGroups !== null && walletGroups.length === 0)
+      ) {
         return Object.freeze([]);
       }
+      // A wallet-scoped read keeps only `owner ∈ W` (Decision 0075): an
+      // approval granted *to* a LOOP wallet is not part of its inventory.
       const logs = await readLogRangeWith(
         (request) =>
           aggregate.getLogs({
             address: [...request.addresses],
             event: erc20ApprovalEvent,
+            args: request.topics === null ? {} : { owner: [...request.topics] },
             fromBlock: request.from,
             toBlock: request.to,
           }),
         [...query.addresses].map(asAddress),
         query.fromBlock,
         query.toBlock,
+        walletGroups,
       );
       return Object.freeze(
         logs.flatMap((log): BscApprovalLog[] => {

@@ -17,6 +17,16 @@ import {
   type WorkerSignalSource,
 } from "../src/worker-runtime.js";
 import type { ChainRegistryRepository } from "../src/database/chain-registry-repository.js";
+import type {
+  BscIndexerRepository,
+  BscIndexerWalletSetRepository,
+} from "../src/database/bsc-indexer-repository.js";
+import type {
+  BscIndexerWorker,
+  CreateBscIndexerWorkerOptions,
+} from "../src/bsc-indexer-worker.js";
+import type { BscPoolIndexerWorker } from "../src/bsc-pool-indexer-worker.js";
+import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-client.js";
 import type { MarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
 import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-sparkline-warm-worker.js";
@@ -888,5 +898,99 @@ describe("market sparkline warm lane composition (Decision 0074)", () => {
       expect.anything(),
     );
     expect(events).toEqual(["ping", "close"]);
+  });
+});
+
+describe("BSC transfer lane composition (Decision 0075)", () => {
+  function indexerConfig() {
+    return loadReconciliationWorkerConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "silent",
+      DATABASE_URL:
+        "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+      SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+      ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+      MARKET_SPARKLINE_WARM_ENABLED: "false",
+      BSC_INDEXER_ENABLED: "true",
+      BSC_RPC_URLS: "https://rpc-a.example/",
+      BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE: "150",
+    });
+  }
+
+  function indexerFactories() {
+    const createBscIndexerWorker = vi.fn<
+      (options: CreateBscIndexerWorkerOptions) => BscIndexerWorker
+    >((): BscIndexerWorker => ({
+      workerId,
+      lane: "erc20_transfer",
+      runOnce: vi.fn(),
+      backfillApprovalCoverageOnce: vi.fn(),
+      run: () => Promise.resolve(),
+    }));
+    const createBscPoolIndexerWorker = vi.fn(
+      (): BscPoolIndexerWorker =>
+        ({
+          workerId,
+          lane: "pool_event",
+          runOnce: vi.fn(),
+          run: () => Promise.resolve(),
+        }) as unknown as BscPoolIndexerWorker,
+    );
+    return { createBscIndexerWorker, createBscPoolIndexerWorker };
+  }
+
+  it("hands the lane the active-wallet source and the configured topic chunk size", async () => {
+    expect(indexerConfig().bscIndexer).toEqual({
+      startBlockNumber: null,
+      walletTopicChunkSize: 150,
+    });
+    const events: string[] = [];
+    const walletSet: BscIndexerWalletSetRepository = {
+      listActiveWalletAddresses: vi.fn(() => Promise.resolve([])),
+    };
+    const factories = indexerFactories();
+
+    await runReconciliationWorker({
+      config: indexerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        chainRegistry: {} as ChainRegistryRepository,
+        bscIndexer: {} as BscIndexerRepository,
+        bscIndexerWallets: walletSet,
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createBscReadClient: () => createUnavailableBscReadClient(),
+      ...factories,
+    });
+
+    expect(factories.createBscIndexerWorker).toHaveBeenCalledTimes(1);
+    const options = factories.createBscIndexerWorker.mock.calls[0]?.[0];
+    expect(options?.walletSet).toBe(walletSet);
+    expect(options?.walletTopicChunkSize).toBe(150);
+  });
+
+  it("keeps the transfer lane off rather than scanning every log when the wallet source is missing", async () => {
+    const events: string[] = [];
+    const factories = indexerFactories();
+
+    await runReconciliationWorker({
+      config: indexerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        chainRegistry: {} as ChainRegistryRepository,
+        bscIndexer: {} as BscIndexerRepository,
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createBscReadClient: () => createUnavailableBscReadClient(),
+      ...factories,
+    });
+
+    expect(factories.createBscIndexerWorker).not.toHaveBeenCalled();
+    // The pool lane does not depend on the wallet set (Decision 0034).
+    expect(factories.createBscPoolIndexerWorker).toHaveBeenCalledTimes(1);
   });
 });

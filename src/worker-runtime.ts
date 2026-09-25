@@ -59,7 +59,10 @@ import {
 } from "./market-sparkline-warm-worker.js";
 import type { WatchlistV2Repository } from "./database/watchlist-v2-repository.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
-import type { BscIndexerRepository } from "./database/bsc-indexer-repository.js";
+import type {
+  BscIndexerRepository,
+  BscIndexerWalletSetRepository,
+} from "./database/bsc-indexer-repository.js";
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
 import { bscChainId } from "./features/chain/chain-contract.js";
 import {
@@ -130,6 +133,8 @@ export interface ReconciliationWorkerDatabase {
   >;
   readonly chainRegistry?: ChainRegistryRepository;
   readonly bscIndexer?: BscIndexerRepository;
+  /** Wallet filter of the transfer lane (Decision 0075); absent keeps it off. */
+  readonly bscIndexerWallets?: BscIndexerWalletSetRepository;
   readonly marketFacts?: MarketFactCacheRepository;
   /** Watchlisted asset ids for the sparkline warm lane (Decision 0074). */
   readonly watchlistsV2?: WatchlistV2Repository;
@@ -373,6 +378,9 @@ export async function runReconciliationWorker(
     };
     const indexerRepository = database.bscIndexer;
     const indexerRegistry = database.chainRegistry;
+    // The transfer lane filters on active LOOP wallets (Decision 0075); without
+    // the wallet source it stays off rather than falling back to a full scan.
+    const indexerWalletSet = database.bscIndexerWallets;
     const indexerReadClient =
       indexerChainConfig === null
         ? null
@@ -381,11 +389,14 @@ export async function runReconciliationWorker(
       indexerConfig === null ||
       indexerReadClient === null ||
       indexerRepository === undefined ||
-      indexerRegistry === undefined
+      indexerRegistry === undefined ||
+      indexerWalletSet === undefined
         ? null
         : indexerWorkerFactory({
             repository: indexerRepository,
             registry: indexerRegistry,
+            walletSet: indexerWalletSet,
+            walletTopicChunkSize: indexerConfig.walletTopicChunkSize,
             readClient: indexerReadClient,
             chainId: bscChainId,
             startBlockNumber: indexerConfig.startBlockNumber,

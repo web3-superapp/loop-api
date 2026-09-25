@@ -19,7 +19,9 @@ import {
 } from "./account-wallet-repository.js";
 import {
   createPostgresBscIndexerRepository,
+  createPostgresBscIndexerWalletSetRepository,
   type BscIndexerRepository,
+  type BscIndexerWalletSetRepository,
 } from "./bsc-indexer-repository.js";
 import {
   createPostgresChainRegistryRepository,
@@ -154,6 +156,8 @@ export interface Database {
   readonly accountWallets?: AccountWalletRepository;
   /** Narrow BSC indexer lanes and their projections (Decision 0033). */
   readonly bscIndexer?: BscIndexerRepository;
+  /** Active wallet addresses the transfer lane filters on (Decision 0075). */
+  readonly bscIndexerWallets?: BscIndexerWalletSetRepository;
   readonly alerts: AlertRepository;
   /** Market Provider fact cache (Decision 0034). */
   readonly marketFacts?: MarketFactCacheRepository;
@@ -303,6 +307,7 @@ export function createPostgresDatabase(
   const chainRegistry = createPostgresChainRegistryRepository(pool);
   const accountWallets = createPostgresAccountWalletRepository(pool);
   const bscIndexer = createPostgresBscIndexerRepository(pool);
+  const bscIndexerWallets = createPostgresBscIndexerWalletSetRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
   const alertsV2 = createPostgresAlertV2Repository(pool);
@@ -360,6 +365,7 @@ export function createPostgresDatabase(
     chainRegistry,
     accountWallets,
     bscIndexer,
+    bscIndexerWallets,
     alerts,
     marketFacts,
     alertsV2,

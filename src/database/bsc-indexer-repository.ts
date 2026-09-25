@@ -130,6 +130,25 @@ export interface CommitTransferSegmentInput {
    * checkpoint.
    */
   readonly rewindFromBlockNumber?: string;
+  /**
+   * The lane's wallet filter for this segment (Decision 0075). Every address
+   * without an `indexer_wallet_coverage` row gets one with
+   * `from_block_number = fromBlockNumber`, in the same transaction as the
+   * checkpoint advance; an existing row is never rewritten.
+   */
+  readonly walletCoverage?: {
+    readonly addresses: readonly string[];
+    readonly fromBlockNumber: string;
+  };
+}
+
+/**
+ * The wallet set the `erc20_transfer` lane filters on (Decision 0075): the
+ * distinct lowercase address of every `active` `account_wallets` row, any
+ * kind, any owner. It is re-read every tick, like the Asset Registry.
+ */
+export interface BscIndexerWalletSetRepository {
+  listActiveWalletAddresses(): Promise<readonly string[]>;
 }
 
 export const poolEventKinds = Object.freeze(["swap", "mint", "burn"] as const);
@@ -718,6 +737,57 @@ async function insertTransfers(
   }
 }
 
+/**
+ * Records the first covered block of every wallet address new to the lane's
+ * filter, inside the caller's transaction (Decision 0075). `on conflict do
+ * nothing` keeps an existing row's `from_block_number` as first written.
+ */
+async function insertWalletCoverage(
+  client: PoolClient,
+  chainId: string,
+  addresses: readonly string[],
+  fromBlockNumber: string,
+): Promise<void> {
+  if (addresses.length === 0) {
+    return;
+  }
+  await client.query<Record<string, unknown>>({
+    text: `
+      insert into public.indexer_wallet_coverage (
+        chain_id, lane, address, from_block_number
+      )
+      select $1, 'erc20_transfer', wallet.address, $3::numeric
+      from unnest($2::text[]) as wallet(address)
+      on conflict (chain_id, lane, address) do nothing
+    `,
+    values: [chainId, [...new Set(addresses)], fromBlockNumber],
+  });
+}
+
+const walletAddressRowSchema = z
+  .object({ address: z.string().regex(new RegExp(evmAddressPatternSource)) })
+  .strict();
+
+export function createPostgresBscIndexerWalletSetRepository(
+  pool: Pool,
+): BscIndexerWalletSetRepository {
+  return Object.freeze({
+    async listActiveWalletAddresses(): Promise<readonly string[]> {
+      const result = await pool.query<Record<string, unknown>>({
+        text: `
+          select distinct address
+          from public.account_wallets
+          where status = 'active'
+          order by address
+        `,
+      });
+      return Object.freeze(
+        result.rows.map((row) => walletAddressRowSchema.parse(row).address),
+      );
+    },
+  });
+}
+
 export function createPostgresBscIndexerRepository(
   pool: Pool,
 ): BscIndexerRepository {
@@ -771,6 +841,14 @@ export function createPostgresBscIndexerRepository(
 
         await insertTransfers(client, input.chainId, input.transfers);
         await insertApprovals(client, input.chainId, input.approvals ?? []);
+        if (input.walletCoverage !== undefined) {
+          await insertWalletCoverage(
+            client,
+            input.chainId,
+            input.walletCoverage.addresses,
+            input.walletCoverage.fromBlockNumber,
+          );
+        }
 
         const committed = await upsertCheckpoint(
           client,

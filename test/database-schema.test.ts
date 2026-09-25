@@ -133,6 +133,7 @@ describe("database schema readiness contract", () => {
       "public.device_push_tokens",
       "public.device_push_token_commands",
       "public.push_deliveries",
+      "public.indexer_wallet_coverage",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

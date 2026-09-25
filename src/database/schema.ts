@@ -1,4 +1,4 @@
-export const latestMigrationName = "000039_v2_community_application_review";
+export const latestMigrationName = "000040_indexer_wallet_coverage";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -109,4 +109,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.device_push_tokens",
   "public.device_push_token_commands",
   "public.push_deliveries",
+  "public.indexer_wallet_coverage",
 ] as const);

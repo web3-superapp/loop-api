@@ -608,6 +608,7 @@ const reconciliationWorkerEnvironmentSchema = z
       .min(0)
       .max(Number.MAX_SAFE_INTEGER)
       .optional(),
+    BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE: positiveIntegerString(1, 1_000),
     BSC_RPC_URLS: optionalCredential(4_096),
     BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
@@ -859,6 +860,12 @@ export interface PasskeyIosConfig {
 
 export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
+  /**
+   * Wallet addresses per topic OR array of one `eth_getLogs` request
+   * (Decision 0075, `BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE`, 1-1000, default
+   * 200).
+   */
+  readonly walletTopicChunkSize: number;
 }
 
 /**
@@ -1999,6 +2006,8 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
     BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
     BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
+    BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE:
+      environment["BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE"] ?? "200",
     BSC_RPC_URLS: environment["BSC_RPC_URLS"],
     BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
@@ -2084,6 +2093,7 @@ export function loadReconciliationWorkerConfig(
     bscIndexer: parsed.data.BSC_INDEXER_ENABLED
       ? Object.freeze({
           startBlockNumber: parsed.data.BSC_INDEXER_START_BLOCK ?? null,
+          walletTopicChunkSize: parsed.data.BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE,
         })
       : null,
     communityChannelSync:

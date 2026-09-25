@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   BscIndexerRepository,
+  BscIndexerWalletSetRepository,
   IndexedApprovalInput,
   IndexedTransferInput,
 } from "./database/bsc-indexer-repository.js";
@@ -13,18 +14,24 @@ import {
   bscLogQueryBudgetExhaustedReasonCode,
   bscLogQueryRejectedReasonCode,
   bscMaximumLogRange,
+  defaultBscWalletTopicChunkSize,
   summarizeRpcError,
   type BscApprovalLog,
   type BscReadClient,
   type BscRpcErrorSummary,
+  type BscTransferLog,
 } from "./integrations/bsc/rpc-client.js";
 
 /**
  * The `bsc-erc20-transfer` indexer lane (Decision 0033).
  *
- * Scope is deliberately narrow: only ERC-20 `Transfer` logs emitted by
- * addresses that are already readable Asset Registry rows. It is not a
- * general-purpose chain indexer and it never discovers assets on its own.
+ * Scope is deliberately narrow: only ERC-20 `Transfer` and `Approval` logs
+ * emitted by addresses that are already readable Asset Registry rows, and
+ * only those whose indexed wallet topic (`from`/`to`, `owner`) is an active
+ * LOOP wallet (Decision 0075). It is not a general-purpose chain indexer and
+ * it never discovers assets or wallets on its own. Both sets are re-read
+ * every tick. With no active wallet the tick stores nothing, still advances
+ * the checkpoint, and reports `INDEXER_WALLET_SET_EMPTY`.
  *
  * State machine per tick:
  *
@@ -43,6 +50,8 @@ export const BSC_INDEXER_LANE = "erc20_transfer" as const;
 export const BSC_INDEXER_IDLE_DELAY_MS = 3_000;
 export const BSC_INDEXER_RETRY_BASE_DELAY_MS = 1_000;
 export const BSC_INDEXER_RETRY_MAX_DELAY_MS = 30_000;
+/** Idle reason of a tick that advanced with an empty wallet set (Decision 0075). */
+export const BSC_INDEXER_WALLET_SET_EMPTY = "INDEXER_WALLET_SET_EMPTY" as const;
 
 export type BscIndexerRunKind =
   "aborted" | "advanced" | "idle" | "reorged" | "seeded" | "unavailable";
@@ -230,6 +239,10 @@ export interface BscIndexerWorker {
 export interface CreateBscIndexerWorkerOptions {
   readonly repository: BscIndexerRepository;
   readonly registry: ChainRegistryRepository;
+  /** Active LOOP wallets the lane filters on (Decision 0075). */
+  readonly walletSet: BscIndexerWalletSetRepository;
+  /** Wallets per topic OR array; defaults to `defaultBscWalletTopicChunkSize`. */
+  readonly walletTopicChunkSize?: number;
   readonly readClient: BscReadClient;
   readonly chainId: string;
   /** Block to seed a brand-new lane from; `null` starts near the head. */
@@ -286,11 +299,25 @@ export function retryDelayMs(consecutiveFailureCount: number): number {
   );
 }
 
+/**
+ * The wallet filter of one tick: distinct lowercase addresses, sorted so the
+ * topic chunks are stable between ticks.
+ */
+export function normalizeWalletSet(
+  addresses: readonly string[],
+): readonly string[] {
+  return Object.freeze(
+    [...new Set(addresses.map((address) => address.toLowerCase()))].sort(),
+  );
+}
+
 export function createBscIndexerWorker(
   options: CreateBscIndexerWorkerOptions,
 ): BscIndexerWorker {
   const createUuid = options.createUuid ?? randomUUID;
   const workerId = createUuid();
+  const topicChunkSize =
+    options.walletTopicChunkSize ?? defaultBscWalletTopicChunkSize;
   let inFlight: Promise<BscIndexerRunResult> | null = null;
   let loopRunning = false;
 
@@ -303,6 +330,9 @@ export function createBscIndexerWorker(
     if (tokens.length === 0) {
       return idleResult("idle", "ASSET_REGISTRY_EMPTY");
     }
+    const wallets = normalizeWalletSet(
+      await options.walletSet.listActiveWalletAddresses(),
+    );
 
     let head;
     try {
@@ -371,22 +401,34 @@ export function createBscIndexerWorker(
 
     // A refused or unreachable read is the lane's `unavailable` outcome, not
     // a retry-loop failure (Decision 0068); nothing is committed for it.
-    let logs;
-    let approvalLogs;
+    // With no active wallet there is nothing to read or store: the segment
+    // is committed empty so the checkpoint keeps pace with the chain, and a
+    // wallet that appears later is covered from its first tick on.
+    let logs: readonly BscTransferLog[] = [];
+    let approvalLogs: readonly BscApprovalLog[] = [];
     try {
-      logs = await options.readClient.readTransferLogs({
-        addresses: tokens.map((token) => token.address),
-        fromBlock,
-        toBlock,
-      });
-      // Approval logs are read for the same addresses and range and committed
-      // under the same checkpoint (Decision 0035), so the approvals inventory
-      // can never be ahead of or behind the transfer history.
-      approvalLogs = await options.readClient.readApprovalLogs({
-        addresses: tokens.map((token) => token.address),
-        fromBlock,
-        toBlock,
-      });
+      if (wallets.length > 0) {
+        const walletFilter = {
+          walletAddresses: wallets,
+          topicChunkSize,
+        };
+        logs = await options.readClient.readTransferLogs({
+          addresses: tokens.map((token) => token.address),
+          fromBlock,
+          toBlock,
+          walletFilter,
+        });
+        // Approval logs are read for the same addresses, wallets, and range
+        // and committed under the same checkpoint (Decision 0035), so the
+        // approvals inventory can never be ahead of or behind the transfer
+        // history.
+        approvalLogs = await options.readClient.readApprovalLogs({
+          addresses: tokens.map((token) => token.address),
+          fromBlock,
+          toBlock,
+          walletFilter,
+        });
+      }
     } catch (error) {
       const unavailable = unavailableReasonFor(error);
       if (unavailable !== null) {
@@ -438,14 +480,20 @@ export function createBscIndexerWorker(
       ...(rewindFrom === null
         ? {}
         : { rewindFromBlockNumber: rewindFrom.toString(10) }),
+      // A wallet new to the filter is covered from this segment's first block
+      // (Decision 0075); the row commits with the checkpoint or not at all.
+      walletCoverage: {
+        addresses: wallets,
+        fromBlockNumber: fromBlock.toString(10),
+      },
     });
 
     return Object.freeze({
-      kind,
+      kind: wallets.length === 0 ? "idle" : kind,
       fromBlockNumber: fromBlock.toString(10),
       toBlockNumber: toBlock.toString(10),
       transferCount: transfers.length,
-      reasonCode: null,
+      reasonCode: wallets.length === 0 ? BSC_INDEXER_WALLET_SET_EMPTY : null,
     });
   }
 
@@ -490,6 +538,14 @@ export function createBscIndexerWorker(
     if (tokens.length === 0) {
       return coverageIdle("idle", "ASSET_REGISTRY_EMPTY");
     }
+    // The backfill is wallet-scoped like the lane (Decision 0075): it reads
+    // `owner ∈ W` for today's wallet set and never the whole token history.
+    const wallets = normalizeWalletSet(
+      await options.walletSet.listActiveWalletAddresses(),
+    );
+    if (wallets.length === 0) {
+      return coverageIdle("idle", BSC_INDEXER_WALLET_SET_EMPTY);
+    }
     const checkpoint = await options.repository.getCheckpoint(
       BSC_INDEXER_LANE,
       options.chainId,
@@ -515,6 +571,7 @@ export function createBscIndexerWorker(
         addresses: tokens.map((token) => token.address),
         fromBlock,
         toBlock,
+        walletFilter: { walletAddresses: wallets, topicChunkSize },
       });
     } catch (error) {
       const unavailable = unavailableReasonFor(error);
