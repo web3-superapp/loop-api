@@ -106,3 +106,13 @@ Blank the four keys: the adapter is `unavailable(LAUNCH_CONTRACT_BASELINE_PENDIN
 and every response is byte-identical to `1ab26d7`. Migration `000041`'s
 `down` refuses while any row holds a chain axis value, a `sale_id`, or a
 `launch_intent_v1` record.
+
+## Main-agent rulings on the S83a report (2026-09-25)
+
+1. **`roundIndex` on the wire, `roundId` stays LOOP's opaque ID.** Accepted; 06 §4.2 now carries a note.
+2. **Axis numbers are now explicit in 06 §2** (row order, as encoded here) and every read **must revert with `SaleNotFound()`** on an unknown `saleId`. The zero-`configVersion` guard stays as a second line.
+3. Migration order: S82 (000040) merged first, then this (000041). Resolved in the merge commit.
+4. **`reasonCode` widened to a list** on the unavailable branch: accepted. S83c must decode `reasonCode` as any string, never a fixed literal.
+5. **S83b shapes are frozen as published here.** S83b may only add optional fields to the eligibility/holders/history available branches and the intents `201` body; anything else is a new decision.
+6. **Digest storage keeps the column format** (64 hex characters, no `0x`); the wire keeps `0x`-prefixed bytes32. Conversion lives in the repository layer, once.
+7. **`sale_id` is registered by an operator script** (`pnpm launch:register-sale --launch <launchId> --sale-id <n> --confirm`, S83b): it reads `getSaleConfig` first, refuses when `usd1` or the project token disagrees with LOOP's records, writes a `launch_review_events` audit row, and is refused in production without the flag. Deriving it from events is rejected: nothing on chain names LOOP's launch.
