@@ -9,6 +9,7 @@ import {
   type LaunchChainId,
   type LaunchChainReference,
 } from "./features/chain/chain-contract.js";
+import type { LaunchContractConfig } from "./integrations/launch/launch-contract-adapter.js";
 import {
   compareClientVersions,
   isValidClientVersion,
@@ -108,6 +109,12 @@ const launchChainEnvironmentShape = {
   LAUNCH_BSC_RPC_URLS: optionalCredential(4_096),
   LAUNCH_BSC_CONFIRMATIONS: optionalPositiveIntegerString(1, 1_000),
   LAUNCH_BSC_REORG_DEPTH_BLOCKS: optionalPositiveIntegerString(1, 1_000),
+  // Decision 0076: the Launch contract on the launch slot. All four blank, or
+  // all four set; anything in between refuses to boot.
+  LAUNCH_CONTRACT_ADDRESS: optionalCredential(64),
+  LAUNCH_CONTRACT_VERSION: optionalCredential(64),
+  LAUNCH_CONTRACT_START_BLOCK: optionalCredential(32),
+  LAUNCH_USD1_ADDRESS: optionalCredential(64),
 } as const;
 
 function launchChainEnvironmentDefaults(
@@ -118,7 +125,47 @@ function launchChainEnvironmentDefaults(
     LAUNCH_BSC_RPC_URLS: environment["LAUNCH_BSC_RPC_URLS"],
     LAUNCH_BSC_CONFIRMATIONS: environment["LAUNCH_BSC_CONFIRMATIONS"],
     LAUNCH_BSC_REORG_DEPTH_BLOCKS: environment["LAUNCH_BSC_REORG_DEPTH_BLOCKS"],
+    LAUNCH_CONTRACT_ADDRESS: environment["LAUNCH_CONTRACT_ADDRESS"],
+    LAUNCH_CONTRACT_VERSION: environment["LAUNCH_CONTRACT_VERSION"],
+    LAUNCH_CONTRACT_START_BLOCK: environment["LAUNCH_CONTRACT_START_BLOCK"],
+    LAUNCH_USD1_ADDRESS: environment["LAUNCH_USD1_ADDRESS"],
   };
+}
+
+const launchContractKeys = [
+  "LAUNCH_CONTRACT_ADDRESS",
+  "LAUNCH_CONTRACT_VERSION",
+  "LAUNCH_CONTRACT_START_BLOCK",
+  "LAUNCH_USD1_ADDRESS",
+] as const;
+
+type LaunchContractEnvironment = {
+  readonly [Key in (typeof launchContractKeys)[number]]?: string | undefined;
+};
+
+/**
+ * Decision 0076: the four Launch contract keys are one unit. A partial set
+ * would publish a contract whose settlement token or start block is unknown,
+ * so it refuses to boot and names every missing key (the 0038 discipline).
+ */
+function refineLaunchContractEnvironment(
+  value: LaunchContractEnvironment,
+  context: z.RefinementCtx,
+): void {
+  const present = launchContractKeys.filter((key) => value[key] !== undefined);
+  if (present.length === 0 || present.length === launchContractKeys.length) {
+    return;
+  }
+  for (const key of launchContractKeys) {
+    if (value[key] === undefined) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "is required when any of LAUNCH_CONTRACT_ADDRESS, LAUNCH_CONTRACT_VERSION, LAUNCH_CONTRACT_START_BLOCK, LAUNCH_USD1_ADDRESS is set",
+        path: [key],
+      });
+    }
+  }
 }
 
 function refineLaunchChainEnvironment(
@@ -398,6 +445,7 @@ const environmentSchema = z
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
+    refineLaunchContractEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -632,6 +680,7 @@ const reconciliationWorkerEnvironmentSchema = z
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
+    refineLaunchContractEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1023,6 +1072,8 @@ export interface AppConfig {
   readonly bscReorgDepthBlocks: number;
   /** The `launch` chain slot (Decision 0038); never null. */
   readonly launchChain: LaunchChainConfig;
+  /** The Launch contract on that slot (Decision 0076); null keeps it unavailable. */
+  readonly launchContract: LaunchContractConfig | null;
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
    * Development seed's `mock_seed` balances. Default false; the schema
@@ -1070,6 +1121,8 @@ export interface ReconciliationWorkerConfig {
    * lane until the 02 contract document lands.
    */
   readonly launchChain: LaunchChainConfig;
+  /** Decision 0076, parsed identically; no worker lane reads it yet (S83b). */
+  readonly launchContract: LaunchContractConfig | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -1401,6 +1454,74 @@ export function parseLaunchChainIdEnvironment(
 }
 
 const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+const semanticVersionPattern =
+  /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/;
+const blockNumberPattern = /^(0|[1-9][0-9]{0,18})$/;
+
+/**
+ * Parses the Decision 0076 contract keys after the schema refinement has
+ * already refused a partial set. The address and the USD1 address are stored
+ * lowercase; the start block must fit a PostgreSQL `bigint` checkpoint. The
+ * ABI major is not checked here: an unsupported major is a runtime
+ * `LAUNCH_CONTRACT_VERSION_UNSUPPORTED`, not a boot failure.
+ */
+export function parseLaunchContractConfig(
+  data: LaunchContractEnvironment,
+): LaunchContractConfig | null {
+  const address = data.LAUNCH_CONTRACT_ADDRESS;
+  const version = data.LAUNCH_CONTRACT_VERSION;
+  const startBlock = data.LAUNCH_CONTRACT_START_BLOCK;
+  const usd1Address = data.LAUNCH_USD1_ADDRESS;
+  if (
+    address === undefined ||
+    version === undefined ||
+    startBlock === undefined ||
+    usd1Address === undefined
+  ) {
+    return null;
+  }
+  const issues: string[] = [];
+  if (!evmAddressPattern.test(address)) {
+    issues.push(
+      "LAUNCH_CONTRACT_ADDRESS: must be a 0x-prefixed 20-byte address",
+    );
+  }
+  if (!evmAddressPattern.test(usd1Address)) {
+    issues.push("LAUNCH_USD1_ADDRESS: must be a 0x-prefixed 20-byte address");
+  }
+  const versionMatch = semanticVersionPattern.exec(version);
+  if (versionMatch === null) {
+    issues.push(
+      "LAUNCH_CONTRACT_VERSION: must be a semantic version MAJOR.MINOR.PATCH",
+    );
+  }
+  if (
+    !blockNumberPattern.test(startBlock) ||
+    BigInt(startBlock) > 9_223_372_036_854_775_807n
+  ) {
+    issues.push(
+      "LAUNCH_CONTRACT_START_BLOCK: must be a non-negative integer block number",
+    );
+  }
+  if (
+    issues.length === 0 &&
+    address.toLowerCase() === usd1Address.toLowerCase()
+  ) {
+    issues.push(
+      "LAUNCH_USD1_ADDRESS: must differ from LAUNCH_CONTRACT_ADDRESS",
+    );
+  }
+  if (issues.length > 0 || versionMatch === null) {
+    throw new ConfigurationError(issues);
+  }
+  return Object.freeze({
+    address: address.toLowerCase(),
+    version,
+    versionMajor: Number(versionMatch[1]),
+    startBlock: BigInt(startBlock),
+    usd1Address: usd1Address.toLowerCase(),
+  });
+}
 
 /**
  * The USD1 slot needs both an address and an explicit verification flag. A
@@ -1965,6 +2086,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       confirmations: parsed.data.BSC_CONFIRMATIONS,
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     }),
+    launchContract: parseLaunchContractConfig(parsed.data),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
@@ -2110,6 +2232,7 @@ export function loadReconciliationWorkerConfig(
       confirmations: parsed.data.BSC_CONFIRMATIONS,
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
     }),
+    launchContract: parseLaunchContractConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED

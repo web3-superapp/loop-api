@@ -1,4 +1,4 @@
-export const latestMigrationName = "000040_indexer_wallet_coverage";
+export const latestMigrationName = "000041_v2_launch_contract_adapter";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

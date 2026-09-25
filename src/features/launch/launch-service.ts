@@ -22,11 +22,15 @@ import {
   parseLaunchOpaqueId,
   parseLaunchProjectValues,
   parseReplaceLaunchProjectRequest,
+  launchContractReasonCodes,
   unavailable,
   unavailableOnChainState,
+  unavailableOnChainStateFor,
   venueMilestoneTracks,
+  type LaunchContractReasonCode,
   type LaunchEligibilityMode,
   type LaunchGraduationStep,
+  type LaunchOnChainStateAvailable,
   type LaunchOnChainStateProjection,
   type LaunchProjectListFilter,
   type LaunchProjectProjection,
@@ -35,6 +39,13 @@ import {
   type LaunchSummaryProjection,
   type UnavailableProjection,
 } from "./launch-contract.js";
+import {
+  LaunchContractUnavailableError,
+  isZeroBytes32,
+  type LaunchContractAdapter,
+  type LaunchContractRound,
+  type LaunchContractSaleConfig,
+} from "../../integrations/launch/launch-contract-adapter.js";
 import {
   LaunchDataStaleError,
   LaunchIdempotencyConflictError,
@@ -45,6 +56,7 @@ import {
   type LaunchConfigRecord,
   type LaunchDetailRecord,
   type LaunchProjectRecord,
+  type LaunchRecord,
   type LaunchRepository,
   type LaunchRoundRecord,
   type VenueMilestoneRecord,
@@ -60,6 +72,11 @@ import {
 export interface LaunchServiceDependencies {
   readonly repository: LaunchRepository;
   readonly cursorCodec: V2CursorCodec | null;
+  /**
+   * Launch contract adapter (Decision 0076). Absent or unconfigured keeps
+   * every on-chain slot byte-identical to Decision 0036.
+   */
+  readonly contract?: LaunchContractAdapter | null;
   readonly now?: () => Date;
 }
 
@@ -135,6 +152,43 @@ export interface LaunchConfigProjection {
   };
 }
 
+/**
+ * One round read from `getRounds` (Decision 0076). `roundIndex` is the
+ * contract's `roundId` (uint16); `roundId` stays LOOP's opaque round ID, or
+ * null when no `launch_rounds` row carries that index.
+ */
+export interface LaunchChainRoundProjection {
+  readonly status: "available";
+  readonly roundId: string | null;
+  readonly roundIndex: number;
+  readonly startAt: string;
+  readonly endAt: string;
+  readonly priceUsd1PerToken: string;
+  readonly roundCapUsd1: string;
+  readonly walletRoundCapUsd1: string;
+  readonly allowlistRoot: string;
+  readonly raisedUsd1: string;
+}
+
+/** `getSaleConfig` at the same block as the four axes (Decision 0076). */
+export interface LaunchChainConfigProjection {
+  readonly status: "available";
+  readonly projectToken: string;
+  readonly usd1: string;
+  readonly softCapUsd1: string;
+  readonly hardCapUsd1: string;
+  readonly walletProjectCapUsd1: string;
+  readonly minPurchaseUsd1: string;
+  readonly protocolFeeBps: number;
+  readonly liquidityBps: number;
+  readonly tgeBps: number;
+  readonly cliffSeconds: number;
+  readonly vestingSeconds: number;
+  readonly poolFeeTier: number;
+  readonly lpLockSeconds: number;
+  readonly configVersion: string;
+}
+
 export interface LaunchRoundProjection {
   readonly roundId: string;
   readonly roundIndex: number;
@@ -157,9 +211,11 @@ export interface LaunchDetailResource {
     readonly officialLinks: LaunchProjectProjection["officialLinks"];
     readonly materialVersion: number;
   };
-  readonly config: LaunchConfigProjection | null;
+  readonly config: LaunchConfigProjection | LaunchChainConfigProjection | null;
   readonly configPending: UnavailableProjection | null;
-  readonly rounds: readonly LaunchRoundProjection[];
+  readonly rounds: readonly (
+    LaunchRoundProjection | LaunchChainRoundProjection
+  )[];
   readonly graduation: {
     readonly steps: readonly {
       readonly step: LaunchGraduationStep;
@@ -361,19 +417,15 @@ function projectProjection(
 function summaryProjection(
   record: LaunchCatalogRecord,
   onChainState: LaunchOnChainStateProjection,
+  contractAddress: string | null,
 ): LaunchSummaryProjection {
-  if (record.launch.contractAddress !== null) {
-    // The migration pins contract_address to null; a non-null value would
-    // mean the schema moved without this projection being revised.
-    throw V2ApiError.capabilityUnavailable();
-  }
   return Object.freeze({
     launchId: record.launch.launchId,
     projectId: record.launch.projectId,
     name: record.projectName,
     ticker: record.projectTicker,
     chainId: record.launch.chainId,
-    contractAddress: null,
+    contractAddress,
     configDigest: record.launch.configDigest,
     scheduleStatus: record.launch.scheduleStatus,
     onChainState,
@@ -515,11 +567,215 @@ function eligibilityMode(
     : "unavailable";
 }
 
+/** Largest unix second `Date` can represent (year 275760). */
+const maximumUnixSeconds = 8_640_000_000_000n;
+
+function unixSecondsToIso(seconds: bigint): string {
+  if (seconds < 0n || seconds > maximumUnixSeconds) {
+    throw new LaunchContractUnavailableError(
+      launchContractReasonCodes.readInvalid,
+    );
+  }
+  return new Date(Number(seconds) * 1_000).toISOString();
+}
+
+function chainRoundProjection(
+  round: LaunchContractRound,
+  offChainRounds: readonly LaunchRoundRecord[],
+): LaunchChainRoundProjection {
+  const match = offChainRounds.find(
+    (candidate) => candidate.roundIndex === round.roundId,
+  );
+  return Object.freeze({
+    status: "available" as const,
+    roundId: match?.roundId ?? null,
+    roundIndex: round.roundId,
+    startAt: unixSecondsToIso(round.startAt),
+    endAt: unixSecondsToIso(round.endAt),
+    priceUsd1PerToken: round.priceUsd1PerToken.toString(),
+    roundCapUsd1: round.roundCapUsd1.toString(),
+    walletRoundCapUsd1: round.walletRoundCapUsd1.toString(),
+    allowlistRoot: round.allowlistRoot,
+    raisedUsd1: round.raisedUsd1.toString(),
+  });
+}
+
+function chainConfigProjection(
+  config: LaunchContractSaleConfig,
+): LaunchChainConfigProjection {
+  return Object.freeze({
+    status: "available" as const,
+    projectToken: config.projectToken,
+    usd1: config.usd1,
+    softCapUsd1: config.softCapUsd1.toString(),
+    hardCapUsd1: config.hardCapUsd1.toString(),
+    walletProjectCapUsd1: config.walletProjectCapUsd1.toString(),
+    minPurchaseUsd1: config.minPurchaseUsd1.toString(),
+    protocolFeeBps: config.protocolFeeBps,
+    liquidityBps: config.liquidityBps,
+    tgeBps: config.tgeBps,
+    cliffSeconds: config.cliffSeconds,
+    vestingSeconds: config.vestingSeconds,
+    poolFeeTier: config.poolFeeTier,
+    lpLockSeconds: config.lpLockSeconds,
+    configVersion: config.configVersion,
+  });
+}
+
+type ChainReadOutcome =
+  | {
+      readonly status: "available";
+      readonly onChainState: LaunchOnChainStateAvailable;
+      readonly rounds: readonly LaunchChainRoundProjection[];
+      readonly config: LaunchChainConfigProjection;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reasonCode: LaunchContractReasonCode;
+    };
+
 export function createLaunchService(
   dependencies: LaunchServiceDependencies,
 ): LaunchService {
   const { repository } = dependencies;
+  const contract = dependencies.contract ?? null;
   const now = dependencies.now ?? ((): Date => new Date());
+
+  /**
+   * Why this launch's sale cannot be read, from configuration and the
+   * registry alone; null when the adapter may be asked.
+   */
+  function registryReason(
+    launch: LaunchRecord,
+  ): LaunchContractReasonCode | null {
+    const configured = contract?.contract ?? null;
+    if (configured === null) {
+      return launchContractReasonCodes.baselinePending;
+    }
+    if (launch.saleId === null) {
+      return launchContractReasonCodes.saleNotRegistered;
+    }
+    if (
+      launch.contractAddress !== configured.address ||
+      launch.contractVersion !== configured.version
+    ) {
+      return launchContractReasonCodes.saleContractMismatch;
+    }
+    return null;
+  }
+
+  /** The address is published only for a registered sale on a verified contract. */
+  function publishedContractAddress(launch: LaunchRecord): string | null {
+    if (
+      contract === null ||
+      registryReason(launch) !== null ||
+      contract.currentAvailability().status !== "available"
+    ) {
+      return null;
+    }
+    return launch.contractAddress;
+  }
+
+  /**
+   * Lists never read the chain (200 launches would be 600 calls); the S83b
+   * event lane projects the axes into `launches`. Until then a list says why.
+   */
+  function listOnChainState(
+    launch: LaunchRecord,
+  ): LaunchOnChainStateProjection {
+    if (contract === null) {
+      return unavailableOnChainState;
+    }
+    const state = contract.currentAvailability();
+    if (state.status === "unavailable") {
+      return unavailableOnChainStateFor(state.reasonCode);
+    }
+    return unavailableOnChainStateFor(
+      registryReason(launch) ??
+        launchContractReasonCodes.onChainStateNotIndexed,
+    );
+  }
+
+  /**
+   * Four axes, rounds, and configuration at one block (Decision 0076). Every
+   * failure is a reason code; nothing is defaulted or inferred.
+   */
+  async function readChain(
+    detail: LaunchDetailRecord,
+  ): Promise<ChainReadOutcome> {
+    const refused = registryReason(detail.launch);
+    if (contract === null || refused !== null) {
+      return {
+        status: "unavailable",
+        reasonCode: refused ?? launchContractReasonCodes.baselinePending,
+      };
+    }
+    const state = await contract.availability();
+    if (state.status === "unavailable") {
+      return { status: "unavailable", reasonCode: state.reasonCode };
+    }
+    const saleId = BigInt(detail.launch.saleId as string);
+    try {
+      const snapshot = await contract.takeSnapshot();
+      const [tuple, rounds, config] = await Promise.all([
+        contract.getState(saleId, snapshot),
+        contract.getRounds(saleId, snapshot),
+        contract.getSaleConfig(saleId, snapshot),
+      ]);
+      await contract.confirmSnapshot(snapshot);
+      if (isZeroBytes32(tuple.value.configVersion)) {
+        return {
+          status: "unavailable",
+          reasonCode: launchContractReasonCodes.saleNotFound,
+        };
+      }
+      if (
+        tuple.value.configVersion !== config.value.configVersion ||
+        (detail.launch.configVersionOnchain !== null &&
+          detail.launch.configVersionOnchain !== tuple.value.configVersion)
+      ) {
+        return {
+          status: "unavailable",
+          reasonCode: launchContractReasonCodes.configVersionMismatch,
+        };
+      }
+      if (config.value.usd1 !== contract.contract?.usd1Address) {
+        return {
+          status: "unavailable",
+          reasonCode: launchContractReasonCodes.usd1AddressMismatch,
+        };
+      }
+      return {
+        status: "available",
+        onChainState: Object.freeze({
+          saleState: tuple.value.saleState,
+          entitlementState: tuple.value.entitlementState,
+          liquidityState: tuple.value.liquidityState,
+          operationalState: tuple.value.operationalState,
+          stateTupleDigest: tuple.value.stateTupleDigest,
+          snapshotBlockNumber: snapshot.blockNumber.toString(),
+          snapshotBlockHash: snapshot.blockHash,
+          configVersion: tuple.value.configVersion,
+          source: "chain" as const,
+          reasonCode: null,
+        }),
+        rounds: Object.freeze(
+          rounds.value.map((round) =>
+            chainRoundProjection(round, detail.rounds),
+          ),
+        ),
+        config: chainConfigProjection(config.value),
+      };
+    } catch (error) {
+      if (error instanceof LaunchContractUnavailableError) {
+        return { status: "unavailable", reasonCode: error.reasonCode };
+      }
+      return {
+        status: "unavailable",
+        reasonCode: launchContractReasonCodes.readFailed,
+      };
+    }
+  }
 
   function requireCursorCodec(): V2CursorCodec {
     if (dependencies.cursorCodec === null) {
@@ -556,7 +812,11 @@ export function createLaunchService(
       try {
         const launches = await repository.listLaunches();
         const summaries = launches.map((record) =>
-          summaryProjection(record, unavailableOnChainState),
+          summaryProjection(
+            record,
+            listOnChainState(record.launch),
+            publishedContractAddress(record.launch),
+          ),
         );
         return Object.freeze({
           segments: Object.freeze({
@@ -755,8 +1015,17 @@ export function createLaunchService(
           confirmedConfigVersion:
             config !== null && !pending ? config.configVersion : null,
         };
+        const chain = await readChain(detail);
+        const onChainState: LaunchOnChainStateProjection =
+          chain.status === "available"
+            ? chain.onChainState
+            : unavailableOnChainStateFor(chain.reasonCode);
         return Object.freeze({
-          launch: summaryProjection(catalog, unavailableOnChainState),
+          launch: summaryProjection(
+            catalog,
+            onChainState,
+            publishedContractAddress(detail.launch),
+          ),
           project: Object.freeze({
             projectId: detail.project.projectId,
             name: detail.project.name,
@@ -765,11 +1034,22 @@ export function createLaunchService(
             officialLinks: detail.project.officialLinks,
             materialVersion: detail.project.materialVersion,
           }),
-          config: config === null ? null : configProjection(config),
-          configPending: pending
-            ? unavailable(launchReasonCodes.configPendingConfirmation)
-            : null,
-          rounds: Object.freeze(detail.rounds.map(roundProjection)),
+          // A chain read replaces the off-chain slots with the contract's own
+          // values; otherwise both stay exactly as in Decision 0036.
+          config:
+            chain.status === "available"
+              ? chain.config
+              : config === null
+                ? null
+                : configProjection(config),
+          configPending:
+            chain.status !== "available" && pending
+              ? unavailable(launchReasonCodes.configPendingConfirmation)
+              : null,
+          rounds:
+            chain.status === "available"
+              ? chain.rounds
+              : Object.freeze(detail.rounds.map(roundProjection)),
           graduation: Object.freeze({
             steps: Object.freeze(
               launchGraduationSteps.map((step) =>

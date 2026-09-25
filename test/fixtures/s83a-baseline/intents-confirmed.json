@@ -1,0 +1,1 @@
+{"statusCode":503,"body":"{\"code\":\"CAPABILITY_UNAVAILABLE\",\"category\":\"availability\",\"retryable\":true,\"userMessageKey\":\"errors.capability.unavailable\",\"correlationId\":\"<id>\",\"detailsSafe\":null,\"providerReferenceSafe\":null}"}

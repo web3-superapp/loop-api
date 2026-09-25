@@ -448,3 +448,192 @@ capability evidence 表达）。表单可见、主动作禁用并说明；未毕
   - `--reviewer` 形如 `^[a-z][a-z0-9_.-]{0,63}$`；证据引用只存 SHA-256 digest，原文不落库。
   - 不在上表的迁移（例如 `APPLIED → FEATURED`）→ `launch_milestone_failed`。
 - 两者在 `NODE_ENV=production` 下拒绝执行。
+
+## S83a：合约适配层与 `available` 分支（决策 0076）
+
+接口基线改为 `LOOP/docs/06-Launch合约接口需求.md`（LOOP 自定义合约接口）。本节只描述
+**线上字节的变化规则**；机器契约仍以 `openapi/loop-api.v2.json` 为准。
+
+### S83a.1 硬规则：`unavailable` 分支字节不变
+
+- 后端四个配置键（`LAUNCH_CONTRACT_ADDRESS` / `LAUNCH_CONTRACT_VERSION` /
+  `LAUNCH_CONTRACT_START_BLOCK` / `LAUNCH_USD1_ADDRESS`）**全空**时，下列接口的响应与
+  S83a 之前**逐字节相同**（回归测试
+  `test/v2-launch-contract-routes.test.ts` › "keeps every Launch response
+  byte-identical to 1ab26d7 while no contract is configured"，基线在
+  `test/fixtures/s83a-baseline/`）：`GET /v2/launch/overview`、
+  `GET /v2/launches/{launchId}`、`GET /v2/launch/{launchId}/eligibility`、
+  `…/holders`、`…/history`、`POST …/intents`（`503`）。
+- 每个改动的槽位都是**判别联合**：旧对象原样保留为一个分支，新增一个 `available`
+  分支。判别字段用旧对象**已有**的字段，所以旧分支不多一个键：
+
+| 槽位                                   | 判别字段         | 旧分支（不变）                                      | 新分支                                           |
+| -------------------------------------- | ---------------- | --------------------------------------------------- | ------------------------------------------------ |
+| `launch.onChainState`（四轴）          | `source`         | `"unavailable"`                                     | `"chain"`                                        |
+| `launch.contractAddress`               | 类型             | `null`                                              | `0x` + 40 位小写十六进制                         |
+| `config`（launches 详情）              | `status`         | `pending_confirmation` / `confirmed`（LOOP 配置槽） | `"available"`（合约 `getSaleConfig`）            |
+| `rounds[]`（launches 详情）            | `status`         | `pending_confirmation` / `confirmed`（LOOP 轮次槽） | `"available"`（合约 `getRounds`）                |
+| eligibility `result`                   | 有无 `status` 键 | `{tier: null, reasonCode, snapshotBlock: null}`     | `{status: "available", …}`（S83b 起）            |
+| holders `holders/myPosition/walletCap` | `status`         | `unavailable`                                       | `available`（S83b 起）                           |
+| history `source`                       | `status`         | `unavailable`（三个数组恒空）                       | `available`（S83b 起，数组有元素）               |
+| `POST …/intents`                       | HTTP 状态        | `503 CAPABILITY_UNAVAILABLE`（错误体七字段不变）    | `201 {launchIntent, contractVersion}`（S83b 起） |
+
+- 解码器要求：**先按判别字段选分支，再严格解码**；两个分支都 `additionalProperties:
+false`。金额（`*Usd1`、`*Tokens`、`priceUsd1PerToken`）一律十进制整数字符串（18 位
+  最小单位）；区块号是十进制字符串；`bps/seconds/poolFeeTier/roundIndex` 是 JSON 整数
+  （uint16/uint24/uint32，不是金额）。
+
+### S83a.2 本单实际会返回 `available` 的只有 `GET /v2/launches/{launchId}`
+
+条件：四个键全配、启动时 `eth_getCode` 看到代码、launch 链槽位 `eth_chainId` 核对通过、
+该 launch 行已登记 `saleId` 且登记的合约地址/版本与配置一致。此时四轴、`rounds`、
+`config` **在同一个区块**读出（`onChainState.snapshotBlockNumber/Hash`），`configPending`
+为 `null`：
+
+```json
+{
+  "launch": {
+    "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+    "projectId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "name": "MoonCat",
+    "ticker": "MCAT",
+    "chainId": "eip155:97",
+    "contractAddress": "0x1111111111111111111111111111111111111111",
+    "configDigest": null,
+    "scheduleStatus": "scheduled",
+    "onChainState": {
+      "saleState": "LIVE",
+      "entitlementState": "NONE",
+      "liquidityState": "NOT_STARTED",
+      "operationalState": "ACTIVE",
+      "stateTupleDigest": "0xcdcd…cdcd",
+      "snapshotBlockNumber": "45000000",
+      "snapshotBlockHash": "0x1212…1212",
+      "configVersion": "0xabab…abab",
+      "source": "chain",
+      "reasonCode": null
+    },
+    "configVersion": null,
+    "createdAt": "2026-09-08T01:00:00.000Z"
+  },
+  "config": {
+    "status": "available",
+    "projectToken": "0x3333333333333333333333333333333333333333",
+    "usd1": "0x2222222222222222222222222222222222222222",
+    "softCapUsd1": "20000000000000000000000",
+    "hardCapUsd1": "100000000000000000000000",
+    "walletProjectCapUsd1": "1000000000000000000000",
+    "minPurchaseUsd1": "10000000000000000000",
+    "protocolFeeBps": 300,
+    "liquidityBps": 5000,
+    "tgeBps": 2500,
+    "cliffSeconds": 0,
+    "vestingSeconds": 7776000,
+    "poolFeeTier": 2500,
+    "lpLockSeconds": 31536000,
+    "configVersion": "0xabab…abab"
+  },
+  "configPending": null,
+  "rounds": [
+    {
+      "status": "available",
+      "roundId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "roundIndex": 1,
+      "startAt": "2026-09-21T14:13:20.000Z",
+      "endAt": "2026-09-23T14:13:20.000Z",
+      "priceUsd1PerToken": "10000000000000000",
+      "roundCapUsd1": "40000000000000000000000",
+      "walletRoundCapUsd1": "500000000000000000000",
+      "allowlistRoot": "0xefef…efef",
+      "raisedUsd1": "1234000000000000000000"
+    }
+  ],
+  "graduation": { "…": "不变，四步仍 pending" },
+  "market": {
+    "status": "unavailable",
+    "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING"
+  },
+  "holders": {
+    "status": "unavailable",
+    "reasonCode": "LAUNCH_CONTRACT_BASELINE_PENDING"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+（示例数值取自测试夹具，仅示意格式，不是产品参数。）
+
+- 四轴取值即 06 §2 的名字：`saleState ∈ SCHEDULED|LIVE|ENDED|SUCCEEDED|FAILED|CANCELLED`，
+  `entitlementState ∈ NONE|FROZEN|VESTING|COMPLETED|REFUNDING|REFUNDED`，
+  `liquidityState ∈ NOT_STARTED|PREPARING|V3_LIVE|LP_LOCKED|COMPLETED|RETRY_SCHEDULED`，
+  `operationalState ∈ ACTIVE|PAUSED`。"毕业中/已毕业"只能由前端从四轴只读组合（03 §8.3），
+  后端不发第五条轴。
+- `stateTupleDigest`、`configVersion` 是合约原值（bytes32），后端不重算。
+- **轮次 ID**：合约的 `roundId`（uint16）在线上叫 `roundIndex`；`roundId` 仍是 LOOP 的
+  opaque 轮次 ID（与 `launch_rounds.roundIndex` 相同序号的那一行），没有对应行时为
+  `null`。`POST …/intents` 请求体里的 `roundId` 继续是 opaque ID。
+- `allowlistRoot` 全 0 表示该轮不设资格。
+- `startAt/endAt` 由合约 unix 秒转为 RFC 3339 UTC。
+
+### S83a.3 读链失败：回到 `unavailable` 分支，给出原因
+
+合约已配置但读不到时，`onChainState` 仍是 `source: "unavailable"` 的旧形状，
+`reasonCode` 说明原因；`rounds`/`config`/`configPending` 回到 LOOP 自己的槽位（与未配置时
+相同）；`contractAddress` 为 `null`。
+
+| reasonCode                             | 含义                                               | 前端处理         |
+| -------------------------------------- | -------------------------------------------------- | ---------------- |
+| `LAUNCH_CONTRACT_BASELINE_PENDING`     | 未配置合约（与之前完全相同）                       | 显示"待确认"     |
+| `LAUNCH_CONTRACT_VERIFICATION_PENDING` | 已配置，尚未观察到合约代码                         | 稍后刷新         |
+| `LAUNCH_CONTRACT_CODE_MISSING`         | 配置地址上没有合约代码                             | 不可用，联系运营 |
+| `LAUNCH_CONTRACT_VERSION_UNSUPPORTED`  | 合约主版本不是 1                                   | 不可用           |
+| `LAUNCH_CHAIN_RPC_NOT_CONFIGURED`      | launch 链槽位没有 RPC                              | 不可用           |
+| `LAUNCH_CHAIN_ID_MISMATCH`             | RPC 返回的链不是配置的链                           | 不可用           |
+| `LAUNCH_CHAIN_RPC_UNREACHABLE`         | RPC 不可达                                         | 可重试           |
+| `LAUNCH_SALE_NOT_REGISTERED`           | 该 launch 尚未登记 `saleId`                        | 显示"待上链"     |
+| `LAUNCH_SALE_CONTRACT_MISMATCH`        | 登记的合约地址/版本与当前配置不一致                | 不可用           |
+| `LAUNCH_SALE_NOT_FOUND`                | 合约上没有这个 `saleId`                            | 不可用           |
+| `LAUNCH_CONFIG_VERSION_MISMATCH`       | 链上 `configVersion` 与预期不一致                  | 不可用           |
+| `LAUNCH_USD1_ADDRESS_MISMATCH`         | sale 的结算币不是配置的 USD1                       | 不可用           |
+| `LAUNCH_CONTRACT_READ_FAILED`          | 读合约失败                                         | 可重试           |
+| `LAUNCH_CONTRACT_READ_INVALID`         | 返回值无法解码或越界（枚举超范围等）               | 不可用           |
+| `LAUNCH_SNAPSHOT_REORGED`              | 读取期间快照区块被重组                             | 可重试           |
+| `LAUNCH_ONCHAIN_STATE_NOT_INDEXED`     | 仅出现在**列表**：列表不逐个读链，等 S83b 事件索引 | 进入详情查看     |
+
+`GET /v2/launch/overview` 永不读链；合约可用且该 launch 已登记时，列表项会带
+`contractAddress`，但 `onChainState` 为 `unavailable` + `LAUNCH_ONCHAIN_STATE_NOT_INDEXED`。
+
+### S83a.4 其余接口：只加了 schema，本单行为不变
+
+以下 `available` 分支已进 OpenAPI，便于 S83c 先写解码器；**S83b 之前没有任何路径会返回它们**：
+
+- eligibility `result`：`{status: "available", tier: priority|community|public|null,
+reasonCode|null, snapshotBlock: "区块号", roundIndex, allowlistRoot, eligibilityProof: [bytes32…]}`。
+  `eligibilityProof` 原样作为 `buy()` 的最后一个参数。
+- holders：`holders = {status: "available", holderCount, indexedBlockNumber}`；
+  `myPosition = {status: "available", walletId, cumulativeUsd1, purchasedTokens,
+entitledTokens, claimableTokens, claimedTokens, refundableUsd1, refundedUsd1,
+snapshotBlockNumber, snapshotBlockHash}`（06 `Position`）；`walletCap = {status:
+"available", walletProjectCapUsd1, rounds: [{roundIndex, walletRoundCapUsd1,
+cumulativeUsd1}], snapshotBlockNumber, snapshotBlockHash}`。
+- history：`source = {status: "available", indexedBlockNumber, indexedBlockHash}`；
+  `purchaseRecords[] = {purchaseRecordId, walletId, roundId|null, roundIndex, usd1Amount,
+tokenAmount, transactionHash, logIndex, blockNumber, blockHash, confirmationState:
+pending|confirmed|reorged, observedAt}`；`entitlements[] = {entitlementId, walletId,
+entitledTokens, claimedTokens, state: frozen|partially_claimed|claimed, frozenAtBlock}`；
+  `refunds[] = {refundLiabilityId, walletId, refundableUsd1, refundedUsd1, state:
+frozen|partially_refunded|refunded, frozenAtBlock}`。
+- `POST …/intents` `201`：`{launchIntent: {launchIntentId, state, launchId, projectId,
+walletId, roundId, roundIndex, chainId, contractAddress, quoteAssetId, usd1Amount,
+expectedTokenAmount, minTokenAmount, walletCumulativeUsd1, deadline, eligibilityProof,
+configVersion, stateTupleDigest, snapshotBlockNumber, snapshotBlockHash, payloadDigest,
+unsignedTransaction: {chainId: 56|97, to, data, value: "0x0"}, expiresAt, createdAt},
+contractVersion}`。`data` 为 `buy(saleId, roundId, usd1Amount, minTokenAmount,
+deadline, eligibilityProof)`（06 §4.1 顺序）。本单仍恒 `503`。
+
+这些形状是 S83a 的预留，S83b 落地时若需调整会在其决策里明确列出；在此之前请勿假设它们会出现。
+
+### S83a.5 Headers / 错误码
+
+无新增 header、无新增错误码；错误体仍是七字段。S83a 新增的 reasonCode 只出现在
+`onChainState.reasonCode`（上表），不会出现在错误体里。

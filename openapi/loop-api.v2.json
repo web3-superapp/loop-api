@@ -84469,8 +84469,14 @@
                                 "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
-                                "type": "null",
-                                "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  }
+                                ],
+                                "description": "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076)."
                               },
                               "configDigest": {
                                 "anyOf": [
@@ -84491,48 +84497,148 @@
                                 ]
                               },
                               "onChainState": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": [
-                                  "saleState",
-                                  "entitlementState",
-                                  "liquidityState",
-                                  "operationalState",
-                                  "stateTupleDigest",
-                                  "snapshotBlockNumber",
-                                  "snapshotBlockHash",
-                                  "source",
-                                  "reasonCode"
-                                ],
-                                "properties": {
-                                  "saleState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "stateTupleDigest": { "type": "null" },
+                                      "snapshotBlockNumber": { "type": "null" },
+                                      "snapshotBlockHash": { "type": "null" },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "reasonCode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAUNCH_CONTRACT_BASELINE_PENDING",
+                                          "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+                                          "LAUNCH_CONTRACT_CODE_MISSING",
+                                          "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+                                          "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                                          "LAUNCH_CHAIN_ID_MISMATCH",
+                                          "LAUNCH_CHAIN_RPC_UNREACHABLE",
+                                          "LAUNCH_SALE_NOT_REGISTERED",
+                                          "LAUNCH_SALE_CONTRACT_MISMATCH",
+                                          "LAUNCH_SALE_NOT_FOUND",
+                                          "LAUNCH_CONFIG_VERSION_MISMATCH",
+                                          "LAUNCH_USD1_ADDRESS_MISMATCH",
+                                          "LAUNCH_CONTRACT_READ_FAILED",
+                                          "LAUNCH_CONTRACT_READ_INVALID",
+                                          "LAUNCH_SNAPSHOT_REORGED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                        ],
+                                        "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
+                                      }
+                                    }
                                   },
-                                  "entitlementState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "liquidityState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "operationalState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "stateTupleDigest": { "type": "null" },
-                                  "snapshotBlockNumber": { "type": "null" },
-                                  "snapshotBlockHash": { "type": "null" },
-                                  "source": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "reasonCode": {
-                                    "type": "string",
-                                    "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "configVersion",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "SCHEDULED",
+                                          "LIVE",
+                                          "ENDED",
+                                          "SUCCEEDED",
+                                          "FAILED",
+                                          "CANCELLED"
+                                        ]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NONE",
+                                          "FROZEN",
+                                          "VESTING",
+                                          "COMPLETED",
+                                          "REFUNDING",
+                                          "REFUNDED"
+                                        ]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NOT_STARTED",
+                                          "PREPARING",
+                                          "V3_LIVE",
+                                          "LP_LOCKED",
+                                          "COMPLETED",
+                                          "RETRY_SCHEDULED"
+                                        ]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["ACTIVE", "PAUSED"]
+                                      },
+                                      "stateTupleDigest": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain."
+                                      },
+                                      "snapshotBlockNumber": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                      },
+                                      "snapshotBlockHash": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      "configVersion": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "The contract's configVersion (keccak256 of the sale configuration)."
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["chain"]
+                                      },
+                                      "reasonCode": { "type": "null" }
+                                    }
                                   }
-                                }
+                                ]
                               },
                               "configVersion": {
                                 "anyOf": [
@@ -84594,8 +84700,14 @@
                                 "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
-                                "type": "null",
-                                "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  }
+                                ],
+                                "description": "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076)."
                               },
                               "configDigest": {
                                 "anyOf": [
@@ -84616,48 +84728,148 @@
                                 ]
                               },
                               "onChainState": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": [
-                                  "saleState",
-                                  "entitlementState",
-                                  "liquidityState",
-                                  "operationalState",
-                                  "stateTupleDigest",
-                                  "snapshotBlockNumber",
-                                  "snapshotBlockHash",
-                                  "source",
-                                  "reasonCode"
-                                ],
-                                "properties": {
-                                  "saleState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "stateTupleDigest": { "type": "null" },
+                                      "snapshotBlockNumber": { "type": "null" },
+                                      "snapshotBlockHash": { "type": "null" },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "reasonCode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAUNCH_CONTRACT_BASELINE_PENDING",
+                                          "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+                                          "LAUNCH_CONTRACT_CODE_MISSING",
+                                          "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+                                          "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                                          "LAUNCH_CHAIN_ID_MISMATCH",
+                                          "LAUNCH_CHAIN_RPC_UNREACHABLE",
+                                          "LAUNCH_SALE_NOT_REGISTERED",
+                                          "LAUNCH_SALE_CONTRACT_MISMATCH",
+                                          "LAUNCH_SALE_NOT_FOUND",
+                                          "LAUNCH_CONFIG_VERSION_MISMATCH",
+                                          "LAUNCH_USD1_ADDRESS_MISMATCH",
+                                          "LAUNCH_CONTRACT_READ_FAILED",
+                                          "LAUNCH_CONTRACT_READ_INVALID",
+                                          "LAUNCH_SNAPSHOT_REORGED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                        ],
+                                        "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
+                                      }
+                                    }
                                   },
-                                  "entitlementState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "liquidityState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "operationalState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "stateTupleDigest": { "type": "null" },
-                                  "snapshotBlockNumber": { "type": "null" },
-                                  "snapshotBlockHash": { "type": "null" },
-                                  "source": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "reasonCode": {
-                                    "type": "string",
-                                    "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "configVersion",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "SCHEDULED",
+                                          "LIVE",
+                                          "ENDED",
+                                          "SUCCEEDED",
+                                          "FAILED",
+                                          "CANCELLED"
+                                        ]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NONE",
+                                          "FROZEN",
+                                          "VESTING",
+                                          "COMPLETED",
+                                          "REFUNDING",
+                                          "REFUNDED"
+                                        ]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NOT_STARTED",
+                                          "PREPARING",
+                                          "V3_LIVE",
+                                          "LP_LOCKED",
+                                          "COMPLETED",
+                                          "RETRY_SCHEDULED"
+                                        ]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["ACTIVE", "PAUSED"]
+                                      },
+                                      "stateTupleDigest": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain."
+                                      },
+                                      "snapshotBlockNumber": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                      },
+                                      "snapshotBlockHash": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      "configVersion": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "The contract's configVersion (keccak256 of the sale configuration)."
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["chain"]
+                                      },
+                                      "reasonCode": { "type": "null" }
+                                    }
                                   }
-                                }
+                                ]
                               },
                               "configVersion": {
                                 "anyOf": [
@@ -84720,8 +84932,14 @@
                                 "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
-                                "type": "null",
-                                "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  }
+                                ],
+                                "description": "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076)."
                               },
                               "configDigest": {
                                 "anyOf": [
@@ -84742,48 +84960,148 @@
                                 ]
                               },
                               "onChainState": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": [
-                                  "saleState",
-                                  "entitlementState",
-                                  "liquidityState",
-                                  "operationalState",
-                                  "stateTupleDigest",
-                                  "snapshotBlockNumber",
-                                  "snapshotBlockHash",
-                                  "source",
-                                  "reasonCode"
-                                ],
-                                "properties": {
-                                  "saleState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "stateTupleDigest": { "type": "null" },
+                                      "snapshotBlockNumber": { "type": "null" },
+                                      "snapshotBlockHash": { "type": "null" },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "reasonCode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAUNCH_CONTRACT_BASELINE_PENDING",
+                                          "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+                                          "LAUNCH_CONTRACT_CODE_MISSING",
+                                          "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+                                          "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                                          "LAUNCH_CHAIN_ID_MISMATCH",
+                                          "LAUNCH_CHAIN_RPC_UNREACHABLE",
+                                          "LAUNCH_SALE_NOT_REGISTERED",
+                                          "LAUNCH_SALE_CONTRACT_MISMATCH",
+                                          "LAUNCH_SALE_NOT_FOUND",
+                                          "LAUNCH_CONFIG_VERSION_MISMATCH",
+                                          "LAUNCH_USD1_ADDRESS_MISMATCH",
+                                          "LAUNCH_CONTRACT_READ_FAILED",
+                                          "LAUNCH_CONTRACT_READ_INVALID",
+                                          "LAUNCH_SNAPSHOT_REORGED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                        ],
+                                        "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
+                                      }
+                                    }
                                   },
-                                  "entitlementState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "liquidityState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "operationalState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "stateTupleDigest": { "type": "null" },
-                                  "snapshotBlockNumber": { "type": "null" },
-                                  "snapshotBlockHash": { "type": "null" },
-                                  "source": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "reasonCode": {
-                                    "type": "string",
-                                    "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "configVersion",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "SCHEDULED",
+                                          "LIVE",
+                                          "ENDED",
+                                          "SUCCEEDED",
+                                          "FAILED",
+                                          "CANCELLED"
+                                        ]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NONE",
+                                          "FROZEN",
+                                          "VESTING",
+                                          "COMPLETED",
+                                          "REFUNDING",
+                                          "REFUNDED"
+                                        ]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NOT_STARTED",
+                                          "PREPARING",
+                                          "V3_LIVE",
+                                          "LP_LOCKED",
+                                          "COMPLETED",
+                                          "RETRY_SCHEDULED"
+                                        ]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["ACTIVE", "PAUSED"]
+                                      },
+                                      "stateTupleDigest": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain."
+                                      },
+                                      "snapshotBlockNumber": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                      },
+                                      "snapshotBlockHash": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      "configVersion": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "The contract's configVersion (keccak256 of the sale configuration)."
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["chain"]
+                                      },
+                                      "reasonCode": { "type": "null" }
+                                    }
                                   }
-                                }
+                                ]
                               },
                               "configVersion": {
                                 "anyOf": [
@@ -84846,8 +85164,14 @@
                                 "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                               },
                               "contractAddress": {
-                                "type": "null",
-                                "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  }
+                                ],
+                                "description": "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076)."
                               },
                               "configDigest": {
                                 "anyOf": [
@@ -84868,48 +85192,148 @@
                                 ]
                               },
                               "onChainState": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": [
-                                  "saleState",
-                                  "entitlementState",
-                                  "liquidityState",
-                                  "operationalState",
-                                  "stateTupleDigest",
-                                  "snapshotBlockNumber",
-                                  "snapshotBlockHash",
-                                  "source",
-                                  "reasonCode"
-                                ],
-                                "properties": {
-                                  "saleState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "stateTupleDigest": { "type": "null" },
+                                      "snapshotBlockNumber": { "type": "null" },
+                                      "snapshotBlockHash": { "type": "null" },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      },
+                                      "reasonCode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAUNCH_CONTRACT_BASELINE_PENDING",
+                                          "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+                                          "LAUNCH_CONTRACT_CODE_MISSING",
+                                          "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+                                          "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                                          "LAUNCH_CHAIN_ID_MISMATCH",
+                                          "LAUNCH_CHAIN_RPC_UNREACHABLE",
+                                          "LAUNCH_SALE_NOT_REGISTERED",
+                                          "LAUNCH_SALE_CONTRACT_MISMATCH",
+                                          "LAUNCH_SALE_NOT_FOUND",
+                                          "LAUNCH_CONFIG_VERSION_MISMATCH",
+                                          "LAUNCH_USD1_ADDRESS_MISMATCH",
+                                          "LAUNCH_CONTRACT_READ_FAILED",
+                                          "LAUNCH_CONTRACT_READ_INVALID",
+                                          "LAUNCH_SNAPSHOT_REORGED",
+                                          "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                        ],
+                                        "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
+                                      }
+                                    }
                                   },
-                                  "entitlementState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "liquidityState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "operationalState": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "stateTupleDigest": { "type": "null" },
-                                  "snapshotBlockNumber": { "type": "null" },
-                                  "snapshotBlockHash": { "type": "null" },
-                                  "source": {
-                                    "type": "string",
-                                    "enum": ["unavailable"]
-                                  },
-                                  "reasonCode": {
-                                    "type": "string",
-                                    "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "saleState",
+                                      "entitlementState",
+                                      "liquidityState",
+                                      "operationalState",
+                                      "stateTupleDigest",
+                                      "snapshotBlockNumber",
+                                      "snapshotBlockHash",
+                                      "configVersion",
+                                      "source",
+                                      "reasonCode"
+                                    ],
+                                    "properties": {
+                                      "saleState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "SCHEDULED",
+                                          "LIVE",
+                                          "ENDED",
+                                          "SUCCEEDED",
+                                          "FAILED",
+                                          "CANCELLED"
+                                        ]
+                                      },
+                                      "entitlementState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NONE",
+                                          "FROZEN",
+                                          "VESTING",
+                                          "COMPLETED",
+                                          "REFUNDING",
+                                          "REFUNDED"
+                                        ]
+                                      },
+                                      "liquidityState": {
+                                        "type": "string",
+                                        "enum": [
+                                          "NOT_STARTED",
+                                          "PREPARING",
+                                          "V3_LIVE",
+                                          "LP_LOCKED",
+                                          "COMPLETED",
+                                          "RETRY_SCHEDULED"
+                                        ]
+                                      },
+                                      "operationalState": {
+                                        "type": "string",
+                                        "enum": ["ACTIVE", "PAUSED"]
+                                      },
+                                      "stateTupleDigest": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain."
+                                      },
+                                      "snapshotBlockNumber": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                      },
+                                      "snapshotBlockHash": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      "configVersion": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$",
+                                        "description": "The contract's configVersion (keccak256 of the sale configuration)."
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": ["chain"]
+                                      },
+                                      "reasonCode": { "type": "null" }
+                                    }
                                   }
-                                }
+                                ]
                               },
                               "configVersion": {
                                 "anyOf": [
@@ -90375,8 +90799,11 @@
                           "description": "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56."
                         },
                         "contractAddress": {
-                          "type": "null",
-                          "description": "Always null: no Launch contract has been deployed, audited, or verified."
+                          "anyOf": [
+                            { "type": "null" },
+                            { "type": "string", "pattern": "^0x[0-9a-f]{40}$" }
+                          ],
+                          "description": "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076)."
                         },
                         "configDigest": {
                           "anyOf": [
@@ -90389,48 +90816,148 @@
                           "enum": ["unscheduled", "scheduled", "live", "ended"]
                         },
                         "onChainState": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": [
-                            "saleState",
-                            "entitlementState",
-                            "liquidityState",
-                            "operationalState",
-                            "stateTupleDigest",
-                            "snapshotBlockNumber",
-                            "snapshotBlockHash",
-                            "source",
-                            "reasonCode"
-                          ],
-                          "properties": {
-                            "saleState": {
-                              "type": "string",
-                              "enum": ["unavailable"]
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "saleState",
+                                "entitlementState",
+                                "liquidityState",
+                                "operationalState",
+                                "stateTupleDigest",
+                                "snapshotBlockNumber",
+                                "snapshotBlockHash",
+                                "source",
+                                "reasonCode"
+                              ],
+                              "properties": {
+                                "saleState": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "entitlementState": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "liquidityState": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "operationalState": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "stateTupleDigest": { "type": "null" },
+                                "snapshotBlockNumber": { "type": "null" },
+                                "snapshotBlockHash": { "type": "null" },
+                                "source": {
+                                  "type": "string",
+                                  "enum": ["unavailable"]
+                                },
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "LAUNCH_CONTRACT_BASELINE_PENDING",
+                                    "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+                                    "LAUNCH_CONTRACT_CODE_MISSING",
+                                    "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+                                    "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+                                    "LAUNCH_CHAIN_ID_MISMATCH",
+                                    "LAUNCH_CHAIN_RPC_UNREACHABLE",
+                                    "LAUNCH_SALE_NOT_REGISTERED",
+                                    "LAUNCH_SALE_CONTRACT_MISMATCH",
+                                    "LAUNCH_SALE_NOT_FOUND",
+                                    "LAUNCH_CONFIG_VERSION_MISMATCH",
+                                    "LAUNCH_USD1_ADDRESS_MISMATCH",
+                                    "LAUNCH_CONTRACT_READ_FAILED",
+                                    "LAUNCH_CONTRACT_READ_INVALID",
+                                    "LAUNCH_SNAPSHOT_REORGED",
+                                    "LAUNCH_ONCHAIN_STATE_NOT_INDEXED"
+                                  ],
+                                  "description": "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076)."
+                                }
+                              }
                             },
-                            "entitlementState": {
-                              "type": "string",
-                              "enum": ["unavailable"]
-                            },
-                            "liquidityState": {
-                              "type": "string",
-                              "enum": ["unavailable"]
-                            },
-                            "operationalState": {
-                              "type": "string",
-                              "enum": ["unavailable"]
-                            },
-                            "stateTupleDigest": { "type": "null" },
-                            "snapshotBlockNumber": { "type": "null" },
-                            "snapshotBlockHash": { "type": "null" },
-                            "source": {
-                              "type": "string",
-                              "enum": ["unavailable"]
-                            },
-                            "reasonCode": {
-                              "type": "string",
-                              "enum": ["LAUNCH_CONTRACT_BASELINE_PENDING"]
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "saleState",
+                                "entitlementState",
+                                "liquidityState",
+                                "operationalState",
+                                "stateTupleDigest",
+                                "snapshotBlockNumber",
+                                "snapshotBlockHash",
+                                "configVersion",
+                                "source",
+                                "reasonCode"
+                              ],
+                              "properties": {
+                                "saleState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "SCHEDULED",
+                                    "LIVE",
+                                    "ENDED",
+                                    "SUCCEEDED",
+                                    "FAILED",
+                                    "CANCELLED"
+                                  ]
+                                },
+                                "entitlementState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "NONE",
+                                    "FROZEN",
+                                    "VESTING",
+                                    "COMPLETED",
+                                    "REFUNDING",
+                                    "REFUNDED"
+                                  ]
+                                },
+                                "liquidityState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "NOT_STARTED",
+                                    "PREPARING",
+                                    "V3_LIVE",
+                                    "LP_LOCKED",
+                                    "COMPLETED",
+                                    "RETRY_SCHEDULED"
+                                  ]
+                                },
+                                "operationalState": {
+                                  "type": "string",
+                                  "enum": ["ACTIVE", "PAUSED"]
+                                },
+                                "stateTupleDigest": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$",
+                                  "description": "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain."
+                                },
+                                "snapshotBlockNumber": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                },
+                                "snapshotBlockHash": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "configVersion": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$",
+                                  "description": "The contract's configVersion (keccak256 of the sale configuration)."
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": ["chain"]
+                                },
+                                "reasonCode": { "type": "null" }
+                              }
                             }
-                          }
+                          ]
                         },
                         "configVersion": {
                           "anyOf": [
@@ -90858,8 +91385,99 @@
                             }
                           }
                         },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "projectToken",
+                            "usd1",
+                            "softCapUsd1",
+                            "hardCapUsd1",
+                            "walletProjectCapUsd1",
+                            "minPurchaseUsd1",
+                            "protocolFeeBps",
+                            "liquidityBps",
+                            "tgeBps",
+                            "cliffSeconds",
+                            "vestingSeconds",
+                            "poolFeeTier",
+                            "lpLockSeconds",
+                            "configVersion"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "projectToken": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "usd1": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "softCapUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "hardCapUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "walletProjectCapUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "minPurchaseUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "protocolFeeBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            },
+                            "liquidityBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            },
+                            "tgeBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            },
+                            "cliffSeconds": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 4294967295
+                            },
+                            "vestingSeconds": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 4294967295
+                            },
+                            "poolFeeTier": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 16777215
+                            },
+                            "lpLockSeconds": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 4294967295
+                            },
+                            "configVersion": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          }
+                        },
                         { "type": "null" }
-                      ]
+                      ],
+                      "description": "LOOP's configuration slots (status pending_confirmation|confirmed), or, once launch.onChainState.source is chain, the contract's getSaleConfig (status available)."
                     },
                     "configPending": {
                       "anyOf": [
@@ -90885,74 +91503,147 @@
                       "type": "array",
                       "maxItems": 64,
                       "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                          "roundId",
-                          "roundIndex",
-                          "configVersion",
-                          "status",
-                          "startsAt",
-                          "endsAt",
-                          "priceUsd1",
-                          "eligibilityTier",
-                          "walletRoundCapRaw"
-                        ],
-                        "properties": {
-                          "roundId": {
-                            "type": "string",
-                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          },
-                          "roundIndex": { "type": "integer", "minimum": 1 },
-                          "configVersion": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-                          },
-                          "status": {
-                            "type": "string",
-                            "enum": ["pending_confirmation", "confirmed"]
-                          },
-                          "startsAt": {
-                            "anyOf": [
-                              { "type": "string", "format": "date-time" },
-                              { "type": "null" }
-                            ]
-                          },
-                          "endsAt": {
-                            "anyOf": [
-                              { "type": "string", "format": "date-time" },
-                              { "type": "null" }
-                            ]
-                          },
-                          "priceUsd1": {
-                            "anyOf": [
-                              {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "roundId",
+                              "roundIndex",
+                              "configVersion",
+                              "status",
+                              "startsAt",
+                              "endsAt",
+                              "priceUsd1",
+                              "eligibilityTier",
+                              "walletRoundCapRaw"
+                            ],
+                            "properties": {
+                              "roundId": {
                                 "type": "string",
-                                "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                               },
-                              { "type": "null" }
-                            ]
-                          },
-                          "eligibilityTier": {
-                            "anyOf": [
-                              {
+                              "roundIndex": { "type": "integer", "minimum": 1 },
+                              "configVersion": {
                                 "type": "string",
-                                "enum": ["priority", "community", "public"]
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
                               },
-                              { "type": "null" }
-                            ]
+                              "status": {
+                                "type": "string",
+                                "enum": ["pending_confirmation", "confirmed"]
+                              },
+                              "startsAt": {
+                                "anyOf": [
+                                  { "type": "string", "format": "date-time" },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "endsAt": {
+                                "anyOf": [
+                                  { "type": "string", "format": "date-time" },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "priceUsd1": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "eligibilityTier": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["priority", "community", "public"]
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "walletRoundCapRaw": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
                           },
-                          "walletRoundCapRaw": {
-                            "anyOf": [
-                              {
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "status",
+                              "roundId",
+                              "roundIndex",
+                              "startAt",
+                              "endAt",
+                              "priceUsd1PerToken",
+                              "roundCapUsd1",
+                              "walletRoundCapUsd1",
+                              "allowlistRoot",
+                              "raisedUsd1"
+                            ],
+                            "properties": {
+                              "status": {
+                                "type": "string",
+                                "enum": ["available"]
+                              },
+                              "roundId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  { "type": "null" }
+                                ],
+                                "description": "LOOP's opaque round ID for the launch_rounds row with this roundIndex; null when LOOP has no such row."
+                              },
+                              "roundIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 65535,
+                                "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                              },
+                              "startAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "endAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "priceUsd1PerToken": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                "description": "USD1 per whole token, 1e18 = 1 USD1 (06 §4.2)."
+                              },
+                              "roundCapUsd1": {
                                 "type": "string",
                                 "pattern": "^(0|[1-9][0-9]{0,77})$"
                               },
-                              { "type": "null" }
-                            ]
+                              "walletRoundCapUsd1": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$"
+                              },
+                              "allowlistRoot": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$",
+                                "description": "Merkle root; all zeroes means the round has no allowlist."
+                              },
+                              "raisedUsd1": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$"
+                              }
+                            }
                           }
-                        }
-                      }
+                        ]
+                      },
+                      "description": "LOOP's round slots, or, once launch.onChainState.source is chain, every getRounds item (status available) at the same block."
                     },
                     "graduation": {
                       "type": "object",
@@ -91551,17 +92242,83 @@
                       ]
                     },
                     "result": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["tier", "reasonCode", "snapshotBlock"],
-                      "properties": {
-                        "tier": { "type": "null" },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["tier", "reasonCode", "snapshotBlock"],
+                          "properties": {
+                            "tier": { "type": "null" },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            "snapshotBlock": { "type": "null" }
+                          }
                         },
-                        "snapshotBlock": { "type": "null" }
-                      }
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "tier",
+                            "reasonCode",
+                            "snapshotBlock",
+                            "roundIndex",
+                            "allowlistRoot",
+                            "eligibilityProof"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "tier": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["priority", "community", "public"]
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "null when the wallet is not in the allowlist."
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "snapshotBlock": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "roundIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535,
+                              "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                            },
+                            "allowlistRoot": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "eligibilityProof": {
+                              "type": "array",
+                              "maxItems": 64,
+                              "items": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              "description": "Merkle proof for leaf keccak256(abi.encodePacked(wallet)); the buy() eligibilityProof argument verbatim. Empty when the root is zero."
+                            }
+                          }
+                        }
+                      ],
+                      "description": "The unchanged Decision 0036 object while no evaluator exists; the status=available branch is reserved for the S83b evaluators (Decision 0076) and is not emitted yet."
                     },
                     "configVersion": {
                       "anyOf": [
@@ -92098,40 +92855,204 @@
                       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                     },
                     "holders": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "holderCount",
+                            "indexedBlockNumber"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "holderCount": { "type": "integer", "minimum": 0 },
+                            "indexedBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "myPosition": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "walletId",
+                            "cumulativeUsd1",
+                            "purchasedTokens",
+                            "entitledTokens",
+                            "claimableTokens",
+                            "claimedTokens",
+                            "refundableUsd1",
+                            "refundedUsd1",
+                            "snapshotBlockNumber",
+                            "snapshotBlockHash"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "walletId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "cumulativeUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "purchasedTokens": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "entitledTokens": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "claimableTokens": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "claimedTokens": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "refundableUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "refundedUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "snapshotBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "snapshotBlockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          },
+                          "description": "getPosition (06 §4.2 Position) at one block."
                         }
-                      }
+                      ]
                     },
                     "walletCap": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "walletProjectCapUsd1",
+                            "rounds",
+                            "snapshotBlockNumber",
+                            "snapshotBlockHash"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "walletProjectCapUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "rounds": {
+                              "type": "array",
+                              "maxItems": 64,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "roundIndex",
+                                  "walletRoundCapUsd1",
+                                  "cumulativeUsd1"
+                                ],
+                                "properties": {
+                                  "roundIndex": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535,
+                                    "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                                  },
+                                  "walletRoundCapUsd1": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                  },
+                                  "cumulativeUsd1": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                    "description": "getRoundPosition for the caller's wallet."
+                                  }
+                                }
+                              }
+                            },
+                            "snapshotBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "snapshotBlockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -92650,26 +93571,219 @@
                     },
                     "purchaseRecords": {
                       "type": "array",
-                      "maxItems": 0,
-                      "items": {}
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "purchaseRecordId",
+                          "walletId",
+                          "roundId",
+                          "roundIndex",
+                          "usd1Amount",
+                          "tokenAmount",
+                          "transactionHash",
+                          "logIndex",
+                          "blockNumber",
+                          "blockHash",
+                          "confirmationState",
+                          "observedAt"
+                        ],
+                        "properties": {
+                          "purchaseRecordId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "walletId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "roundId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "roundIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 65535,
+                            "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                          },
+                          "usd1Amount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "tokenAmount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "transactionHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "logIndex": { "type": "integer", "minimum": 0 },
+                          "blockNumber": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,19})$"
+                          },
+                          "blockHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "confirmationState": {
+                            "type": "string",
+                            "enum": ["pending", "confirmed", "reorged"]
+                          },
+                          "observedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "description": "Always empty while source is unavailable."
                     },
                     "entitlements": {
                       "type": "array",
-                      "maxItems": 0,
-                      "items": {}
-                    },
-                    "refunds": { "type": "array", "maxItems": 0, "items": {} },
-                    "source": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["status", "reasonCode"],
-                      "properties": {
-                        "status": { "type": "string", "enum": ["unavailable"] },
-                        "reasonCode": {
-                          "type": "string",
-                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "entitlementId",
+                          "walletId",
+                          "entitledTokens",
+                          "claimedTokens",
+                          "state",
+                          "frozenAtBlock"
+                        ],
+                        "properties": {
+                          "entitlementId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "walletId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "entitledTokens": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "claimedTokens": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": ["frozen", "partially_claimed", "claimed"]
+                          },
+                          "frozenAtBlock": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$"
+                              },
+                              { "type": "null" }
+                            ]
+                          }
                         }
-                      }
+                      },
+                      "description": "Always empty while source is unavailable."
+                    },
+                    "refunds": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "refundLiabilityId",
+                          "walletId",
+                          "refundableUsd1",
+                          "refundedUsd1",
+                          "state",
+                          "frozenAtBlock"
+                        ],
+                        "properties": {
+                          "refundLiabilityId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "walletId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "refundableUsd1": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "refundedUsd1": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": ["frozen", "partially_refunded", "refunded"]
+                          },
+                          "frozenAtBlock": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$"
+                              },
+                              { "type": "null" }
+                            ]
+                          }
+                        }
+                      },
+                      "description": "Always empty while source is unavailable."
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "indexedBlockNumber",
+                            "indexedBlockHash"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "indexedBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "indexedBlockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          }
+                        }
+                      ],
+                      "description": "unavailable until the S83b launch_event lane indexes the sale (Decision 0076)."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -93125,7 +94239,7 @@
         "operationId": "prepareV2LaunchIntent",
         "summary": "Prepare a Launch purchase Intent (unavailable)",
         "tags": ["launch"],
-        "description": "Always 503 CAPABILITY_UNAVAILABLE (LAUNCH_CONTRACT_BASELINE_PENDING). No payload, digest, or launch_intents row is ever produced in this step; the request shape documents the eventual Intent (03 §8.2), which stays fully separate from wallet intents.",
+        "description": "Still always 503 CAPABILITY_UNAVAILABLE (the error body is unchanged). No payload, digest, or launch_intents row is produced; the request shape and the 201 launchIntent shape document the eventual Intent (03 §8.2, Decision 0076), which stays fully separate from wallet intents. S83b implements the prepare.",
         "requestBody": {
           "required": true,
           "content": {
@@ -93192,6 +94306,184 @@
         ],
         "security": [{ "privyBearer": [] }],
         "responses": {
+          "201": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["launchIntent", "contractVersion"],
+                  "properties": {
+                    "launchIntent": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "launchIntentId",
+                        "state",
+                        "launchId",
+                        "projectId",
+                        "walletId",
+                        "roundId",
+                        "roundIndex",
+                        "chainId",
+                        "contractAddress",
+                        "quoteAssetId",
+                        "usd1Amount",
+                        "expectedTokenAmount",
+                        "minTokenAmount",
+                        "walletCumulativeUsd1",
+                        "deadline",
+                        "eligibilityProof",
+                        "configVersion",
+                        "stateTupleDigest",
+                        "snapshotBlockNumber",
+                        "snapshotBlockHash",
+                        "payloadDigest",
+                        "unsignedTransaction",
+                        "expiresAt",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "launchIntentId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "prepared",
+                            "awaiting_signature",
+                            "submitted",
+                            "confirmed",
+                            "reverted",
+                            "failed",
+                            "unknown",
+                            "cancelled",
+                            "expired"
+                          ]
+                        },
+                        "launchId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundIndex": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 65535,
+                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "quoteAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "usd1Amount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "expectedTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "quote() at the snapshot block."
+                        },
+                        "minTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "walletCumulativeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "eligibilityProof": {
+                          "type": "array",
+                          "maxItems": 64,
+                          "items": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          }
+                        },
+                        "configVersion": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "stateTupleDigest": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "snapshotBlockNumber": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,19})$"
+                        },
+                        "snapshotBlockHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "payloadDigest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "unsignedTransaction": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["chainId", "to", "data", "value"],
+                          "properties": {
+                            "chainId": { "type": "integer", "enum": [56, 97] },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x([0-9a-f]{2})*$"
+                            },
+                            "value": { "type": "string", "enum": ["0x0"] }
+                          }
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdAt": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
           "400": {
             "description": "Default Response",
             "headers": {

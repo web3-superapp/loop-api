@@ -42,6 +42,7 @@ describe("loadReconciliationWorkerConfig", () => {
         reorgDepthBlocks: 64,
         sharedWithPrimary: true,
       },
+      launchContract: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,
@@ -237,6 +238,29 @@ describe("loadReconciliationWorkerConfig", () => {
       expect(error).toBeInstanceOf(ConfigurationError);
       expect(String(error)).not.toContain("do-not-log-me");
     }
+  });
+
+  it("parses the Launch contract keys with the API rules (Decision 0076)", () => {
+    const complete = validEnvironment();
+    complete["LAUNCH_CONTRACT_ADDRESS"] =
+      "0x1111111111111111111111111111111111111111";
+    complete["LAUNCH_CONTRACT_VERSION"] = "1.0.0";
+    complete["LAUNCH_CONTRACT_START_BLOCK"] = "44000000";
+    complete["LAUNCH_USD1_ADDRESS"] =
+      "0x2222222222222222222222222222222222222222";
+    expect(loadReconciliationWorkerConfig(complete).launchContract).toEqual({
+      address: "0x1111111111111111111111111111111111111111",
+      version: "1.0.0",
+      versionMajor: 1,
+      startBlock: 44_000_000n,
+      usd1Address: "0x2222222222222222222222222222222222222222",
+    });
+    const partial = validEnvironment();
+    partial["LAUNCH_CONTRACT_ADDRESS"] =
+      "0x1111111111111111111111111111111111111111";
+    expect(() => loadReconciliationWorkerConfig(partial)).toThrow(
+      /LAUNCH_USD1_ADDRESS: is required/,
+    );
   });
 
   it("parses the launch chain slot with the API rules so one environment file behaves identically (Decision 0038)", () => {

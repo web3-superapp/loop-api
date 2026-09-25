@@ -755,6 +755,99 @@ describe("launch chain slot (Decision 0038)", () => {
   });
 });
 
+describe("Launch contract configuration (Decision 0076)", () => {
+  const complete = {
+    LAUNCH_CONTRACT_ADDRESS: "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+    LAUNCH_CONTRACT_VERSION: "1.2.3",
+    LAUNCH_CONTRACT_START_BLOCK: "44000000",
+    LAUNCH_USD1_ADDRESS: "0x2222222222222222222222222222222222222222",
+  } as const;
+
+  it("keeps the contract null (BASELINE_PENDING) when all four keys are blank", () => {
+    expect(loadConfig(validEnvironment()).launchContract).toBeNull();
+    const blank = validEnvironment();
+    for (const key of Object.keys(complete)) {
+      blank[key] = " ";
+    }
+    expect(loadConfig(blank).launchContract).toBeNull();
+  });
+
+  it("parses all four keys, lowercasing both addresses", () => {
+    const config = loadConfig({ ...validEnvironment(), ...complete });
+    expect(config.launchContract).toEqual({
+      address: "0xabcdef0123456789abcdef0123456789abcdef01",
+      version: "1.2.3",
+      versionMajor: 1,
+      startBlock: 44_000_000n,
+      usd1Address: "0x2222222222222222222222222222222222222222",
+    });
+    expect(Object.isFrozen(config.launchContract)).toBe(true);
+    // An unsupported major is a runtime reason code, not a boot failure.
+    expect(
+      loadConfig({
+        ...validEnvironment(),
+        ...complete,
+        LAUNCH_CONTRACT_VERSION: "2.0.0",
+      }).launchContract?.versionMajor,
+    ).toBe(2);
+  });
+
+  it("refuses to boot with a partial set and names every missing key", () => {
+    for (const present of Object.keys(complete)) {
+      const environment = validEnvironment();
+      environment[present] = complete[present as keyof typeof complete];
+      const missing = Object.keys(complete).filter((key) => key !== present);
+      let message = "";
+      try {
+        loadConfig(environment);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigurationError);
+        message = String(error);
+      }
+      for (const key of missing) {
+        expect(message, present).toContain(`${key}: is required`);
+      }
+      expect(message).not.toContain(`${present}: is required`);
+    }
+    const threeOfFour: NodeJS.ProcessEnv = {
+      ...validEnvironment(),
+      ...complete,
+    };
+    delete threeOfFour["LAUNCH_CONTRACT_START_BLOCK"];
+    expect(() => loadConfig(threeOfFour)).toThrow(
+      /LAUNCH_CONTRACT_START_BLOCK: is required/,
+    );
+  });
+
+  it("rejects malformed values without echoing them", () => {
+    for (const overrides of [
+      { LAUNCH_CONTRACT_ADDRESS: "0x1234" },
+      { LAUNCH_USD1_ADDRESS: "not-an-address" },
+      { LAUNCH_CONTRACT_VERSION: "v1" },
+      { LAUNCH_CONTRACT_VERSION: "1.0" },
+      { LAUNCH_CONTRACT_VERSION: "01.0.0" },
+      { LAUNCH_CONTRACT_START_BLOCK: "-1" },
+      { LAUNCH_CONTRACT_START_BLOCK: "1e6" },
+      { LAUNCH_CONTRACT_START_BLOCK: "9223372036854775808" },
+      { LAUNCH_USD1_ADDRESS: complete.LAUNCH_CONTRACT_ADDRESS.toLowerCase() },
+    ]) {
+      const environment = { ...validEnvironment(), ...complete, ...overrides };
+      expect(() => loadConfig(environment), JSON.stringify(overrides)).toThrow(
+        ConfigurationError,
+      );
+    }
+    try {
+      loadConfig({
+        ...validEnvironment(),
+        ...complete,
+        LAUNCH_CONTRACT_ADDRESS: "0xdo-not-log-me",
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain("do-not-log-me");
+    }
+  });
+});
+
 describe("audio-room user-role evidence reference (Decision 0039)", () => {
   const key = "STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF";
 
