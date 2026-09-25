@@ -120,6 +120,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/launch/{launchId}/history",
       "/v2/launch/{launchId}/holders",
       "/v2/launch/{launchId}/intents",
+      "/v2/launch/{launchId}/intents/{launchIntentId}",
       "/v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report",
       "/v2/launches/{launchId}",
       "/v2/market/assets/{assetId}",
@@ -187,7 +188,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(136);
+    expect(operationIds).toHaveLength(137);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
@@ -1049,6 +1050,56 @@ describe("committed OpenAPI artifact", () => {
       "requestBody.content.application/json.schema.oneOf.1.properties.official_formatter_envelope_sha256.pattern",
       "^[0-9a-f]{64}$",
     );
+  });
+
+  it("publishes the Launch Intent read with the prepare 201 schema and launchUsd1 as optional (Decision 0081)", async () => {
+    const document = JSON.parse(
+      await readFile(openApiV2ArtifactPath, "utf8"),
+    ) as OpenApiDocument;
+    const schemaOf = (path: string, method: string, status: string) =>
+      (
+        document.paths[path]?.[method]?.responses?.[status] as
+          | {
+              readonly content?: Record<string, { readonly schema?: unknown }>;
+            }
+          | undefined
+      )?.content?.["application/json"]?.schema;
+    const read =
+      document.paths["/v2/launch/{launchId}/intents/{launchIntentId}"]?.["get"];
+    expect(read).toMatchObject({
+      operationId: "getV2LaunchIntent",
+      security: [{ privyBearer: [] }],
+    });
+    expect(read?.requestBody).toBeUndefined();
+    expect(Object.keys(read?.responses ?? {}).sort()).toEqual([
+      "200",
+      "400",
+      "401",
+      "404",
+      "409",
+      "500",
+      "503",
+    ]);
+    expect(read?.parameters?.map((parameter) => parameter.name)).not.toContain(
+      "idempotency-key",
+    );
+    expect(
+      schemaOf("/v2/launch/{launchId}/intents/{launchIntentId}", "get", "200"),
+    ).toEqual(schemaOf("/v2/launch/{launchId}/intents", "post", "201"));
+    const balances = schemaOf(
+      "/v2/wallets/{walletId}/balances",
+      "get",
+      "200",
+    ) as {
+      readonly required: readonly string[];
+      readonly properties: Record<string, { readonly required?: unknown }>;
+    };
+    expect(balances.required).not.toContain("launchUsd1");
+    expect(balances.properties["launchUsd1"]).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["balance", "allowance"],
+    });
   });
 
   it("publishes one notification id pattern across every V2 surface", async () => {

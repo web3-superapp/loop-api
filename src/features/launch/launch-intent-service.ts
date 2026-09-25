@@ -46,6 +46,7 @@ import {
 import { walletIntentRefusalReasonCodes } from "../wallet-intents/intent-contract.js";
 import {
   LaunchIntentIdempotencyConflictError,
+  LaunchChainRepositoryUnavailableError,
   LaunchIntentReportConflictError,
   type CreateLaunchIntentInput,
   type LaunchChainRepository,
@@ -904,4 +905,43 @@ export async function reportLaunchIntentBroadcast(
     }
     throw error;
   }
+}
+
+/**
+ * Owner-scoped read of one Launch Intent (Decision 0081): the same projection
+ * as the prepare `201` and the broadcast report, so the client can follow a
+ * reported Intent through the reconcile lane (Decision 0080) without
+ * re-reporting. Another account's Intent is NOT_FOUND, never a distinct
+ * code. The gate is the report's: CAPABILITY_UNAVAILABLE while writes are
+ * off or the contract keys are blank.
+ */
+export async function readLaunchIntent(
+  deps: LaunchIntentReportDependencies,
+  input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly launchId: string;
+    readonly launchIntentId: string;
+  },
+): Promise<LaunchIntentResource> {
+  if (deps.runtime.writes === null || deps.contract.contract === null) {
+    throw V2ApiError.capabilityUnavailable();
+  }
+  let record: LaunchIntentRecord | null;
+  try {
+    record = await deps.chain.getIntent({
+      ownerUserId: input.principal.userId,
+      launchId: input.launchId,
+      intentId: input.launchIntentId,
+    });
+  } catch (error) {
+    if (error instanceof LaunchChainRepositoryUnavailableError) {
+      // Fail closed: the store is unreadable, which is not "not found".
+      throw V2ApiError.capabilityUnavailable();
+    }
+    throw error;
+  }
+  if (record === null) {
+    throw V2ApiError.notFound();
+  }
+  return projectLaunchIntent(record, deps.runtime.now());
 }

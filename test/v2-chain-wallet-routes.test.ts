@@ -1051,6 +1051,125 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     ).not.toHaveProperty("usd1");
   });
 
+  it("publishes launchUsd1 at the root only while the launch slot is shared and the contract keys are set (Decision 0081)", async () => {
+    const usd1 = "0x2222222222222222222222222222222222222222";
+    const launchContract = "0x1111111111111111111111111111111111111111";
+    const contractKeys = {
+      LAUNCH_CONTRACT_ADDRESS: launchContract,
+      LAUNCH_CONTRACT_VERSION: "1.0.0",
+      LAUNCH_CONTRACT_START_BLOCK: "1",
+      LAUNCH_USD1_ADDRESS: usd1,
+    };
+    const baseline = readFileSync(
+      new URL("./fixtures/s9-baseline/wallet-balances.json", import.meta.url),
+      "utf8",
+    ).trimEnd();
+    const allowanceSpenders: string[] = [];
+    const primaryWithUsd1 = (allowanceBlock: bigint): BscReadClient => {
+      const base = readClientFake();
+      return {
+        ...base,
+        readBalances: (
+          owner: string,
+          items: readonly { assetId: string; address: string | null }[],
+        ) =>
+          items.length === 1 && items[0]?.address === usd1
+            ? Promise.resolve({
+                head: {
+                  blockNumber: headNumber,
+                  blockHash: headHash,
+                  observedAt,
+                },
+                balances: [
+                  {
+                    assetId: items[0].assetId,
+                    rawValue: 9_000_000_000_000_000_000n,
+                    reasonCode: null,
+                  },
+                ],
+              })
+            : base.readBalances(owner, items),
+        readAllowances: (
+          _owner: string,
+          items: readonly { assetId: string; spender: string }[],
+        ) => {
+          allowanceSpenders.push(...items.map((item) => item.spender));
+          return Promise.resolve({
+            head: {
+              blockNumber: allowanceBlock,
+              blockHash: headHash,
+              observedAt,
+            },
+            allowances: items.map((item) => ({
+              assetId: item.assetId,
+              spender: item.spender,
+              rawValue: 4_000_000_000_000_000_000n,
+              reasonCode: null,
+            })),
+          });
+        },
+      } as unknown as BscReadClient;
+    };
+    const read = async (app: FastifyInstance) =>
+      app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      });
+
+    const { app } = await createApp(
+      { ...fakes(), bscReadClient: primaryWithUsd1(headNumber) },
+      { LAUNCH_CHAIN_ID: "56", ...contractKeys },
+    );
+    const shared = await read(app);
+    expect(shared.statusCode).toBe(200);
+    const body = shared.json<Record<string, unknown>>();
+    expect(body["launchUsd1"]).toEqual({
+      balance: "9000000000000000000",
+      allowance: "4000000000000000000",
+    });
+    expect(body).not.toHaveProperty("launchChain");
+    expect(allowanceSpenders).toEqual([launchContract]);
+    // Additive only: without the new key the document is the S5 baseline.
+    const rest = { ...body };
+    delete rest["launchUsd1"];
+    expect(JSON.stringify(rest)).toBe(baseline);
+
+    // The two values from different blocks are no fact: the key is absent.
+    const { app: skewed } = await createApp(
+      { ...fakes(), bscReadClient: primaryWithUsd1(headNumber + 1n) },
+      { LAUNCH_CHAIN_ID: "56", ...contractKeys },
+    );
+    expect((await read(skewed)).body).toBe(baseline);
+
+    // A primary client without the allowance surface fails closed: absent.
+    const { app: noAllowance } = await createApp(fakes(), {
+      LAUNCH_CHAIN_ID: "56",
+      ...contractKeys,
+    });
+    expect((await read(noAllowance)).body).toBe(baseline);
+
+    // No contract keys on the shared slot: byte-identical baseline.
+    const { app: blank } = await createApp(
+      { ...fakes(), bscReadClient: primaryWithUsd1(headNumber) },
+      { LAUNCH_CHAIN_ID: "56" },
+    );
+    expect((await read(blank)).body).toBe(baseline);
+
+    // A separate slot keeps USD1 under launchChain and never at the root.
+    const { app: separate } = await createApp(
+      {
+        ...fakes(),
+        bscReadClient: primaryWithUsd1(headNumber),
+        launchChainReadClient: launchClientFake(),
+      },
+      { LAUNCH_CHAIN_ID: "97", ...contractKeys },
+    );
+    const split = (await read(separate)).json<Record<string, unknown>>();
+    expect(split).toHaveProperty("launchChain");
+    expect(split).not.toHaveProperty("launchUsd1");
+  });
+
   it("reports the launch slot's failures inside launchChain without failing the primary reads", async () => {
     const cases: readonly {
       readonly client: BscReadClient;

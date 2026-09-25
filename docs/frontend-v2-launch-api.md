@@ -1066,3 +1066,93 @@ Base URL、headers、路由都不变；本节只说明回报之后 `launchIntent
 ### S83b2.4 错误码与 unavailable
 
 错误码表不变（S83b.6 / S83b.7）。对账没有配置 launch 槽位 RPC 时后端不推进任何状态，Intent 停在 `submitted`；接口仍 `200`，不会伪造结果。
+
+## S83b3：单个购买 Intent 读取、主链槽位的 USD1 授权、交易 hash 形式（决策 0081）
+
+Base URL 与通用 headers 不变（见文首）。本节新增一个只读路由和一个可选字段，其他响应字节不变。
+
+### S83b3.1 `GET /v2/launch/{launchId}/intents/{launchIntentId}`
+
+读 headers（不带 `Idempotency-Key`）：
+
+```
+Authorization: Bearer <Privy access token>
+X-Loop-Client-Version: 1.2.3
+X-Loop-Contract-Version: 2.0
+```
+
+无 query、无 body。`200` 与 `POST …/intents` 的 `201`、`broadcast-report` 的 `200` **完全同形**
+（同一个投影函数；同一时刻字节相同），`Cache-Control: no-store`：
+
+```json
+{
+  "launchIntent": {
+    "launchIntentId": "0f3d6c1a-8b8e-4c55-9a51-4c1f3e2d7a90",
+    "state": "submitted",
+    "launchId": "…",
+    "walletId": "…",
+    "transactionHash": "0xabababababababababababababababababababababababababababababababab",
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": false,
+      "reasonCode": "LAUNCH_INTENT_ALREADY_REPORTED"
+    },
+    "…": "其余字段同 S83b.6"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- `state` 可为 `awaiting_signature` / `submitted` / `confirmed` / `reverted` / `failed` / `expired`（S83b2.1）。
+  未回报且过了 `expiresAt` 的 Intent 读出来是 `expired`（`signing.reasonCode = LAUNCH_INTENT_EXPIRED`）。
+- `revertReason` 只在 `state = "reverted"` 时出现（目前恒 `null`）；其他状态没有这个键。
+- 读取不改变任何状态；状态只由后端索引 / 对账 lane 推进。建议广播后按需轮询（例如 5 s 间隔，
+  到 `confirmed` / `reverted` / `failed` / `expired` 停止）。
+
+| HTTP / code                                           | 何时                                                                                                     |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `200`                                                 | Intent 属于当前账号                                                                                      |
+| `400 INVALID_REQUEST`                                 | `launchId` / `launchIntentId` 不是 UUIDv4；带 query；缺 `X-Loop-Contract-Version` 等 header              |
+| `401 AUTH_REQUIRED` / `AUTH_INVALID`                  | 缺少或无效的 Bearer                                                                                      |
+| `404 NOT_FOUND`                                       | Intent 不存在、属于其他账号、或不属于这个 `launchId`（三者同一响应，不泄露存在性；`detailsSafe: null`）  |
+| `409 ACCOUNT_BOOTSTRAP_REQUIRED` / `VERSION_CONFLICT` | 通用会话规则                                                                                             |
+| `500 INTERNAL_ERROR`                                  | 未预期错误                                                                                               |
+| `503 CAPABILITY_UNAVAILABLE`                          | 写开关关闭 / 合约键为空 / Intent 存储不可读（均 `detailsSafe: null`，与 prepare / report 的 503 同字节） |
+| `503 PROVIDER_DISCONNECTED` / `REQUEST_TIMEOUT`       | 通用                                                                                                     |
+
+### S83b3.2 `GET /v2/wallets/{walletId}/balances` → 根上的 `launchUsd1`（可选）
+
+`launchChain` 只在 launch 槽位与主链**不同**（`LAUNCH_CHAIN_ID=97`）时出现，USD1 读在
+`launchChain.usd1`（S83b.9）。当 launch 槽位**就是主链**（`LAUNCH_CHAIN_ID=56`）时 `launchChain` 缺席，
+此时同样的数据出现在根上：
+
+```json
+{
+  "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+  "snapshot": { "…": "…" },
+  "gasReservePolicy": { "…": "…" },
+  "balances": [],
+  "netWorth": { "…": "…" },
+  "launchUsd1": {
+    "balance": "9000000000000000000",
+    "allowance": "4000000000000000000"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- 形状与 `launchChain.usd1` 完全相同（决策 0088）：18 位最小单位十进制字符串；`allowance` 是对
+  `LAUNCH_CONTRACT_ADDRESS` 的授权额。
+- 仅当：槽位共享 + 四个 `LAUNCH_CONTRACT_*` 键已配置 + 两个值在同一区块读到。否则整个键缺席
+  （不会是 `null`），读失败不影响页面其余部分。
+- `launchUsd1` 与 `launchChain.usd1` 永不同时出现。客户端读法：`launchChain?.usd1 ?? launchUsd1`，都缺席即“未知”，
+  不得当作 0。
+- 注意：槽位共享时 `POST /v2/wallet-intents/approve` 对 USD1 → Launch 合约仍是 `422 CHAIN_MISMATCH`
+  （S83b.8，主网签名关闭），授权额可读但暂时不能在 app 内提高。
+
+### S83b3.3 `transactionHash` 形式
+
+- 所有 Launch Intent 投影（prepare、report、S83b3.1 读取）里的 `transactionHash` 恒为小写 `0x` + 64 位十六进制，
+  或回报前为 `null`。
+- `broadcast-report` 的 `txHash` 接受任意大小写，存库与响应一律小写；同一 hash 换大小写再回报是同一次回报
+  （`200`、同字节），不会是 `LAUNCH_INTENT_ALREADY_REPORTED`。客户端可以直接字节比较。

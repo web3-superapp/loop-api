@@ -60,6 +60,7 @@ import {
 } from "./launch-eligibility.js";
 import {
   prepareLaunchIntent,
+  readLaunchIntent,
   reportLaunchIntentBroadcast,
   type LaunchIntentResource,
   type LaunchIntentRuntime,
@@ -433,6 +434,12 @@ export interface LaunchService {
     readonly launchId: string;
     readonly launchIntentId: string;
     readonly body: unknown;
+  }): Promise<LaunchIntentResource>;
+  /** Owner-scoped read of one Launch Intent (Decision 0081). */
+  getIntent(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly launchId: string;
+    readonly launchIntentId: string;
   }): Promise<LaunchIntentResource>;
   getStake(): LaunchStakeResource;
   getEconomy(): Promise<LaunchEconomyResource>;
@@ -1661,6 +1668,24 @@ export function createLaunchService(
       }
     },
 
+    async getIntent(input: Parameters<LaunchService["getIntent"]>[0]) {
+      if (intentRuntime === null || chain === null || contract === null) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      try {
+        return await readLaunchIntent(
+          { chain, contract, runtime: intentRuntime },
+          {
+            principal: input.principal,
+            launchId: parseLaunchOpaqueId(input.launchId),
+            launchIntentId: parseLaunchOpaqueId(input.launchIntentId),
+          },
+        );
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     getStake() {
       return Object.freeze({
         stake: unavailable(launchReasonCodes.stakingContractPending),
@@ -1709,6 +1734,7 @@ export function createUnavailableLaunchService(): LaunchService {
     getMilestones: unavailableService,
     prepareIntent: unavailableService,
     reportIntent: unavailableService,
+    getIntent: unavailableService,
     getStake() {
       return Object.freeze({
         stake: unavailable(launchReasonCodes.stakingContractPending),

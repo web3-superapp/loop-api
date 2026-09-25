@@ -221,6 +221,13 @@ export interface WalletBalancesResource {
    * a client that predates the slot must see a byte-identical document.
    */
   readonly launchChain?: LaunchChainBalanceProjection;
+  /**
+   * Decision 0081: USD1 balance and allowance to the Launch contract when the
+   * launch slot is shared with the primary slot (so `launchChain` is absent)
+   * and the four Launch contract keys are configured. Same shape and same
+   * one-block rule as `launchChain.usd1`; absent otherwise.
+   */
+  readonly launchUsd1?: LaunchChainUsd1Balance;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -1022,6 +1029,24 @@ export function createWalletReadService(
           input.launchUsd1 ?? null,
         ),
       );
+      // Decision 0081: a shared launch slot has no `launchChain` block, so
+      // the USD1 balance/allowance pair is read on the primary client and
+      // published at the root. Nothing is read while the slot is separate.
+      const sharedUsd1Target =
+        input.launchChainReadClient === null
+          ? (input.launchUsd1 ?? null)
+          : null;
+      const launchUsd1Pending =
+        sharedUsd1Target === null
+          ? Promise.resolve(null)
+          : timings.measure("launchUsd1", () =>
+              readLaunchChainUsd1(
+                input.readClient,
+                wallet.address,
+                sharedUsd1Target,
+                launchChainReadDeadlineMs,
+              ),
+            );
       const checkpointPending = timings.measure("indexerCheckpoint", () =>
         input.indexerRepository.getCheckpoint("erc20_transfer", input.chainId),
       );
@@ -1055,6 +1080,7 @@ export function createWalletReadService(
         );
       } catch (error) {
         void launchChainPending.catch(() => undefined);
+        void launchUsd1Pending.catch(() => undefined);
         void checkpointPending.catch(() => undefined);
         void pricesPending.catch(() => undefined);
         void privyObservationPending.catch(() => undefined);
@@ -1120,7 +1146,7 @@ export function createWalletReadService(
       // The cross-check, the pending totals, the per-asset prices, and the
       // audit snapshots all depend only on the one block already read, so
       // they observe the same facts whether they run in sequence or together.
-      const [pendingTotals, crossCheck, prices, , launchChain] =
+      const [pendingTotals, crossCheck, prices, , launchChain, launchUsd1] =
         await Promise.all([
           pendingPending,
           privyObservationPending.then((observation) =>
@@ -1143,6 +1169,7 @@ export function createWalletReadService(
             ),
           ),
           launchChainPending,
+          launchUsd1Pending,
         ]);
 
       const rowValuations = assets.map((_asset, index) =>
@@ -1238,6 +1265,7 @@ export function createWalletReadService(
         balances: Object.freeze(balances),
         netWorth: projectNetWorth(),
         ...(launchChain === null ? {} : { launchChain }),
+        ...(launchUsd1 === null ? {} : { launchUsd1 }),
         contractVersion: v2ContractVersion,
       });
 

@@ -58299,6 +58299,24 @@
                       },
                       "description": "The wallet's native coin on the launch chain slot (LAUNCH_CHAIN_ID). Absent while the slot equals the primary chain. A launch-slot failure is reported here and never fails the primary balances."
                     },
+                    "launchUsd1": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["balance", "allowance"],
+                      "properties": {
+                        "balance": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals)."
+                        },
+                        "allowance": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "USD1 allowance(wallet, LAUNCH_CONTRACT_ADDRESS), base units: what buy() may pull."
+                        }
+                      },
+                      "description": "Optional (Decision 0081): USD1 balance and allowance to the Launch contract while the launch slot is shared with the primary slot (LAUNCH_CHAIN_ID=56, so launchChain is absent) and the four Launch contract keys are configured, both read at the same block. Absent when the slot is separate (read launchChain.usd1), the contract is not configured, or the read failed (never null, never a guess)."
+                    },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
                 }
@@ -96131,6 +96149,832 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch/{launchId}/intents/{launchIntentId}": {
+      "get": {
+        "operationId": "getV2LaunchIntent",
+        "summary": "Get one Launch purchase Intent",
+        "tags": ["launch"],
+        "description": "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "launchId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "launchIntentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["launchIntent", "contractVersion"],
+                  "properties": {
+                    "launchIntent": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "launchIntentId",
+                        "state",
+                        "launchId",
+                        "projectId",
+                        "walletId",
+                        "roundId",
+                        "roundIndex",
+                        "chainId",
+                        "contractAddress",
+                        "quoteAssetId",
+                        "usd1Amount",
+                        "expectedTokenAmount",
+                        "minTokenAmount",
+                        "walletCumulativeUsd1",
+                        "deadline",
+                        "eligibilityProof",
+                        "configVersion",
+                        "stateTupleDigest",
+                        "snapshotBlockNumber",
+                        "snapshotBlockHash",
+                        "payloadDigest",
+                        "unsignedTransaction",
+                        "expiresAt",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "launchIntentId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "prepared",
+                            "awaiting_signature",
+                            "submitted",
+                            "confirmed",
+                            "reverted",
+                            "failed",
+                            "unknown",
+                            "cancelled",
+                            "expired"
+                          ],
+                          "description": "Decision 0080: after a broadcast report, submitted settles to confirmed (Purchased log indexed, or success receipt at the launch slot's confirmation depth), reverted (receipt status 0x0), failed (the hash is another transaction), or expired (no receipt after the deadline plus grace). cancelled and unknown are not emitted."
+                        },
+                        "launchId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "roundIndex": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 65535,
+                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "quoteAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "usd1Amount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "expectedTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "quote() at the snapshot block."
+                        },
+                        "minTokenAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "walletCumulativeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "eligibilityProof": {
+                          "type": "array",
+                          "maxItems": 64,
+                          "items": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          }
+                        },
+                        "configVersion": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "stateTupleDigest": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "snapshotBlockNumber": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,19})$"
+                        },
+                        "snapshotBlockHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "payloadDigest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "unsignedTransaction": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["chainId", "to", "data", "value"],
+                          "properties": {
+                            "chainId": { "type": "integer", "enum": [56, 97] },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x([0-9a-f]{2})*$"
+                            },
+                            "value": { "type": "string", "enum": ["0x0"] },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "description": "Optional (Decision 0077): the signing wallet; the device passes the whole object to eth_sendTransaction."
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "projectAssetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "description": "Optional (0077): the project token's asset ID on the launch chain."
+                        },
+                        "saleId": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "walletRoundCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getRounds walletRoundCapUsd1 of this round at snapshotBlockNumber, for display before signing."
+                        },
+                        "walletProjectCapUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (0077/0088): getSaleConfig walletProjectCapUsd1 at snapshotBlockNumber, for display before signing."
+                        },
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ],
+                          "description": "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it or the reconcile lane read a successful receipt at the launch slot's confirmation depth (Decision 0080)."
+                        },
+                        "revertReason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Optional (Decision 0080): present only when state is reverted. The decoded revert reason when a read surface yields one; null today (public endpoints expose no trace)."
+                        },
+                        "simulation": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["passed", "reverted", "unavailable"]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): eth_call + estimateGas of the exact buy() payload at prepare."
+                        },
+                        "policy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "configVersion",
+                            "canaryMaxUsd",
+                            "valueUsd",
+                            "priceSource"
+                          ],
+                          "properties": {
+                            "configVersion": {
+                              "type": "string",
+                              "enum": ["bscWriteCanaryV1"]
+                            },
+                            "canaryMaxUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "valueUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                            },
+                            "priceSource": {
+                              "type": "string",
+                              "description": "USD1 is valued at exactly 1 USD for the canary.",
+                              "enum": ["usd1_par"]
+                            }
+                          },
+                          "description": "Optional (0077): the Decision 0065 canary facts this Intent was admitted under."
+                        },
+                        "signing": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["mode", "allowed", "reasonCode"],
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": ["device_eth_send_transaction"]
+                            },
+                            "allowed": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Optional (0077): true only in awaiting_signature and before expiresAt."
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                    },
                     "category": {
                       "type": "string",
                       "enum": [

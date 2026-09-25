@@ -415,6 +415,31 @@ const decimalAmountSchema = {
 } as const;
 
 /**
+ * USD1 `balanceOf` and `allowance(wallet, LAUNCH_CONTRACT_ADDRESS)` read at
+ * one block (Decision 0077, shape frozen by 0088). Shared by
+ * `launchChain.usd1` and the root `launchUsd1` (Decision 0081).
+ */
+const launchUsd1BalanceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["balance", "allowance"],
+  properties: {
+    balance: {
+      type: "string",
+      pattern: "^(0|[1-9][0-9]{0,77})$",
+      description:
+        "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals).",
+    },
+    allowance: {
+      type: "string",
+      pattern: "^(0|[1-9][0-9]{0,77})$",
+      description:
+        "USD1 allowance(wallet, LAUNCH_CONTRACT_ADDRESS), base units: what buy() may pull.",
+    },
+  },
+} as const;
+
+/**
  * The wallet's native coin on the launch chain slot (Decision 0038): one
  * balance at one block, with the primary gas-reserve rule. No registry,
  * pending, valuation, or cross-check facts exist for this slot.
@@ -428,23 +453,7 @@ const launchChainBalanceSchema = {
     availability: { type: "string", enum: ["available", "unavailable"] },
     reasonCode: nullableReasonCodeSchema,
     usd1: {
-      type: "object",
-      additionalProperties: false,
-      required: ["balance", "allowance"],
-      properties: {
-        balance: {
-          type: "string",
-          pattern: "^(0|[1-9][0-9]{0,77})$",
-          description:
-            "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals).",
-        },
-        allowance: {
-          type: "string",
-          pattern: "^(0|[1-9][0-9]{0,77})$",
-          description:
-            "USD1 allowance(wallet, LAUNCH_CONTRACT_ADDRESS), base units: what buy() may pull.",
-        },
-      },
+      ...launchUsd1BalanceSchema,
       description:
         "Optional (Decision 0077, shape frozen by 0088): present only when LAUNCH_USD1_ADDRESS is configured AND both values were read at the same block; absent otherwise (never null, never a guess).",
     },
@@ -708,6 +717,11 @@ export const walletBalancesResourceSchema = {
       ],
     },
     launchChain: launchChainBalanceSchema,
+    launchUsd1: {
+      ...launchUsd1BalanceSchema,
+      description:
+        "Optional (Decision 0081): USD1 balance and allowance to the Launch contract while the launch slot is shared with the primary slot (LAUNCH_CHAIN_ID=56, so launchChain is absent) and the four Launch contract keys are configured, both read at the same block. Absent when the slot is separate (read launchChain.usd1), the contract is not configured, or the read failed (never null, never a guess).",
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

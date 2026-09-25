@@ -249,13 +249,17 @@ export function chainRepositoryFake(
       intents.set(input.idempotencyKey, { sha: input.requestSha256, record });
       return { created: true, intent: record };
     },
+    // Owner-scoped like the PostgreSQL repository: another account's
+    // Intent is simply not found (Decision 0081).
     getIntent: (input: {
+      readonly ownerUserId: string;
       readonly intentId: string;
       readonly launchId: string;
     }) =>
       Promise.resolve(
         [...intents.values()].find(
           (entry) =>
+            entry.record.ownerUserId === input.ownerUserId &&
             entry.record.intentId === input.intentId &&
             entry.record.launchId === input.launchId,
         )?.record ?? null,

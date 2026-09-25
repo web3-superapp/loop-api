@@ -513,6 +513,40 @@ export function registerV2LaunchRoutes(
   );
 
   app.get(
+    "/v2/launch/:launchId/intents/:launchIntentId",
+    {
+      schema: {
+        operationId: "getV2LaunchIntent",
+        summary: "Get one Launch purchase Intent",
+        description:
+          "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launchIntentParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: launchIntentResourceSchema, ...launchReadErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as {
+        readonly launchId: string;
+        readonly launchIntentId: string;
+      };
+      const resource = await service.getIntent({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        launchId: params.launchId,
+        launchIntentId: params.launchIntentId,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
     "/v2/launch/stake",
     {
       schema: {
