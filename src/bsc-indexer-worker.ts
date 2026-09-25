@@ -17,6 +17,7 @@ import {
   defaultBscWalletTopicChunkSize,
   summarizeRpcError,
   type BscApprovalLog,
+  type BscLogQueryLimits,
   type BscReadClient,
   type BscRpcErrorSummary,
   type BscTransferLog,
@@ -83,6 +84,14 @@ export interface BscIndexerInfrastructureBackoff {
   readonly rpcCode: number | null;
   readonly rpcUrlHost: string | null;
   readonly method: string | null;
+  /**
+   * The shared read client's learned `eth_getLogs` limits at the time of the
+   * event (Decision 0079); absent when the client does not report them.
+   */
+  readonly learnedAddressLimit?: number;
+  readonly learnedTopicGroupLimit?: number;
+  readonly learnedRangeLimit?: number;
+  readonly relaxAfterCleanReads?: number;
 }
 
 /**
@@ -99,6 +108,42 @@ export interface BscIndexerLaneAvailabilityEvent {
   readonly rpcCode: number | null;
   readonly rpcUrlHost: string | null;
   readonly method: string | null;
+  /** Learned log-query limits, as on the backoff event (Decision 0079). */
+  readonly learnedAddressLimit?: number;
+  readonly learnedTopicGroupLimit?: number;
+  readonly learnedRangeLimit?: number;
+  readonly relaxAfterCleanReads?: number;
+}
+
+/**
+ * The read client's learned log-query limits (Decision 0079), or `null`
+ * when it does not report them. Never throws: it runs inside a lane's catch.
+ */
+export function logQueryLimitsOf(
+  client: BscReadClient,
+): BscLogQueryLimits | null {
+  try {
+    return client.logQueryLimits?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function limitFields(limits: BscLogQueryLimits | null | undefined): {
+  readonly learnedAddressLimit?: number;
+  readonly learnedTopicGroupLimit?: number;
+  readonly learnedRangeLimit?: number;
+  readonly relaxAfterCleanReads?: number;
+} {
+  if (limits === null || limits === undefined) {
+    return {};
+  }
+  return {
+    learnedAddressLimit: limits.learnedAddressLimit,
+    learnedTopicGroupLimit: limits.learnedTopicGroupLimit,
+    learnedRangeLimit: limits.learnedRangeLimit,
+    relaxAfterCleanReads: limits.relaxAfterCleanReads,
+  };
 }
 
 const emptySummary: BscRpcErrorSummary = Object.freeze({
@@ -114,6 +159,7 @@ export function infrastructureBackoffEvent(
   error: unknown,
   consecutiveFailureCount: number,
   retryDelayMs: number,
+  limits?: BscLogQueryLimits | null,
 ): BscIndexerInfrastructureBackoff {
   // The classification runs inside the lane's catch: a hostile error object
   // must never turn the backoff itself into a thrown TypeError, which would
@@ -130,6 +176,7 @@ export function infrastructureBackoffEvent(
     consecutiveFailureCount,
     retryDelayMs,
     ...summary,
+    ...limitFields(limits),
   });
 }
 
@@ -173,6 +220,7 @@ export function laneAvailabilityEvent(
   state: "unavailable" | "recovered",
   reasonCode: string | null,
   rpcError: BscRpcErrorSummary | undefined,
+  limits?: BscLogQueryLimits | null,
 ): BscIndexerLaneAvailabilityEvent {
   return Object.freeze({
     lane,
@@ -183,6 +231,7 @@ export function laneAvailabilityEvent(
     rpcCode: rpcError?.rpcCode ?? null,
     rpcUrlHost: rpcError?.rpcUrlHost ?? null,
     method: rpcError?.method ?? null,
+    ...limitFields(limits),
   });
 }
 
@@ -640,6 +689,7 @@ export function createBscIndexerWorker(
                     "unavailable",
                     result.reasonCode,
                     result.rpcError,
+                    logQueryLimitsOf(options.readClient),
                   ),
                 );
               }
@@ -661,6 +711,7 @@ export function createBscIndexerWorker(
                   "recovered",
                   null,
                   undefined,
+                  logQueryLimitsOf(options.readClient),
                 ),
               );
             }
@@ -679,6 +730,7 @@ export function createBscIndexerWorker(
                 error,
                 consecutiveFailures,
                 delay,
+                logQueryLimitsOf(options.readClient),
               ),
             );
             await waitFor(delay, signal);

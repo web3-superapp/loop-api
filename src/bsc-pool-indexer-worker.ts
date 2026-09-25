@@ -6,6 +6,7 @@ import {
   infrastructureBackoffEvent,
   isRefusalReasonCode,
   laneAvailabilityEvent,
+  logQueryLimitsOf,
   retryDelayMs,
   unavailableDelayMs,
   unavailableReasonFor,
@@ -341,6 +342,7 @@ export function createBscPoolIndexerWorker(
                     "unavailable",
                     result.reasonCode,
                     result.rpcError,
+                    logQueryLimitsOf(options.readClient),
                   ),
                 );
               }
@@ -362,6 +364,7 @@ export function createBscPoolIndexerWorker(
                   "recovered",
                   null,
                   undefined,
+                  logQueryLimitsOf(options.readClient),
                 ),
               );
             }
@@ -380,6 +383,7 @@ export function createBscPoolIndexerWorker(
                 error,
                 consecutiveFailures,
                 delay,
+                logQueryLimitsOf(options.readClient),
               ),
             );
             await waitFor(delay, signal);

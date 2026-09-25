@@ -411,6 +411,52 @@ describe("BSC pool_event indexer lane — Provider refusals (Decision 0068)", ()
     expect(storage.current()).toBeNull();
   });
 
+  it("adds the shared read client's learned log-query limits to the backoff event (Decision 0079)", async () => {
+    const storage = repositoryFake();
+    const events: BscIndexerInfrastructureBackoff[] = [];
+    const controller = new AbortController();
+    const worker = createBscPoolIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      readClient: {
+        ...readClientFake({ head: 100n }),
+        readPoolEventLogs: () => Promise.reject(requestBlocked()),
+        logQueryLimits: () => ({
+          learnedAddressLimit: 1,
+          learnedTopicGroupLimit: 100,
+          learnedRangeLimit: 500,
+          relaxAfterCleanReads: 8,
+        }),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+
+    await worker.run(controller.signal);
+
+    expect(events).toEqual([
+      {
+        reasonCode: "bsc_indexer_unavailable",
+        lane: "pool_event",
+        consecutiveFailureCount: 1,
+        retryDelayMs: 1_000,
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+        learnedAddressLimit: 1,
+        learnedTopicGroupLimit: 100,
+        learnedRangeLimit: 500,
+        relaxAfterCleanReads: 8,
+      },
+    ]);
+  });
+
   it("advances through a real 403 HttpRequestError on multi-address eth_getLogs by reading one pool at a time", async () => {
     const storage = repositoryFake();
     const accepted: string[][] = [];

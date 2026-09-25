@@ -1,4 +1,9 @@
-import { custom, HttpRequestError, numberToHex } from "viem";
+import {
+  custom,
+  HttpRequestError,
+  LimitExceededRpcError,
+  numberToHex,
+} from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -699,6 +704,98 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
       lastBlockNumber: "100",
       lastBlockHash: blockHash(100n),
     });
+  });
+
+  it("backs off on a throttle without narrowing when the other endpoint refuses every request, and logs the learned limits (Decision 0079)", async () => {
+    const storage = repositoryFake();
+    const events: BscIndexerInfrastructureBackoff[] = [];
+    const controller = new AbortController();
+    let throttledLogReads = 0;
+    let refusedLogReads = 0;
+    const readClient = createBscReadClient({
+      config: {
+        chainId: "eip155:56",
+        chainReference: 56,
+        rpcUrls: ["https://rpc-a.example/", "https://rpc-b.example/"],
+        confirmations: 15,
+        reorgDepthBlocks: 64,
+        logAddressChunkSize: 8,
+      },
+      transportFactory: (url) =>
+        custom({
+          request: (request: {
+            readonly method: string;
+            readonly params?: unknown;
+          }): Promise<unknown> => {
+            switch (request.method) {
+              case "eth_chainId": {
+                return Promise.resolve("0x38");
+              }
+              case "eth_getBlockByNumber": {
+                const [tag] = request.params as readonly [string];
+                return Promise.resolve(
+                  rpcBlock(tag === "latest" ? 100n : BigInt(tag)),
+                );
+              }
+              case "eth_getLogs": {
+                if (url === "https://rpc-a.example/") {
+                  throttledLogReads += 1;
+                  return Promise.reject(
+                    new HttpRequestError({
+                      status: 429,
+                      url: "https://bsc-rpc.publicnode.com/",
+                      details: "Too Many Requests",
+                    }),
+                  );
+                }
+                refusedLogReads += 1;
+                return Promise.reject(
+                  new LimitExceededRpcError(new Error("limit exceeded")),
+                );
+              }
+              default: {
+                return Promise.reject(new Error(`unmocked ${request.method}`));
+              }
+            }
+          },
+        }),
+    });
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake([wbnbAsset, cakeAsset]),
+      walletSet: walletSetFake(),
+      readClient,
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+
+    await worker.run(controller.signal);
+
+    // One request, one attempt per endpoint, no split.
+    expect(throttledLogReads).toBe(1);
+    expect(refusedLogReads).toBe(1);
+    expect(events).toEqual([
+      {
+        reasonCode: "bsc_indexer_unavailable",
+        lane: "erc20_transfer",
+        consecutiveFailureCount: 1,
+        retryDelayMs: 1_000,
+        errorClass: "HttpRequestError",
+        rpcStatus: 429,
+        rpcCode: null,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: null,
+        learnedAddressLimit: 8,
+        learnedTopicGroupLimit: 200,
+        learnedRangeLimit: 2_000,
+        relaxAfterCleanReads: 4,
+      },
+    ]);
+    expect(storage.current()).toBeNull();
   });
 
   it("idles as unavailable, commits nothing, backs off exponentially, and reports the transition once when every split is still refused", async () => {

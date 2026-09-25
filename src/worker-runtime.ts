@@ -76,6 +76,7 @@ import {
   asChainCallClient,
   createBscReadClient,
   createUnavailableBscReadClient,
+  type BscLogQueryLimitsResetEvent,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
 import {
@@ -276,9 +277,26 @@ export async function runReconciliationWorker(
     options.createMiningSnapshotWorker ?? createMiningSnapshotWorker;
   const sparklineWarmWorkerFactory =
     options.createMarketSparklineWarmWorker ?? createMarketSparklineWarmWorker;
+  // Decision 0079: a read that ran out of budget resets the client's learned
+  // log-query limits; the reset is one warn line with the numbers only.
+  const onLogQueryLimitsReset = (event: BscLogQueryLimitsResetEvent): void => {
+    options.logger.warn(
+      {
+        ...logFields(),
+        reasonCode: event.reasonCode,
+        detailReasonCode: event.trigger,
+        ...event.after,
+        previousAddressLimit: event.before.learnedAddressLimit,
+        previousTopicGroupLimit: event.before.learnedTopicGroupLimit,
+        previousRangeLimit: event.before.learnedRangeLimit,
+      },
+      "LOOP BSC log-query limits reset to their configured values",
+    );
+  };
   const readClientFactory =
     options.createBscReadClient ??
-    ((config): BscReadClient => createBscReadClient({ config }));
+    ((config): BscReadClient =>
+      createBscReadClient({ config, onLogQueryLimitsReset }));
   const communityChannelSyncWorkerFactory =
     options.createCommunityChannelSyncWorker ??
     createCommunityChannelSyncWorker;
@@ -391,7 +409,15 @@ export async function runReconciliationWorker(
         return;
       }
       options.logger.info(
-        { ...logFields(), lane: event.lane, state: event.state },
+        {
+          ...logFields(),
+          lane: event.lane,
+          state: event.state,
+          learnedAddressLimit: event.learnedAddressLimit,
+          learnedTopicGroupLimit: event.learnedTopicGroupLimit,
+          learnedRangeLimit: event.learnedRangeLimit,
+          relaxAfterCleanReads: event.relaxAfterCleanReads,
+        },
         "LOOP BSC indexer lane recovered",
       );
     };
@@ -474,7 +500,10 @@ export async function runReconciliationWorker(
                   reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
                   reasonCode: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
                 })
-              : createBscReadClient({ config: launchChainConfig });
+              : createBscReadClient({
+                  config: launchChainConfig,
+                  onLogQueryLimitsReset,
+                });
       const adapter = createLaunchContractAdapter({
         contract: options.config.launchContract,
         chain: launchChainConfig,

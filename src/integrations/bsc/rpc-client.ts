@@ -293,6 +293,11 @@ export interface BscReadClient {
     query: BscTransferLogQuery,
   ): Promise<readonly BscApprovalLog[]>;
   probeEndpoints(): Promise<readonly BscEndpointHealth[]>;
+  /**
+   * Current learned `eth_getLogs` limits (Decision 0079), for lane logs.
+   * Absent on clients that never read logs (the unavailable client, fakes).
+   */
+  logQueryLimits?(): BscLogQueryLimits;
 }
 
 /**
@@ -391,11 +396,63 @@ export const defaultBscLogAddressChunkSize = 8;
 export const maximumBscLogAddressChunkSize = 100;
 /**
  * Consecutive refusal-free segment reads before learned limits are probed one
- * step wider (Decision 0078). One indexer tick issues about three segment
- * reads, so a Provider that keeps its cap is re-probed about once every five
- * ticks instead of on every tick.
+ * step wider (Decision 0079, amending 0078's 16). One indexer tick issues
+ * about three segment reads, so a narrowed client starts re-widening after
+ * about two ticks. A probe that is refused on the very next read is rolled
+ * back and doubles the streak needed for the next probe, up to
+ * `bscLogLimitRelaxMaximumCleanReads`; a probe that holds restores the base
+ * streak. A Provider that keeps its cap therefore costs one refusal per
+ * 4, 8, 16, then 32 clean reads instead of oscillating.
  */
-export const bscLogLimitRelaxAfterCleanReads = 16;
+export const bscLogLimitRelaxAfterCleanReads = 4;
+export const bscLogLimitRelaxMaximumCleanReads = 32;
+/**
+ * Floors of the learned limits (Decision 0079). A shape refusal whose text
+ * does not name the dimension may narrow the request in flight below its
+ * floor, but the value kept on the client (and reused by every later read)
+ * stops at the floor. Only a refusal that names the dimension (`address`,
+ * `topic`, `block range`, ...) lowers the kept value below it. At the floors
+ * today's wallet-scoped segment (11 tokens, 360 wallets in two topic arrays,
+ * 2,000 blocks) is 11 × 4 × 4 = 176 requests per side, inside the 512-read
+ * budget, so a client pinned to its floors still finishes a segment.
+ */
+export const bscLogAddressLimitFloor = 1;
+export const bscLogTopicGroupLimitFloor = 100;
+export const bscLogRangeLimitFloor = 500n;
+/**
+ * Warn-level reason code emitted when the learned limits are reset to their
+ * configured starting values after `BSC_LOG_QUERY_BUDGET_EXHAUSTED`
+ * (Decision 0079), so the next segment probes from the top instead of
+ * grinding at the narrowest shape.
+ */
+export const bscLogLimitsResetReasonCode = "BSC_LOG_LIMITS_RESET";
+
+/**
+ * The client's current learned `eth_getLogs` limits (Decision 0079): numbers
+ * only, safe to log. `learnedTopicGroupLimit` is capped at the caller's wallet
+ * topic chunk (1,000 before any wallet-scoped read).
+ */
+export interface BscLogQueryLimits {
+  readonly learnedAddressLimit: number;
+  readonly learnedTopicGroupLimit: number;
+  readonly learnedRangeLimit: number;
+  readonly relaxAfterCleanReads: number;
+}
+
+/**
+ * Detail code of a `BSC_LOG_LIMITS_RESET` caused by a throttle that aborted a
+ * read while the learned limits were narrowed (Decision 0079). Log-only.
+ */
+export const bscLogQueryThrottledReasonCode = "BSC_LOG_QUERY_THROTTLED";
+
+export interface BscLogQueryLimitsResetEvent {
+  readonly reasonCode: typeof bscLogLimitsResetReasonCode;
+  readonly trigger:
+    | typeof bscLogQueryBudgetExhaustedReasonCode
+    | typeof bscLogQueryThrottledReasonCode;
+  readonly before: BscLogQueryLimits;
+  readonly after: BscLogQueryLimits;
+}
 /**
  * Upper bound on client-side `eth_getLogs` reads one segment may issue while
  * it splits (each read is at most one HTTP attempt per endpoint: the log lane
@@ -474,6 +531,11 @@ export interface CreateBscReadClientOptions {
   readonly transportFactory?: BscTransportFactory;
   readonly now?: () => Date;
   readonly monotonicMs?: () => number;
+  /**
+   * Called (synchronously, errors swallowed) when the learned log-query
+   * limits are reset after a read ran out of budget (Decision 0079).
+   */
+  readonly onLogQueryLimitsReset?: (event: BscLogQueryLimitsResetEvent) => void;
 }
 
 type ViemClient = PublicClient<Transport, Chain>;
@@ -995,22 +1057,45 @@ export function createBscReadClient(
   let verificationInFlight: Promise<ChainVerificationState> | null = null;
   /**
    * Request shape the endpoints are known to accept, learned from shape
-   * refusals and kept on this client across reads (and indexer ticks) so the
-   * next segment is issued at the known-good shape instead of rediscovering
-   * it. After `bscLogLimitRelaxAfterCleanReads` consecutive refusal-free
-   * reads every learned limit is probed one doubling wider, capped at its
-   * ceiling (2,000 blocks, the configured address chunk, the caller's topic
-   * chunk), so a Provider that relaxes its cap is not pinned forever and one
-   * that keeps it costs one refusal per probe rather than one per tick
-   * (Decision 0078).
+   * refusals and kept on this client across reads (and indexer ticks, and
+   * both log lanes that share the client) so the next segment is issued at
+   * the known-good shape instead of rediscovering it (Decision 0078).
+   * Decision 0079 bounds it: an unhinted refusal never keeps a value below
+   * the dimension's floor; after `relaxAfterCleanReads` consecutive
+   * refusal-free reads every learned limit is probed one doubling wider,
+   * capped at its ceiling (2,000 blocks, the configured address chunk, the
+   * caller's topic chunk); and a read that runs out of budget resets every
+   * learned limit to its ceiling.
    */
   let learnedRangeLimit: bigint = bscMaximumLogRange;
   let learnedAddressLimit: number = addressChunkCeiling;
   /** Same discipline for wallet topic OR arrays (Decision 0075). */
-  let learnedTopicLimit: number = Number.MAX_SAFE_INTEGER;
+  let topicChunkCeiling: number = maximumBscWalletTopicChunkSize;
+  let learnedTopicLimit: number = topicChunkCeiling;
   let consecutiveCleanReads = 0;
+  let relaxAfterCleanReads = bscLogLimitRelaxAfterCleanReads;
+  /** Limits before the last relaxation, until the next read confirms it. */
+  let relaxProbe: {
+    readonly range: bigint;
+    readonly addresses: number;
+    readonly topics: number;
+  } | null = null;
+
+  function currentLogQueryLimits(): BscLogQueryLimits {
+    return Object.freeze({
+      learnedAddressLimit,
+      learnedTopicGroupLimit: Math.min(learnedTopicLimit, topicChunkCeiling),
+      learnedRangeLimit: Number(learnedRangeLimit),
+      relaxAfterCleanReads,
+    });
+  }
 
   function relaxLearnedLimits(): void {
+    const before = {
+      range: learnedRangeLimit,
+      addresses: learnedAddressLimit,
+      topics: learnedTopicLimit,
+    };
     const relaxedRange = learnedRangeLimit * 2n;
     learnedRangeLimit =
       relaxedRange < bscMaximumLogRange ? relaxedRange : bscMaximumLogRange;
@@ -1018,10 +1103,91 @@ export function createBscReadClient(
       addressChunkCeiling,
       learnedAddressLimit * 2,
     );
-    learnedTopicLimit =
-      learnedTopicLimit >= maximumBscWalletTopicChunkSize
-        ? Number.MAX_SAFE_INTEGER
-        : learnedTopicLimit * 2;
+    learnedTopicLimit = Math.min(
+      Math.max(topicChunkCeiling, learnedTopicLimit),
+      learnedTopicLimit * 2,
+    );
+    const widened =
+      learnedRangeLimit !== before.range ||
+      learnedAddressLimit !== before.addresses ||
+      Math.min(learnedTopicLimit, topicChunkCeiling) !==
+        Math.min(before.topics, topicChunkCeiling);
+    relaxProbe = widened ? before : null;
+  }
+
+  /**
+   * Books one finished segment read (Decision 0079). A refused read ends the
+   * clean streak; if it is the first read after a relaxation, the widening
+   * is rolled back and the next probe waits twice as long (at most
+   * `bscLogLimitRelaxMaximumCleanReads`). A clean read confirms a pending
+   * probe (the base streak is restored) and extends the streak.
+   */
+  function recordSegmentRead(refused: boolean): void {
+    const probe = relaxProbe;
+    relaxProbe = null;
+    if (refused) {
+      consecutiveCleanReads = 0;
+      if (probe !== null) {
+        learnedRangeLimit =
+          probe.range < learnedRangeLimit ? probe.range : learnedRangeLimit;
+        learnedAddressLimit = Math.min(learnedAddressLimit, probe.addresses);
+        learnedTopicLimit = Math.min(learnedTopicLimit, probe.topics);
+        relaxAfterCleanReads = Math.min(
+          bscLogLimitRelaxMaximumCleanReads,
+          relaxAfterCleanReads * 2,
+        );
+      }
+      return;
+    }
+    if (probe !== null) {
+      relaxAfterCleanReads = bscLogLimitRelaxAfterCleanReads;
+    }
+    consecutiveCleanReads += 1;
+    if (consecutiveCleanReads >= relaxAfterCleanReads) {
+      consecutiveCleanReads = 0;
+      relaxLearnedLimits();
+    }
+  }
+
+  /** Whether any learned limit is below its ceiling. */
+  function learnedLimitsNarrowed(): boolean {
+    return (
+      learnedAddressLimit < addressChunkCeiling ||
+      learnedTopicLimit < topicChunkCeiling ||
+      learnedRangeLimit < bscMaximumLogRange
+    );
+  }
+
+  /**
+   * Decision 0079: the learned shape is evidently not one the endpoints serve
+   * within their budget (`BSC_LOG_QUERY_BUDGET_EXHAUSTED`) or their rate (a
+   * throttle aborted a read while narrowed: a narrow shape multiplies the
+   * requests of every segment), so every limit returns to its configured
+   * starting value and the next segment probes from the top. A real cap is
+   * re-learned from one refusal per halving.
+   */
+  function resetLearnedLimits(
+    trigger: BscLogQueryLimitsResetEvent["trigger"],
+  ): void {
+    const before = currentLogQueryLimits();
+    learnedRangeLimit = bscMaximumLogRange;
+    learnedAddressLimit = addressChunkCeiling;
+    learnedTopicLimit = topicChunkCeiling;
+    consecutiveCleanReads = 0;
+    relaxAfterCleanReads = bscLogLimitRelaxAfterCleanReads;
+    relaxProbe = null;
+    try {
+      options.onLogQueryLimitsReset?.(
+        Object.freeze({
+          reasonCode: bscLogLimitsResetReasonCode,
+          trigger,
+          before,
+          after: currentLogQueryLimits(),
+        }),
+      );
+    } catch {
+      // Observability must never turn a classified failure into another.
+    }
   }
 
   async function probeVerification(): Promise<ChainVerificationState> {
@@ -1064,17 +1230,21 @@ export function createBscReadClient(
 
   /**
    * Reads one segment, narrowing the request whenever the Provider refuses
-   * its shape (Decision 0068, order Decision 0078). Before a request is sent
-   * it is split to the learned limits (addresses, then wallet topics, then
-   * block range). A shape refusal — from the endpoint whose error viem
-   * rethrows or from any earlier endpoint in the fallback list — halves the
-   * dimension the refusal text names, or, when it names none, the address
-   * list first, then the wallet topic OR array (Decision 0075), then the
-   * block range. The walk is iterative and bounded: the whole read fails
-   * closed — never a partial page — when a single-address, single-wallet,
-   * single-block request is still refused or when the read budget runs out.
-   * A throttle refusal, a timeout, or a transport failure propagates
-   * unchanged after the first occurrence.
+   * its shape (Decision 0068, order Decision 0078, floors Decision 0079).
+   * Before a request is sent it is split to the effective limits (addresses,
+   * then wallet topics, then block range): the learned limit, or tighter if
+   * this read already narrowed below a floor. A shape refusal — from the
+   * endpoint whose error viem rethrows or from any earlier endpoint in the
+   * fallback list — halves the dimension the refusal text names, or, when it
+   * names none, the first dimension (addresses, topics, range) still above
+   * its floor, and only then one below it. The walk is iterative and
+   * bounded: the whole read fails closed — never a partial page — when a
+   * single-address, single-wallet, single-block request is still refused or
+   * when the read budget runs out (which also resets the learned limits).
+   * A throttle from any endpoint of the request wins over a shape refusal
+   * from another (Decision 0079) and propagates unchanged (resetting the
+   * learned limits first when they are narrowed), as does a
+   * timeout or a transport failure with no shape refusal beside it.
    * Collected logs are returned in block order regardless of split order.
    */
   async function readLogRangeWith<
@@ -1088,7 +1258,11 @@ export function createBscReadClient(
     fromBlock: bigint,
     toBlock: bigint,
     topicGroups: readonly (readonly Address[])[] | null = null,
+    topicChunk: number | null = null,
   ): Promise<T[]> {
+    if (topicChunk !== null) {
+      topicChunkCeiling = topicChunk;
+    }
     const pending: LogRangeRequest[] =
       topicGroups === null
         ? [{ from: fromBlock, to: toBlock, addresses, topics: null }]
@@ -1098,6 +1272,13 @@ export function createBscReadClient(
             addresses,
             topics,
           }));
+    /**
+     * Narrowing below a floor that no refusal text justified: it applies to
+     * the rest of this read only and is never written back (Decision 0079).
+     */
+    let readAddressLimit = Number.MAX_SAFE_INTEGER;
+    let readTopicLimit = Number.MAX_SAFE_INTEGER;
+    let readRangeLimit = bscMaximumLogRange;
     const collected: T[] = [];
     let requestCount = 0;
     let refused = false;
@@ -1106,18 +1287,19 @@ export function createBscReadClient(
       if (request === undefined) {
         break;
       }
-      if (request.addresses.length > learnedAddressLimit) {
-        pending.unshift(...splitAddresses(request, learnedAddressLimit));
+      const addressLimit = Math.min(learnedAddressLimit, readAddressLimit);
+      if (request.addresses.length > addressLimit) {
+        pending.unshift(...splitAddresses(request, addressLimit));
         continue;
       }
-      if (
-        request.topics !== null &&
-        request.topics.length > learnedTopicLimit
-      ) {
-        pending.unshift(...splitTopics(request, learnedTopicLimit));
+      const topicLimit = Math.min(learnedTopicLimit, readTopicLimit);
+      if (request.topics !== null && request.topics.length > topicLimit) {
+        pending.unshift(...splitTopics(request, topicLimit));
         continue;
       }
-      if (request.to - request.from + 1n > learnedRangeLimit) {
+      const rangeLimit =
+        readRangeLimit < learnedRangeLimit ? readRangeLimit : learnedRangeLimit;
+      if (request.to - request.from + 1n > rangeLimit) {
         const middle = request.from + (request.to - request.from) / 2n;
         pending.unshift(
           { ...request, to: middle },
@@ -1126,6 +1308,7 @@ export function createBscReadClient(
         continue;
       }
       if (requestCount >= bscMaximumLogRequestsPerSegment) {
+        resetLearnedLimits(bscLogQueryBudgetExhaustedReasonCode);
         throw new BscReadUnavailableError(bscLogQueryBudgetExhaustedReasonCode);
       }
       requestCount += 1;
@@ -1135,17 +1318,30 @@ export function createBscReadClient(
           ...(await logEndpointErrors.run(endpointErrors, () => read(request))),
         );
       } catch (error) {
-        const shapeRefusals = [...endpointErrors, error].filter((candidate) =>
+        const candidates = [...endpointErrors, error];
+        // A rate objection anywhere in the request is temporary; narrowing
+        // would only spend the quota faster (Decision 0079).
+        const throttle = candidates.find(
+          (candidate) => classifyLogQueryError(candidate) === "throttle",
+        );
+        if (throttle !== undefined) {
+          if (learnedLimitsNarrowed()) {
+            resetLearnedLimits(bscLogQueryThrottledReasonCode);
+          }
+          // Recorded endpoint errors are what the transports threw: rethrow
+          // the rate objection itself so the lane logs its status and host.
+          // eslint-disable-next-line @typescript-eslint/only-throw-error
+          throw throttle;
+        }
+        const shapeRefusals = candidates.filter((candidate) =>
           isLogQueryRejection(candidate),
         );
         if (shapeRefusals.length === 0) {
           throw error;
         }
         refused = true;
-        const dimension = narrowingDimension(
-          request,
-          hintedDimensions(shapeRefusals),
-        );
+        const hinted = hintedDimensions(shapeRefusals);
+        const dimension = narrowingDimension(request, hinted);
         if (dimension === null) {
           const refusal = isLogQueryRejection(error)
             ? error
@@ -1155,40 +1351,45 @@ export function createBscReadClient(
             rpcError: summarizeRpcError(refusal),
           });
         }
+        const named = hinted.has(dimension);
         switch (dimension) {
           case "addresses": {
+            const half = Math.ceil(request.addresses.length / 2);
+            readAddressLimit = Math.min(readAddressLimit, half);
             learnedAddressLimit = Math.min(
               learnedAddressLimit,
-              Math.ceil(request.addresses.length / 2),
+              named ? half : Math.max(half, bscLogAddressLimitFloor),
             );
             break;
           }
           case "topics": {
+            const half = Math.ceil((request.topics?.length ?? 1) / 2);
+            readTopicLimit = Math.min(readTopicLimit, half);
             learnedTopicLimit = Math.min(
               learnedTopicLimit,
-              Math.ceil((request.topics?.length ?? 1) / 2),
+              named ? half : Math.max(half, bscLogTopicGroupLimitFloor),
             );
             break;
           }
           case "range": {
             const half = (request.to - request.from + 2n) / 2n;
-            learnedRangeLimit =
-              half < learnedRangeLimit ? half : learnedRangeLimit;
+            if (half < readRangeLimit) {
+              readRangeLimit = half;
+            }
+            const kept =
+              named || half >= bscLogRangeLimitFloor
+                ? half
+                : bscLogRangeLimitFloor;
+            if (kept < learnedRangeLimit) {
+              learnedRangeLimit = kept;
+            }
             break;
           }
         }
         pending.unshift(request);
       }
     }
-    if (refused) {
-      consecutiveCleanReads = 0;
-    } else {
-      consecutiveCleanReads += 1;
-      if (consecutiveCleanReads >= bscLogLimitRelaxAfterCleanReads) {
-        consecutiveCleanReads = 0;
-        relaxLearnedLimits();
-      }
-    }
+    recordSegmentRead(refused);
     return collected.sort((left, right) => {
       const leftBlock = left.blockNumber ?? -1n;
       const rightBlock = right.blockNumber ?? -1n;
@@ -1202,28 +1403,49 @@ export function createBscReadClient(
   /**
    * The dimension to halve after a shape refusal: the first one in
    * `logQueryNarrowingOrder` the refusal names and the request can still
-   * narrow, else the first one it can narrow at all; `null` at the floor.
+   * narrow; else the first one still above its floor (Decision 0079); else
+   * the first one it can narrow at all; `null` at one address, one wallet,
+   * one block.
    */
   function narrowingDimension(
     request: LogRangeRequest,
     hinted: ReadonlySet<LogQueryDimension>,
   ): LogQueryDimension | null {
-    const narrowable = (dimension: LogQueryDimension): boolean => {
+    const size = (dimension: LogQueryDimension): bigint => {
       switch (dimension) {
         case "addresses": {
-          return request.addresses.length > 1;
+          return BigInt(request.addresses.length);
         }
         case "topics": {
-          return request.topics !== null && request.topics.length > 1;
+          return BigInt(request.topics?.length ?? 0);
         }
         case "range": {
-          return request.to - request.from + 1n > bscLogRangeSplitFloor;
+          return request.to - request.from + 1n;
         }
       }
     };
+    const floor = (dimension: LogQueryDimension): bigint => {
+      switch (dimension) {
+        case "addresses": {
+          return BigInt(bscLogAddressLimitFloor);
+        }
+        case "topics": {
+          return BigInt(bscLogTopicGroupLimitFloor);
+        }
+        case "range": {
+          return bscLogRangeLimitFloor;
+        }
+      }
+    };
+    const narrowable = (dimension: LogQueryDimension): boolean =>
+      size(dimension) > bscLogRangeSplitFloor;
     return (
       logQueryNarrowingOrder.find(
         (dimension) => hinted.has(dimension) && narrowable(dimension),
+      ) ??
+      logQueryNarrowingOrder.find(
+        (dimension) =>
+          narrowable(dimension) && size(dimension) > floor(dimension),
       ) ??
       logQueryNarrowingOrder.find((dimension) => narrowable(dimension)) ??
       null
@@ -1278,6 +1500,7 @@ export function createBscReadClient(
     ),
     verifyChain,
     currentVerification: (): ChainVerificationState => verification,
+    logQueryLimits: currentLogQueryLimits,
 
     async getHead(): Promise<BscChainHead> {
       await requireVerifiedChain();
@@ -1455,6 +1678,7 @@ export function createBscReadClient(
           query.fromBlock,
           query.toBlock,
           side === null ? null : walletGroups,
+          side === null ? null : (query.walletFilter?.topicChunkSize ?? null),
         );
       const decode = (
         logs: Awaited<ReturnType<typeof readSide>>,
@@ -1605,6 +1829,7 @@ export function createBscReadClient(
         query.fromBlock,
         query.toBlock,
         walletGroups,
+        query.walletFilter?.topicChunkSize ?? null,
       );
       return Object.freeze(
         logs.flatMap((log): BscApprovalLog[] => {

@@ -1,6 +1,6 @@
 # Decision 0078: A refused `eth_getLogs` is narrowed by the dimension the Provider caps, addresses first
 
-- Status: Accepted (S82b)
+- Status: Accepted (S82b); rulings 3 and 5 amended by Decision 0079
 - Date: 2026-09-25
 - Scope: `src/integrations/bsc/rpc-client.ts` (`readLogRangeWith`, the
   `eth_getLogs` transport lane), `src/config.ts` (one key,

@@ -1068,8 +1068,8 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       { from: 3_001n, to: 3_500n },
       { from: 3_501n, to: 4_000n },
     ]);
-    // One clean read does not relax the limit (Decision 0078): every read
-    // until the streak completes stays at the learned width, refusal-free.
+    // One clean read does not relax the limit (Decisions 0078, 0079): every
+    // read until the 4-read streak completes stays at the learned width.
     let nextFrom = 4_001n;
     for (
       let cleanReads = 1;
@@ -1093,6 +1093,12 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       toBlock: nextFrom + 1_999n,
     });
     expect(rejectedCount).toBe(learnedRejections + 1);
+    // The refused probe is rolled back and the next one waits twice as long
+    // (Decision 0079).
+    expect(client.logQueryLimits?.()).toMatchObject({
+      learnedRangeLimit: 500,
+      relaxAfterCleanReads: bscLogLimitRelaxAfterCleanReads * 2,
+    });
   });
 
   it("splits a 403 multi-address query by address once the range is a single block, and learns the group size once", async () => {
@@ -1278,6 +1284,12 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       reasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
     });
     expect(requestCount).toBe(bscMaximumLogRequestsPerSegment);
+    // The learned range was kept at its 500-block floor while the read went
+    // lower on its own; running out of budget resets it (Decision 0079).
+    expect(client.logQueryLimits?.()).toMatchObject({
+      learnedAddressLimit: 8,
+      learnedRangeLimit: 2_000,
+    });
   });
 });
 

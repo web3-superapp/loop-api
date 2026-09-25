@@ -33,6 +33,7 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker infrastructure retry scheduled"
   | "LOOP BSC indexer lane is unavailable"
   | "LOOP BSC indexer lane recovered"
+  | "LOOP BSC log-query limits reset to their configured values"
   | "LOOP launch_event lane skipped a fact"
   | "LOOP launch_event lane is idle"
   | "LOOP reconciliation worker failed to start"
@@ -90,6 +91,20 @@ export interface ReconciliationWorkerLogFields {
   readonly saleId?: string | null;
   readonly blockNumber?: string;
   readonly detailReasonCode?: string | null;
+  /**
+   * Decision 0079: the shared BSC read client's learned `eth_getLogs` limits
+   * (addresses per request, wallets per topic array, blocks per request) and
+   * the clean-read streak before the next widening probe; numbers only. On a
+   * `BSC_LOG_LIMITS_RESET` line the `previous*` fields are the values before
+   * the reset and the `learned*` fields the values after it.
+   */
+  readonly learnedAddressLimit?: number | undefined;
+  readonly learnedTopicGroupLimit?: number | undefined;
+  readonly learnedRangeLimit?: number | undefined;
+  readonly relaxAfterCleanReads?: number | undefined;
+  readonly previousAddressLimit?: number | undefined;
+  readonly previousTopicGroupLimit?: number | undefined;
+  readonly previousRangeLimit?: number | undefined;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -209,6 +224,26 @@ function sanitizeFields(
       ? fields.blockNumber
       : undefined;
   const detailReasonCode = safeCode(fields.detailReasonCode ?? undefined);
+  const limits = Object.fromEntries(
+    (
+      [
+        "learnedAddressLimit",
+        "learnedTopicGroupLimit",
+        "learnedRangeLimit",
+        "relaxAfterCleanReads",
+        "previousAddressLimit",
+        "previousTopicGroupLimit",
+        "previousRangeLimit",
+      ] as const
+    ).flatMap((key) => {
+      const value = fields[key];
+      return typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        value >= 0
+        ? [[key, value]]
+        : [];
+    }),
+  );
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -245,6 +280,7 @@ function sanitizeFields(
     ...(saleId === undefined ? {} : { saleId }),
     ...(blockNumber === undefined ? {} : { blockNumber }),
     ...(detailReasonCode === undefined ? {} : { detailReasonCode }),
+    ...limits,
   });
 }
 

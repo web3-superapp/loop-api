@@ -1,11 +1,23 @@
-import { custom, HttpRequestError, numberToHex, type Transport } from "viem";
+import {
+  custom,
+  HttpRequestError,
+  LimitExceededRpcError,
+  numberToHex,
+  type Transport,
+} from "viem";
 import { describe, expect, it } from "vitest";
 
 import type { BscChainConfig } from "../src/config.js";
 import {
+  bscLogAddressLimitFloor,
   bscLogLimitRelaxAfterCleanReads,
+  bscLogLimitRelaxMaximumCleanReads,
+  bscLogRangeLimitFloor,
+  bscLogTopicGroupLimitFloor,
+  bscMaximumLogRequestsPerSegment,
   createBscReadClient,
   defaultBscLogAddressChunkSize,
+  type BscLogQueryLimitsResetEvent,
   type BscReadClient,
 } from "../src/integrations/bsc/rpc-client.js";
 
@@ -175,13 +187,25 @@ function rawLog(log: ChainLog): unknown {
 
 interface EndpointPolicy {
   /** More token addresses than this: HTTP 403 / -32602 "Request blocked". */
-  readonly addressCap?: number;
+  readonly addressCap?: number | undefined;
   /** More sub-topics in one position than this: -32602 "too many topics". */
   readonly topicCap?: number;
   /** More blocks than this: -32602 "block range too large". */
   readonly rangeCap?: bigint;
   /** Every eth_getLogs is refused as a rate objection (HTTP 429). */
   readonly throttled?: boolean;
+  /** The first N eth_getLogs are refused with HTTP 429, then served. */
+  readonly throttleFirst?: number;
+  /** More blocks than this: -32005 "limit exceeded" (names no dimension). */
+  readonly unhintedRangeCap?: bigint;
+  /** Every eth_getLogs is refused with -32005 "limit exceeded" (bsc-dataseed). */
+  readonly limitExceeded?: boolean;
+  /**
+   * A switchable unhinted policy (-32005 "limit exceeded"): `floors` serves
+   * only requests at or under the learned-limit floors, `singleBlock` only
+   * one-block requests, `throttled` nothing (HTTP 429), `open` everything.
+   */
+  readonly mode?: { current: "floors" | "singleBlock" | "open" | "throttled" };
 }
 
 interface EndpointStats {
@@ -223,6 +247,61 @@ function fixtureEndpoint(policy: EndpointPolicy): {
         stats.refusals += 1;
         return Promise.reject(error);
       };
+      const limitExceeded = (): Promise<never> =>
+        refuse(new LimitExceededRpcError(new Error("limit exceeded")));
+      if (
+        policy.throttleFirst !== undefined &&
+        stats.logRequests <= policy.throttleFirst
+      ) {
+        return refuse(
+          new HttpRequestError({
+            status: 429,
+            url: "https://bsc-rpc.publicnode.com/",
+            details: '{"code":-32005,"message":"too many requests"}',
+          }),
+        );
+      }
+      if (policy.limitExceeded === true) {
+        return limitExceeded();
+      }
+      const span = BigInt(filter.toBlock) - BigInt(filter.fromBlock) + 1n;
+      if (
+        policy.unhintedRangeCap !== undefined &&
+        span > policy.unhintedRangeCap
+      ) {
+        return limitExceeded();
+      }
+      if (policy.mode?.current === "throttled") {
+        return refuse(
+          new HttpRequestError({
+            status: 429,
+            url: "https://bsc-rpc.publicnode.com/",
+            details: '{"code":-32005,"message":"Rate limit exceeded"}',
+          }),
+        );
+      }
+      if (policy.mode?.current === "singleBlock" && span > 1n) {
+        return limitExceeded();
+      }
+      if (policy.mode?.current === "floors") {
+        const addressCount =
+          filter.address === undefined ? 0 : asList(filter.address).length;
+        const widestTopic = Math.max(
+          0,
+          ...(filter.topics ?? [])
+            .slice(1)
+            .map((position) =>
+              position === null ? 0 : asList(position).length,
+            ),
+        );
+        if (
+          addressCount > bscLogAddressLimitFloor ||
+          widestTopic > bscLogTopicGroupLimitFloor ||
+          span > bscLogRangeLimitFloor
+        ) {
+          return limitExceeded();
+        }
+      }
       if (policy.throttled === true) {
         return refuse(
           new HttpRequestError({
@@ -286,6 +365,7 @@ function chainConfig(
 function clientWith(
   policies: readonly EndpointPolicy[],
   logAddressChunkSize?: number,
+  onLogQueryLimitsReset?: (event: BscLogQueryLimitsResetEvent) => void,
 ): { readonly client: BscReadClient; readonly stats: EndpointStats[] } {
   const endpoints = policies.map((policy) => fixtureEndpoint(policy));
   const urls = policies.map((_, index) => `https://rpc-${String(index)}.test/`);
@@ -298,6 +378,7 @@ function clientWith(
       }
       return endpoint.transport;
     },
+    ...(onLogQueryLimitsReset === undefined ? {} : { onLogQueryLimitsReset }),
   });
   return { client, stats: endpoints.map((endpoint) => endpoint.stats) };
 }
@@ -442,6 +523,9 @@ describe("eth_getLogs narrowing order (Decision 0078)", () => {
     }
     // 30 → 15 → 8 learned in two refusals, then applied without another.
     expect(stats[0]?.refusals).toBe(2);
+    // The refusal named the range, so the kept limit may go below the
+    // 500-block floor (Decision 0079).
+    expect(client.logQueryLimits?.().learnedRangeLimit).toBe(8);
   });
 
   it("propagates a throttle unchanged after one attempt per endpoint, never narrowing", async () => {
@@ -458,21 +542,26 @@ describe("eth_getLogs narrowing order (Decision 0078)", () => {
     expect(stats.map((endpoint) => endpoint.logRequests)).toEqual([1, 1]);
   });
 
-  it("narrows on an earlier endpoint's shape refusal even when the last endpoint's error is a throttle", async () => {
-    const reference = await unchunkedReference();
-    // publicnode first, a quota-exhausted endpoint last: viem's fallback
-    // rethrows the 429, but the 403 "Request blocked" decides the narrowing.
+  it("treats a throttle from the last endpoint as a throttle even when an earlier endpoint refused the shape (Decision 0079 amends 0078 rule 5)", async () => {
+    // publicnode first, a quota-exhausted endpoint last. Decision 0078
+    // narrowed on the 403; Decision 0079 lets the 429 win: the rate
+    // objection is temporary and narrowing would spend the quota faster.
     const { client, stats } = clientWith(
       [{ addressCap: 8 }, { throttled: true }],
       100,
     );
+    const before = client.logQueryLimits?.();
 
-    const transfers = await client.readTransferLogs(transferQuery());
+    await expect(
+      client.readTransferLogs(transferQuery()),
+    ).rejects.toMatchObject({ name: "HttpRequestError", status: 429 });
 
-    expect(transfers).toEqual(reference.transfers);
     expect(stats[0]?.refusals).toBe(1);
-    // The quota endpoint saw only the one refused request, once.
     expect(stats[1]?.logRequests).toBe(1);
+    // Nothing was learned from the 403 that came with the throttle.
+    expect(client.logQueryLimits?.().learnedAddressLimit).toBe(
+      before?.learnedAddressLimit,
+    );
   });
 
   it("costs one attempt per endpoint for a refused request, not four passes over the list", async () => {
@@ -487,5 +576,283 @@ describe("eth_getLogs narrowing order (Decision 0078)", () => {
     // narrowed request is served by the first endpoint.
     expect(stats.map((endpoint) => endpoint.refusals)).toEqual([1, 1]);
     expect(stats[1]?.logRequests).toBe(1);
+  });
+});
+
+/** Two thousand blocks from the fixture chain's first block: a full segment. */
+const wideQuery = {
+  addresses: registryTokens,
+  fromBlock,
+  toBlock: fromBlock + 1_999n,
+  walletFilter,
+};
+const configuredLimits = {
+  learnedAddressLimit: defaultBscLogAddressChunkSize,
+  learnedTopicGroupLimit: 200,
+  learnedRangeLimit: 2_000,
+  relaxAfterCleanReads: bscLogLimitRelaxAfterCleanReads,
+};
+const floorLimits = {
+  learnedAddressLimit: bscLogAddressLimitFloor,
+  learnedTopicGroupLimit: bscLogTopicGroupLimitFloor,
+  learnedRangeLimit: Number(bscLogRangeLimitFloor),
+  relaxAfterCleanReads: bscLogLimitRelaxAfterCleanReads,
+};
+
+describe("learned-limit floors, throttle priority, and reset (Decision 0079)", () => {
+  it("does not narrow when one endpoint throttles and the other refuses every request: the lane gets the throttle", async () => {
+    const reference = await unchunkedReference();
+    // The 2026-09-25 incident: publicnode rate-limited for a while, and
+    // bsc-dataseed answering every eth_getLogs with -32005.
+    const resets: BscLogQueryLimitsResetEvent[] = [];
+    const { client, stats } = clientWith(
+      [{ addressCap: 8, throttleFirst: 3 }, { limitExceeded: true }],
+      undefined,
+      (event) => resets.push(event),
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        client.readApprovalLogs(transferQuery()),
+      ).rejects.toMatchObject({ name: "HttpRequestError", status: 429 });
+      expect(client.logQueryLimits?.()).toEqual(configuredLimits);
+    }
+    // One request per attempt reached each endpoint: no split, no narrowing.
+    expect(stats[0]?.logRequests).toBe(3);
+    expect(stats[1]?.logRequests).toBe(3);
+
+    // publicnode recovers: the read goes out at the configured shape.
+    const approvals = await client.readApprovalLogs(transferQuery());
+    expect(approvals).toEqual(reference.approvals);
+    expect(stats[0]?.logRequests).toBe(3 + 4);
+    expect(stats[1]?.logRequests).toBe(3);
+    expect(client.logQueryLimits?.()).toEqual(configuredLimits);
+    // Nothing was narrowed, so the throttles reset nothing either.
+    expect(resets).toEqual([]);
+  });
+
+  it("resets narrowed limits when a throttle aborts a read, so a rate-limited lane does not grind at the floors", async () => {
+    const mode: {
+      current: "floors" | "singleBlock" | "open" | "throttled";
+    } = { current: "floors" };
+    const resets: BscLogQueryLimitsResetEvent[] = [];
+    const { client, stats } = clientWith([{ mode }], undefined, (event) =>
+      resets.push(event),
+    );
+    await client.readApprovalLogs(wideQuery);
+    expect(client.logQueryLimits?.()).toEqual(floorLimits);
+
+    mode.current = "throttled";
+    await expect(client.readApprovalLogs(wideQuery)).rejects.toMatchObject({
+      name: "HttpRequestError",
+      status: 429,
+    });
+    expect(resets).toEqual([
+      {
+        reasonCode: "BSC_LOG_LIMITS_RESET",
+        trigger: "BSC_LOG_QUERY_THROTTLED",
+        before: floorLimits,
+        after: configuredLimits,
+      },
+    ]);
+    // Throttled again at the configured shape: nothing left to reset.
+    await expect(client.readApprovalLogs(wideQuery)).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(resets).toHaveLength(1);
+
+    mode.current = "open";
+    const before = stats[0]?.logRequests ?? 0;
+    await client.readApprovalLogs(wideQuery);
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(4);
+  });
+
+  it("keeps unhinted narrowing at the floors, finishes a segment there, and climbs back after clean reads", async () => {
+    const reference = await unchunkedReference();
+    const mode: { current: "floors" | "singleBlock" | "open" | "throttled" } = {
+      current: "floors",
+    };
+    const { client, stats } = clientWith([{ mode }]);
+
+    const first = await client.readApprovalLogs(wideQuery);
+    expect(first).toEqual(reference.approvals);
+    expect(client.logQueryLimits?.()).toEqual(floorLimits);
+    // 8→4→2→1 addresses (pre-split at the configured 8), 200→100 wallets,
+    // 2000→1000→500 blocks: one refusal per halving, none below a floor.
+    expect(stats[0]?.refusals).toBe(3 + 1 + 2);
+
+    // At the floors a segment is 11 tokens × 4 wallet arrays × 4 ranges.
+    const atFloors = stats[0]?.logRequests ?? 0;
+    await client.readApprovalLogs(wideQuery);
+    expect((stats[0]?.logRequests ?? 0) - atFloors).toBe(176);
+    expect(176).toBeLessThan(bscMaximumLogRequestsPerSegment);
+
+    // The Provider stops refusing: every 4 clean reads double each limit.
+    mode.current = "open";
+    const cleanReads = async (count: number): Promise<void> => {
+      for (let read = 0; read < count; read += 1) {
+        await client.readApprovalLogs(wideQuery);
+      }
+    };
+    await cleanReads(bscLogLimitRelaxAfterCleanReads - 1);
+    expect(client.logQueryLimits?.()).toEqual({
+      ...configuredLimits,
+      learnedAddressLimit: 2,
+      learnedTopicGroupLimit: 200,
+      learnedRangeLimit: 1_000,
+    });
+    await cleanReads(bscLogLimitRelaxAfterCleanReads);
+    expect(client.logQueryLimits?.()).toEqual({
+      ...configuredLimits,
+      learnedAddressLimit: 4,
+    });
+    await cleanReads(bscLogLimitRelaxAfterCleanReads);
+    expect(client.logQueryLimits?.()).toEqual(configuredLimits);
+    const refusals = stats[0]?.refusals;
+    const before = stats[0]?.logRequests ?? 0;
+    await client.readApprovalLogs(wideQuery);
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(4);
+    expect(stats[0]?.refusals).toBe(refusals);
+  });
+
+  it("narrows below a floor for the read in flight only when the refusal names no dimension", async () => {
+    const { client, stats } = clientWith([{ unhintedRangeCap: 100n }]);
+    const query = {
+      addresses: [registryTokens[0]],
+      fromBlock,
+      toBlock: fromBlock + 1_999n,
+    };
+
+    await client.readTransferLogs(query);
+    // 2000 → 1000 → 500 kept; 500 → 250 → 125 → 63 for this read only.
+    expect(stats[0]?.refusals).toBe(5);
+    expect(client.logQueryLimits?.().learnedRangeLimit).toBe(500);
+
+    await client.readTransferLogs(query);
+    // The next read starts at the kept floor: 500 → 250 → 125 → 63 again.
+    expect(stats[0]?.refusals).toBe(5 + 3);
+    expect(client.logQueryLimits?.().learnedRangeLimit).toBe(500);
+  });
+
+  it("resets the learned limits and reports BSC_LOG_LIMITS_RESET when a read runs out of budget", async () => {
+    const mode: { current: "floors" | "singleBlock" | "open" | "throttled" } = {
+      current: "singleBlock",
+    };
+    const resets: BscLogQueryLimitsResetEvent[] = [];
+    const { client, stats } = clientWith([{ mode }], undefined, (event) =>
+      resets.push(event),
+    );
+
+    await expect(client.readApprovalLogs(wideQuery)).rejects.toMatchObject({
+      name: "BscReadUnavailableError",
+      reasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+    });
+    expect(stats[0]?.logRequests).toBe(bscMaximumLogRequestsPerSegment);
+    expect(resets).toEqual([
+      {
+        reasonCode: "BSC_LOG_LIMITS_RESET",
+        trigger: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+        before: floorLimits,
+        after: configuredLimits,
+      },
+    ]);
+    expect(client.logQueryLimits?.()).toEqual(configuredLimits);
+
+    // The next segment probes from the top instead of the narrowest shape.
+    mode.current = "open";
+    const before = stats[0]?.logRequests ?? 0;
+    await client.readApprovalLogs(wideQuery);
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(4);
+  });
+
+  it("rolls a refused probe back and doubles the streak before the next one, up to 32; a probe that holds restores 4", async () => {
+    const smallQuery = {
+      addresses: registryTokens,
+      fromBlock,
+      toBlock,
+      walletFilter: {
+        walletAddresses: wallets.slice(0, 10),
+        topicChunkSize: 200,
+      },
+    };
+    const policy: { addressCap: number | undefined } = { addressCap: 8 };
+    const { client, stats } = clientWith([policy], 100);
+    const limits = () => client.logQueryLimits?.();
+    const cleanReads = async (count: number): Promise<void> => {
+      const refusals = stats[0]?.refusals;
+      for (let read = 0; read < count; read += 1) {
+        await client.readApprovalLogs(smallQuery);
+      }
+      expect(stats[0]?.refusals).toBe(refusals);
+    };
+
+    await client.readApprovalLogs(smallQuery);
+    expect(stats[0]?.refusals).toBe(1);
+    expect(limits()?.learnedAddressLimit).toBe(6);
+
+    let streak = bscLogLimitRelaxAfterCleanReads;
+    const thresholds: number[] = [];
+    for (let probe = 0; probe < 4; probe += 1) {
+      await cleanReads(streak);
+      // Widened to 12 tokens: the probe read is refused once and rolled back.
+      expect(limits()?.learnedAddressLimit).toBe(12);
+      const refusals = stats[0]?.refusals ?? 0;
+      await client.readApprovalLogs(smallQuery);
+      expect(stats[0]?.refusals).toBe(refusals + 1);
+      expect(limits()?.learnedAddressLimit).toBe(6);
+      streak = limits()?.relaxAfterCleanReads ?? 0;
+      thresholds.push(streak);
+    }
+    expect(thresholds).toEqual([8, 16, 32, bscLogLimitRelaxMaximumCleanReads]);
+
+    // The Provider lifts its cap: the next probe holds and the base returns.
+    policy.addressCap = undefined;
+    await cleanReads(streak);
+    expect(limits()?.learnedAddressLimit).toBe(12);
+    await cleanReads(1);
+    expect(limits()?.relaxAfterCleanReads).toBe(
+      bscLogLimitRelaxAfterCleanReads,
+    );
+  });
+
+  it("shares learned limits between the transfer and pool lanes, and a reset from one lane frees the other", async () => {
+    const mode: { current: "floors" | "singleBlock" | "open" | "throttled" } = {
+      current: "floors",
+    };
+    const resets: BscLogQueryLimitsResetEvent[] = [];
+    const { client, stats } = clientWith([{ mode }], undefined, (event) =>
+      resets.push(event),
+    );
+
+    // The erc20_transfer lane narrows the shared client to its floors.
+    await client.readApprovalLogs(wideQuery);
+    expect(client.logQueryLimits?.()).toEqual(floorLimits);
+
+    // The pool_event lane then runs out of budget on the same client.
+    mode.current = "singleBlock";
+    await expect(
+      client.readPoolEventLogs({
+        addresses: registryTokens,
+        fromBlock,
+        toBlock: fromBlock + 1_999n,
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+    });
+    expect(resets).toHaveLength(1);
+    expect(client.logQueryLimits?.()).toEqual(configuredLimits);
+
+    // Both lanes go out at the configured shape again.
+    mode.current = "open";
+    let before = stats[0]?.logRequests ?? 0;
+    await client.readApprovalLogs(wideQuery);
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(4);
+    before = stats[0]?.logRequests ?? 0;
+    await client.readPoolEventLogs({
+      addresses: registryTokens,
+      fromBlock,
+      toBlock: fromBlock + 1_999n,
+    });
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(2);
   });
 });

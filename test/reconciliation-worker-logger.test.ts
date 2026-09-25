@@ -138,6 +138,62 @@ describe("reconciliation worker logger", () => {
     expect(line).not.toContain("0xabc");
   });
 
+  it("passes the learned log-query limits through as non-negative integers only (Decision 0079)", () => {
+    const stderr = vi.fn<(line: string) => void>();
+    const logger = createReconciliationWorkerLogger({
+      level: "warn",
+      serviceVersion: "0.1.0",
+      now: () => new Date("2026-09-25T07:00:00.000Z"),
+      writeStderr: stderr,
+    });
+
+    logger.warn(
+      {
+        reasonCode: "BSC_LOG_LIMITS_RESET",
+        detailReasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+        learnedAddressLimit: 8,
+        learnedTopicGroupLimit: 200,
+        learnedRangeLimit: 2_000,
+        relaxAfterCleanReads: 4,
+        previousAddressLimit: 1,
+        previousTopicGroupLimit: 100,
+        previousRangeLimit: 500,
+      },
+      "LOOP BSC log-query limits reset to their configured values",
+    );
+    expect(JSON.parse(stderr.mock.calls[0]?.[0] ?? "{}")).toEqual({
+      level: "warn",
+      time: "2026-09-25T07:00:00.000Z",
+      service: "loop-reconciliation-worker",
+      version: "0.1.0",
+      reasonCode: "BSC_LOG_LIMITS_RESET",
+      detailReasonCode: "BSC_LOG_QUERY_BUDGET_EXHAUSTED",
+      learnedAddressLimit: 8,
+      learnedTopicGroupLimit: 200,
+      learnedRangeLimit: 2_000,
+      relaxAfterCleanReads: 4,
+      previousAddressLimit: 1,
+      previousTopicGroupLimit: 100,
+      previousRangeLimit: 500,
+      msg: "LOOP BSC log-query limits reset to their configured values",
+    });
+
+    logger.warn(
+      {
+        lane: "pool_event",
+        learnedAddressLimit: -1,
+        learnedTopicGroupLimit: 1.5,
+        learnedRangeLimit: Number.NaN,
+        relaxAfterCleanReads: "4" as unknown as number,
+      },
+      "LOOP reconciliation worker infrastructure retry scheduled",
+    );
+    const line = stderr.mock.calls[1]?.[0] ?? "";
+    expect(line).toContain('"lane":"pool_event"');
+    expect(line).not.toContain("learned");
+    expect(line).not.toContain("relaxAfterCleanReads");
+  });
+
   it("emits nothing at the silent level", () => {
     const stdout = vi.fn<(line: string) => void>();
     const stderr = vi.fn<(line: string) => void>();

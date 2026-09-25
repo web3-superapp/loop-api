@@ -341,16 +341,30 @@ from the endpoint whose error viem rethrows or any earlier endpoint in the
 list) is narrowed along the dimension its text names, otherwise addresses
 first, then the wallet topic array, then the block range (Decision 0078).
 Token addresses are sent at most `BSC_LOG_ADDRESS_CHUNK_SIZE` (default 8)
-per request; learned limits are kept on the client across ticks and probed
-wider only after 16 consecutive refusal-free segment reads. No new reason
-code. A _throttle_ (HTTP 429, `rate limit` /
+per request; learned limits are kept on the client across ticks and shared
+by the `erc20_transfer` and `pool_event` lanes. Since Decision 0079 a refusal
+that names no dimension keeps the learned limits at or above their floors
+(1 address, 100 wallets per topic array, 500 blocks; the read in flight may
+go lower), limits are probed wider after 4 consecutive refusal-free segment
+reads (a probe refused on the next read is rolled back and doubles the
+streak, up to 32; a probe that holds restores 4), and
+`BSC_LOG_LIMITS_RESET` (warn line `LOOP BSC log-query limits reset to their
+configured values`, `detailReasonCode` `BSC_LOG_QUERY_BUDGET_EXHAUSTED` or
+`BSC_LOG_QUERY_THROTTLED`, `previous*Limit` before and `learned*Limit`
+after, numbers only) resets all three learned limits to the configured
+starting values whenever a segment read runs out of budget, or a throttle
+aborts a read while any learned limit is narrowed. A _throttle_ (HTTP 429, `rate limit` /
 `too many` / `quota` / `usage limit` text, which is the only reading of
--32001) is not narrowed and goes to the retry loop's exponential backoff.
+-32001) is not narrowed and goes to the retry loop's exponential backoff;
+since Decision 0079 a throttle from any endpoint of the request wins over a
+shape refusal from another endpoint.
 A lane idling on either refusal code backs off 1 s → 30 s between ticks.
 The retry-loop warn line and the once-per-transition `LOOP BSC indexer lane
-is unavailable` line carry `lane`, `errorClass`, `rpcStatus`, `rpcCode`,
+is unavailable` / `recovered` lines carry `lane`, `errorClass`, `rpcStatus`, `rpcCode`,
 `rpcUrlHost` (host name only), and `method`; on `BSC_RPC_UNREACHABLE` (from
-the chain-verification probe) these are `null`.
+the chain-verification probe) these are `null`. Since Decision 0079 they also
+carry `learnedAddressLimit`, `learnedTopicGroupLimit`, `learnedRangeLimit`,
+and `relaxAfterCleanReads` (integers).
 
 ### V2 wallet module (Decision 0033, `V2_MODULES_ENABLED=wallet`)
 
