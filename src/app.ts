@@ -330,6 +330,10 @@ import {
   createUnavailableLaunchService,
   type LaunchService,
 } from "./features/launch/launch-service.js";
+import {
+  createLaunchContractAdapter,
+  type LaunchContractAdapter,
+} from "./integrations/launch/launch-contract-adapter.js";
 import { createUnavailableLaunchRepository } from "./features/launch/launch-repository.js";
 import {
   createMiningFormulaBaselineProbe,
@@ -451,6 +455,11 @@ export interface BuildAppOptions {
    * client and publishes nothing of its own.
    */
   readonly launchChainReadClient?: BscReadClient;
+  /**
+   * Test seam for the Launch contract adapter (Decision 0076). Production
+   * builds it from `launchContract` on the launch slot's endpoints.
+   */
+  readonly launchContractAdapter?: LaunchContractAdapter;
   /**
    * Test seam for the chain-verification watch (startup retry policy,
    * projection re-probe throttle, clock, and sleep). Production uses the
@@ -1533,14 +1542,30 @@ export async function buildApp(
     registeredModuleIds.includes("launch") &&
     (options.launchService !== undefined ||
       (database.launch !== undefined && v2CursorCodec !== null));
+  // Decision 0076: the Launch contract adapter reads through its own viem
+  // client on the launch slot's endpoints and reuses that slot's chain-ID
+  // verification. Unconfigured, it is unavailable(BASELINE_PENDING) and no
+  // response changes.
+  const launchContractAdapter =
+    options.launchContractAdapter ??
+    createLaunchContractAdapter({
+      contract: config.launchContract,
+      chain: config.launchChain,
+      verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
+      logger: app.log,
+    });
   const launchService =
     options.launchService ??
     (launchRuntimeAvailable
       ? createLaunchService({
           repository: database.launch ?? createUnavailableLaunchRepository(),
           cursorCodec: v2CursorCodec,
+          contract: launchContractAdapter,
         })
       : createUnavailableLaunchService());
+  if (launchRuntimeAvailable && launchContractAdapter.contract !== null) {
+    void launchContractAdapter.verifyAtStartup();
+  }
   const miningRuntimeAvailable =
     registeredModuleIds.includes("mining") &&
     (options.miningService !== undefined || database.mining !== undefined);

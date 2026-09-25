@@ -31,6 +31,7 @@
     "format:check": "prettier --check .",
     "identity-stream:smoke": "node --env-file-if-exists=.env.local --import tsx scripts/identity-stream-smoke.ts",
     "indexer:backfill": "node --env-file-if-exists=.env.local --import tsx scripts/indexer-backfill.ts",
+    "launch:abi-check": "tsx scripts/launch-abi-check.ts",
     "launch:milestone": "node --env-file-if-exists=.env.local --import tsx scripts/launch-milestone.ts",
     "launch:review": "node --env-file-if-exists=.env.local --import tsx scripts/launch-review.ts",
     "lint": "eslint .",

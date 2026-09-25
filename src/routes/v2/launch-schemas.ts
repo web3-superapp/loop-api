@@ -1,8 +1,17 @@
 import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
-import { launchChainIds } from "../../features/chain/chain-contract.js";
+import {
+  evmAddressPatternSource,
+  launchChainIds,
+  transactionHashPatternSource,
+} from "../../features/chain/chain-contract.js";
 import {
   launchConfigVersion,
+  launchContractReasonCodeValues,
+  launchEntitlementStates,
+  launchLiquidityStates,
+  launchOperationalStates,
+  launchSaleStates,
   launchConfigVersionPatternSource,
   launchEligibilityModes,
   launchEligibilityTiers,
@@ -46,6 +55,44 @@ export const unavailableSchema = {
     status: { type: "string", const: "unavailable" },
     reasonCode: reasonCodeSchema,
   },
+} as const;
+
+/** Unsigned integer (uint256 and below) as a decimal string; never a JSON number. */
+const uintStringSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,77})$",
+} as const;
+
+const blockNumberStringSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,19})$",
+} as const;
+
+const bytes32Schema = {
+  type: "string",
+  pattern: "^0x[0-9a-f]{64}$",
+} as const;
+
+const addressSchema = {
+  type: "string",
+  pattern: evmAddressPatternSource,
+} as const;
+
+const onChainRoundIndexSchema = {
+  type: "integer",
+  minimum: 0,
+  maximum: 65_535,
+  description:
+    "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076).",
+} as const;
+
+/**
+ * Chain snapshot every `available` branch is read at (Decision 0076): one
+ * block number and hash per projection.
+ */
+const snapshotProperties = {
+  snapshotBlockNumber: blockNumberStringSchema,
+  snapshotBlockHash: bytes32Schema,
 } as const;
 
 const nullableDateTimeSchema = {
@@ -249,11 +296,15 @@ export const projectListResourceSchema = {
 } as const;
 
 /**
- * Four-axis projection (03 §8.3). Axis names are fixed; values are the
- * literal `unavailable` and the tuple digest / snapshot block are null until
- * the 02 contract baseline defines them.
+ * Four-axis projection (03 §8.3, 06 §2), discriminated by `source`
+ * (Decision 0076). The `unavailable` branch is the pre-0076 object: every
+ * axis the literal `unavailable`, digest and snapshot null. Without a
+ * configured contract its reasonCode is LAUNCH_CONTRACT_BASELINE_PENDING and
+ * the bytes are unchanged. The `chain` branch carries the 06 axis names read
+ * from `getState` at one block, with the contract's own stateTupleDigest and
+ * configVersion.
  */
-export const onChainStateSchema = {
+const onChainStateUnavailableSchema = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -276,8 +327,53 @@ export const onChainStateSchema = {
     snapshotBlockNumber: { type: "null" },
     snapshotBlockHash: { type: "null" },
     source: { type: "string", const: "unavailable" },
-    reasonCode: { type: "string", const: "LAUNCH_CONTRACT_BASELINE_PENDING" },
+    reasonCode: {
+      type: "string",
+      enum: [...launchContractReasonCodeValues],
+      description:
+        "LAUNCH_CONTRACT_BASELINE_PENDING while no contract is configured (unchanged since Decision 0036); the other values name why a configured contract could not be read (Decision 0076).",
+    },
   },
+} as const;
+
+const onChainStateAvailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "saleState",
+    "entitlementState",
+    "liquidityState",
+    "operationalState",
+    "stateTupleDigest",
+    "snapshotBlockNumber",
+    "snapshotBlockHash",
+    "configVersion",
+    "source",
+    "reasonCode",
+  ],
+  properties: {
+    saleState: { type: "string", enum: [...launchSaleStates] },
+    entitlementState: { type: "string", enum: [...launchEntitlementStates] },
+    liquidityState: { type: "string", enum: [...launchLiquidityStates] },
+    operationalState: { type: "string", enum: [...launchOperationalStates] },
+    stateTupleDigest: {
+      ...bytes32Schema,
+      description:
+        "keccak256(abi.encode(saleId, saleState, entitlementState, liquidityState, operationalState, configVersion)) exactly as getState returned it; never recomputed off chain.",
+    },
+    ...snapshotProperties,
+    configVersion: {
+      ...bytes32Schema,
+      description:
+        "The contract's configVersion (keccak256 of the sale configuration).",
+    },
+    source: { type: "string", const: "chain" },
+    reasonCode: { type: "null" },
+  },
+} as const;
+
+export const onChainStateSchema = {
+  anyOf: [onChainStateUnavailableSchema, onChainStateAvailableSchema],
 } as const;
 
 const launchSummarySchema = {
@@ -312,9 +408,9 @@ const launchSummarySchema = {
         "The launch chain slot the launch was created on (Decision 0038): eip155:56 or, while the Launch contract lives on the BSC testnet, eip155:97. Every other module stays on eip155:56.",
     },
     contractAddress: {
-      type: "null",
+      anyOf: [{ type: "null" }, addressSchema],
       description:
-        "Always null: no Launch contract has been deployed, audited, or verified.",
+        "Null unless the Launch contract is configured, its code was observed on the launch chain, and this launch's sale is registered on it (Decision 0076).",
     },
     configDigest: {
       anyOf: [
@@ -406,6 +502,89 @@ const configSlotSchema = {
       },
     },
   ],
+} as const;
+
+/** `getSaleConfig` at the four-axis snapshot block (Decision 0076). */
+const chainConfigProjectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "projectToken",
+    "usd1",
+    "softCapUsd1",
+    "hardCapUsd1",
+    "walletProjectCapUsd1",
+    "minPurchaseUsd1",
+    "protocolFeeBps",
+    "liquidityBps",
+    "tgeBps",
+    "cliffSeconds",
+    "vestingSeconds",
+    "poolFeeTier",
+    "lpLockSeconds",
+    "configVersion",
+  ],
+  properties: {
+    status: { type: "string", const: "available" },
+    projectToken: addressSchema,
+    usd1: addressSchema,
+    softCapUsd1: uintStringSchema,
+    hardCapUsd1: uintStringSchema,
+    walletProjectCapUsd1: uintStringSchema,
+    minPurchaseUsd1: uintStringSchema,
+    protocolFeeBps: { type: "integer", minimum: 0, maximum: 65_535 },
+    liquidityBps: { type: "integer", minimum: 0, maximum: 65_535 },
+    tgeBps: { type: "integer", minimum: 0, maximum: 65_535 },
+    cliffSeconds: { type: "integer", minimum: 0, maximum: 4_294_967_295 },
+    vestingSeconds: { type: "integer", minimum: 0, maximum: 4_294_967_295 },
+    poolFeeTier: { type: "integer", minimum: 0, maximum: 16_777_215 },
+    lpLockSeconds: { type: "integer", minimum: 0, maximum: 4_294_967_295 },
+    configVersion: bytes32Schema,
+  },
+} as const;
+
+/** One `getRounds` item at the four-axis snapshot block (Decision 0076). */
+const chainRoundProjectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "roundId",
+    "roundIndex",
+    "startAt",
+    "endAt",
+    "priceUsd1PerToken",
+    "roundCapUsd1",
+    "walletRoundCapUsd1",
+    "allowlistRoot",
+    "raisedUsd1",
+  ],
+  properties: {
+    status: { type: "string", const: "available" },
+    roundId: {
+      anyOf: [
+        { type: "string", pattern: opaqueIdPatternSource },
+        { type: "null" },
+      ],
+      description:
+        "LOOP's opaque round ID for the launch_rounds row with this roundIndex; null when LOOP has no such row.",
+    },
+    roundIndex: onChainRoundIndexSchema,
+    startAt: { type: "string", format: "date-time" },
+    endAt: { type: "string", format: "date-time" },
+    priceUsd1PerToken: {
+      ...uintStringSchema,
+      description: "USD1 per whole token, 1e18 = 1 USD1 (06 §4.2).",
+    },
+    roundCapUsd1: uintStringSchema,
+    walletRoundCapUsd1: uintStringSchema,
+    allowlistRoot: {
+      ...bytes32Schema,
+      description: "Merkle root; all zeroes means the round has no allowlist.",
+    },
+    raisedUsd1: uintStringSchema,
+  },
 } as const;
 
 const configProjectionSchema = {
@@ -544,9 +723,23 @@ export const launchDetailResourceSchema = {
         materialVersion: { type: "integer", minimum: 1 },
       },
     },
-    config: { anyOf: [configProjectionSchema, { type: "null" }] },
+    config: {
+      anyOf: [
+        configProjectionSchema,
+        chainConfigProjectionSchema,
+        { type: "null" },
+      ],
+      description:
+        "LOOP's configuration slots (status pending_confirmation|confirmed), or, once launch.onChainState.source is chain, the contract's getSaleConfig (status available).",
+    },
     configPending: { anyOf: [unavailableSchema, { type: "null" }] },
-    rounds: { type: "array", maxItems: 64, items: roundProjectionSchema },
+    rounds: {
+      type: "array",
+      maxItems: 64,
+      items: { anyOf: [roundProjectionSchema, chainRoundProjectionSchema] },
+      description:
+        "LOOP's round slots, or, once launch.onChainState.source is chain, every getRounds item (status available) at the same block.",
+    },
     graduation: {
       type: "object",
       additionalProperties: false,
@@ -592,14 +785,54 @@ export const eligibilityResourceSchema = {
     launchId: { type: "string", pattern: opaqueIdPatternSource },
     mode: { type: "string", enum: [...launchEligibilityModes] },
     result: {
-      type: "object",
-      additionalProperties: false,
-      required: ["tier", "reasonCode", "snapshotBlock"],
-      properties: {
-        tier: { type: "null" },
-        reasonCode: reasonCodeSchema,
-        snapshotBlock: { type: "null" },
-      },
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["tier", "reasonCode", "snapshotBlock"],
+          properties: {
+            tier: { type: "null" },
+            reasonCode: reasonCodeSchema,
+            snapshotBlock: { type: "null" },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "tier",
+            "reasonCode",
+            "snapshotBlock",
+            "roundIndex",
+            "allowlistRoot",
+            "eligibilityProof",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            tier: {
+              anyOf: [
+                { type: "string", enum: [...launchEligibilityTiers] },
+                { type: "null" },
+              ],
+              description: "null when the wallet is not in the allowlist.",
+            },
+            reasonCode: { anyOf: [reasonCodeSchema, { type: "null" }] },
+            snapshotBlock: blockNumberStringSchema,
+            roundIndex: onChainRoundIndexSchema,
+            allowlistRoot: bytes32Schema,
+            eligibilityProof: {
+              type: "array",
+              maxItems: 64,
+              items: bytes32Schema,
+              description:
+                "Merkle proof for leaf keccak256(abi.encodePacked(wallet)); the buy() eligibilityProof argument verbatim. Empty when the root is zero.",
+            },
+          },
+        },
+      ],
+      description:
+        "The unchanged Decision 0036 object while no evaluator exists; the status=available branch is reserved for the S83b evaluators (Decision 0076) and is not emitted yet.",
     },
     configVersion: {
       anyOf: [
@@ -630,10 +863,193 @@ export const holdersResourceSchema = {
   ],
   properties: {
     launchId: { type: "string", pattern: opaqueIdPatternSource },
-    holders: unavailableSchema,
-    myPosition: unavailableSchema,
-    walletCap: unavailableSchema,
+    holders: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "holderCount", "indexedBlockNumber"],
+          properties: {
+            status: { type: "string", const: "available" },
+            holderCount: { type: "integer", minimum: 0 },
+            indexedBlockNumber: blockNumberStringSchema,
+          },
+        },
+      ],
+    },
+    myPosition: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "walletId",
+            "cumulativeUsd1",
+            "purchasedTokens",
+            "entitledTokens",
+            "claimableTokens",
+            "claimedTokens",
+            "refundableUsd1",
+            "refundedUsd1",
+            "snapshotBlockNumber",
+            "snapshotBlockHash",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            walletId: { type: "string", pattern: opaqueIdPatternSource },
+            cumulativeUsd1: uintStringSchema,
+            purchasedTokens: uintStringSchema,
+            entitledTokens: uintStringSchema,
+            claimableTokens: uintStringSchema,
+            claimedTokens: uintStringSchema,
+            refundableUsd1: uintStringSchema,
+            refundedUsd1: uintStringSchema,
+            ...snapshotProperties,
+          },
+          description: "getPosition (06 §4.2 Position) at one block.",
+        },
+      ],
+    },
+    walletCap: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "walletProjectCapUsd1",
+            "rounds",
+            "snapshotBlockNumber",
+            "snapshotBlockHash",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            walletProjectCapUsd1: uintStringSchema,
+            rounds: {
+              type: "array",
+              maxItems: 64,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "roundIndex",
+                  "walletRoundCapUsd1",
+                  "cumulativeUsd1",
+                ],
+                properties: {
+                  roundIndex: onChainRoundIndexSchema,
+                  walletRoundCapUsd1: uintStringSchema,
+                  cumulativeUsd1: {
+                    ...uintStringSchema,
+                    description: "getRoundPosition for the caller's wallet.",
+                  },
+                },
+              },
+            },
+            ...snapshotProperties,
+          },
+        },
+      ],
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+const confirmationStateSchema = {
+  type: "string",
+  enum: ["pending", "confirmed", "reorged"],
+} as const;
+
+/** One observed `Purchased` event (03 §8.3 PurchaseRecord, 06 §3 names). */
+const purchaseRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "purchaseRecordId",
+    "walletId",
+    "roundId",
+    "roundIndex",
+    "usd1Amount",
+    "tokenAmount",
+    "transactionHash",
+    "logIndex",
+    "blockNumber",
+    "blockHash",
+    "confirmationState",
+    "observedAt",
+  ],
+  properties: {
+    purchaseRecordId: { type: "string", pattern: opaqueIdPatternSource },
+    walletId: { type: "string", pattern: opaqueIdPatternSource },
+    roundId: {
+      anyOf: [
+        { type: "string", pattern: opaqueIdPatternSource },
+        { type: "null" },
+      ],
+    },
+    roundIndex: onChainRoundIndexSchema,
+    usd1Amount: uintStringSchema,
+    tokenAmount: uintStringSchema,
+    transactionHash: { type: "string", pattern: transactionHashPatternSource },
+    logIndex: { type: "integer", minimum: 0 },
+    blockNumber: blockNumberStringSchema,
+    blockHash: bytes32Schema,
+    confirmationState: confirmationStateSchema,
+    observedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+/** Frozen project-token claim right after SUCCEEDED (03 §8.3 Entitlement). */
+const entitlementRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "entitlementId",
+    "walletId",
+    "entitledTokens",
+    "claimedTokens",
+    "state",
+    "frozenAtBlock",
+  ],
+  properties: {
+    entitlementId: { type: "string", pattern: opaqueIdPatternSource },
+    walletId: { type: "string", pattern: opaqueIdPatternSource },
+    entitledTokens: uintStringSchema,
+    claimedTokens: uintStringSchema,
+    state: {
+      type: "string",
+      enum: ["frozen", "partially_claimed", "claimed"],
+    },
+    frozenAtBlock: { anyOf: [blockNumberStringSchema, { type: "null" }] },
+  },
+} as const;
+
+/** Wallet-level refund liability after FAILED/CANCELLED (03 §8.3 RefundLiability). */
+const refundRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "refundLiabilityId",
+    "walletId",
+    "refundableUsd1",
+    "refundedUsd1",
+    "state",
+    "frozenAtBlock",
+  ],
+  properties: {
+    refundLiabilityId: { type: "string", pattern: opaqueIdPatternSource },
+    walletId: { type: "string", pattern: opaqueIdPatternSource },
+    refundableUsd1: uintStringSchema,
+    refundedUsd1: uintStringSchema,
+    state: {
+      type: "string",
+      enum: ["frozen", "partially_refunded", "refunded"],
+    },
+    frozenAtBlock: { anyOf: [blockNumberStringSchema, { type: "null" }] },
   },
 } as const;
 
@@ -651,10 +1067,41 @@ export const historyResourceSchema = {
   ],
   properties: {
     launchId: { type: "string", pattern: opaqueIdPatternSource },
-    purchaseRecords: { type: "array", maxItems: 0, items: {} },
-    entitlements: { type: "array", maxItems: 0, items: {} },
-    refunds: { type: "array", maxItems: 0, items: {} },
-    source: unavailableSchema,
+    purchaseRecords: {
+      type: "array",
+      maxItems: 500,
+      items: purchaseRecordSchema,
+      description: "Always empty while source is unavailable.",
+    },
+    entitlements: {
+      type: "array",
+      maxItems: 500,
+      items: entitlementRecordSchema,
+      description: "Always empty while source is unavailable.",
+    },
+    refunds: {
+      type: "array",
+      maxItems: 500,
+      items: refundRecordSchema,
+      description: "Always empty while source is unavailable.",
+    },
+    source: {
+      anyOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "indexedBlockNumber", "indexedBlockHash"],
+          properties: {
+            status: { type: "string", const: "available" },
+            indexedBlockNumber: blockNumberStringSchema,
+            indexedBlockHash: bytes32Schema,
+          },
+        },
+      ],
+      description:
+        "unavailable until the S83b launch_event lane indexes the sale (Decision 0076).",
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -756,6 +1203,105 @@ export const launchIntentRequestSchema = {
       description:
         "USD1 amount as a decimal string; a JSON number is INVALID_REQUEST.",
     },
+  },
+} as const;
+
+/**
+ * The prepared Launch purchase Intent (Decision 0076, reserved for S83b).
+ * The route still answers 503 CAPABILITY_UNAVAILABLE; this `201` shape is
+ * what a prepare will return once S83b ships, so the client can decode it
+ * now. Every 03 §8.2 binding is present; `unsignedTransaction.data` is
+ * `buy(saleId, roundId, usd1Amount, minTokenAmount, deadline,
+ * eligibilityProof)` in 06 §4.1 order.
+ */
+export const launchIntentResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["launchIntent", "contractVersion"],
+  properties: {
+    launchIntent: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "launchIntentId",
+        "state",
+        "launchId",
+        "projectId",
+        "walletId",
+        "roundId",
+        "roundIndex",
+        "chainId",
+        "contractAddress",
+        "quoteAssetId",
+        "usd1Amount",
+        "expectedTokenAmount",
+        "minTokenAmount",
+        "walletCumulativeUsd1",
+        "deadline",
+        "eligibilityProof",
+        "configVersion",
+        "stateTupleDigest",
+        "snapshotBlockNumber",
+        "snapshotBlockHash",
+        "payloadDigest",
+        "unsignedTransaction",
+        "expiresAt",
+        "createdAt",
+      ],
+      properties: {
+        launchIntentId: { type: "string", pattern: opaqueIdPatternSource },
+        state: {
+          type: "string",
+          enum: [
+            "prepared",
+            "awaiting_signature",
+            "submitted",
+            "confirmed",
+            "reverted",
+            "failed",
+            "unknown",
+            "cancelled",
+            "expired",
+          ],
+        },
+        launchId: { type: "string", pattern: opaqueIdPatternSource },
+        projectId: { type: "string", pattern: opaqueIdPatternSource },
+        walletId: { type: "string", pattern: opaqueIdPatternSource },
+        roundId: { type: "string", pattern: opaqueIdPatternSource },
+        roundIndex: onChainRoundIndexSchema,
+        chainId: { type: "string", enum: [...launchChainIds] },
+        contractAddress: addressSchema,
+        quoteAssetId: { type: "string", minLength: 1, maxLength: 128 },
+        usd1Amount: uintStringSchema,
+        expectedTokenAmount: {
+          ...uintStringSchema,
+          description: "quote() at the snapshot block.",
+        },
+        minTokenAmount: uintStringSchema,
+        walletCumulativeUsd1: uintStringSchema,
+        deadline: { type: "string", format: "date-time" },
+        eligibilityProof: { type: "array", maxItems: 64, items: bytes32Schema },
+        configVersion: bytes32Schema,
+        stateTupleDigest: bytes32Schema,
+        ...snapshotProperties,
+        payloadDigest: { type: "string", pattern: sha256PatternSource },
+        unsignedTransaction: {
+          type: "object",
+          additionalProperties: false,
+          required: ["chainId", "to", "data", "value"],
+          properties: {
+            chainId: { type: "integer", enum: [56, 97] },
+            to: addressSchema,
+            data: { type: "string", pattern: "^0x([0-9a-f]{2})*$" },
+            value: { type: "string", const: "0x0" },
+          },
+        },
+        expiresAt: { type: "string", format: "date-time" },
+        createdAt: { type: "string", format: "date-time" },
+      },
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
 

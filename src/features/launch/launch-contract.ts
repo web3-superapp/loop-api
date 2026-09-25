@@ -34,6 +34,77 @@ export const launchReasonCodes = Object.freeze({
   economyUnavailable: "LAUNCH_ECONOMY_CONTRACT_PENDING",
 } as const);
 
+/**
+ * Reason codes of the Launch contract adapter and the chain-read projection
+ * (Decision 0076). The three `LAUNCH_CHAIN_*` codes are Decision 0038's slot
+ * codes, reused so one cause has one name.
+ */
+export const launchContractReasonCodes = Object.freeze({
+  baselinePending: "LAUNCH_CONTRACT_BASELINE_PENDING",
+  verificationPending: "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+  codeMissing: "LAUNCH_CONTRACT_CODE_MISSING",
+  versionUnsupported: "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+  chainRpcNotConfigured: "LAUNCH_CHAIN_RPC_NOT_CONFIGURED",
+  chainIdMismatch: "LAUNCH_CHAIN_ID_MISMATCH",
+  chainRpcUnreachable: "LAUNCH_CHAIN_RPC_UNREACHABLE",
+  saleNotRegistered: "LAUNCH_SALE_NOT_REGISTERED",
+  saleContractMismatch: "LAUNCH_SALE_CONTRACT_MISMATCH",
+  saleNotFound: "LAUNCH_SALE_NOT_FOUND",
+  configVersionMismatch: "LAUNCH_CONFIG_VERSION_MISMATCH",
+  usd1AddressMismatch: "LAUNCH_USD1_ADDRESS_MISMATCH",
+  readFailed: "LAUNCH_CONTRACT_READ_FAILED",
+  readInvalid: "LAUNCH_CONTRACT_READ_INVALID",
+  snapshotReorged: "LAUNCH_SNAPSHOT_REORGED",
+  /** Lists do not read the chain; the S83b event lane will project it. */
+  onChainStateNotIndexed: "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+} as const);
+export type LaunchContractReasonCode =
+  (typeof launchContractReasonCodes)[keyof typeof launchContractReasonCodes];
+export const launchContractReasonCodeValues: readonly LaunchContractReasonCode[] =
+  Object.freeze(Object.values(launchContractReasonCodes));
+
+/**
+ * The four on-chain axes of 06 §2. The array index is the contract's `uint8`
+ * encoding (the row order of the 06 tables; 06 §3 pins `3=SUCCEEDED
+ * 4=FAILED 5=CANCELLED`). Never reorder: a new value is appended by a new ABI.
+ */
+export const launchSaleStates = [
+  "SCHEDULED",
+  "LIVE",
+  "ENDED",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+] as const;
+export type LaunchSaleState = (typeof launchSaleStates)[number];
+export const launchEntitlementStates = [
+  "NONE",
+  "FROZEN",
+  "VESTING",
+  "COMPLETED",
+  "REFUNDING",
+  "REFUNDED",
+] as const;
+export type LaunchEntitlementState = (typeof launchEntitlementStates)[number];
+export const launchLiquidityStates = [
+  "NOT_STARTED",
+  "PREPARING",
+  "V3_LIVE",
+  "LP_LOCKED",
+  "COMPLETED",
+  "RETRY_SCHEDULED",
+] as const;
+export type LaunchLiquidityState = (typeof launchLiquidityStates)[number];
+export const launchOperationalStates = ["ACTIVE", "PAUSED"] as const;
+export type LaunchOperationalState = (typeof launchOperationalStates)[number];
+/** `SaleFinalized.outcome` admits only the three final sale states. */
+export const launchFinalOutcomes = [
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+] as const;
+export type LaunchFinalOutcome = (typeof launchFinalOutcomes)[number];
+
 export const launchReviewStatuses = [
   "draft",
   "submitted",
@@ -569,11 +640,19 @@ export function unavailable(reasonCode: string): UnavailableProjection {
 }
 
 /**
- * Four-axis on-chain projection (03 §8.3). The axis names are fixed; each
- * value is the literal `unavailable` until the 02 baseline defines the enums,
- * and the tuple digest / snapshot block are null for the same reason.
+ * Four-axis on-chain projection (03 §8.3, 06 §2). Two branches share the
+ * object, discriminated by `source` (the field the pre-0076 object already
+ * carried):
+ *
+ * - `source: "unavailable"`: the pre-0076 shape, byte for byte; every axis
+ *   is the literal `unavailable` and the digest / snapshot block are null.
+ *   Without a configured contract `reasonCode` is
+ *   `LAUNCH_CONTRACT_BASELINE_PENDING`, exactly as before.
+ * - `source: "chain"`: the 06 axis names read from `getState` at one block;
+ *   `stateTupleDigest` and `configVersion` are the contract's bytes32 values
+ *   verbatim (never recomputed off chain).
  */
-export interface LaunchOnChainStateProjection {
+export interface LaunchOnChainStateUnavailable {
   readonly saleState: "unavailable";
   readonly entitlementState: "unavailable";
   readonly liquidityState: "unavailable";
@@ -582,10 +661,28 @@ export interface LaunchOnChainStateProjection {
   readonly snapshotBlockNumber: null;
   readonly snapshotBlockHash: null;
   readonly source: "unavailable";
-  readonly reasonCode: typeof launchReasonCodes.contractBaselinePending;
+  readonly reasonCode: LaunchContractReasonCode;
 }
 
-export const unavailableOnChainState: LaunchOnChainStateProjection =
+export interface LaunchOnChainStateAvailable {
+  readonly saleState: LaunchSaleState;
+  readonly entitlementState: LaunchEntitlementState;
+  readonly liquidityState: LaunchLiquidityState;
+  readonly operationalState: LaunchOperationalState;
+  readonly stateTupleDigest: string;
+  /** Decimal string. */
+  readonly snapshotBlockNumber: string;
+  readonly snapshotBlockHash: string;
+  /** The contract's `configVersion` bytes32. */
+  readonly configVersion: string;
+  readonly source: "chain";
+  readonly reasonCode: null;
+}
+
+export type LaunchOnChainStateProjection =
+  LaunchOnChainStateUnavailable | LaunchOnChainStateAvailable;
+
+export const unavailableOnChainState: LaunchOnChainStateUnavailable =
   Object.freeze({
     saleState: "unavailable",
     entitlementState: "unavailable",
@@ -597,6 +694,15 @@ export const unavailableOnChainState: LaunchOnChainStateProjection =
     source: "unavailable",
     reasonCode: launchReasonCodes.contractBaselinePending,
   });
+
+/** The unavailable branch with a Decision 0076 reason; same key order. */
+export function unavailableOnChainStateFor(
+  reasonCode: LaunchContractReasonCode,
+): LaunchOnChainStateUnavailable {
+  return reasonCode === launchReasonCodes.contractBaselinePending
+    ? unavailableOnChainState
+    : Object.freeze({ ...unavailableOnChainState, reasonCode });
+}
 
 export interface LaunchProjectProjection {
   readonly projectId: string;
@@ -627,7 +733,11 @@ export interface LaunchSummaryProjection {
   readonly name: string;
   readonly ticker: string;
   readonly chainId: LaunchChainId;
-  readonly contractAddress: null;
+  /**
+   * The Launch contract, published only while the adapter is available (code
+   * observed) and this launch's sale is registered on it (Decision 0076).
+   */
+  readonly contractAddress: string | null;
   readonly configDigest: string | null;
   readonly scheduleStatus: LaunchScheduleStatus;
   readonly onChainState: LaunchOnChainStateProjection;

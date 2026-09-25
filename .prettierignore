@@ -8,3 +8,5 @@ pnpm-lock.yaml
 server/app-integrations-p0/adapter.mjs
 # Byte-exact response baselines (Decision 0038); never reformat.
 test/fixtures/s9-baseline/
+# Byte-exact Launch baselines from 1ab26d7 (Decision 0076); never reformat.
+test/fixtures/s83a-baseline/

@@ -44,6 +44,14 @@ export interface LaunchRecord {
   /** The launch chain slot at creation time (Decision 0038). */
   readonly chainId: LaunchChainId;
   readonly contractAddress: string | null;
+  /**
+   * The sale registry (Decision 0076): the contract's `saleId` as a decimal
+   * string, the semantic version of the contract it lives on, and the
+   * expected on-chain `configVersion`. All null until a sale is registered.
+   */
+  readonly saleId: string | null;
+  readonly contractVersion: string | null;
+  readonly configVersionOnchain: string | null;
   readonly configDigest: string | null;
   readonly scheduleStatus: LaunchScheduleStatus;
   readonly createdAt: string;

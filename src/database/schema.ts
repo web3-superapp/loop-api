@@ -1,4 +1,4 @@
-export const latestMigrationName = "000039_v2_community_application_review";
+export const latestMigrationName = "000041_v2_launch_contract_adapter";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

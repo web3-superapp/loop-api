@@ -122,6 +122,12 @@ const launchRowSchema = z
     project_id: opaqueIdSchema,
     chain_id: z.enum(launchChainIds),
     contract_address: z.string().nullable(),
+    sale_id: z
+      .string()
+      .regex(/^[1-9][0-9]{0,18}$/)
+      .nullable(),
+    contract_version: z.string().nullable(),
+    config_version_onchain: z.string().nullable(),
     config_digest: z.string().nullable(),
     schedule_status: z.enum(launchScheduleStatuses),
     created_at: dateSchema,
@@ -242,6 +248,9 @@ function mapLaunch(row: z.infer<typeof launchRowSchema>): LaunchRecord {
     projectId: row.project_id,
     chainId: row.chain_id,
     contractAddress: row.contract_address,
+    saleId: row.sale_id,
+    contractVersion: row.contract_version,
+    configVersionOnchain: row.config_version_onchain,
     configDigest: row.config_digest,
     scheduleStatus: row.schedule_status,
     createdAt: toIsoString(row.created_at),
@@ -705,7 +714,8 @@ export function createPostgresLaunchRepository(
                 values ($1, $2, $3)
                 on conflict (project_id) do nothing
                 returning
-                  launch_id, project_id, chain_id, contract_address, config_digest,
+                  launch_id, project_id, chain_id, contract_address, sale_id::text as sale_id,
+                  contract_version, config_version_onchain, config_digest,
                   schedule_status, created_at, updated_at
               `,
               values: [launchId, projectId, launchChainId],
@@ -742,6 +752,7 @@ export function createPostgresLaunchRepository(
           text: `
             select
               l.launch_id, l.project_id, l.chain_id, l.contract_address,
+              l.sale_id::text as sale_id, l.contract_version, l.config_version_onchain,
               l.config_digest, l.schedule_status, l.created_at, l.updated_at,
               p.name as project_name,
               p.ticker as project_ticker,
@@ -777,7 +788,8 @@ export function createPostgresLaunchRepository(
         const launchResult = await pool.query({
           text: `
             select
-              launch_id, project_id, chain_id, contract_address, config_digest,
+              launch_id, project_id, chain_id, contract_address, sale_id::text as sale_id,
+                  contract_version, config_version_onchain, config_digest,
               schedule_status, created_at, updated_at
             from public.launches
             where launch_id = $1
