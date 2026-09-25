@@ -211,3 +211,11 @@ for any address new in that tick.
   filtered on; if it becomes active again, the blocks in between are not
   indexed for it and its coverage row still shows the original start. The
   table records first entry only (see the hand-off questions).
+
+## Main-agent review (2026-09-25): accepted, open items
+
+Merged as delivered. Three gaps are recorded here rather than fixed, because each needs either a wire change or a behaviour decision:
+
+1. `approvalCoverageFromBlockNumber` is still the lane-wide start. For an external wallet linked after the lane started, the per-wallet start is `indexer_wallet_coverage.from_block_number`; approvals made before linking are not indexed and the response cannot say so. Exposing the per-wallet start is a wire change (S83 or later).
+2. A wallet archived and later reactivated keeps its original coverage row; the blocks in between are not indexed for it. Add `last_covered_block_number` or an archive hook when reactivation becomes a real path.
+3. Refusal narrowing halves the block range before the topic array, so a provider whose topic cap is below `BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE` can exhaust the request budget first. Fails safe; the lever is the chunk size setting.

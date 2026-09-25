@@ -314,7 +314,10 @@ never an API field): `BSC_RPC_UNREACHABLE`, `BSC_CHAIN_ID_MISMATCH`,
 Decision 0068 `BSC_LOG_QUERY_REJECTED` (every endpoint refused even a
 single-address, single-block `eth_getLogs`) and
 `BSC_LOG_QUERY_BUDGET_EXHAUSTED` (narrowing a segment would exceed 512
-client-side reads, each at most endpoints × 4 HTTP attempts). A _shape_
+client-side reads, each at most endpoints × 4 HTTP attempts); since
+Decision 0075 `INDEXER_WALLET_SET_EMPTY` (no active `account_wallets`
+row: the segment commits empty and the checkpoint advances) and
+`BSC_LOG_WALLET_FILTER_INVALID` (malformed wallet filter or chunk size). A _shape_
 refusal (HTTP 413, JSON-RPC -32602/-32005 typed or in a 4xx body, or
 `limit exceeded` / `Request blocked` / `block range` / `more than` text) is
 narrowed by block range, then by address, with the learned limits kept on
