@@ -596,6 +596,7 @@ describe("launch chain slot (Decision 0038)", () => {
       rpcUrls: ["https://rpc-a.example/", "https://rpc-b.example/"],
       confirmations: 21,
       reorgDepthBlocks: 96,
+      logAddressChunkSize: 8,
       sharedWithPrimary: true,
     });
     expect(Object.isFrozen(config.launchChain)).toBe(true);
@@ -609,6 +610,7 @@ describe("launch chain slot (Decision 0038)", () => {
       rpcUrls: [],
       confirmations: 15,
       reorgDepthBlocks: 64,
+      logAddressChunkSize: 8,
       sharedWithPrimary: true,
     });
   });
@@ -644,6 +646,7 @@ describe("launch chain slot (Decision 0038)", () => {
       rpcUrls: [],
       confirmations: 5,
       reorgDepthBlocks: 15,
+      logAddressChunkSize: 8,
       sharedWithPrimary: false,
     });
     expect(config.bscChain).toBeNull();
@@ -668,6 +671,7 @@ describe("launch chain slot (Decision 0038)", () => {
       ],
       confirmations: 3,
       reorgDepthBlocks: 15,
+      logAddressChunkSize: 8,
       sharedWithPrimary: false,
     });
     // The primary slot is untouched by the launch slot.
@@ -705,6 +709,26 @@ describe("launch chain slot (Decision 0038)", () => {
       "https://user:pass@bsc-testnet.example/";
     expect(() => loadConfig(credentialed)).toThrow(/LAUNCH_BSC_RPC_URLS/);
     expect(() => loadConfig(credentialed)).not.toThrow(/pass@/);
+  });
+
+  it("parses BSC_LOG_ADDRESS_CHUNK_SIZE into both chain slots and refuses out-of-range values (Decision 0078)", () => {
+    const environment = validEnvironment();
+    environment["BSC_RPC_URLS"] = "https://rpc-a.example/";
+    environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] = "5";
+    const config = loadConfig(environment);
+    expect(config.bscChain?.logAddressChunkSize).toBe(5);
+    expect(config.launchChain.logAddressChunkSize).toBe(5);
+
+    const defaulted = validEnvironment();
+    defaulted["BSC_RPC_URLS"] = "https://rpc-a.example/";
+    expect(loadConfig(defaulted).bscChain?.logAddressChunkSize).toBe(8);
+
+    for (const value of ["0", "101", "1.5", "eight"]) {
+      const refused = validEnvironment();
+      refused["BSC_RPC_URLS"] = "https://rpc-a.example/";
+      refused["BSC_LOG_ADDRESS_CHUNK_SIZE"] = value;
+      expect(() => loadConfig(refused), value).toThrow(ConfigurationError);
+    }
   });
 
   it("reads the launch chain ID for operator scripts with exactly the loadConfig rule", () => {

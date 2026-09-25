@@ -20,6 +20,7 @@ import {
 import {
   BscChainMismatchError,
   BscReadUnavailableError,
+  bscLogLimitRelaxAfterCleanReads,
   bscMaximumLogRequestsPerSegment,
   classifyLogQueryError,
   createBscReadClient,
@@ -53,6 +54,7 @@ function chainConfig(overrides: Partial<BscChainConfig> = {}): BscChainConfig {
     ]),
     confirmations: 15,
     reorgDepthBlocks: 64,
+    logAddressChunkSize: 8,
     usd1TokenAddress: null,
     ...overrides,
   });
@@ -931,8 +933,8 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
         toBlock: 8n,
       }),
     ).rejects.toBeInstanceOf(HttpRequestError);
-    // One client read (viem retries a 502 up to three times), no narrowing.
-    expect(requestCount).toBeLessThanOrEqual(4);
+    // One client read, one attempt (Decision 0078), no narrowing.
+    expect(requestCount).toBe(1);
   });
 
   it("splits on a -32000 'query returned more than 10000 results' refusal", async () => {
@@ -1066,13 +1068,29 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
       { from: 3_001n, to: 3_500n },
       { from: 3_501n, to: 4_000n },
     ]);
-    // A clean read relaxes the limit one step, so a Provider that recovers
-    // is not pinned to the narrow width forever: the third segment probes
-    // 1000 blocks once and is refused once.
+    // One clean read does not relax the limit (Decision 0078): every read
+    // until the streak completes stays at the learned width, refusal-free.
+    let nextFrom = 4_001n;
+    for (
+      let cleanReads = 1;
+      cleanReads < bscLogLimitRelaxAfterCleanReads;
+      cleanReads += 1
+    ) {
+      await client.readTransferLogs({
+        addresses: [tokenA],
+        fromBlock: nextFrom,
+        toBlock: nextFrom + 1_999n,
+      });
+      nextFrom += 2_000n;
+    }
+    expect(rejectedCount).toBe(learnedRejections);
+    // After the streak the limit is probed one step wider, so a Provider
+    // that recovers is not pinned to the narrow width forever: the next
+    // segment probes 1000 blocks once and is refused once.
     await client.readTransferLogs({
       addresses: [tokenA],
-      fromBlock: 4_001n,
-      toBlock: 6_000n,
+      fromBlock: nextFrom,
+      toBlock: nextFrom + 1_999n,
     });
     expect(rejectedCount).toBe(learnedRejections + 1);
   });
@@ -1154,10 +1172,12 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
     expect(accepted.every((request) => request.addresses.length === 1)).toBe(
       true,
     );
-    // Range halving (4 → 2 → 1) costs two refusals, then the address list
-    // is narrowed on one leaf (3 → 2 → 1, two refusals) and the learned limit
-    // is applied to every remaining leaf without another refusal.
-    expect(rejectedCount).toBe(4);
+    // The refusal names no dimension, so the address list is narrowed first
+    // (Decision 0078): 3 → 2 → 1 costs two refusals, the learned limit is
+    // applied to every remaining address without another refusal, and the
+    // four-block range is never split.
+    expect(rejectedCount).toBe(2);
+    expect(accepted).toHaveLength(3);
     // Logs come back in block order even though the split reordered requests.
     expect(logs.map((log) => [log.blockNumber, log.logIndex])).toEqual([
       [1n, 0],
@@ -1214,9 +1234,9 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
         method: "eth_getLogs",
       },
     });
-    // [1..2]{A,B} → [1]{A,B} → [1]{A}: three refusals and no further probing
-    // (viem retries a 403 up to three times per refusal before giving up).
-    expect(requestCount).toBeLessThanOrEqual(3 * 4);
+    // [1..2]{A,B} → [1..2]{A} → [1]{A}: three refusals and no further
+    // probing; the log lane sends each request once (Decision 0078).
+    expect(requestCount).toBe(3);
   });
 
   it("fails closed as BSC_LOG_QUERY_BUDGET_EXHAUSTED instead of grinding a rationed endpoint block by block", async () => {
@@ -1729,7 +1749,12 @@ describe("BSC read client — wallet-scoped ERC-20 logs (Decision 0075)", () => 
   });
 
   it("keeps narrowing the block range of a wallet-scoped read that the Provider refuses by span", async () => {
-    const accepted: { from: bigint; to: bigint; side: "from" | "to" }[] = [];
+    const accepted: {
+      from: bigint;
+      to: bigint;
+      side: "from" | "to";
+      wallet: string;
+    }[] = [];
     const client = createBscReadClient({
       config: chainConfig({ rpcUrls: ["https://rpc-a.example/"] }),
       transportFactory: () =>
@@ -1741,11 +1766,11 @@ describe("BSC read client — wallet-scoped ERC-20 logs (Decision 0075)", () => 
               new LimitExceededRpcError(new Error("limit exceeded")),
             );
           }
-          accepted.push({
-            from,
-            to,
-            side: topicAddresses(filter, 1) === null ? "to" : "from",
-          });
+          const fromSide = topicAddresses(filter, 1);
+          const side = fromSide === null ? "to" : "from";
+          for (const wallet of fromSide ?? topicAddresses(filter, 2) ?? []) {
+            accepted.push({ from, to, side, wallet });
+          }
           return Promise.resolve([]);
         }),
     });
@@ -1757,14 +1782,21 @@ describe("BSC read client — wallet-scoped ERC-20 logs (Decision 0075)", () => 
       walletFilter: { walletAddresses: wallets, topicChunkSize: 200 },
     });
 
+    // A bare "limit exceeded" names no dimension, so the topic array is
+    // narrowed before the range (Decision 0078); either way every block of
+    // every wallet on every side is covered exactly once.
     for (const side of ["from", "to"] as const) {
-      let expectedNext = 1n;
-      for (const range of accepted.filter((entry) => entry.side === side)) {
-        expect(range.from).toBe(expectedNext);
-        expect(range.to - range.from + 1n).toBeLessThanOrEqual(500n);
-        expectedNext = range.to + 1n;
+      for (const wallet of wallets) {
+        let expectedNext = 1n;
+        for (const range of accepted.filter(
+          (entry) => entry.side === side && entry.wallet === wallet,
+        )) {
+          expect(range.from).toBe(expectedNext);
+          expect(range.to - range.from + 1n).toBeLessThanOrEqual(500n);
+          expectedNext = range.to + 1n;
+        }
+        expect(expectedNext).toBe(2_001n);
       }
-      expect(expectedNext).toBe(2_001n);
     }
   });
 });

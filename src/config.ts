@@ -420,6 +420,7 @@ const environmentSchema = z
     BSC_RPC_URLS: optionalCredential(4_096),
     BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    BSC_LOG_ADDRESS_CHUNK_SIZE: positiveIntegerString(1, 100),
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
     BSC_WRITES_ENABLED: booleanString,
@@ -661,6 +662,7 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_RPC_URLS: optionalCredential(4_096),
     BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
     BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    BSC_LOG_ADDRESS_CHUNK_SIZE: positiveIntegerString(1, 100),
     ALERT_EVALUATOR_ENABLED: booleanString,
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
     MARKET_SPARKLINE_WARM_ENABLED: booleanString,
@@ -845,6 +847,11 @@ export interface BscChainConfig {
   readonly rpcUrls: readonly string[];
   readonly confirmations: number;
   readonly reorgDepthBlocks: number;
+  /**
+   * Token addresses per `eth_getLogs` request (Decision 0078,
+   * `BSC_LOG_ADDRESS_CHUNK_SIZE`, 1-100, default 8).
+   */
+  readonly logAddressChunkSize: number;
   /** Present only when the address is configured and independently verified. */
   readonly usd1TokenAddress: string | null;
 }
@@ -863,6 +870,8 @@ export interface LaunchChainConfig {
   readonly rpcUrls: readonly string[];
   readonly confirmations: number;
   readonly reorgDepthBlocks: number;
+  /** Always the primary `BSC_LOG_ADDRESS_CHUNK_SIZE` (Decision 0078). */
+  readonly logAddressChunkSize: number;
   readonly sharedWithPrimary: boolean;
 }
 
@@ -1415,6 +1424,7 @@ export function parseLaunchChainConfig(
     readonly rpcUrls: readonly string[];
     readonly confirmations: number;
     readonly reorgDepthBlocks: number;
+    readonly logAddressChunkSize: number;
   },
 ): LaunchChainConfig {
   if (data.LAUNCH_CHAIN_ID === "56") {
@@ -1424,6 +1434,7 @@ export function parseLaunchChainConfig(
       rpcUrls: primary.rpcUrls,
       confirmations: primary.confirmations,
       reorgDepthBlocks: primary.reorgDepthBlocks,
+      logAddressChunkSize: primary.logAddressChunkSize,
       sharedWithPrimary: true,
     });
   }
@@ -1435,6 +1446,7 @@ export function parseLaunchChainConfig(
       data.LAUNCH_BSC_CONFIRMATIONS ?? defaultLaunchChainConfirmations,
     reorgDepthBlocks:
       data.LAUNCH_BSC_REORG_DEPTH_BLOCKS ?? defaultLaunchChainReorgDepthBlocks,
+    logAddressChunkSize: primary.logAddressChunkSize,
     sharedWithPrimary: false,
   });
 }
@@ -1558,6 +1570,7 @@ function parseBscChainConfig(data: {
   readonly BSC_RPC_URLS?: string | undefined;
   readonly BSC_CONFIRMATIONS: number;
   readonly BSC_REORG_DEPTH_BLOCKS: number;
+  readonly BSC_LOG_ADDRESS_CHUNK_SIZE: number;
   readonly BSC_USD1_TOKEN_ADDRESS?: string | undefined;
   readonly BSC_USD1_VERIFIED?: boolean | undefined;
 }): BscChainConfig | null {
@@ -1571,6 +1584,7 @@ function parseBscChainConfig(data: {
     rpcUrls,
     confirmations: data.BSC_CONFIRMATIONS,
     reorgDepthBlocks: data.BSC_REORG_DEPTH_BLOCKS,
+    logAddressChunkSize: data.BSC_LOG_ADDRESS_CHUNK_SIZE,
     usd1TokenAddress: parseVerifiedUsd1Address(
       data.BSC_USD1_TOKEN_ADDRESS,
       data.BSC_USD1_VERIFIED ?? false,
@@ -1941,6 +1955,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_RPC_URLS: environment["BSC_RPC_URLS"],
     BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    BSC_LOG_ADDRESS_CHUNK_SIZE:
+      environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] ?? "8",
     BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
     BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
     BSC_WRITES_ENABLED: environment["BSC_WRITES_ENABLED"] ?? "false",
@@ -2092,6 +2108,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       rpcUrls: bscChain?.rpcUrls ?? Object.freeze([]),
       confirmations: parsed.data.BSC_CONFIRMATIONS,
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+      logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
@@ -2141,6 +2158,8 @@ export function loadReconciliationWorkerConfig(
     BSC_RPC_URLS: environment["BSC_RPC_URLS"],
     BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
     BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    BSC_LOG_ADDRESS_CHUNK_SIZE:
+      environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] ?? "8",
     ALERT_EVALUATOR_ENABLED: environment["ALERT_EVALUATOR_ENABLED"] ?? "false",
     ALERT_NOTIFICATION_DEDUPE_SECONDS:
       environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
@@ -2239,6 +2258,7 @@ export function loadReconciliationWorkerConfig(
       rpcUrls: workerBscChain?.rpcUrls ?? Object.freeze([]),
       confirmations: parsed.data.BSC_CONFIRMATIONS,
       reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+      logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
     launchIndexerEnabled: parsed.data.LAUNCH_INDEXER_ENABLED,
