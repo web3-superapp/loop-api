@@ -1,4 +1,4 @@
-export const latestMigrationName = "000042_v2_launch_event_lane";
+export const latestMigrationName = "000043_v2_launch_intent_reconcile";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

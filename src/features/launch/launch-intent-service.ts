@@ -17,6 +17,7 @@ import {
   BscReadUnavailableError,
   type BscChainCallClient,
   type BscFeeData,
+  type BscTransactionObservation,
 } from "../../integrations/bsc/rpc-client.js";
 import { toHexQuantity } from "../../integrations/bsc/tx-builder.js";
 import {
@@ -97,6 +98,10 @@ export const launchIntentReasonCodes = Object.freeze({
   intentNotSignable: "LAUNCH_INTENT_NOT_SIGNABLE",
   intentAlreadyReported: "LAUNCH_INTENT_ALREADY_REPORTED",
   txPayloadMismatch: "LAUNCH_TX_PAYLOAD_MISMATCH",
+  /** Decision 0080: the finalized receipt has status 0x0. */
+  txReverted: "LAUNCH_TX_REVERTED",
+  /** Decision 0080: no receipt once the deadline plus grace has passed. */
+  txNotObserved: "LAUNCH_TX_NOT_OBSERVED",
 } as const);
 
 export interface LaunchIntentRuntime {
@@ -254,6 +259,9 @@ export function projectLaunchIntent(
             walletProjectCapUsd1: caps.walletProjectCapUsd1,
           }),
       transactionHash: record.transactionHash,
+      // Decision 0080: present on a reverted Intent only; null while no
+      // read surface yields a decoded reason.
+      ...(state === "reverted" ? { revertReason: record.revertReason } : {}),
       simulation: Object.freeze({
         status: simulation?.status ?? "unavailable",
         reasonCode: simulation?.reasonCode ?? null,
@@ -271,10 +279,13 @@ export function projectLaunchIntent(
           ? null
           : elapsed
             ? launchIntentReasonCodes.intentExpired
-            : record.transactionHash !== null
-              ? launchIntentReasonCodes.intentAlreadyReported
-              : (simulation?.reasonCode ??
-                launchIntentReasonCodes.simulationUnavailable),
+            : record.reasonCode !== null
+              ? // Decision 0080: why the reconcile lane settled it.
+                record.reasonCode
+              : record.transactionHash !== null
+                ? launchIntentReasonCodes.intentAlreadyReported
+                : (simulation?.reasonCode ??
+                  launchIntentReasonCodes.simulationUnavailable),
       }),
     }),
     contractVersion: v2ContractVersion,
@@ -799,6 +810,25 @@ export interface LaunchIntentReportDependencies {
 }
 
 /**
+ * Whether an observed transaction is the sealed `buy()` payload: sender,
+ * contract, calldata, zero value, and chain (Decision 0077). The broadcast
+ * report and the receipt reconciler (Decision 0080) apply the same test.
+ */
+export function launchTransactionMatches(
+  observed: BscTransactionObservation,
+  transaction: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    observed.from === transaction["from"] &&
+    observed.to === transaction["to"] &&
+    observed.input.toLowerCase() ===
+      String(transaction["data"]).toLowerCase() &&
+    observed.value === 0n &&
+    (observed.chainId === null || observed.chainId === transaction["chainId"])
+  );
+}
+
+/**
  * Device broadcast report (Decision 0077, same discipline as 0035): the
  * transaction hash is pending evidence, verified against the sealed payload
  * when the launch slot already sees it. The Intent becomes `confirmed` only
@@ -857,16 +887,7 @@ export async function reportLaunchIntentBroadcast(
     // A late report is accepted only with the transaction in hand.
     refuse("DATA_STALE", launchIntentReasonCodes.intentExpired);
   }
-  if (
-    observed !== null &&
-    (observed.from !== transaction["from"] ||
-      observed.to !== transaction["to"] ||
-      observed.input.toLowerCase() !==
-        String(transaction["data"]).toLowerCase() ||
-      observed.value !== 0n ||
-      (observed.chainId !== null &&
-        observed.chainId !== transaction["chainId"]))
-  ) {
+  if (observed !== null && !launchTransactionMatches(observed, transaction)) {
     refuse("VALIDATION_FAILED", launchIntentReasonCodes.txPayloadMismatch);
   }
   try {

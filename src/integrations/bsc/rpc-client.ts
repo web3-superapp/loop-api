@@ -478,6 +478,13 @@ export const bscLogWalletFilterInvalidReasonCode =
   "BSC_LOG_WALLET_FILTER_INVALID";
 export const bscLogQueryBudgetExhaustedReasonCode =
   "BSC_LOG_QUERY_BUDGET_EXHAUSTED";
+/**
+ * The endpoint serves only recent blocks and refuses the requested range as
+ * an archive (historical) read (Decision 0079, S82d). Narrowing cannot help:
+ * the read fails closed at once, the learned limits are left untouched, and
+ * the lane reports how far behind the head the refused segment starts.
+ */
+export const bscLogArchiveRequiredReasonCode = "BSC_LOG_ARCHIVE_REQUIRED";
 /** Mirrors the BSC_CONFIRMATIONS and BSC_REORG_DEPTH_BLOCKS defaults. */
 export const defaultBscConfirmations = 15;
 export const defaultBscReorgDepthBlocks = 64;
@@ -889,8 +896,16 @@ export function summarizeRpcError(error: unknown): BscRpcErrorSummary {
  *   "too many requests", "quota", "usage limit". Narrowing would multiply
  *   the requests against the same quota, so the error propagates unchanged
  *   to the lane's exponential backoff.
+ * - `archive` (Decision 0079, S82d): the endpoint objects to the *age* of the
+ *   blocks — it keeps only recent state/history and refuses older ranges
+ *   whatever their shape. Observed 2026-09-25: publicnode mainnet answers
+ *   HTTP 403 / -32602 "Archive requests require a personal token" about
+ *   10,000 blocks behind the head; publicnode testnet answers -32701
+ *   "History has been pruned for this block". Narrowing only multiplies the
+ *   refusals, so it is checked before the shape codes (-32602 would
+ *   otherwise read as a shape refusal) and never narrows.
  */
-export type LogQueryRefusal = "shape" | "throttle";
+export type LogQueryRefusal = "shape" | "throttle" | "archive";
 
 const shapeStatuses = new Set([413]);
 const shapeCodes = new Set<number>([
@@ -908,6 +923,14 @@ const throttlePattern = new RegExp(
   `rate limit|too many(?! (?:${filterPartPattern}))|quota|usage limit`,
   "i",
 );
+/**
+ * Age objections. "archive" and "personal token" are publicnode's mainnet
+ * wording, "pruned" its testnet (and go-ethereum's history-expiry) wording,
+ * "historical" the generic form some gateways use ("historical data/state/
+ * blocks not available").
+ */
+const archivePattern =
+  /archive|personal token|pruned|historical|missing trie node/i;
 const shapePattern = new RegExp(
   `limit exceeded|request blocked|block range|more than|too wide|too large|exceed|too many (?:${filterPartPattern})`,
   "i",
@@ -949,6 +972,9 @@ export function classifyLogQueryError(error: unknown): LogQueryRefusal | null {
   });
   if (texts.some((text) => throttlePattern.test(text))) {
     return "throttle";
+  }
+  if (texts.some((text) => archivePattern.test(text))) {
+    return "archive";
   }
   if (
     error instanceof LimitExceededRpcError ||
@@ -1244,7 +1270,9 @@ export function createBscReadClient(
    * A throttle from any endpoint of the request wins over a shape refusal
    * from another (Decision 0079) and propagates unchanged (resetting the
    * learned limits first when they are narrowed), as does a
-   * timeout or a transport failure with no shape refusal beside it.
+   * timeout or a transport failure with no shape refusal beside it. An
+   * archive refusal with no shape refusal beside it (S82d) fails the read
+   * closed as `BSC_LOG_ARCHIVE_REQUIRED` without narrowing or resetting.
    * Collected logs are returned in block order regardless of split order.
    */
   async function readLogRangeWith<
@@ -1337,6 +1365,17 @@ export function createBscReadClient(
           isLogQueryRejection(candidate),
         );
         if (shapeRefusals.length === 0) {
+          // An age objection (S82d) is final for this read: no narrowing,
+          // no reset, the learned limits stay what they were.
+          const archive = candidates.find(
+            (candidate) => classifyLogQueryError(candidate) === "archive",
+          );
+          if (archive !== undefined) {
+            throw new BscReadUnavailableError(bscLogArchiveRequiredReasonCode, {
+              cause: archive,
+              rpcError: summarizeRpcError(archive),
+            });
+          }
           throw error;
         }
         refused = true;

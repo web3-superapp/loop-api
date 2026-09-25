@@ -882,7 +882,7 @@ Content-Type: application/json
 - 同一 `Idempotency-Key` 同一请求体：返回同一个 Intent（不再读链）；不同请求体：`409 IDEMPOTENCY_CONFLICT`。
 - 模拟失败：仍返回 `201`，`state: "prepared"`，`signing.allowed: false`，
   `reasonCode` 为 `LAUNCH_SIMULATION_REVERTED` / `LAUNCH_SIMULATION_UNAVAILABLE`。
-- `state` 可能值：`prepared` / `awaiting_signature` / `submitted`（已回报）/ `confirmed`（索引看到对应 `Purchased`）/ `expired`（未回报且过期）。
+- `state` 可能值：`prepared` / `awaiting_signature` / `submitted`（已回报）/ `confirmed`（索引看到对应 `Purchased`，或回执成功，S83b2）/ `expired`（未回报且过期；或已回报但截止后仍无回执，S83b2）/ `reverted`、`failed`（S83b2，见 S83b2 节）。
 
 错误（七字段错误体，`detailsSafe.reasonCode` 指明规则；除 `detailsSafe` 外字段均为固定值）：
 
@@ -1014,3 +1014,55 @@ Content-Type: application/json
 - `pnpm launch:allowlist import <csv> --launch <id> --round <n> [--source <tag>]`：每行一个地址（可有表头 `address`）。
 - `pnpm launch:allowlist compute --launch <id> --round <n> --snapshot-block <n> [--confirm]`：输出 Merkle 根，
   由运营写入链上轮次；后端不写链。
+
+## S83b2：购买 Intent 回执对账（决策 0080）
+
+Base URL、headers、路由都不变；本节只说明回报之后 `launchIntent.state` 会怎样变化、在哪里看到。
+
+### S83b2.1 状态机（后端对账 lane 写，前端只读）
+
+| 从          | 到          | 触发                                                                            | `signing.reasonCode`             |
+| ----------- | ----------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| `submitted` | `confirmed` | 索引到该交易的 `Purchased`，或回执 `status=0x1` 且确认数 ≥ launch 槽位确认数    | `LAUNCH_INTENT_ALREADY_REPORTED` |
+| `submitted` | `reverted`  | 回执 `status=0x0` 且确认数足够                                                  | `LAUNCH_TX_REVERTED`             |
+| `submitted` | `failed`    | 回报的 hash 在链上是另一笔交易（回报时链上还看不到，事后核对不一致）            | `LAUNCH_TX_PAYLOAD_MISMATCH`     |
+| `submitted` | `expired`   | 过了 `deadline`（= `expiresAt`）5 分钟仍无回执（节点仍显示 pending 则 60 分钟） | `LAUNCH_TX_NOT_OBSERVED`         |
+| `expired`   | `confirmed` | 之后仍索引到该交易的 `Purchased`（证据优先）                                    | `LAUNCH_INTENT_ALREADY_REPORTED` |
+
+`signing.allowed` 在这些状态下都是 `false`。确认数：测试网（`LAUNCH_CHAIN_ID=97`）默认 5 块，主网槽位与主链一致。
+两条路径（索引 / 回执）谁先到谁生效，另一条是空操作，不会来回跳。
+
+### S83b2.2 在哪里看到
+
+- 用同一 hash 重放 `POST …/broadcast-report`（幂等，`200`），或同一 `Idempotency-Key` 重放 `POST …/intents`，返回存储中的最新状态。
+- `GET /v2/launch/{launchId}/history` 不变：只列索引到的 `Purchased`；reverted / expired 的购买不会出现在里面。
+
+### S83b2.3 wire 变化
+
+- `state` 枚举不变（`reverted` / `failed` / `expired` 在 S83a 冻结枚举里已有），这是它们第一次真正出现。
+- 新增可选字段 `launchIntent.revertReason`：**只在 `state = "reverted"` 时出现**，值为字符串或 `null`；目前恒为 `null`（公共节点拿不到 trace）。其他状态不出现该键，响应字节不变。
+
+`reverted` 示例（节选）：
+
+```json
+{
+  "launchIntent": {
+    "launchIntentId": "0f3d6c1a-8b8e-4c55-9a51-4c1f3e2d7a90",
+    "state": "reverted",
+    "transactionHash": "0xabababababababababababababababababababababababababababababababab",
+    "revertReason": null,
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": false,
+      "reasonCode": "LAUNCH_TX_REVERTED"
+    }
+  },
+  "contractVersion": "2.0"
+}
+```
+
+前端建议：`reverted` 显示「交易失败，资金未扣除（仅 gas）」；`expired` 显示「未上链，可重新下单」；`failed` 显示「回报的交易不匹配」。三者都可以直接重新 `POST …/intents`（新 `Idempotency-Key`）。
+
+### S83b2.4 错误码与 unavailable
+
+错误码表不变（S83b.6 / S83b.7）。对账没有配置 launch 槽位 RPC 时后端不推进任何状态，Intent 停在 `submitted`；接口仍 `200`，不会伪造结果。

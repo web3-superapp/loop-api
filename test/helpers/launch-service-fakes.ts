@@ -242,6 +242,9 @@ export function chainRepositoryFake(
         payloadVerified: false,
         reportedAt: null,
         createdAt,
+        receipt: null,
+        reasonCode: null,
+        revertReason: null,
       };
       intents.set(input.idempotencyKey, { sha: input.requestSha256, record });
       return { created: true, intent: record };

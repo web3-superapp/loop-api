@@ -1,3 +1,4 @@
+import { RpcRequestError } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -384,6 +385,58 @@ describe("launch_event lane (Decision 0077)", () => {
       kind: "unavailable",
       reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
     });
+  });
+
+  it("reports an archive refusal of the adapter's getLogs as BSC_LOG_ARCHIVE_REQUIRED with behindBlocks (S82d)", async () => {
+    const { fake, commits } = repository();
+    const onUnavailable = vi.fn();
+    const pruned = {
+      ...adapter(logs),
+      readLogs: () =>
+        Promise.reject(
+          new LaunchContractUnavailableError("LAUNCH_CONTRACT_READ_FAILED", {
+            cause: new RpcRequestError({
+              body: { method: "eth_getLogs" },
+              url: "https://bsc-testnet-rpc.publicnode.com/",
+              error: {
+                code: -32701,
+                message: "History has been pruned for this block.",
+              },
+            }),
+          }),
+        ),
+    };
+    const worker = createLaunchIndexerWorker({
+      repository: fake,
+      readClient: readClient({ block: 3_000_100n }),
+      adapter: pruned,
+      chainId: "eip155:97",
+      onUnavailable,
+    });
+    expect(await worker.runOnce()).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "BSC_LOG_ARCHIVE_REQUIRED",
+      behindBlocks: 3_000_000,
+    });
+    expect(commits).toEqual([]);
+    // Any other read failure keeps the adapter's reason and no behindBlocks.
+    const failing = {
+      ...adapter(logs),
+      readLogs: () =>
+        Promise.reject(
+          new LaunchContractUnavailableError("LAUNCH_CONTRACT_READ_FAILED", {
+            cause: new Error("socket hang up"),
+          }),
+        ),
+    };
+    const other = await createLaunchIndexerWorker({
+      repository: fake,
+      readClient: readClient({ block: 3_000_100n }),
+      adapter: failing,
+      chainId: "eip155:97",
+    }).runOnce();
+    expect(other.reasonCode).toBe("LAUNCH_CONTRACT_READ_FAILED");
+    expect(other).not.toHaveProperty("behindBlocks");
   });
 
   it("stores every argument of the 14 events as strings under its 06 name", () => {

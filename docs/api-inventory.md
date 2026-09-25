@@ -240,7 +240,7 @@ accepts or refuses a delivered ABI.
 | `GET /v2/launch/{launchId}/holders`                                    | Bearer + headers                                                          | `holders` (indexed buyers), `myPosition` (`getPosition`), `walletCap` at one block                                                                                          | `implemented` | `blocked-provider`; `available` once the contract is configured, the sale registered, and the lane indexed (Decision 0077)                       |
 | `GET /v2/launch/{launchId}/history`                                    | Bearer + headers                                                          | Caller's `purchaseRecords`/`entitlements`/`refunds` from the lane + `source.indexedBlockNumber/Hash`                                                                        | `implemented` | `blocked-provider`; lane-projected (Decision 0077)                                                                                               |
 | `POST /v2/launch/{launchId}/intents`                                   | Write headers; `{walletId, roundId, payAmount}`                           | `201 launchIntent` binding every 03 §8.2 field + unsigned `buy()`; refusals carry `detailsSafe.reasonCode`                                                                  | `implemented` | `blocked-provider`; `503` byte-identical while `BSC_WRITES_ENABLED` is off or the contract keys are blank (Decision 0077)                        |
-| `POST /v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report` | Write headers; `{txHash}`                                                 | `200 launchIntent` `submitted` (then `confirmed` when the lane indexes the Purchased log)                                                                                   | `implemented` | `blocked-provider`; same gates as prepare (Decision 0077)                                                                                        |
+| `POST /v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report` | Write headers; `{txHash}`                                                 | `200 launchIntent` `submitted` (then `confirmed` when the lane indexes the Purchased log or, since 0080, a success receipt; `reverted`/`failed`/`expired` from the receipt) | `implemented` | `blocked-provider`; same gates as prepare (Decision 0077)                                                                                        |
 | `GET /v2/launch/stake`                                                 | Bearer + headers                                                          | `STAKING_CONTRACT_PENDING`, `executable: false`                                                                                                                             | `implemented` | `blocked-provider`                                                                                                                               |
 | `GET /v2/launch/economy`                                               | Bearer + headers                                                          | Provable counts + `source: loop` (Decision 0049); optional `onChain` (registered sales, SUCCEEDED raise, locked LP; `source: loop_indexer`) only with a configured contract | `implemented` | `implemented`; `onChain` needs the lane checkpoint (Decision 0077)                                                                               |
 
@@ -331,7 +331,14 @@ never an API field): `BSC_RPC_UNREACHABLE`, `BSC_CHAIN_ID_MISMATCH`,
 Decision 0068 `BSC_LOG_QUERY_REJECTED` (every endpoint refused even a
 single-address, single-block `eth_getLogs`) and
 `BSC_LOG_QUERY_BUDGET_EXHAUSTED` (narrowing a segment would exceed 512
-client-side reads, each one HTTP attempt per endpoint since Decision 0078); since
+client-side reads, each one HTTP attempt per endpoint since Decision 0078);
+since S82d (Decision 0079) `BSC_LOG_ARCHIVE_REQUIRED` with `behindBlocks`
+(head − the refused segment's first block): the endpoint refused the range
+as an archive read (publicnode `Archive requests require a personal token`,
+403 / -32602; `History has been pruned for this block`, -32701; any
+`archive` / `personal token` / `pruned` / `historical` text) — never narrowed,
+learned limits untouched, exponential backoff like the other refusals, and
+also reported by the `launch_event` lane; since
 Decision 0075 `INDEXER_WALLET_SET_EMPTY` (no active `account_wallets`
 row: the segment commits empty and the checkpoint advances) and
 `BSC_LOG_WALLET_FILTER_INVALID` (malformed wallet filter or chunk size). A _shape_
@@ -524,7 +531,15 @@ The switch is on for the Development stack only. Ambiguous Provider
 results become `unknown` and are reconciled by the default-off
 `wallet-intent-reconcile` worker lane, never replayed; a late device
 broadcast on an expired or cancelled intent is accepted only when the chain
-already shows the matching payload. No transaction has been broadcast or
+already shows the matching payload. Since Decision 0080 the same lane also
+settles reported Launch purchase Intents (`launch_intents`, read on the launch
+chain slot): a receipt at the slot's confirmation depth moves `submitted` to
+`confirmed` (status 0x1, idempotent with the `launch_event` Purchased log) or
+`reverted` (`LAUNCH_TX_REVERTED`); an unverified hash that is another
+transaction becomes `failed` (`LAUNCH_TX_PAYLOAD_MISMATCH`); no receipt past
+the deadline plus grace becomes `expired` (`LAUNCH_TX_NOT_OBSERVED`); without
+a launch-slot RPC it stays `unavailable` (`LAUNCH_CHAIN_RPC_NOT_CONFIGURED`)
+and moves nothing. No transaction has been broadcast or
 executed: the 2026-09-22 Development run reached `409 INSUFFICIENT_BALANCE`
 at the gas-reserve check because no Development wallet holds BNB.
 

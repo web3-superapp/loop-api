@@ -235,3 +235,41 @@ run, so the rate budget was shared.
 1. **Throttle reset kept.** The addition beyond the task sheet stays: the live run showed a client parked at the floor never leaves it under a per-second rate limit without this rule.
 2. **Archive boundary** (publicnode "Archive requests require a personal token", 403 -32602): to be classified on its own and never narrowed, with the lane reporting "behind the provider's window, reseed"; tracked as S82d. Until then the runbook remedy is `ops/indexer-reseed.sh`.
 3. **Endpoint hygiene is configuration.** A permanently throttled or quota-exhausted endpoint must be removed from `BSC_RPC_URLS` / `LAUNCH_BSC_RPC_URLS`; the client cannot tell it from a transient limit. Recorded in the ops runbook.
+
+## S82d: archive refusals are a third class (2026-09-25)
+
+Ruling 2 above, implemented.
+
+- `classifyLogQueryError` returns `archive` when the refusal text (a 4xx body
+  or a JSON-RPC error; never a 5xx page) matches `archive`, `personal
+token`, `pruned`, `historical`, or `missing trie node`. It is checked after
+  the throttle texts (a quota is still a rate objection) and **before** the
+  shape codes, so publicnode's HTTP 403 / -32602 is no longer read as an
+  unhinted shape refusal.
+- Wording checked live on 2026-09-25 (`eth_getLogs`, 3-block range):
+  publicnode mainnet (`bsc-rpc.publicnode.com`) answers HTTP 403 `{"code":
+-32602, "message": "Archive requests require a personal token. …"}` from
+  about 20,000 blocks back (the refusal starts roughly 10,000 behind head);
+  publicnode testnet (`bsc-testnet-rpc.publicnode.com`) answers HTTP 200
+  `{"code": -32701, "message": "History has been pruned for this block. …"}`
+  3,000,000 blocks back; NodeReal and dRPC served the same ranges (dRPC
+  failed a deep one with a 5xx "Temporary internal error", which stays an
+  outage); `bsc-dataseed.bnbchain.org` answered `-32005 limit exceeded` at
+  every depth (shape, unchanged); 1RPC only returned its `-32001` usage-limit
+  text (throttle, unchanged), so its archive wording could not be observed.
+- The range reader: an archive refusal with no shape refusal from another
+  endpoint of the same request fails the read at once with
+  `BscReadUnavailableError("BSC_LOG_ARCHIVE_REQUIRED")` (with the Provider
+  classification). Nothing is narrowed, the learned limits are neither
+  lowered nor reset, and the clean-read streak is not touched. If another
+  endpoint refuses the shape, narrowing proceeds for that endpoint as before.
+- The lanes: `erc20_transfer` and `pool_event` report `unavailable` /
+  `BSC_LOG_ARCHIVE_REQUIRED` with `behindBlocks = head − fromBlock` on the
+  run result and on the once-per-transition availability line (the worker
+  logger now allowlists `behindBlocks`), and back off exponentially like the
+  other refusals. The `launch_event` lane reads through the contract adapter;
+  when the adapter's `LAUNCH_CONTRACT_READ_FAILED` wraps an archive refusal
+  it reports `BSC_LOG_ARCHIVE_REQUIRED` with `behindBlocks` instead.
+- The remedy stays operational (reseed with `ops/indexer-reseed.sh`, or an
+  archive-capable endpoint in `BSC_RPC_URLS` / `LAUNCH_BSC_RPC_URLS`); the
+  lane never skips the gap on its own.

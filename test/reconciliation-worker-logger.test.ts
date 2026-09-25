@@ -194,6 +194,59 @@ describe("reconciliation worker logger", () => {
     expect(line).not.toContain("relaxAfterCleanReads");
   });
 
+  it("passes behindBlocks (S82d) and the Launch Intent settlement fields (Decision 0080) through, and drops malformed ones", () => {
+    const stderr = vi.fn<(line: string) => void>();
+    const logger = createReconciliationWorkerLogger({
+      level: "info",
+      serviceVersion: "0.1.0",
+      now: () => new Date("2026-09-25T07:00:00.000Z"),
+      writeStderr: stderr,
+      writeStdout: stderr,
+    });
+    logger.warn(
+      {
+        lane: "erc20_transfer",
+        state: "unavailable",
+        reasonCode: "BSC_LOG_ARCHIVE_REQUIRED",
+        behindBlocks: 10_240,
+      },
+      "LOOP BSC indexer lane is unavailable",
+    );
+    expect(stderr.mock.calls[0]?.[0]).toContain('"behindBlocks":10240');
+    logger.info(
+      {
+        lane: "launch_intent_reconcile",
+        launchIntentId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+        toState: "reverted",
+        reasonCode: "LAUNCH_TX_REVERTED",
+      },
+      "LOOP launch intent settled from its receipt",
+    );
+    const settled = JSON.parse(stderr.mock.calls[1]?.[0] ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(settled).toMatchObject({
+      lane: "launch_intent_reconcile",
+      launchIntentId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+      toState: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+    });
+    logger.info(
+      {
+        lane: "launch_intent_reconcile",
+        launchIntentId: "0xabc",
+        toState: "gone",
+        behindBlocks: -1,
+      },
+      "LOOP launch intent settled from its receipt",
+    );
+    const dropped = stderr.mock.calls[2]?.[0] ?? "";
+    expect(dropped).not.toContain("launchIntentId");
+    expect(dropped).not.toContain("toState");
+    expect(dropped).not.toContain("behindBlocks");
+  });
+
   it("emits nothing at the silent level", () => {
     const stdout = vi.fn<(line: string) => void>();
     const stderr = vi.fn<(line: string) => void>();

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   BSC_INDEXER_IDLE_DELAY_MS,
+  behindBlocksOf,
   retryDelayMs,
   unavailableReasonFor,
   type BscIndexerRunKind,
@@ -15,7 +16,11 @@ import {
   type LaunchStateProjectionInput,
 } from "./features/launch/launch-chain-repository.js";
 import { launchContractReasonCodes } from "./features/launch/launch-contract.js";
-import type { BscReadClient } from "./integrations/bsc/rpc-client.js";
+import {
+  bscLogArchiveRequiredReasonCode,
+  classifyLogQueryError,
+  type BscReadClient,
+} from "./integrations/bsc/rpc-client.js";
 import {
   LaunchContractUnavailableError,
   isZeroBytes32,
@@ -48,6 +53,8 @@ export interface LaunchIndexerRunResult {
   readonly eventCount: number;
   readonly projectedSaleCount: number;
   readonly reasonCode: string | null;
+  /** `BSC_LOG_ARCHIVE_REQUIRED` only: head − fromBlock (Decision 0079, S82d). */
+  readonly behindBlocks?: number;
 }
 
 export interface LaunchIndexerWarning {
@@ -76,7 +83,10 @@ export interface CreateLaunchIndexerWorkerOptions {
   readonly chainId: LaunchChainId;
   readonly createUuid?: () => string;
   readonly onWarning?: (warning: LaunchIndexerWarning) => void;
-  readonly onUnavailable?: (reasonCode: string) => void;
+  readonly onUnavailable?: (
+    reasonCode: string,
+    detail?: { readonly behindBlocks?: number },
+  ) => void;
   readonly onInfrastructureBackoff?: (event: {
     readonly lane: typeof LAUNCH_INDEXER_LANE;
     readonly consecutiveFailureCount: number;
@@ -312,6 +322,14 @@ export function createLaunchIndexerWorker(
       decoded = options.adapter.decodeEvents(logs);
     } catch (error) {
       if (error instanceof LaunchContractUnavailableError) {
+        // The adapter keeps the Provider error as the cause: an endpoint
+        // that refuses the range as an archive read is reported as such
+        // (S82d) instead of a generic read failure.
+        if (classifyLogQueryError(error.cause) === "archive") {
+          return result("unavailable", bscLogArchiveRequiredReasonCode, {
+            behindBlocks: behindBlocksOf(head.blockNumber, fromBlock),
+          });
+        }
         return result("unavailable", error.reasonCode);
       }
       throw error;
@@ -440,7 +458,13 @@ export function createLaunchIndexerWorker(
                 ? outcome.reasonCode
                 : null;
             if (idleReason !== null && idleReason !== lastUnavailable) {
-              options.onUnavailable?.(idleReason);
+              if (outcome.behindBlocks === undefined) {
+                options.onUnavailable?.(idleReason);
+              } else {
+                options.onUnavailable?.(idleReason, {
+                  behindBlocks: outcome.behindBlocks,
+                });
+              }
             }
             lastUnavailable = idleReason;
             if (outcome.kind !== "advanced" && outcome.kind !== "reorged") {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  archiveFields,
   availabilityKey,
   BSC_INDEXER_IDLE_DELAY_MS,
   infrastructureBackoffEvent,
@@ -49,6 +50,8 @@ export interface BscPoolIndexerRunResult {
   readonly reasonCode: string | null;
   /** Provider error classification behind an `unavailable` tick (Decision 0068). */
   readonly rpcError?: BscRpcErrorSummary;
+  /** `BSC_LOG_ARCHIVE_REQUIRED` only: head − fromBlock (S82d). */
+  readonly behindBlocks?: number;
 }
 
 export interface BscPoolIndexerWorker {
@@ -77,6 +80,7 @@ function idleResult(
   kind: BscIndexerRunKind,
   reasonCode: string | null,
   rpcError?: BscRpcErrorSummary,
+  extra: { readonly behindBlocks?: number } = {},
 ): BscPoolIndexerRunResult {
   return Object.freeze({
     kind,
@@ -85,6 +89,7 @@ function idleResult(
     eventCount: 0,
     reasonCode,
     ...(rpcError === undefined ? {} : { rpcError }),
+    ...extra,
   });
 }
 
@@ -252,6 +257,7 @@ export function createBscPoolIndexerWorker(
           "unavailable",
           unavailable.reasonCode,
           unavailable.rpcError,
+          archiveFields(unavailable.reasonCode, head.blockNumber, fromBlock),
         );
       }
       throw error;
@@ -343,6 +349,7 @@ export function createBscPoolIndexerWorker(
                     result.reasonCode,
                     result.rpcError,
                     logQueryLimitsOf(options.readClient),
+                    result.behindBlocks,
                   ),
                 );
               }

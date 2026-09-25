@@ -368,4 +368,76 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     });
     expect(response.body).not.toContain("invalid/");
   });
+
+  it("projects the reconciled states through the report replay: reverted carries revertReason null, submitted has no revertReason (Decision 0080)", async () => {
+    const chain = chainRepositoryFake();
+    const app = await createApp({ env: writesEnv, chain });
+    const prepared = await app.inject({
+      method: "POST",
+      url: `/v2/launch/${launchId}/intents`,
+      headers: s7CommandHeaders(),
+      payload: { walletId, roundId: roundOneId, payAmount: "10" },
+    });
+    expect(prepared.statusCode).toBe(201);
+    const launchIntentId = prepared.json<{
+      launchIntent: { launchIntentId: string };
+    }>().launchIntent.launchIntentId;
+    const txHash = `0x${"ab".repeat(32)}`;
+    const entry = [...chain.intents.values()][0];
+    if (entry === undefined) {
+      throw new Error("no intent stored");
+    }
+    const report = () =>
+      app.inject({
+        method: "POST",
+        url: `/v2/launch/${launchId}/intents/${launchIntentId}/broadcast-report`,
+        headers: s7CommandHeaders({
+          "idempotency-key": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        }),
+        payload: { txHash },
+      });
+    entry.record = {
+      ...entry.record,
+      state: "submitted",
+      transactionHash: txHash,
+      payloadVerified: true,
+      reportedAt: entry.record.createdAt,
+    };
+    const submitted = await report();
+    expect(submitted.statusCode).toBe(200);
+    expect(submitted.json()).toMatchObject({
+      launchIntent: { state: "submitted", transactionHash: txHash },
+    });
+    expect(
+      submitted.json<{ launchIntent: object }>().launchIntent,
+    ).not.toHaveProperty("revertReason");
+    entry.record = {
+      ...entry.record,
+      state: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+      revertReason: null,
+      receipt: {
+        status: "reverted",
+        blockNumber: "990",
+        blockHash: fixtureBlockHash(990n),
+        gasUsed: "120000",
+        effectiveGasPrice: "1000000000",
+        confirmations: 5,
+        observedAt: entry.record.createdAt,
+      },
+    };
+    const reverted = await report();
+    expect(reverted.statusCode).toBe(200);
+    expect(reverted.json()).toMatchObject({
+      launchIntent: {
+        state: "reverted",
+        revertReason: null,
+        transactionHash: txHash,
+        signing: { allowed: false, reasonCode: "LAUNCH_TX_REVERTED" },
+      },
+      contractVersion: "2.0",
+    });
+    // The receipt fact is internal: it never reaches the wire.
+    expect(reverted.body).not.toContain("effectiveGasPrice");
+  });
 });

@@ -7,6 +7,7 @@ import {
   multicall3Abi,
   numberToHex,
   ResourceNotFoundRpcError,
+  RpcRequestError,
   TimeoutError,
   type Transport,
 } from "viem";
@@ -765,6 +766,67 @@ describe("BSC read client — Provider refusals of eth_getLogs (Decision 0068)",
     expect(serialised).not.toContain("token=");
     expect(serialised).not.toContain(tokenA);
     expect(serialised).not.toContain("Request blocked");
+  });
+
+  it("classifies age refusals as archive before the shape codes, so -32602 with archive text never narrows (S82d)", () => {
+    // publicnode mainnet, observed 2026-09-25 about 10,000 blocks back.
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 403,
+          url: keyedEndpointUrl,
+          details:
+            '{"jsonrpc":"2.0","error":{"code":-32602,"message":"Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode"},"id":1}',
+        }),
+      ),
+    ).toBe("archive");
+    // publicnode testnet: HTTP 200, JSON-RPC -32701.
+    expect(
+      classifyLogQueryError(
+        new RpcRequestError({
+          body: { method: "eth_getLogs" },
+          url: keyedEndpointUrl,
+          error: {
+            code: -32701,
+            message: "History has been pruned for this block.",
+          },
+        }),
+      ),
+    ).toBe("archive");
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 400,
+          url: keyedEndpointUrl,
+          details:
+            '{"code":-32000,"message":"historical data is not available on this plan"}',
+        }),
+      ),
+    ).toBe("archive");
+    // A quota text still wins: the rate is the objection.
+    expect(
+      classifyLogQueryError(
+        new HttpRequestError({
+          status: 429,
+          url: keyedEndpointUrl,
+          details: '{"code":-32005,"message":"archive quota exceeded"}',
+        }),
+      ),
+    ).toBe("throttle");
+    // The unchanged shape refusal.
+    expect(
+      classifyLogQueryError(requestBlocked({ method: "eth_getLogs" })),
+    ).toBe("shape");
+    expect(
+      isLogQueryRejection(
+        new HttpRequestError({
+          status: 403,
+          url: keyedEndpointUrl,
+          details:
+            '{"code":-32602,"message":"Archive requests require a personal token."}',
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("splits only on a shape refusal; a throttle propagates to the lane backoff and a transport failure is neither", () => {

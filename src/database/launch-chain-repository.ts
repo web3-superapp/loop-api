@@ -143,8 +143,19 @@ const intentColumns = `
   contract_address, state_tuple_digest,
   snapshot_block_number::text as snapshot_block_number, snapshot_block_hash,
   payload_digest, state, deadline, eligibility_proof, unsigned_transaction,
-  policy, expires_at, created_at, transaction_hash, payload_verified, reported_at
+  policy, expires_at, created_at, transaction_hash, payload_verified, reported_at,
+  receipt, reason_code, revert_reason
 `;
+
+const intentReceiptSchema = z.object({
+  status: z.enum(["success", "reverted"]),
+  blockNumber: blockSchema,
+  blockHash: hashSchema,
+  gasUsed: rawSchema,
+  effectiveGasPrice: rawSchema,
+  confirmations: z.number().int().nonnegative(),
+  observedAt: z.string(),
+});
 
 const intentRowSchema = z.object({
   intent_id: uuidSchema,
@@ -178,6 +189,9 @@ const intentRowSchema = z.object({
   transaction_hash: hashSchema.nullable(),
   payload_verified: z.boolean(),
   reported_at: dateSchema.nullable(),
+  receipt: intentReceiptSchema.nullable(),
+  reason_code: z.string().nullable(),
+  revert_reason: z.string().nullable(),
 });
 
 function mapIntent(raw: unknown): LaunchIntentRecord {
@@ -214,6 +228,9 @@ function mapIntent(raw: unknown): LaunchIntentRecord {
     transactionHash: row.transaction_hash,
     payloadVerified: row.payload_verified,
     reportedAt: row.reported_at === null ? null : toIsoString(row.reported_at),
+    receipt: row.receipt === null ? null : Object.freeze({ ...row.receipt }),
+    reasonCode: row.reason_code,
+    revertReason: row.revert_reason,
   });
 }
 
@@ -291,21 +308,29 @@ async function reprojectLaunch(
     `,
     values: [launchId, confirmedThroughBlockNumber],
   });
-  // A reported Intent is confirmed only by a surviving Purchased log of its
-  // transaction; a reorg sends it back to submitted.
+  // A reported Intent is confirmed by a surviving Purchased log of its
+  // transaction or by a finalized success receipt the reconcile lane stored
+  // (Decision 0080, first evidence wins); a reorg of the log alone sends it
+  // back to submitted. A Purchased log also confirms an Intent the lane
+  // expired, since evidence outranks the absence of a receipt. `reverted`
+  // and `failed` are never touched: a reverted transaction emits no log.
   await client.query({
     text: `
       update public.launch_intents as li
       set
-        state = case when exists (
-          select 1 from public.launch_indexed_events as e
-          where e.launch_id = li.launch_id and e.event_name = 'Purchased'
-            and e.transaction_hash = li.transaction_hash and not e.removed
-        ) then 'confirmed' else 'submitted' end,
+        state = case
+          when exists (
+            select 1 from public.launch_indexed_events as e
+            where e.launch_id = li.launch_id and e.event_name = 'Purchased'
+              and e.transaction_hash = li.transaction_hash and not e.removed
+          ) or li.receipt ->> 'status' = 'success' then 'confirmed'
+          when li.state = 'expired' then 'expired'
+          else 'submitted'
+        end,
         updated_at = clock_timestamp()
       where li.launch_id = $1
         and li.transaction_hash is not null
-        and li.state in ('submitted', 'confirmed')
+        and li.state in ('submitted', 'confirmed', 'expired')
     `,
     values: [launchId],
   });
@@ -1261,6 +1286,7 @@ export function createPostgresLaunchChainRepository(
                   where e.launch_id = li.launch_id and e.event_name = 'Purchased'
                     and e.transaction_hash = $3 and not e.removed
                 ) then 'confirmed' else 'submitted' end,
+                reconcile_after = null,
                 updated_at = clock_timestamp()
               where owner_user_id = $1 and intent_id = $2
               returning ${intentColumns}
@@ -1281,6 +1307,94 @@ export function createPostgresLaunchChainRepository(
           });
           return mapIntent(updated.rows[0]);
         });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async leaseReconcilableIntents(input) {
+      try {
+        const limit = z.number().int().min(1).max(100).parse(input.limit);
+        const leaseMs = z
+          .number()
+          .int()
+          .min(1)
+          .max(3_600_000)
+          .parse(input.leaseMs);
+        const result = await pool.query({
+          text: `
+            update public.launch_intents
+            set reconcile_after =
+              clock_timestamp() + ($3::integer * interval '1 millisecond')
+            where intent_id in (
+              select intent_id from public.launch_intents
+              where chain_id = $1
+                and state = 'submitted'
+                and transaction_hash is not null
+                and (reconcile_after is null or reconcile_after <= clock_timestamp())
+              order by reconcile_after nulls first, intent_id
+              limit $2
+              for update skip locked
+            )
+            returning ${intentColumns}
+          `,
+          values: [input.chainId, limit, leaseMs],
+        });
+        return Object.freeze(result.rows.map(mapIntent));
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async markIntentPayloadVerified(input) {
+      try {
+        await pool.query({
+          text: `
+            update public.launch_intents
+            set payload_verified = true, updated_at = clock_timestamp()
+            where intent_id = $1 and transaction_hash = $2 and not payload_verified
+          `,
+          values: [
+            uuidSchema.parse(input.intentId),
+            hashSchema.parse(input.transactionHash),
+          ],
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async settleIntent(input) {
+      try {
+        const receipt =
+          input.receipt === null
+            ? null
+            : JSON.stringify(intentReceiptSchema.parse(input.receipt));
+        const result = await pool.query({
+          text: `
+            update public.launch_intents
+            set
+              state = $3,
+              reason_code = $4,
+              revert_reason = $5,
+              receipt = coalesce($6::jsonb, receipt),
+              reconcile_after = null,
+              updated_at = clock_timestamp()
+            where intent_id = $1 and transaction_hash = $2 and state = 'submitted'
+            returning ${intentColumns}
+          `,
+          values: [
+            uuidSchema.parse(input.intentId),
+            hashSchema.parse(input.transactionHash),
+            z
+              .enum(["confirmed", "reverted", "failed", "expired"])
+              .parse(input.toState),
+            input.reasonCode,
+            input.revertReason,
+            receipt,
+          ],
+        });
+        return result.rows[0] === undefined ? null : mapIntent(result.rows[0]);
       } catch (error) {
         return translate(error);
       }

@@ -3,6 +3,7 @@ import {
   HttpRequestError,
   LimitExceededRpcError,
   numberToHex,
+  RpcRequestError,
   type Transport,
 } from "viem";
 import { describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { BscChainConfig } from "../src/config.js";
 import {
   bscLogAddressLimitFloor,
+  bscLogArchiveRequiredReasonCode,
   bscLogLimitRelaxAfterCleanReads,
   bscLogLimitRelaxMaximumCleanReads,
   bscLogRangeLimitFloor,
@@ -206,6 +208,13 @@ interface EndpointPolicy {
    * one-block requests, `throttled` nothing (HTTP 429), `open` everything.
    */
   readonly mode?: { current: "floors" | "singleBlock" | "open" | "throttled" };
+  /**
+   * Age refusals observed 2026-09-25 (S82d): `publicnode` is mainnet's
+   * HTTP 403 / -32602 "Archive requests require a personal token", `pruned`
+   * the testnet's HTTP 200 / -32701 "History has been pruned for this
+   * block". `off` serves normally.
+   */
+  readonly archive?: { current: "publicnode" | "pruned" | "off" };
 }
 
 interface EndpointStats {
@@ -258,6 +267,29 @@ function fixtureEndpoint(policy: EndpointPolicy): {
             status: 429,
             url: "https://bsc-rpc.publicnode.com/",
             details: '{"code":-32005,"message":"too many requests"}',
+          }),
+        );
+      }
+      if (policy.archive?.current === "publicnode") {
+        return refuse(
+          new HttpRequestError({
+            status: 403,
+            url: "https://bsc-rpc.publicnode.com/",
+            details:
+              '{"jsonrpc":"2.0","error":{"code":-32602,"message":"Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode"},"id":1}',
+          }),
+        );
+      }
+      if (policy.archive?.current === "pruned") {
+        return refuse(
+          new RpcRequestError({
+            body: { method: "eth_getLogs" },
+            url: "https://bsc-testnet-rpc.publicnode.com/",
+            error: {
+              code: -32701,
+              message:
+                "History has been pruned for this block. To remove restrictions, order a dedicated full node here: https://www.allnodes.com/bnb/host",
+            },
           }),
         );
       }
@@ -854,5 +886,66 @@ describe("learned-limit floors, throttle priority, and reset (Decision 0079)", (
       toBlock: fromBlock + 1_999n,
     });
     expect((stats[0]?.logRequests ?? 0) - before).toBe(2);
+  });
+});
+
+describe("archive refusals are a third class (Decision 0079, S82d)", () => {
+  it("fails a publicnode archive refusal closed at once: no narrowing, learned limits unchanged, reason code BSC_LOG_ARCHIVE_REQUIRED", async () => {
+    const archive = { current: "off" as "publicnode" | "pruned" | "off" };
+    const resets: BscLogQueryLimitsResetEvent[] = [];
+    const { client, stats } = clientWith(
+      [{ addressCap: 8, archive }],
+      100,
+      (event) => resets.push(event),
+    );
+    // Learn the 8-address cap first so there is a narrowed value to keep.
+    await client.readTransferLogs(transferQuery());
+    const learned = client.logQueryLimits?.();
+    expect(learned?.learnedAddressLimit).toBeLessThan(100);
+
+    archive.current = "publicnode";
+    const before = stats[0]?.logRequests ?? 0;
+    await expect(
+      client.readTransferLogs(transferQuery()),
+    ).rejects.toMatchObject({
+      name: "BscReadUnavailableError",
+      reasonCode: bscLogArchiveRequiredReasonCode,
+      rpcError: { rpcStatus: 403, rpcCode: -32602 },
+    });
+    // One request: the refusal is not narrowed along any dimension.
+    expect((stats[0]?.logRequests ?? 0) - before).toBe(1);
+    expect(client.logQueryLimits?.()).toEqual(learned);
+    expect(resets).toEqual([]);
+  });
+
+  it("classifies the pruned-history wording the same way, with -32701 in an HTTP 200 body", async () => {
+    const { client, stats } = clientWith([{ archive: { current: "pruned" } }]);
+    const initial = client.logQueryLimits?.();
+    await expect(
+      client.readPoolEventLogs({
+        addresses: registryTokens.slice(0, 2),
+        fromBlock,
+        toBlock,
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: bscLogArchiveRequiredReasonCode,
+      rpcError: { rpcCode: -32701 },
+    });
+    expect(stats[0]?.logRequests).toBe(1);
+    expect(client.logQueryLimits?.()).toEqual(initial);
+  });
+
+  it("still narrows when another endpoint of the same request refuses the shape", async () => {
+    const reference = await unchunkedReference();
+    const { client } = clientWith(
+      [{ archive: { current: "publicnode" } }, { addressCap: 8 }],
+      100,
+    );
+    // The second endpoint answers once the request is narrowed for it.
+    const transfers = await client.readTransferLogs(transferQuery());
+    expect(transfers).toEqual(reference.transfers);
+    expect(client.logQueryLimits?.().learnedAddressLimit).toBeLessThanOrEqual(
+      8,
+    );
   });
 });

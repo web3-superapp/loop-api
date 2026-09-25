@@ -11,6 +11,7 @@ import { assetIdForAddress } from "./features/chain/chain-contract.js";
 import {
   BscChainMismatchError,
   BscReadUnavailableError,
+  bscLogArchiveRequiredReasonCode,
   bscLogQueryBudgetExhaustedReasonCode,
   bscLogQueryRejectedReasonCode,
   bscMaximumLogRange,
@@ -65,6 +66,12 @@ export interface BscIndexerRunResult {
   readonly reasonCode: string | null;
   /** Provider error classification behind an `unavailable` tick (Decision 0068). */
   readonly rpcError?: BscRpcErrorSummary;
+  /**
+   * `BSC_LOG_ARCHIVE_REQUIRED` only (Decision 0079, S82d): head − the
+   * refused segment's first block, so an operator sees how far behind the
+   * endpoint's retained history the lane is.
+   */
+  readonly behindBlocks?: number;
 }
 
 export type BscIndexerLaneName = "erc20_transfer" | "pool_event";
@@ -108,6 +115,8 @@ export interface BscIndexerLaneAvailabilityEvent {
   readonly rpcCode: number | null;
   readonly rpcUrlHost: string | null;
   readonly method: string | null;
+  /** Present with `BSC_LOG_ARCHIVE_REQUIRED` only (S82d). */
+  readonly behindBlocks?: number;
   /** Learned log-query limits, as on the backoff event (Decision 0079). */
   readonly learnedAddressLimit?: number;
   readonly learnedTopicGroupLimit?: number;
@@ -188,7 +197,30 @@ export function infrastructureBackoffEvent(
 const refusalReasonCodes = new Set<string>([
   bscLogQueryRejectedReasonCode,
   bscLogQueryBudgetExhaustedReasonCode,
+  bscLogArchiveRequiredReasonCode,
 ]);
+
+/**
+ * Blocks between the head and the first block of a segment the endpoint
+ * refused as an archive read (S82d); a safe integer for the log line.
+ */
+export function behindBlocksOf(head: bigint, fromBlock: bigint): number {
+  const behind = head > fromBlock ? head - fromBlock : 0n;
+  return behind > BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number.MAX_SAFE_INTEGER
+    : Number(behind);
+}
+
+/** The `behindBlocks` field of an archive refusal, absent otherwise. */
+export function archiveFields(
+  reasonCode: string,
+  head: bigint,
+  fromBlock: bigint,
+): { readonly behindBlocks?: number } {
+  return reasonCode === bscLogArchiveRequiredReasonCode
+    ? { behindBlocks: behindBlocksOf(head, fromBlock) }
+    : {};
+}
 
 export function unavailableDelayMs(
   reasonCode: string | null,
@@ -221,6 +253,7 @@ export function laneAvailabilityEvent(
   reasonCode: string | null,
   rpcError: BscRpcErrorSummary | undefined,
   limits?: BscLogQueryLimits | null,
+  behindBlocks?: number,
 ): BscIndexerLaneAvailabilityEvent {
   return Object.freeze({
     lane,
@@ -231,6 +264,7 @@ export function laneAvailabilityEvent(
     rpcCode: rpcError?.rpcCode ?? null,
     rpcUrlHost: rpcError?.rpcUrlHost ?? null,
     method: rpcError?.method ?? null,
+    ...(behindBlocks === undefined ? {} : { behindBlocks }),
     ...limitFields(limits),
   });
 }
@@ -309,6 +343,7 @@ function idleResult(
   kind: BscIndexerRunKind,
   reasonCode: string | null,
   rpcError?: BscRpcErrorSummary,
+  extra: { readonly behindBlocks?: number } = {},
 ): BscIndexerRunResult {
   return Object.freeze({
     kind,
@@ -317,6 +352,7 @@ function idleResult(
     transferCount: 0,
     reasonCode,
     ...(rpcError === undefined ? {} : { rpcError }),
+    ...extra,
   });
 }
 
@@ -485,6 +521,7 @@ export function createBscIndexerWorker(
           "unavailable",
           unavailable.reasonCode,
           unavailable.rpcError,
+          archiveFields(unavailable.reasonCode, head.blockNumber, fromBlock),
         );
       }
       throw error;
@@ -690,6 +727,7 @@ export function createBscIndexerWorker(
                     result.reasonCode,
                     result.rpcError,
                     logQueryLimitsOf(options.readClient),
+                    result.behindBlocks,
                   ),
                 );
               }

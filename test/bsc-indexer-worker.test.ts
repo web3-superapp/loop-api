@@ -892,6 +892,103 @@ describe("BSC ERC-20 indexer lane — Provider refusals (Decision 0068)", () => 
   });
 });
 
+describe("BSC ERC-20 indexer lane — archive refusals (Decision 0079, S82d)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports BSC_LOG_ARCHIVE_REQUIRED with behindBlocks = head − fromBlock, commits nothing, and backs off like a refusal", async () => {
+    const storage = repositoryFake();
+    const availability: BscIndexerLaneAvailabilityEvent[] = [];
+    let readCount = 0;
+    const worker = createBscIndexerWorker({
+      repository: storage.repository,
+      registry: registryFake(),
+      walletSet: walletSetFake(),
+      readClient: {
+        ...readClientFake({ head: 20_090n }),
+        readTransferLogs: () => {
+          readCount += 1;
+          return Promise.reject(
+            new BscReadUnavailableError("BSC_LOG_ARCHIVE_REQUIRED", {
+              rpcError: {
+                errorClass: "HttpRequestError",
+                rpcStatus: 403,
+                rpcCode: -32602,
+                rpcUrlHost: "bsc-rpc.publicnode.com",
+                method: "eth_getLogs",
+              },
+            }),
+          );
+        },
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+      onInfrastructureBackoff: () => {
+        throw new Error("a classified refusal must not reach the retry loop");
+      },
+      onLaneAvailability: (event) => {
+        availability.push(event);
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: "unavailable",
+      reasonCode: "BSC_LOG_ARCHIVE_REQUIRED",
+      behindBlocks: 20_000,
+      rpcError: { rpcStatus: 403, rpcCode: -32602 },
+    });
+    expect(storage.commits).toEqual([]);
+    expect(storage.current()).toBeNull();
+
+    vi.useFakeTimers();
+    readCount = 0;
+    const controller = new AbortController();
+    const running = worker.run(controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readCount).toBe(1);
+    // Exponential refusal backoff (1 s, 2 s), not the 3 s idle.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readCount).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readCount).toBe(3);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await running;
+    expect(availability).toEqual([
+      {
+        lane: "erc20_transfer",
+        state: "unavailable",
+        reasonCode: "BSC_LOG_ARCHIVE_REQUIRED",
+        errorClass: "HttpRequestError",
+        rpcStatus: 403,
+        rpcCode: -32602,
+        rpcUrlHost: "bsc-rpc.publicnode.com",
+        method: "eth_getLogs",
+        behindBlocks: 20_000,
+      },
+    ]);
+  });
+
+  it("keeps behindBlocks off every other unavailable reason", async () => {
+    const worker = createBscIndexerWorker({
+      repository: repositoryFake().repository,
+      registry: registryFake(),
+      walletSet: walletSetFake(),
+      readClient: {
+        ...readClientFake({ head: 20_090n }),
+        readTransferLogs: () =>
+          Promise.reject(new BscReadUnavailableError("BSC_LOG_QUERY_REJECTED")),
+      },
+      chainId: bscChainId,
+      startBlockNumber: 90,
+    });
+    const result = await worker.runOnce();
+    expect(result.reasonCode).toBe("BSC_LOG_QUERY_REJECTED");
+    expect(result).not.toHaveProperty("behindBlocks");
+  });
+});
+
 describe("BSC ERC-20 indexer lane — backoff schedule for refusals (Decision 0068)", () => {
   it("keeps the 3 s idle for an unavailable tick that is not a refusal", async () => {
     vi.useFakeTimers();

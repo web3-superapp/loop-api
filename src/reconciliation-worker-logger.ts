@@ -16,6 +16,8 @@ const levelValues = Object.freeze({
 const safeCodePattern = /^[A-Za-z0-9_.-]{1,64}$/;
 const safeWorkerIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const safeUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const safeAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/;
 /** A host name only: no scheme, port, path, query, or user-info (Decision 0068). */
 const safeHostPattern = /^[A-Za-z0-9.-]{1,253}$/;
@@ -24,6 +26,14 @@ const indexerLanes = new Set([
   "pool_event",
   "launch_event",
   "market_sparkline_warm",
+  // Decision 0080: the Launch part of the wallet-intent reconcile lane.
+  "launch_intent_reconcile",
+]);
+const launchIntentSettlements = new Set([
+  "confirmed",
+  "reverted",
+  "failed",
+  "expired",
 ]);
 
 export type ReconciliationWorkerLogMessage =
@@ -36,6 +46,9 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP BSC log-query limits reset to their configured values"
   | "LOOP launch_event lane skipped a fact"
   | "LOOP launch_event lane is idle"
+  | "LOOP launch intent reconciliation is unavailable"
+  | "LOOP launch intent receipt read failed"
+  | "LOOP launch intent settled from its receipt"
   | "LOOP reconciliation worker failed to start"
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
@@ -105,6 +118,14 @@ export interface ReconciliationWorkerLogFields {
   readonly previousAddressLimit?: number | undefined;
   readonly previousTopicGroupLimit?: number | undefined;
   readonly previousRangeLimit?: number | undefined;
+  /**
+   * Decision 0079 (S82d): with `BSC_LOG_ARCHIVE_REQUIRED`, head − the first
+   * block of the segment the endpoint refused as an archive read.
+   */
+  readonly behindBlocks?: number | undefined;
+  /** Decision 0080: the opaque Launch Intent ID and the state it settled to. */
+  readonly launchIntentId?: string;
+  readonly toState?: string;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -224,6 +245,15 @@ function sanitizeFields(
       ? fields.blockNumber
       : undefined;
   const detailReasonCode = safeCode(fields.detailReasonCode ?? undefined);
+  const launchIntentId =
+    fields.launchIntentId !== undefined &&
+    safeUuidPattern.test(fields.launchIntentId)
+      ? fields.launchIntentId
+      : undefined;
+  const toState =
+    fields.toState !== undefined && launchIntentSettlements.has(fields.toState)
+      ? fields.toState
+      : undefined;
   const limits = Object.fromEntries(
     (
       [
@@ -234,6 +264,7 @@ function sanitizeFields(
         "previousAddressLimit",
         "previousTopicGroupLimit",
         "previousRangeLimit",
+        "behindBlocks",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];
@@ -280,6 +311,8 @@ function sanitizeFields(
     ...(saleId === undefined ? {} : { saleId }),
     ...(blockNumber === undefined ? {} : { blockNumber }),
     ...(detailReasonCode === undefined ? {} : { detailReasonCode }),
+    ...(launchIntentId === undefined ? {} : { launchIntentId }),
+    ...(toState === undefined ? {} : { toState }),
     ...limits,
   });
 }

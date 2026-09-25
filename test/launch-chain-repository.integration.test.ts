@@ -21,7 +21,13 @@ import {
   buildLaunchMerkleTree,
   verifyLaunchMerkleProof,
 } from "../src/features/launch/launch-merkle.js";
+import { createLaunchIntentReconciler } from "../src/features/launch/launch-intent-reconciliation.js";
 import type { LaunchRepository } from "../src/features/launch/launch-repository.js";
+import {
+  createUnavailableBscReadClient,
+  type BscChainCallClient,
+  type BscTransactionReceiptObservation,
+} from "../src/integrations/bsc/rpc-client.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 import {
   fixtureBlockHash,
@@ -929,5 +935,233 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
         intentId: first.intent.intentId,
       }),
     ).toMatchObject({ state: "submitted" });
+  });
+
+  it("reconciles reported Intents from receipts: reverted, receipt-confirmed kept by the lane, lane-first no-op, expired then confirmed by a log (Decision 0080)", async () => {
+    const { launchId, projectId, roundIds } = await createLaunch({
+      projectTokenAddress: projectToken,
+    });
+    await register(launchId, "12");
+    const b = users["b"]!;
+    // expires_at must follow created_at; the reconciler runs two hours
+    // later instead, past the deadline and both graces.
+    const deadline = new Date(Date.now() + 120_000).toISOString();
+    const later = (): Date => new Date(Date.now() + 2 * 3_600_000);
+    async function reported(block: bigint): Promise<{
+      readonly intentId: string;
+      readonly tx: string;
+    }> {
+      const created = await chain.createIntent({
+        ownerUserId: b.userId,
+        idempotencyKey: randomUUID(),
+        requestSha256: randomUUID().replaceAll("-", "").padEnd(64, "0"),
+        build: () =>
+          Promise.resolve({
+            intentId: randomUUID(),
+            ownerUserId: b.userId,
+            walletId: b.walletId,
+            launchId,
+            projectId,
+            roundId: roundIds[0]!,
+            roundIndex: 1,
+            saleId: "12",
+            chainId,
+            quoteAssetId: `${chainId}:${usd1}`,
+            projectAssetId: `${chainId}:${projectToken}`,
+            payAmountRaw: oneUsd1.toString(),
+            expectedReceiveRaw: (100n * oneUsd1).toString(),
+            minTokenAmountRaw: (100n * oneUsd1).toString(),
+            configVersion,
+            walletCumulativeRaw: "0",
+            contractAddress: mockLaunchpadAddress,
+            stateTupleDigest: digest,
+            snapshotBlockNumber: "900",
+            snapshotBlockHash: fixtureBlockHash(900n),
+            payloadDigest: "f".repeat(64),
+            state: "awaiting_signature",
+            deadline,
+            eligibilityProof: [],
+            unsignedTransaction: {
+              chainId: 97,
+              from: b.address,
+              to: mockLaunchpadAddress,
+              data: "0x",
+              value: "0x0",
+            },
+            policy: { configVersion: "bscWriteCanaryV1", valueUsd: "1" },
+            expiresAt: deadline,
+          }),
+      });
+      const tx = fixtureTxHash(block, 0);
+      await chain.reportIntentBroadcast({
+        ownerUserId: b.userId,
+        intentId: created.intent.intentId,
+        transactionHash: tx,
+        payloadVerified: true,
+      });
+      return { intentId: created.intent.intentId, tx };
+    }
+    const revertedIntent = await reported(1_201n);
+    const receiptIntent = await reported(1_202n);
+    const laneIntent = await reported(1_203n);
+    const missingIntent = await reported(1_204n);
+
+    const receipts = new Map<string, Partial<BscTransactionReceiptObservation>>(
+      [
+        [revertedIntent.tx, { status: "reverted" }],
+        [receiptIntent.tx, { status: "success" }],
+        [laneIntent.tx, { status: "success" }],
+      ],
+    );
+    const client: BscChainCallClient = {
+      ...createUnavailableBscReadClient({
+        chainId,
+        chainReference: 97,
+        confirmations: 5,
+        reorgDepthBlocks: 15,
+      }),
+      getHead: () =>
+        Promise.resolve({
+          blockNumber: 1_300n,
+          blockHash: fixtureBlockHash(1_300n),
+          observedAt: new Date().toISOString(),
+        }),
+      getTransaction: () => Promise.resolve(null),
+      getTransactionReceipt: (hash: string) => {
+        const receipt = receipts.get(hash);
+        return Promise.resolve(
+          receipt === undefined
+            ? null
+            : {
+                hash,
+                status: "success" as const,
+                blockNumber: 1_200n,
+                blockHash: fixtureBlockHash(1_200n),
+                gasUsed: 100_000n,
+                effectiveGasPrice: 1_000_000_000n,
+                ...receipt,
+              },
+        );
+      },
+    };
+
+    // Lane first for laneIntent: its Purchased log is indexed before any
+    // receipt read.
+    await commit(
+      [
+        fixtureEvent(
+          launchId,
+          "Purchased",
+          {
+            saleId: 12n,
+            buyer: b.address,
+            roundId: 1,
+            usd1Amount: oneUsd1,
+            tokenAmount: 100n * oneUsd1,
+            walletCumulativeUsd1: oneUsd1,
+            purchaseIndex: 1n,
+          },
+          { block: 1_203n, logIndex: 0 },
+        ),
+      ],
+      1_210n,
+    );
+    const intentState = async (intentId: string) =>
+      chain.getIntent({ ownerUserId: b.userId, launchId, intentId });
+    expect(await intentState(laneIntent.intentId)).toMatchObject({
+      state: "confirmed",
+      receipt: null,
+    });
+
+    const reconciler = createLaunchIntentReconciler({
+      repository: chain,
+      readClient: client,
+      chainId,
+      now: later,
+    });
+    const tick = await reconciler.reconcileOnce();
+    expect(tick.status).toBe("available");
+    // Only the three still-submitted Intents of this launch are leased.
+    const settled = new Map(
+      (tick.status === "available" ? tick.transitions : []).map((item) => [
+        item.intentId,
+        item,
+      ]),
+    );
+    expect(settled.get(revertedIntent.intentId)).toEqual({
+      intentId: revertedIntent.intentId,
+      toState: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+    });
+    expect(settled.get(receiptIntent.intentId)?.toState).toBe("confirmed");
+    expect(settled.get(missingIntent.intentId)).toEqual({
+      intentId: missingIntent.intentId,
+      toState: "expired",
+      reasonCode: "LAUNCH_TX_NOT_OBSERVED",
+    });
+    expect(settled.has(laneIntent.intentId)).toBe(false);
+    expect(await intentState(revertedIntent.intentId)).toMatchObject({
+      state: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+      revertReason: null,
+      receipt: {
+        status: "reverted",
+        blockNumber: "1200",
+        confirmations: 101,
+      },
+    });
+
+    // A later lane segment without a Purchased log for the receipt-confirmed
+    // Intent keeps it confirmed; the reverted one is untouched; a Purchased
+    // log for the expired one confirms it (evidence wins).
+    await commit(
+      [
+        fixtureEvent(
+          launchId,
+          "Purchased",
+          {
+            saleId: 12n,
+            buyer: b.address,
+            roundId: 1,
+            usd1Amount: oneUsd1,
+            tokenAmount: 100n * oneUsd1,
+            walletCumulativeUsd1: 2n * oneUsd1,
+            purchaseIndex: 2n,
+          },
+          { block: 1_204n, logIndex: 0 },
+        ),
+      ],
+      1_220n,
+    );
+    expect(await intentState(receiptIntent.intentId)).toMatchObject({
+      state: "confirmed",
+      receipt: { status: "success" },
+    });
+    expect((await intentState(revertedIntent.intentId))?.state).toBe(
+      "reverted",
+    );
+    expect((await intentState(missingIntent.intentId))?.state).toBe(
+      "confirmed",
+    );
+    // Nothing left to lease; a stale settle is a no-op.
+    const second = await reconciler.reconcileOnce();
+    expect(second).toMatchObject({ leasedCount: 0, transitions: [] });
+    await expect(
+      chain.settleIntent({
+        intentId: laneIntent.intentId,
+        transactionHash: laneIntent.tx,
+        toState: "reverted",
+        reasonCode: "LAUNCH_TX_REVERTED",
+        revertReason: null,
+        receipt: null,
+      }),
+    ).resolves.toBeNull();
+    // The schema keeps revert_reason to reverted rows.
+    await expect(
+      pool.query({
+        text: `update public.launch_intents set revert_reason = 'x' where intent_id = $1`,
+        values: [receiptIntent.intentId],
+      }),
+    ).rejects.toThrow(/launch_intents_revert_reason_check/);
   });
 });

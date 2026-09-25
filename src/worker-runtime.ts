@@ -520,9 +520,9 @@ export async function runReconciliationWorker(
             "LOOP launch_event lane skipped a fact",
           );
         },
-        onUnavailable: (reasonCode) => {
+        onUnavailable: (reasonCode, detail) => {
           options.logger.warn(
-            { ...logFields(), lane: "launch_event", reasonCode },
+            { ...logFields(), lane: "launch_event", reasonCode, ...detail },
             "LOOP launch_event lane is idle",
           );
         },
@@ -621,6 +621,16 @@ export async function runReconciliationWorker(
     // reads receipts over RPC and Privy action status when credentials exist;
     // it never signs, broadcasts, or replays.
     const walletIntentConfig = options.config.walletIntentReconcile;
+    const walletIntentLaunchClient =
+      walletIntentConfig === null ||
+      options.config.launchChain.sharedWithPrimary ||
+      options.config.launchChain.rpcUrls.length === 0
+        ? null
+        : asChainCallClient(
+            createBscReadClient({
+              config: options.config.launchChain,
+            }),
+          );
     const walletIntentReconcileWorker =
       walletIntentConfig === null ||
       indexerReadClient === null ||
@@ -632,15 +642,58 @@ export async function runReconciliationWorker(
             wallets: database.accountWallets,
             readClient: asChainCallClient(indexerReadClient),
             // Decision 0077: approvals recorded on the launch slot.
-            launchReadClient:
-              options.config.launchChain.sharedWithPrimary ||
-              options.config.launchChain.rpcUrls.length === 0
+            launchReadClient: walletIntentLaunchClient,
+            // Decision 0080: reported Launch purchase Intents, read on the
+            // launch slot (the primary client when LAUNCH_CHAIN_ID=56). With
+            // the four contract keys blank no Intent exists and the part is
+            // not wired; without a launch RPC it stays unavailable.
+            launchIntents:
+              database.launchChain === undefined ||
+              options.config.launchContract === null
                 ? null
-                : asChainCallClient(
-                    createBscReadClient({
-                      config: options.config.launchChain,
-                    }),
-                  ),
+                : {
+                    repository: database.launchChain,
+                    readClient: options.config.launchChain.sharedWithPrimary
+                      ? asChainCallClient(indexerReadClient)
+                      : walletIntentLaunchClient,
+                    chainId: options.config.launchChain.chainId,
+                  },
+            onLaunchIntentUnavailable: (reasonCode) => {
+              options.logger.warn(
+                { ...logFields(), lane: "launch_intent_reconcile", reasonCode },
+                "LOOP launch intent reconciliation is unavailable",
+              );
+            },
+            onLaunchIntentResult: (result) => {
+              if (result.status !== "available") {
+                return;
+              }
+              for (const failure of result.readFailures) {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    lane: "launch_intent_reconcile",
+                    launchIntentId: failure.intentId,
+                    reasonCode: failure.reasonCode,
+                  },
+                  "LOOP launch intent receipt read failed",
+                );
+              }
+              for (const transition of result.transitions) {
+                options.logger.info(
+                  {
+                    ...logFields(),
+                    lane: "launch_intent_reconcile",
+                    launchIntentId: transition.intentId,
+                    toState: transition.toState,
+                    ...(transition.reasonCode === null
+                      ? {}
+                      : { reasonCode: transition.reasonCode }),
+                  },
+                  "LOOP launch intent settled from its receipt",
+                );
+              }
+            },
             swapAdapter:
               walletIntentConfig.privy === null
                 ? createUnavailablePrivySwapAdapter()

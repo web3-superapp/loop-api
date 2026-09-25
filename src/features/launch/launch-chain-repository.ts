@@ -192,6 +192,10 @@ export const launchIntentStates = [
   "awaiting_signature",
   "submitted",
   "confirmed",
+  // Decision 0080: written only by the receipt reconciler, from `submitted`.
+  "reverted",
+  "failed",
+  "expired",
 ] as const;
 export type LaunchIntentState = (typeof launchIntentStates)[number];
 
@@ -206,7 +210,28 @@ export interface LaunchIntentRecord extends Omit<
   readonly payloadVerified: boolean;
   readonly reportedAt: string | null;
   readonly createdAt: string;
+  /** Finalized receipt fact (Decision 0080); null until reconciled. */
+  readonly receipt: LaunchIntentReceipt | null;
+  /** Why a reconciled Intent left `submitted` without success (0080). */
+  readonly reasonCode: string | null;
+  /** Decoded revert reason of a `reverted` Intent, when one was readable. */
+  readonly revertReason: string | null;
 }
+
+/** The receipt fact the reconcile lane stores (Decision 0080). */
+export interface LaunchIntentReceipt {
+  readonly status: "success" | "reverted";
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly gasUsed: string;
+  readonly effectiveGasPrice: string;
+  readonly confirmations: number;
+  readonly observedAt: string;
+}
+
+/** Terminal states the reconcile lane may write (Decision 0080). */
+export type LaunchIntentSettlement =
+  "confirmed" | "reverted" | "failed" | "expired";
 
 export class LaunchIntentReportConflictError extends Error {
   readonly code = "launch_intent_report_conflict";
@@ -318,6 +343,33 @@ export interface LaunchChainRepository {
     readonly transactionHash: string;
     readonly payloadVerified: boolean;
   }): Promise<LaunchIntentRecord>;
+  /**
+   * Decision 0080: leases up to `limit` reported `submitted` Intents of the
+   * chain whose `reconcile_after` has passed, moving it `leaseMs` ahead.
+   */
+  leaseReconcilableIntents(input: {
+    readonly chainId: LaunchChainId;
+    readonly limit: number;
+    readonly leaseMs: number;
+  }): Promise<readonly LaunchIntentRecord[]>;
+  /** The observed transaction matched the sealed payload (0080). */
+  markIntentPayloadVerified(input: {
+    readonly intentId: string;
+    readonly transactionHash: string;
+  }): Promise<void>;
+  /**
+   * `submitted` → a terminal state, only while the row is still `submitted`
+   * with that hash. `null` when another writer (the `launch_event` lane)
+   * settled it first: first evidence wins, the loser is a no-op.
+   */
+  settleIntent(input: {
+    readonly intentId: string;
+    readonly transactionHash: string;
+    readonly toState: LaunchIntentSettlement;
+    readonly reasonCode: string | null;
+    readonly revertReason: string | null;
+    readonly receipt: LaunchIntentReceipt | null;
+  }): Promise<LaunchIntentRecord | null>;
 }
 
 export class LaunchChainRepositoryUnavailableError extends Error {
@@ -369,5 +421,8 @@ export function createUnavailableLaunchChainRepository(): LaunchChainRepository 
     registerSale: unavailable,
     getIntent: unavailable,
     reportIntentBroadcast: unavailable,
+    leaseReconcilableIntents: unavailable,
+    markIntentPayloadVerified: unavailable,
+    settleIntent: unavailable,
   });
 }

@@ -1276,6 +1276,8 @@ export const launchIntentResourceSchema = {
             "cancelled",
             "expired",
           ],
+          description:
+            "Decision 0080: after a broadcast report, submitted settles to confirmed (Purchased log indexed, or success receipt at the launch slot's confirmation depth), reverted (receipt status 0x0), failed (the hash is another transaction), or expired (no receipt after the deadline plus grace). cancelled and unknown are not emitted.",
         },
         launchId: { type: "string", pattern: opaqueIdPatternSource },
         projectId: { type: "string", pattern: opaqueIdPatternSource },
@@ -1350,7 +1352,15 @@ export const launchIntentResourceSchema = {
             { type: "null" },
           ],
           description:
-            "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it.",
+            "Optional (0077): the device-reported broadcast hash; pending evidence only. state confirmed means the launch_event lane indexed a Purchased log of it or the reconcile lane read a successful receipt at the launch slot's confirmation depth (Decision 0080).",
+        },
+        revertReason: {
+          anyOf: [
+            { type: "string", minLength: 1, maxLength: 256 },
+            { type: "null" },
+          ],
+          description:
+            "Optional (Decision 0080): present only when state is reverted. The decoded revert reason when a read surface yields one; null today (public endpoints expose no trace).",
         },
         simulation: {
           type: "object",
