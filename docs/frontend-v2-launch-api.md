@@ -789,6 +789,7 @@ Base URL：`https://api-dev.<域名>`（与其它 V2 模块相同）。Headers�
 ```
 
 - 链上该轮 `allowlistRoot` 全零：开放轮，`tier` = 轮次配置的 tier 或 `public`，`eligibilityProof: []`，`snapshotBlock` 为读链区块。
+- 开放轮先于模式与名单判定（Decision 0084）：root 全零时即使 `mode: "unavailable"`（`tierModeV1` 未确认）或 LOOP 侧名单未计算，也返回上面的开放分支，不再出现 `TIER_MODE_PENDING` / `LAUNCH_ALLOWLIST_NOT_COMPUTED`；Intent 对开放轮同样不要求 proof 与 LOOP 侧根。无合约配置、读链失败、钱包未找到等拿不到链上 root 的情况，模式未确认时仍返回 `TIER_MODE_PENDING`（字节不变）。
 - 不在名单：`status: available`、`tier: null`、`reasonCode: "LAUNCH_WALLET_NOT_ELIGIBLE"`、`eligibilityProof: []`。
 - 拒绝（旧结构 `{tier: null, reasonCode, snapshotBlock: null}`）：`TIER_MODE_PENDING`、
   `LAUNCH_ALLOWLIST_NOT_COMPUTED`、`LAUNCH_ALLOWLIST_ROOT_MISMATCH`（链上根与 LOOP 计算的根不一致，

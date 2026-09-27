@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import type { LaunchChainRepository } from "../src/features/launch/launch-chain-repository.js";
 import { buildLaunchMerkleTree } from "../src/features/launch/launch-merkle.js";
+import type { LaunchDetailRecord } from "../src/features/launch/launch-repository.js";
 import {
   createFakeLaunchAdapter,
   createFakeLaunchChainState,
@@ -63,6 +64,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       readonly env?: Readonly<Record<string, string>>;
       readonly state?: FakeLaunchChainState;
       readonly chain?: LaunchChainRepository;
+      readonly detail?: LaunchDetailRecord;
     } = {},
   ) {
     const state = options.state ?? createFakeLaunchChainState();
@@ -70,7 +72,9 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       config: s7TestConfig({ ...contractEnv, ...options.env }),
       contractSurface: "v2",
       database: {
-        ...s7Database({ launch: launchRepositoryFor(registeredDetail()) }),
+        ...s7Database({
+          launch: launchRepositoryFor(options.detail ?? registeredDetail()),
+        }),
         launchChain: options.chain ?? chainRepositoryFake(),
         accountWallets: walletsFake(),
       },
@@ -276,6 +280,112 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       (await get(app, `/v2/launch/${launchId}/eligibility?roundIndex=x`))
         .statusCode,
     ).toBe(400);
+  });
+
+  describe("open rounds (Decision 0084)", () => {
+    const zeroRoot = `0x${"00".repeat(32)}`;
+    const nonZeroRoot = `0x${"42".repeat(32)}`;
+    const pendingModeDetail = (): LaunchDetailRecord => {
+      const detail = registeredDetail();
+      return {
+        ...detail,
+        configs: detail.configs.map((config) => ({
+          ...config,
+          status: "pending_confirmation" as const,
+        })),
+      };
+    };
+    const unsetModeDetail = (): LaunchDetailRecord => registeredDetail("");
+
+    it("answers the open branch for an all-zero root while tierModeV1 is unconfirmed", async () => {
+      for (const detail of [pendingModeDetail(), unsetModeDetail()]) {
+        const app = await createApp({ detail });
+        const response = await get(
+          app,
+          `/v2/launch/${launchId}/eligibility?roundIndex=2`,
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          mode: "unavailable",
+          result: {
+            status: "available",
+            tier: "public",
+            reasonCode: null,
+            snapshotBlock: "900",
+            roundIndex: 2,
+            allowlistRoot: zeroRoot,
+            eligibilityProof: [],
+          },
+        });
+      }
+    });
+
+    it("answers the open branch for an all-zero root with no LOOP root computed", async () => {
+      const chain = chainRepositoryFake({ roots: [] });
+      const listRoots = vi.spyOn(chain, "listAllowlistRoots");
+      const app = await createApp({ chain });
+      const response = await get(
+        app,
+        `/v2/launch/${launchId}/eligibility?roundIndex=1`,
+      );
+      expect(response.json()).toMatchObject({
+        mode: "whitelist",
+        result: {
+          status: "available",
+          // Round 1 carries a configured tier; the open branch keeps it.
+          tier: "priority",
+          reasonCode: null,
+          allowlistRoot: zeroRoot,
+          eligibilityProof: [],
+        },
+      });
+      expect(listRoots).not.toHaveBeenCalled();
+    });
+
+    it("keeps the three refusals for a non-zero root", async () => {
+      const state = createFakeLaunchChainState();
+      state.rounds = state.rounds.map((round) =>
+        round.roundId === 1 ? { ...round, allowlistRoot: nonZeroRoot } : round,
+      );
+      const refused = (reasonCode: string) => ({
+        result: { tier: null, reasonCode, snapshotBlock: null },
+      });
+      const url = `/v2/launch/${launchId}/eligibility?roundIndex=1`;
+      const pending = await createApp({ state, detail: pendingModeDetail() });
+      expect((await get(pending, url)).json()).toMatchObject(
+        refused("TIER_MODE_PENDING"),
+      );
+      const notComputed = await createApp({
+        state,
+        chain: chainRepositoryFake({ roots: [] }),
+      });
+      expect((await get(notComputed, url)).json()).toMatchObject(
+        refused("LAUNCH_ALLOWLIST_NOT_COMPUTED"),
+      );
+      const tree = buildLaunchMerkleTree([walletAddress]);
+      const mismatch = await createApp({
+        state,
+        chain: chainRepositoryFake({
+          roots: [
+            {
+              allowlistRootId: "8b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+              launchId,
+              roundIndex: 1,
+              snapshotBlock: "880",
+              snapshotBlockHash: fixtureBlockHash(880n),
+              root: tree.root,
+              leafCount: 1,
+              mode: "whitelist",
+              members: tree.members,
+              computedAt: "2026-09-21T00:00:00.000Z",
+            },
+          ],
+        }),
+      });
+      expect((await get(mismatch, url)).json()).toMatchObject(
+        refused("LAUNCH_ALLOWLIST_ROOT_MISMATCH"),
+      );
+    });
   });
 
   it("economy adds the provable on-chain counts only while a contract is configured", async () => {

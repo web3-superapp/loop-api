@@ -1,5 +1,5 @@
 import { decodeFunctionData, type Hex } from "viem";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { V2ApiError } from "../src/core/http/v2-error.js";
 import { buildLaunchMerkleTree } from "../src/features/launch/launch-merkle.js";
@@ -280,6 +280,16 @@ describe("Launch Intent prepare (Decision 0077)", () => {
     expect(await refusal(prepare(none.service))).toMatchObject({
       reasonCode: "LAUNCH_ALLOWLIST_NOT_COMPUTED",
     });
+  });
+
+  it("prepares an open round (all-zero root) without a proof, a stored root, or a confirmed mode (Decision 0084)", async () => {
+    const detail = registeredDetail("");
+    const { service, chain } = setup({ detail });
+    const listRoots = vi.spyOn(chain, "listAllowlistRoots");
+    const { created, resource } = await prepare(service);
+    expect(created).toBe(true);
+    expect(resource.launchIntent["eligibilityProof"]).toEqual([]);
+    expect(listRoots).not.toHaveBeenCalled();
   });
 
   const base = createFakeLaunchChainState();

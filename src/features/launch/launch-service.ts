@@ -55,6 +55,7 @@ import type {
 } from "./launch-chain-repository.js";
 import {
   decideEligibility,
+  isOpenRoot,
   launchEligibilityReasonCodes,
   tierForMember,
 } from "./launch-eligibility.js";
@@ -1068,22 +1069,33 @@ export function createLaunchService(
   /**
    * One round's eligibility for the caller's active wallet (Decision 0077):
    * the chain's `allowlistRoot` at one snapshot selects the stored set.
+   *
+   * Decision 0084: the chain root is read first. An all-zero root is a
+   * public round and answers the open branch without consulting
+   * `tierModeV1` or LOOP's stored roots. Only a non-zero root needs a
+   * confirmed mode; while the mode is unconfirmed every refusal that
+   * happens before the root is known keeps the pre-0084
+   * `TIER_MODE_PENDING` bytes.
    */
   async function evaluateEligibility(
     detail: LaunchDetailRecord,
-    mode: Exclude<LaunchEligibilityMode, "unavailable">,
+    mode: LaunchEligibilityMode,
     principal: AuthenticatedLoopPrincipal,
     requestedRound: number | null,
   ): Promise<LaunchEligibilityResult> {
     const refusedResult = (reasonCode: string): LaunchEligibilityResult =>
       Object.freeze({ tier: null, reasonCode, snapshotBlock: null });
+    const beforeRoot = (reasonCode: string): LaunchEligibilityResult =>
+      refusedResult(
+        mode === "unavailable" ? launchReasonCodes.tierModePending : reasonCode,
+      );
     const reason = await chainReason(detail.launch);
     if (reason !== null || contract === null) {
-      return refusedResult(reason ?? launchContractReasonCodes.baselinePending);
+      return beforeRoot(reason ?? launchContractReasonCodes.baselinePending);
     }
     const wallet = await activeWallet(principal);
     if (wallet === null) {
-      return refusedResult(launchContractReasonCodes.walletNotFound);
+      return beforeRoot(launchContractReasonCodes.walletNotFound);
     }
     const saleId = BigInt(detail.launch.saleId as string);
     const snapshot = await contract.takeSnapshot();
@@ -1099,16 +1111,20 @@ export function createLaunchService(
           rounds.value.find((item) => item.startAt > nowSeconds) ??
           rounds.value.at(-1));
     if (round === undefined) {
-      return refusedResult(launchEligibilityReasonCodes.roundNotFound);
+      return beforeRoot(launchEligibilityReasonCodes.roundNotFound);
+    }
+    const open = isOpenRoot(round.allowlistRoot);
+    if (!open && mode === "unavailable") {
+      return refusedResult(launchReasonCodes.tierModePending);
     }
     const roots =
-      chain === null
+      open || chain === null
         ? []
         : await chain.listAllowlistRoots(detail.launch.launchId, round.roundId);
     const decision = decideEligibility({
       chainRoot: round.allowlistRoot,
       roots,
-      mode,
+      mode: mode === "unavailable" ? null : mode,
       walletAddress: wallet.address,
     });
     const offChainRound = detail.rounds.find(
@@ -1131,6 +1147,10 @@ export function createLaunchService(
         });
       }
       case "member": {
+        // Unreachable with an unconfirmed mode: a non-zero root refused above.
+        if (mode === "unavailable") {
+          return refusedResult(launchReasonCodes.tierModePending);
+        }
         return Object.freeze({
           status: "available" as const,
           tier: tierForMember(mode, roundTier),
@@ -1472,11 +1492,14 @@ export function createLaunchService(
         const refusedResult = (reasonCode: string): LaunchEligibilityResult =>
           Object.freeze({ tier: null, reasonCode, snapshotBlock: null });
         let result: LaunchEligibilityResult;
-        if (mode === "unavailable") {
-          result = refusedResult(launchReasonCodes.tierModePending);
-        } else if (contract === null || contract.contract === null) {
-          // Unchanged Decision 0036 bytes while no contract is configured.
-          result = refusedResult(launchReasonCodes.contractBaselinePending);
+        if (contract === null || contract.contract === null) {
+          // Unchanged Decision 0036 bytes while no contract is configured:
+          // without a chain root the mode gate still answers first.
+          result = refusedResult(
+            mode === "unavailable"
+              ? launchReasonCodes.tierModePending
+              : launchReasonCodes.contractBaselinePending,
+          );
         } else {
           result = await evaluateEligibility(
             detail,
@@ -1485,7 +1508,12 @@ export function createLaunchService(
             requestedRound,
           ).catch((error: unknown) => {
             if (error instanceof LaunchContractUnavailableError) {
-              return refusedResult(error.reasonCode);
+              // The root was never read: an unconfirmed mode keeps its bytes.
+              return refusedResult(
+                mode === "unavailable"
+                  ? launchReasonCodes.tierModePending
+                  : error.reasonCode,
+              );
             }
             throw error;
           });
