@@ -19,7 +19,9 @@ import { launchContractReasonCodes } from "./features/launch/launch-contract.js"
 import {
   bscLogArchiveRequiredReasonCode,
   classifyLogQueryError,
+  summarizeRpcError,
   type BscReadClient,
+  type BscRpcErrorSummary,
 } from "./integrations/bsc/rpc-client.js";
 import {
   LaunchContractUnavailableError,
@@ -55,6 +57,22 @@ export interface LaunchIndexerRunResult {
   readonly reasonCode: string | null;
   /** `BSC_LOG_ARCHIVE_REQUIRED` only: head − fromBlock (Decision 0079, S82d). */
   readonly behindBlocks?: number;
+  /**
+   * Decision 0085: the Provider error behind an `unavailable` outcome,
+   * classified by `summarizeRpcError` (class, status, code, host, method;
+   * never a URL, a body, or a key). Absent when no Provider error exists.
+   */
+  readonly rpcError?: BscRpcErrorSummary;
+}
+
+/** What `onUnavailable` receives besides the reason code. */
+export interface LaunchIndexerUnavailableDetail {
+  readonly behindBlocks?: number;
+  readonly errorClass?: string;
+  readonly rpcStatus?: number | null;
+  readonly rpcCode?: number | null;
+  readonly rpcUrlHost?: string | null;
+  readonly method?: string | null;
 }
 
 export interface LaunchIndexerWarning {
@@ -85,7 +103,7 @@ export interface CreateLaunchIndexerWorkerOptions {
   readonly onWarning?: (warning: LaunchIndexerWarning) => void;
   readonly onUnavailable?: (
     reasonCode: string,
-    detail?: { readonly behindBlocks?: number },
+    detail?: LaunchIndexerUnavailableDetail,
   ) => void;
   readonly onInfrastructureBackoff?: (event: {
     readonly lane: typeof LAUNCH_INDEXER_LANE;
@@ -108,6 +126,38 @@ function result(
     projectedSaleCount: 0,
     reasonCode,
     ...extra,
+  });
+}
+
+function rpcErrorOf(refused: {
+  readonly rpcError?: BscRpcErrorSummary;
+}): Partial<LaunchIndexerRunResult> {
+  return refused.rpcError === undefined ? {} : { rpcError: refused.rpcError };
+}
+
+/**
+ * The fields logged with an `unavailable` outcome (Decision 0085): the same
+ * names as the BSC lane's "LOOP BSC indexer lane is unavailable" line.
+ */
+function unavailableDetailOf(
+  outcome: LaunchIndexerRunResult,
+): LaunchIndexerUnavailableDetail | null {
+  if (outcome.behindBlocks === undefined && outcome.rpcError === undefined) {
+    return null;
+  }
+  return Object.freeze({
+    ...(outcome.behindBlocks === undefined
+      ? {}
+      : { behindBlocks: outcome.behindBlocks }),
+    ...(outcome.rpcError === undefined
+      ? {}
+      : {
+          errorClass: outcome.rpcError.errorClass,
+          rpcStatus: outcome.rpcError.rpcStatus,
+          rpcCode: outcome.rpcError.rpcCode,
+          rpcUrlHost: outcome.rpcError.rpcUrlHost,
+          method: outcome.rpcError.method,
+        }),
   });
 }
 
@@ -271,7 +321,7 @@ export function createLaunchIndexerWorker(
     } catch (error) {
       const refused = unavailableReasonFor(error);
       if (refused !== null) {
-        return result("unavailable", refused.reasonCode);
+        return result("unavailable", refused.reasonCode, rpcErrorOf(refused));
       }
       throw error;
     }
@@ -297,7 +347,7 @@ export function createLaunchIndexerWorker(
       } catch (error) {
         const refused = unavailableReasonFor(error);
         if (refused !== null) {
-          return result("unavailable", refused.reasonCode);
+          return result("unavailable", refused.reasonCode, rpcErrorOf(refused));
         }
         throw error;
       }
@@ -325,12 +375,17 @@ export function createLaunchIndexerWorker(
         // The adapter keeps the Provider error as the cause: an endpoint
         // that refuses the range as an archive read is reported as such
         // (S82d) instead of a generic read failure.
+        const rpcError =
+          error.cause === undefined
+            ? {}
+            : { rpcError: summarizeRpcError(error.cause) };
         if (classifyLogQueryError(error.cause) === "archive") {
           return result("unavailable", bscLogArchiveRequiredReasonCode, {
             behindBlocks: behindBlocksOf(head.blockNumber, fromBlock),
+            ...rpcError,
           });
         }
-        return result("unavailable", error.reasonCode);
+        return result("unavailable", error.reasonCode, rpcError);
       }
       throw error;
     }
@@ -388,7 +443,7 @@ export function createLaunchIndexerWorker(
     } catch (error) {
       const refused = unavailableReasonFor(error);
       if (refused !== null) {
-        return result("unavailable", refused.reasonCode);
+        return result("unavailable", refused.reasonCode, rpcErrorOf(refused));
       }
       throw error;
     }
@@ -458,12 +513,11 @@ export function createLaunchIndexerWorker(
                 ? outcome.reasonCode
                 : null;
             if (idleReason !== null && idleReason !== lastUnavailable) {
-              if (outcome.behindBlocks === undefined) {
+              const detail = unavailableDetailOf(outcome);
+              if (detail === null) {
                 options.onUnavailable?.(idleReason);
               } else {
-                options.onUnavailable?.(idleReason, {
-                  behindBlocks: outcome.behindBlocks,
-                });
+                options.onUnavailable?.(idleReason, detail);
               }
             }
             lastUnavailable = idleReason;

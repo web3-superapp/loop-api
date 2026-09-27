@@ -24,6 +24,7 @@ import {
   mockConfigVersion,
   mockLaunchpadAddress,
   mockLaunchpadTransportFactory,
+  mockMulticall3Address,
   mockProjectTokenAddress,
   mockStateTupleDigest,
   mockUsd1Address,
@@ -384,13 +385,14 @@ describe("V2 launch routes with the contract adapter (Decision 0076)", () => {
     expect(response.body).not.toMatch(
       /"(?:[a-zA-Z]+Usd1|priceUsd1PerToken)":\d/,
     );
-    // One snapshot: every eth_call is pinned to the same block.
-    const blocks = chain.calls
-      .filter((call) => call.method === "eth_call")
-      .map((call) => call.params[1]);
-    expect(blocks).toHaveLength(3);
-    expect(new Set(blocks)).toEqual(
-      new Set([`0x${mockBlockNumber.toString(16)}`]),
+    // One snapshot (Decision 0085): the three reads travel in one
+    // Multicall3 eth_call pinned to the snapshot block, between the head
+    // read and the reorg check.
+    const calls = chain.calls.filter((call) => call.method === "eth_call");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params[1]).toBe(`0x${mockBlockNumber.toString(16)}`);
+    expect((calls[0]?.params[0] as { to: string }).to.toLowerCase()).toBe(
+      mockMulticall3Address,
     );
     // Graduation, market, and holders stay unavailable in S83a.
     expect(body["holders"]).toEqual({
@@ -469,6 +471,20 @@ describe("V2 launch routes with the contract adapter (Decision 0076)", () => {
         {
           name: "endpoint failure",
           chain: { failCalls: true },
+          launch: registered,
+          reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
+        },
+        // Decision 0085: the three reads share one Multicall3 call; one
+        // reverting inner call fails the whole snapshot, never a partial one.
+        {
+          name: "getRounds reverts inside the multicall",
+          chain: { revertFunction: "getRounds" },
+          launch: registered,
+          reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
+        },
+        {
+          name: "getSaleConfig reverts inside the multicall",
+          chain: { revertFunction: "getSaleConfig" },
           launch: registered,
           reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
         },

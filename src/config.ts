@@ -442,6 +442,9 @@ const environmentSchema = z
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
     DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+    // Decision 0085: in-memory reuse of one Launch sale snapshot (ms); 0
+    // disables it. Default 1500, about half a BSC block interval.
+    LAUNCH_SNAPSHOT_CACHE_TTL_MS: positiveIntegerString(0, 10_000),
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
@@ -1084,6 +1087,11 @@ export interface AppConfig {
   readonly launchChain: LaunchChainConfig;
   /** The Launch contract on that slot (Decision 0076); null keeps it unavailable. */
   readonly launchContract: LaunchContractConfig | null;
+  /**
+   * Decision 0085: how long (ms) one successful sale snapshot is reused by
+   * the Launch detail/eligibility reads. 0 disables the cache.
+   */
+  readonly launchSnapshotCacheTtlMs: number;
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
    * Development seed's `mock_seed` balances. Default false; the schema
@@ -1985,6 +1993,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["DATABASE_CONNECTION_TIMEOUT_MS"] ?? "3000",
     DATABASE_STATEMENT_TIMEOUT_MS:
       environment["DATABASE_STATEMENT_TIMEOUT_MS"] ?? "5000",
+    LAUNCH_SNAPSHOT_CACHE_TTL_MS:
+      environment["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] ?? "1500",
   });
 
   if (!parsed.success) {
@@ -2111,6 +2121,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
+    launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),

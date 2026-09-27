@@ -10,6 +10,7 @@ import {
   encodeAbiParameters,
   encodeEventTopics,
   encodeFunctionResult,
+  multicall3Abi,
   type Hex,
   type Transport,
 } from "viem";
@@ -30,6 +31,9 @@ export const mockStateTupleDigest = `0x${"cd".repeat(32)}`;
 export const mockAllowlistRoot = `0x${"ef".repeat(32)}`;
 export const mockBlockNumber = 45_000_000n;
 export const mockBlockHash = `0x${"12".repeat(32)}`;
+/** Multicall3's canonical address (viem's `bscTestnet`/`bsc` definitions). */
+export const mockMulticall3Address =
+  "0xca11bde05977b3631167028862be2a173976ca11";
 
 export interface MockLaunchpadState {
   saleState: number;
@@ -51,7 +55,13 @@ export interface MockLaunchpadChain {
   usd1: string;
   saleConfigVersion: string;
   failCalls: boolean;
+  /** When set, only inner calls to this function revert (Multicall3 path). */
+  revertFunction: string | null;
+  /** Artificial latency of every request, in milliseconds (0 = none). */
+  latencyMs: number;
   readonly calls: { method: string; params: readonly unknown[] }[];
+  /** Start/end of every request in order, for concurrency assertions. */
+  readonly timeline: string[];
 }
 
 export function createMockLaunchpadChain(
@@ -74,7 +84,10 @@ export function createMockLaunchpadChain(
     usd1: mockUsd1Address,
     saleConfigVersion: mockConfigVersion,
     failCalls: false,
+    revertFunction: null,
+    latencyMs: 0,
     calls: [],
+    timeline: [],
     ...overrides,
   };
 }
@@ -83,6 +96,9 @@ const oneToken = 10n ** 18n;
 
 function callResult(chain: MockLaunchpadChain, data: Hex): Hex {
   const decoded = decodeFunctionData({ abi: launchpadAbiV1, data });
+  if (chain.revertFunction === decoded.functionName) {
+    throw new Error(`mock revert ${decoded.functionName}`);
+  }
   switch (decoded.functionName) {
     case "getState": {
       return encodeFunctionResult({
@@ -215,48 +231,100 @@ export function mockLaunchpadTransportFactory(
   let snapshotReads = 0;
   return (): Transport =>
     custom({
-      request: ({ method, params }: { method: string; params?: unknown }) => {
+      request: async ({
+        method,
+        params,
+      }: {
+        method: string;
+        params?: unknown;
+      }): Promise<unknown> => {
         const list = (params ?? []) as readonly unknown[];
         chain.calls.push({ method, params: list });
-        switch (method) {
-          case "eth_chainId": {
-            return Promise.resolve(chain.chainIdHex);
+        const tag: unknown = method === "eth_call" ? list[1] : list[0];
+        const label = `${method}:${typeof tag === "string" ? tag : ""}`;
+        chain.timeline.push(`start ${label}`);
+        try {
+          if (chain.latencyMs > 0) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, chain.latencyMs),
+            );
           }
-          case "eth_getCode": {
-            return Promise.resolve(chain.code);
-          }
-          case "eth_getBlockByNumber": {
-            const tag = list[0];
-            if (tag === "latest") {
-              return Promise.resolve(
-                blockObject(chain.blockNumber, chain.blockHash),
-              );
-            }
-            snapshotReads += 1;
-            const hash =
-              chain.reorgHash !== null && snapshotReads >= 1
-                ? chain.reorgHash
-                : chain.blockHash;
-            return Promise.resolve(blockObject(BigInt(tag as string), hash));
-          }
-          case "eth_call": {
-            if (chain.failCalls) {
-              return Promise.reject(new Error("mock endpoint failure"));
-            }
-            const [request, block] = list as [{ data: Hex }, string];
-            if (block !== `0x${chain.blockNumber.toString(16)}`) {
-              return Promise.reject(
-                new Error(`call not pinned to the snapshot block: ${block}`),
-              );
-            }
-            return Promise.resolve(callResult(chain, request.data));
-          }
-          default: {
-            return Promise.reject(new Error(`unexpected method ${method}`));
-          }
+          return await answer(method, list);
+        } finally {
+          chain.timeline.push(`end ${label}`);
         }
       },
     });
+
+  function answer(method: string, list: readonly unknown[]): Promise<unknown> {
+    switch (method) {
+      case "eth_chainId": {
+        return Promise.resolve(chain.chainIdHex);
+      }
+      case "eth_getCode": {
+        return Promise.resolve(chain.code);
+      }
+      case "eth_getBlockByNumber": {
+        const tag = list[0];
+        if (tag === "latest") {
+          return Promise.resolve(
+            blockObject(chain.blockNumber, chain.blockHash),
+          );
+        }
+        snapshotReads += 1;
+        const hash =
+          chain.reorgHash !== null && snapshotReads >= 1
+            ? chain.reorgHash
+            : chain.blockHash;
+        return Promise.resolve(blockObject(BigInt(tag as string), hash));
+      }
+      case "eth_call": {
+        if (chain.failCalls) {
+          return Promise.reject(new Error("mock endpoint failure"));
+        }
+        const [request, block] = list as [{ data: Hex; to?: string }, string];
+        if (block !== `0x${chain.blockNumber.toString(16)}`) {
+          return Promise.reject(
+            new Error(`call not pinned to the snapshot block: ${block}`),
+          );
+        }
+        if (request.to?.toLowerCase() === mockMulticall3Address) {
+          return Promise.resolve(aggregate3Result(chain, request.data));
+        }
+        return Promise.resolve(callResult(chain, request.data));
+      }
+      default: {
+        return Promise.reject(new Error(`unexpected method ${method}`));
+      }
+    }
+  }
+}
+
+/**
+ * TEST ONLY: answers Multicall3 `aggregate3` the way the deployed contract
+ * does: each inner call either succeeds with its return data or fails with
+ * `success: false` (every inner call here allows failure; viem decides).
+ */
+function aggregate3Result(chain: MockLaunchpadChain, data: Hex): Hex {
+  const decoded = decodeFunctionData({ abi: multicall3Abi, data });
+  if (decoded.functionName !== "aggregate3") {
+    throw new Error(`unexpected multicall ${decoded.functionName}`);
+  }
+  const [calls] = decoded.args;
+  return encodeFunctionResult({
+    abi: multicall3Abi,
+    functionName: "aggregate3",
+    result: calls.map((call): { success: boolean; returnData: Hex } => {
+      if (call.target.toLowerCase() !== mockLaunchpadAddress) {
+        return { success: false, returnData: "0x" };
+      }
+      try {
+        return { success: true, returnData: callResult(chain, call.callData) };
+      } catch {
+        return { success: false, returnData: "0x" };
+      }
+    }),
+  });
 }
 
 /**

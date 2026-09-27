@@ -1574,6 +1574,7 @@ export async function buildApp(
       contract: config.launchContract,
       chain: config.launchChain,
       verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
+      snapshotCacheTtlMs: config.launchSnapshotCacheTtlMs,
       logger: app.log,
     });
   const launchService =
