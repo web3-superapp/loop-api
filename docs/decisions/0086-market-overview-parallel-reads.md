@@ -164,3 +164,12 @@ this host.
   (270–1100 ms). Getting it under 200 ms needs the list answered from the
   last database projection while Privy is re-read in the background, i.e. an
   observation older than 60 s — a coordinator decision on Decision 0063.
+
+## 主代理裁决（2026-09-27）
+
+状态：Accepted，随 `integration/v2` 合并。
+
+1. `/v2/wallets` 不用超过 60 s 的数据库副本应答：0063 的 60 s 上限不变，闲置一分钟后首读 0.6 s 可接受（S88c 已在启动时预读）。
+2. Provider 共享 1.2 s 截止：接受「宽限期内有缓存 → stale，否则 unavailable」。若真机上出现整页 unavailable，再把它改成 env 可配。
+3. GeckoTerminal 429：dev 的 API + worker 预算之和压到 ≤ 30/min（写在 ops 配置里，不改代码）；失败后不加停顿。
+4. `loop_api_s90` 测量库随 worktree 一起删除。
