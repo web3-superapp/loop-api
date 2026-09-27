@@ -170,3 +170,12 @@ Reverting the commit restores the three single `eth_call`s.
   `rank` option or a "last endpoint that answered first" preference would
   remove that class of incident in code rather than in ops ordering; both
   change the 0038/0076 endpoint policy and are not done here.
+
+## 主代理裁决（2026-09-27）
+
+状态：Accepted，随 `integration/v2` 合并。
+
+1. 保持 3 个往返：0076 要求块哈希核对在调用之后，不与 multicall 并行，宁可多 190 ms 也不漏 reorg。
+2. 端点策略（死端点每轮仍付 2.5 s）另开单 S82e：优先「上次应答的端点」并定期探测回主端点，或 viem fallback `rank`；改动涉及 0038/0076 的端点策略，单独写决策。
+3. Holders 不复用快照，维持独立读取。
+4. Eligibility 随共享 multicall 一起对 `getState`/`getSaleConfig` 失败关门：接受，同块语义优先。
