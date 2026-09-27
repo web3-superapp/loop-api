@@ -1203,3 +1203,283 @@ X-Loop-Contract-Version: 2.0
 - 这是启动时的一次性观测（决策 0076），不轮询；链上状态变化需 API 重启后反映。单个 launch 的可读性仍以
   `GET /v2/launches/{launchId}` 各字段自身的 `status`/`reasonCode` 为准。
 - 无新增错误码。
+
+## S92a：领取（claim）与退款（claimRefund）Intent（决策 0087）
+
+Base URL 与 headers 不变（见文首与 S83b.6）：写接口带 `Authorization: Bearer <Privy access token>`、
+`X-Loop-Client-Version`、`X-Loop-Contract-Version: 2.0`、UUIDv4 `Idempotency-Key`；读接口不带
+`Idempotency-Key`。三个路由（prepare / broadcast-report / GET intent）对 `buy`、`claim`、`claimRefund`
+通用，签名出口、轮询、状态机与购买完全相同（S83b.6、S83b.7、S83b2、S83b3）。
+
+### S92a.1 何时显示「领取 / 退款」按钮
+
+读 `GET /v2/launch/{launchId}/holders` 的 `myPosition`（S83b.3，四个字段一直都在 `available` 分支里）
+与 `GET /v2/launches/{launchId}` 的四轴：
+
+| 按钮 | 前端显示条件（仅提示，最终以 prepare 的回答为准）                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------------ |
+| 领取 | `entitlementState ∈ {VESTING, COMPLETED}`、`operationalState == "ACTIVE"`、`myPosition.claimableTokens != "0"`     |
+| 退款 | `saleState ∈ {FAILED, CANCELLED}`、`entitlementState == "REFUNDING"`、`ACTIVE`、`myPosition.refundableUsd1 != "0"` |
+
+注意：`GET /v2/launches/{launchId}` **没有** `myPosition`；持仓只在 holders 上。金额都是 18 位最小单位十进制字符串。
+`capabilities.launch.evidence` 没有按动作的开关，领取 / 退款与购买一样只看 `evidence.status == "confirmed"`。
+
+### S92a.2 `POST /v2/launch/{launchId}/intents`：请求
+
+`kind` 可选，缺省 `"buy"`；老客户端不带 `kind` 仍是购买，响应字节不变。领取 / 退款**只**带 `kind` 与 `walletId`：
+
+```http
+POST /v2/launch/9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f/intents
+Authorization: Bearer <token>
+X-Loop-Client-Version: 1.2.3
+X-Loop-Contract-Version: 2.0
+Idempotency-Key: 5d0c7a1e-2f3b-4c5d-8e6f-7a8b9c0d1e2f
+Content-Type: application/json
+
+{ "kind": "claim", "walletId": "d64786bb-408d-415d-8a69-6277d56c921b" }
+```
+
+```json
+{ "kind": "claimRefund", "walletId": "d64786bb-408d-415d-8a69-6277d56c921b" }
+```
+
+- 领取 / 退款带 `roundId` 或 `payAmount`、未知 `kind`、缺 `walletId` → `400 INVALID_REQUEST`。
+- 同一 `Idempotency-Key` 重放同一 `kind`：返回同一个 Intent；换 `kind`（或换成购买体）→ `409 IDEMPOTENCY_CONFLICT`。
+  每次新动作用新 key。
+
+### S92a.3 `201`：领取
+
+```json
+{
+  "launchIntent": {
+    "launchIntentId": "7a2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "kind": "claim",
+    "state": "awaiting_signature",
+    "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+    "projectId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+    "roundId": null,
+    "roundIndex": null,
+    "chainId": "eip155:97",
+    "contractAddress": "0x1111111111111111111111111111111111111111",
+    "quoteAssetId": "eip155:97:0x2222222222222222222222222222222222222222",
+    "usd1Amount": "0",
+    "expectedTokenAmount": "2500000000000000000000",
+    "minTokenAmount": "0",
+    "walletCumulativeUsd1": "100000000000000000000",
+    "deadline": "2026-09-22T00:02:00.000Z",
+    "eligibilityProof": [],
+    "configVersion": "0xabababababababababababababababababababababababababababababababab",
+    "stateTupleDigest": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "snapshotBlockNumber": "900",
+    "snapshotBlockHash": "0xbbbb…384",
+    "payloadDigest": "3f1e…(64 hex)",
+    "unsignedTransaction": {
+      "chainId": 97,
+      "to": "0x1111111111111111111111111111111111111111",
+      "data": "0x379607f50000000000000000000000000000000000000000000000000000000000000007",
+      "value": "0x0",
+      "from": "0x…钱包地址",
+      "gas": "0x1d4c0",
+      "nonce": "0x3",
+      "type": "legacy",
+      "maxFeePerGas": null,
+      "maxPriorityFeePerGas": null,
+      "gasPrice": "0x3b9aca00"
+    },
+    "expiresAt": "2026-09-22T00:02:00.000Z",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "projectAssetId": "eip155:97:0x3333333333333333333333333333333333333333",
+    "saleId": "7",
+    "claimableTokens": "2500000000000000000000",
+    "transactionHash": null,
+    "simulation": { "status": "passed", "reasonCode": null },
+    "policy": {
+      "configVersion": "bscWriteCanaryV1",
+      "canaryMaxUsd": "5",
+      "valueUsd": "0",
+      "priceSource": "usd1_par"
+    },
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": true,
+      "reasonCode": null
+    }
+  },
+  "contractVersion": "2.0"
+}
+```
+
+`data` 是 `claim(uint256 saleId)`（选择器 `0x379607f5`）。签名前展示「本次可领取 `claimableTokens`（项目代币）」；
+`expectedTokenAmount` 与它相同。
+
+### S92a.4 `201`：退款
+
+与领取同形，差异如下（其余字段同 S92a.3）：
+
+```json
+{
+  "launchIntent": {
+    "launchIntentId": "8a2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "kind": "claimRefund",
+    "state": "awaiting_signature",
+    "roundId": null,
+    "roundIndex": null,
+    "usd1Amount": "0",
+    "expectedTokenAmount": "0",
+    "minTokenAmount": "0",
+    "walletCumulativeUsd1": "100000000000000000000",
+    "refundableUsd1": "100000000000000000000",
+    "unsignedTransaction": {
+      "chainId": 97,
+      "to": "0x1111111111111111111111111111111111111111",
+      "data": "0x5b7baf640000000000000000000000000000000000000000000000000000000000000007",
+      "value": "0x0",
+      "…": "from / gas / nonce / fee 同领取"
+    },
+    "policy": {
+      "configVersion": "bscWriteCanaryV1",
+      "canaryMaxUsd": "5",
+      "valueUsd": "0",
+      "priceSource": "usd1_par"
+    },
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": true,
+      "reasonCode": null
+    },
+    "…": "其余字段同 S92a.3"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+`data` 是 `claimRefund(uint256 saleId)`（选择器 `0x5b7baf64`）。签名前展示「本次退回 `refundableUsd1` USD1」。
+
+字段规则（两种都适用）：
+
+- `kind` 只出现在领取 / 退款上；**购买的 `launchIntent` 没有 `kind` 键**（与之前字节相同），客户端按「缺省 = buy」解码。
+- `roundId` / `roundIndex` 为 `null`；`usd1Amount` / `minTokenAmount` 为 `"0"`（用户不付 USD1）；`eligibilityProof` 为 `[]`。
+- `claimableTokens` 只在领取上、`refundableUsd1` 只在退款上出现，都是 `getPosition` 在 `snapshotBlockNumber` 的值。
+- 没有 `walletRoundCapUsd1` / `walletProjectCapUsd1`。
+- `deadline` = `expiresAt` = 准备后 120 秒，**只是签名窗口**；合约的 `claim` / `claimRefund` 没有 deadline 参数。
+- 模拟失败仍是 `201`、`state: "prepared"`、`signing.allowed: false`（`LAUNCH_SIMULATION_REVERTED` / `LAUNCH_SIMULATION_UNAVAILABLE`），与购买相同。
+- canary：只要求合约在对手方白名单里；不看资产白名单、单笔上限、每日上限，`policy.valueUsd` 恒 `"0"`，不占每日额度。
+
+### S92a.5 错误码
+
+七字段错误体，`detailsSafe.reasonCode` 指明规则（新增的 6 个都是 `409 DATA_STALE`）：
+
+| HTTP / code                  | `detailsSafe.reasonCode`（附加字段）                                                                                                                                                           | 适用        | 前端建议                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------- |
+| `409 DATA_STALE`             | `LAUNCH_CLAIM_NOT_OPEN`（`entitlementState`）：未 TGE / 池未建好（FROZEN）、未最终化（NONE）、退款态（VESTING 与 COMPLETED 均可领取）                                                          | claim       | 显示「尚未开放领取」，刷新详情     |
+| `409 DATA_STALE`             | `LAUNCH_REFUND_NOT_OPEN`（`saleState`, `entitlementState`）：sale 不是 FAILED / CANCELLED，或不在 REFUNDING（窗口已关为 REFUNDED）                                                             | claimRefund | 显示「当前不可退款」               |
+| `409 DATA_STALE`             | `LAUNCH_SALE_PAUSED`：合约暂停                                                                                                                                                                 | 两者        | 显示「已暂停」，稍后重试           |
+| `409 DATA_STALE`             | `LAUNCH_NOT_PARTICIPANT`：该钱包没有参与该 sale                                                                                                                                                | 两者        | 隐藏按钮                           |
+| `409 DATA_STALE`             | `LAUNCH_NOTHING_TO_CLAIM`：参与过，但当前可领取为 0（未到释放点或已领完）                                                                                                                      | claim       | 显示「暂无可领取」，下次释放后再来 |
+| `409 DATA_STALE`             | `LAUNCH_NOTHING_TO_REFUND`：参与过，但已退完                                                                                                                                                   | claimRefund | 显示「已退款」                     |
+| `409 DATA_STALE`             | `LAUNCH_CONFIG_VERSION_MISMATCH`                                                                                                                                                               | 两者        | 刷新后重试                         |
+| `409 INSUFFICIENT_BALANCE`   | `LAUNCH_GAS_INSUFFICIENT`：原生币不够付 gas                                                                                                                                                    | 两者        | 充 tBNB                            |
+| `409 IDEMPOTENCY_CONFLICT`   | —：同一 key 用在另一个请求体 / kind 上                                                                                                                                                         | 两者        | 新 key                             |
+| `400 INVALID_REQUEST`        | —：未知 `kind`、领取 / 退款带了 `roundId` / `payAmount`、缺 `walletId`、headers 缺失                                                                                                           | 两者        | 修正请求                           |
+| `404 NOT_FOUND`              | —：launch 或钱包不存在 / 不属于你                                                                                                                                                              | 两者        | 刷新                               |
+| `422 VALIDATION_FAILED`      | —：非嵌入式钱包                                                                                                                                                                                | 两者        | 切换到嵌入式钱包                   |
+| `403 POLICY_BLOCKED`         | `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`：合约不在 canary 对手方白名单                                                                                                                           | 两者        | 不可重试                           |
+| `503 CAPABILITY_UNAVAILABLE` | 无 `detailsSafe`：写开关关闭或合约键为空；有 reasonCode：S83a 合约原因码、`LAUNCH_SALE_NOT_FOUND`、`LAUNCH_SALE_ASSETS_UNREGISTERED`、`LAUNCH_CONTRACT_READ_FAILED`、`LAUNCH_SNAPSHOT_REORGED` | 两者        | 稍后重试                           |
+
+示例：
+
+```json
+{
+  "code": "DATA_STALE",
+  "category": "stale",
+  "retryable": false,
+  "userMessageKey": "errors.data.stale",
+  "correlationId": "req-1",
+  "detailsSafe": {
+    "reasonCode": "LAUNCH_CLAIM_NOT_OPEN",
+    "entitlementState": "FROZEN"
+  },
+  "providerReferenceSafe": null
+}
+```
+
+（`category: stale`、`retryable: false`、`userMessageKey: errors.data.stale` 是 `DATA_STALE` 的固定值，与购买的 409 相同；`correlationId` 为每次请求的值。）
+
+### S92a.6 广播回报、读取与状态
+
+与购买完全相同：设备 `eth_sendTransaction` → `POST …/intents/{launchIntentId}/broadcast-report {txHash}` →
+轮询 `GET …/intents/{launchIntentId}`（两者都原样带 `kind`）。领取在 `entitlementState` 为 `VESTING` 或 `COMPLETED` 时都可发起（与参考合约一致，释放全部到期后仍可领取未领完的部分）。状态：
+
+| 从          | 到          | 触发（领取 / 退款）                                                                                   |
+| ----------- | ----------- | ----------------------------------------------------------------------------------------------------- |
+| `submitted` | `confirmed` | 索引到该交易、该 sale、**该钱包**的 `Claimed`（领取）/ `Refunded`（退款）事件；或回执成功且确认数足够 |
+| `submitted` | `reverted`  | 回执 `status=0x0`（`LAUNCH_TX_REVERTED`，`revertReason: null`）                                       |
+| `submitted` | `failed`    | 回报的 hash 是另一笔交易（`LAUNCH_TX_PAYLOAD_MISMATCH`）                                              |
+| `submitted` | `expired`   | 过 `expiresAt` 5 分钟仍无回执（节点仍 pending 时 60 分钟；`LAUNCH_TX_NOT_OBSERVED`）                  |
+| `expired`   | `confirmed` | 之后仍索引到该交易的 `Claimed` / `Refunded`（合约无 deadline，晚到的交易可能仍成功）                  |
+
+前端建议：`confirmed` 显示「已领取」/「已退款」；`reverted` 显示「交易失败（仅消耗 gas）」；`expired` 显示「未上链，可重新发起」
+（先刷新 holders，可能晚到已成功）；三者都可以用新 `Idempotency-Key` 重新 `POST …/intents`。
+
+### S92a.7 `GET /v2/launch/{launchId}/history` → `settlements`
+
+`source` 为 `available` 时多一个数组 `settlements`（`source` 不可用时**没有这个键**，字节与之前相同），
+列出当前账户钱包的每一条 `Claimed` / `Refunded` 事件，按区块倒序，最多 500 条：
+
+```json
+{
+  "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "purchaseRecords": [],
+  "entitlements": [],
+  "refunds": [],
+  "settlements": [
+    {
+      "settlementRecordId": "6b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "kind": "claimed",
+      "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+      "assetId": "eip155:97:0x3333333333333333333333333333333333333333",
+      "amount": "2500000000000000000000",
+      "cumulativeAmount": "2500000000000000000000",
+      "transactionHash": "0xc1c1…c1",
+      "logIndex": 1,
+      "blockNumber": "945",
+      "blockHash": "0xbbbb…3b1",
+      "confirmationState": "confirmed",
+      "observedAt": "2026-09-25T01:00:00.000Z"
+    },
+    {
+      "settlementRecordId": "7b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "kind": "refunded",
+      "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+      "assetId": "eip155:97:0x2222222222222222222222222222222222222222",
+      "amount": "100000000000000000000",
+      "cumulativeAmount": "100000000000000000000",
+      "transactionHash": "0xc2c2…c2",
+      "logIndex": 0,
+      "blockNumber": "944",
+      "blockHash": "0xbbbb…3b0",
+      "confirmationState": "pending",
+      "observedAt": "2026-09-25T01:00:00.000Z"
+    }
+  ],
+  "source": {
+    "status": "available",
+    "indexedBlockNumber": "950",
+    "indexedBlockHash": "0xbbbb…3b6"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- `kind: "claimed"` → 显示「已领取」，`amount` 是项目代币最小单位（`assetId` 为项目代币）；
+  `kind: "refunded"` → 显示「已退款」，`amount` 是 USD1 最小单位（`assetId` 为 USD1）。
+- `cumulativeAmount` 是这条事件之后该钱包的累计已领 / 已退。
+- `confirmationState`：`pending`（未满确认数）→ `confirmed`；被重组的行保留为 `reorged`（显示为失效）。
+- `entitlements` / `refunds` 两个汇总数组不变（`claimedTokens` / `refundedUsd1` 仍是累计值）。
+- 解码建议：`settlements` 按可选数组处理，缺席即「未知」，不是「没有领取过」。
+
+### S92a.8 unavailable
+
+合约键为空或写开关关闭：三种 `kind` 都是不带 `detailsSafe` 的 `503 CAPABILITY_UNAVAILABLE`（与之前字节相同）；
+读链失败：`503` + S83a 原因码。任何情况下都不会用默认值或缓存的持仓冒充链上事实，被拒的请求不存 Intent。

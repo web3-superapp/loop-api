@@ -75,6 +75,7 @@ const truncateControlPlane = `
     public.refund_claims,
     public.refund_liabilities,
     public.entitlements,
+    public.launch_settlement_records,
     public.purchase_records,
     public.launch_round_allowlist_roots,
     public.launch_allowlists,

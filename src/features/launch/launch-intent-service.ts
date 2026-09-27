@@ -50,6 +50,7 @@ import {
   LaunchIntentReportConflictError,
   type CreateLaunchIntentInput,
   type LaunchChainRepository,
+  type LaunchIntentKind,
   type LaunchIntentRecord,
 } from "./launch-chain-repository.js";
 import {
@@ -104,6 +105,16 @@ export const launchIntentReasonCodes = Object.freeze({
   txReverted: "LAUNCH_TX_REVERTED",
   /** Decision 0080: no receipt once the deadline plus grace has passed. */
   txNotObserved: "LAUNCH_TX_NOT_OBSERVED",
+  /** Decision 0087: entitlementState is neither VESTING nor COMPLETED (NONE, FROZEN before TGE / pool, refund states). */
+  claimNotOpen: "LAUNCH_CLAIM_NOT_OPEN",
+  /** Decision 0087: the wallet took part but nothing is claimable now. */
+  nothingToClaim: "LAUNCH_NOTHING_TO_CLAIM",
+  /** Decision 0087: saleState is not FAILED/CANCELLED or entitlementState is not REFUNDING. */
+  refundNotOpen: "LAUNCH_REFUND_NOT_OPEN",
+  /** Decision 0087: the wallet took part but has nothing left to refund. */
+  nothingToRefund: "LAUNCH_NOTHING_TO_REFUND",
+  /** Decision 0087: the wallet never bought into this sale. */
+  notParticipant: "LAUNCH_NOT_PARTICIPANT",
 } as const);
 
 export interface LaunchIntentRuntime {
@@ -226,9 +237,12 @@ export function projectLaunchIntent(
         readonly walletProjectCapUsd1: string;
       }
     | undefined;
+  const settlement = record.kind !== "buy";
   return Object.freeze({
     launchIntent: Object.freeze({
       launchIntentId: record.intentId,
+      // Decision 0087: a purchase keeps its pre-0087 bytes (no `kind`).
+      ...(settlement ? { kind: record.kind } : {}),
       state,
       launchId: record.launchId,
       projectId: record.projectId,
@@ -239,7 +253,8 @@ export function projectLaunchIntent(
       contractAddress: record.contractAddress,
       quoteAssetId: record.quoteAssetId,
       usd1Amount: record.payAmountRaw,
-      expectedTokenAmount: record.expectedReceiveRaw,
+      expectedTokenAmount:
+        record.kind === "claimRefund" ? "0" : record.expectedReceiveRaw,
       minTokenAmount: record.minTokenAmountRaw,
       walletCumulativeUsd1: record.walletCumulativeRaw,
       deadline: record.deadline,
@@ -254,6 +269,11 @@ export function projectLaunchIntent(
       createdAt: record.createdAt,
       projectAssetId: record.projectAssetId,
       saleId: record.saleId,
+      ...(record.kind === "claim"
+        ? { claimableTokens: record.expectedReceiveRaw }
+        : record.kind === "claimRefund"
+          ? { refundableUsd1: record.expectedReceiveRaw }
+          : {}),
       ...(caps === undefined
         ? {}
         : {
@@ -313,15 +333,41 @@ export interface LaunchIntentPrepareDependencies {
   ) => LaunchEligibilityMode;
 }
 
-function parseBody(body: unknown): {
-  readonly walletId: string;
-  readonly roundId: string;
-  readonly payRaw: bigint;
-} {
+type ParsedIntentRequest =
+  | {
+      readonly kind: "buy";
+      readonly walletId: string;
+      readonly roundId: string;
+      readonly payRaw: bigint;
+    }
+  | {
+      readonly kind: Exclude<LaunchIntentKind, "buy">;
+      readonly walletId: string;
+    };
+
+/**
+ * Decision 0087: `kind` defaults to `buy`, so a pre-0087 body is still a
+ * purchase. `claim` / `claimRefund` take only `walletId`: a round or an
+ * amount on them is INVALID_REQUEST, never ignored.
+ */
+function parseBody(body: unknown): ParsedIntentRequest {
   if (typeof body !== "object" || body === null) {
     throw V2ApiError.invalidRequest();
   }
   const value = body as Record<string, unknown>;
+  const kind = value["kind"] === undefined ? "buy" : value["kind"];
+  if (kind === "claim" || kind === "claimRefund") {
+    if (
+      !isOpaqueId(value["walletId"]) ||
+      Object.keys(value).some((key) => key !== "kind" && key !== "walletId")
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    return { kind, walletId: value["walletId"] };
+  }
+  if (kind !== "buy") {
+    throw V2ApiError.invalidRequest();
+  }
   if (
     !isOpaqueId(value["walletId"]) ||
     !isOpaqueId(value["roundId"]) ||
@@ -339,7 +385,12 @@ function parseBody(body: unknown): {
   if (payRaw <= 0n) {
     throw V2ApiError.invalidRequest();
   }
-  return { walletId: value["walletId"], roundId: value["roundId"], payRaw };
+  return {
+    kind: "buy",
+    walletId: value["walletId"],
+    roundId: value["roundId"],
+    payRaw,
+  };
 }
 
 export async function prepareLaunchIntent(
@@ -387,38 +438,62 @@ export async function prepareLaunchIntent(
     // Only a Privy embedded wallet signs through the app's exit (0035).
     throw V2ApiError.fromCode("VALIDATION_FAILED");
   }
-  const round = detail.rounds.find((item) => item.roundId === request.roundId);
-  if (round === undefined) {
-    throw V2ApiError.notFound();
-  }
   const quoteAssetId = assetIdForAddress(
     detail.launch.chainId,
     configured.usd1Address,
   );
-  const requestSha256 = launchIntentRequestDigest([
-    detail.launch.launchId,
-    wallet.walletId,
-    round.roundId,
-    request.payRaw.toString(10),
-  ]);
+  let requestSha256: string;
+  let build: () => Promise<CreateLaunchIntentInput>;
+  if (request.kind === "buy") {
+    const round = detail.rounds.find(
+      (item) => item.roundId === request.roundId,
+    );
+    if (round === undefined) {
+      throw V2ApiError.notFound();
+    }
+    // Unchanged pre-0087 digest parts: a buy replays across the change.
+    requestSha256 = launchIntentRequestDigest([
+      detail.launch.launchId,
+      wallet.walletId,
+      round.roundId,
+      request.payRaw.toString(10),
+    ]);
+    build = () =>
+      buildIntent(deps, {
+        principal: input.principal,
+        detail,
+        wallet,
+        roundId: round.roundId,
+        roundIndex: round.roundIndex,
+        roundTier: round.eligibilityTier,
+        payRaw: request.payRaw,
+        quoteAssetId,
+        writes,
+      });
+  } else {
+    const kind = request.kind;
+    requestSha256 = launchIntentRequestDigest([
+      detail.launch.launchId,
+      wallet.walletId,
+      kind,
+    ]);
+    build = () =>
+      buildSettlementIntent(deps, {
+        principal: input.principal,
+        kind,
+        detail,
+        wallet,
+        quoteAssetId,
+        writes,
+      });
+  }
   let outcome;
   try {
     outcome = await deps.chain.createIntent({
       ownerUserId: input.principal.userId,
       idempotencyKey: input.idempotencyKey,
       requestSha256,
-      build: () =>
-        buildIntent(deps, {
-          principal: input.principal,
-          detail,
-          wallet,
-          roundId: round.roundId,
-          roundIndex: round.roundIndex,
-          roundTier: round.eligibilityTier,
-          payRaw: request.payRaw,
-          quoteAssetId,
-          writes,
-        }),
+      build,
     });
   } catch (error) {
     if (error instanceof LaunchIntentIdempotencyConflictError) {
@@ -780,6 +855,7 @@ async function buildIntent(
     .digest("hex");
   return Object.freeze({
     intentId,
+    kind: "buy" as const,
     ownerUserId: input.principal.userId,
     walletId: input.wallet.walletId,
     launchId: launch.launchId,
@@ -803,6 +879,253 @@ async function buildIntent(
     state: simulation.status === "passed" ? "awaiting_signature" : "prepared",
     deadline,
     eligibilityProof: Object.freeze([...proof]),
+    unsignedTransaction,
+    policy,
+    expiresAt: deadline,
+  });
+}
+
+/**
+ * Decision 0087: `claim(saleId)` / `claimRefund(saleId)` Intent. Admission is
+ * read at one block: the Decision 0085 sale snapshot (`getState`, `getRounds`,
+ * `getSaleConfig` in one multicall) and `getPosition` of the wallet pinned to
+ * that snapshot's block, whose hash is re-checked afterwards (0076). Nothing
+ * is paid, so the canary only requires the contract in the counterparty
+ * allowlist; the Intent carries `valueUsd = "0"` and adds no daily exposure.
+ */
+async function buildSettlementIntent(
+  deps: LaunchIntentPrepareDependencies,
+  input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly kind: Exclude<LaunchIntentKind, "buy">;
+    readonly detail: LaunchDetailRecord;
+    readonly wallet: AccountWalletRecord;
+    readonly quoteAssetId: string;
+    readonly writes: BscWriteConfig;
+  },
+): Promise<CreateLaunchIntentInput> {
+  const { contract, runtime } = deps;
+  const configured = contract.contract;
+  if (configured === null) {
+    throw V2ApiError.capabilityUnavailable();
+  }
+  const launch = input.detail.launch;
+  if (
+    launch.projectAssetId === undefined ||
+    launch.projectAssetId === null ||
+    launch.quoteAssetId === undefined ||
+    launch.quoteAssetId === null
+  ) {
+    return unavailableWith(launchIntentReasonCodes.saleAssetsUnregistered);
+  }
+  const saleId = BigInt(launch.saleId as string);
+  requireCanaryCounterparty(input.writes, configured.address);
+
+  // --- One block for the sale and the wallet's position (0085 + 0076). ---
+  const sale = await contract.readSaleSnapshot(saleId);
+  const snapshot = sale.snapshot;
+  const position = await contract.getPosition(
+    { saleId, wallet: input.wallet.address },
+    snapshot,
+  );
+  await contract.confirmSnapshot(snapshot);
+  const state = sale.state;
+  if (isZeroBytes32(state.configVersion)) {
+    return unavailableWith(launchContractReasonCodes.saleNotFound);
+  }
+  if (sale.config.usd1 !== configured.usd1Address) {
+    return unavailableWith(launchContractReasonCodes.usd1AddressMismatch);
+  }
+  if (
+    state.configVersion !== sale.config.configVersion ||
+    (launch.configVersionOnchain !== null &&
+      launch.configVersionOnchain !== state.configVersion)
+  ) {
+    refuse("DATA_STALE", launchIntentReasonCodes.configVersionMismatch);
+  }
+
+  // --- 06 §4.1 claim / claimRefund preconditions, then the wallet. ---
+  const held = position.value;
+  let receiveRaw: bigint;
+  if (input.kind === "claim") {
+    // The reference LoopLaunchpad.claim admits VESTING and COMPLETED (a
+    // fully matured schedule still pays out what was not yet claimed).
+    if (
+      state.entitlementState !== "VESTING" &&
+      state.entitlementState !== "COMPLETED"
+    ) {
+      refuse("DATA_STALE", launchIntentReasonCodes.claimNotOpen, {
+        entitlementState: state.entitlementState,
+      });
+    }
+    if (state.operationalState === "PAUSED") {
+      refuse("DATA_STALE", launchIntentReasonCodes.salePaused);
+    }
+    if (
+      held.cumulativeUsd1 === 0n &&
+      held.purchasedTokens === 0n &&
+      held.entitledTokens === 0n &&
+      held.claimedTokens === 0n
+    ) {
+      refuse("DATA_STALE", launchIntentReasonCodes.notParticipant);
+    }
+    if (held.claimableTokens <= 0n) {
+      refuse("DATA_STALE", launchIntentReasonCodes.nothingToClaim);
+    }
+    receiveRaw = held.claimableTokens;
+  } else {
+    if (
+      (state.saleState !== "FAILED" && state.saleState !== "CANCELLED") ||
+      state.entitlementState !== "REFUNDING"
+    ) {
+      refuse("DATA_STALE", launchIntentReasonCodes.refundNotOpen, {
+        saleState: state.saleState,
+        entitlementState: state.entitlementState,
+      });
+    }
+    if (state.operationalState === "PAUSED") {
+      refuse("DATA_STALE", launchIntentReasonCodes.salePaused);
+    }
+    if (
+      held.cumulativeUsd1 === 0n &&
+      held.refundableUsd1 === 0n &&
+      held.refundedUsd1 === 0n
+    ) {
+      refuse("DATA_STALE", launchIntentReasonCodes.notParticipant);
+    }
+    if (held.refundableUsd1 <= 0n) {
+      refuse("DATA_STALE", launchIntentReasonCodes.nothingToRefund);
+    }
+    receiveRaw = held.refundableUsd1;
+  }
+
+  // --- Native gas, simulation, fee, nonce: the buy path's discipline. ---
+  const client = runtime.readClient;
+  const nativeId = nativeAssetId(launch.chainId);
+  const balances = await client.readBalances(input.wallet.address, [
+    { assetId: nativeId, address: null },
+  ]);
+  const nativeBalance = balances.balances.find(
+    (item) => item.assetId === nativeId,
+  )?.rawValue;
+  if (nativeBalance === undefined || nativeBalance === null) {
+    return unavailableWith(launchContractReasonCodes.readFailed);
+  }
+  const call =
+    input.kind === "claim"
+      ? contract.encodeClaim(saleId)
+      : contract.encodeClaimRefund(saleId);
+  const request = {
+    from: input.wallet.address,
+    to: call.to,
+    data: call.data,
+    value: 0n,
+  };
+  const simulated = await client.call(request);
+  let simulation: {
+    readonly status: string;
+    readonly reasonCode: string | null;
+  };
+  let gasLimit = 250_000n;
+  if (simulated.status === "reverted") {
+    simulation = {
+      status: "reverted",
+      reasonCode: launchIntentReasonCodes.simulationReverted,
+    };
+  } else {
+    const estimate = await client.estimateGas(request).catch(() => null);
+    if (estimate === null) {
+      simulation = {
+        status: "unavailable",
+        reasonCode: launchIntentReasonCodes.simulationUnavailable,
+      };
+    } else {
+      simulation = { status: "passed", reasonCode: null };
+      gasLimit = (estimate * 12n) / 10n;
+    }
+  }
+  const [fee, nonce] = await Promise.all([
+    client.getFeeData(),
+    client.getTransactionCount(input.wallet.address),
+  ]);
+  const perGas = fee.type === "eip1559" ? fee.maxFeePerGas : fee.gasPrice;
+  if (gasLimit * perGas > nativeBalance) {
+    refuse("INSUFFICIENT_BALANCE", launchIntentReasonCodes.gasInsufficient);
+  }
+
+  const intentId = runtime.createUuid();
+  const unsignedTransaction = unsignedTransactionFor({
+    chainReference: runtime.readClient.chainReference,
+    from: input.wallet.address,
+    to: call.to,
+    data: call.data,
+    gasLimit,
+    nonce,
+    fee,
+  });
+  // No on-chain deadline exists for claim/claimRefund: this is the signing
+  // window only (expiresAt), the same TTL as a purchase.
+  const deadline = new Date(
+    runtime.now().getTime() + launchIntentTtlSeconds * 1000,
+  ).toISOString();
+  const policy = {
+    configVersion: bscWriteCanaryPolicyVersion,
+    canaryMaxUsd: input.writes.canaryMaxUsd,
+    valueUsd: "0",
+    priceSource: "usd1_par",
+    simulation,
+  };
+  const binding = {
+    version: "launchIntentV1",
+    intentId,
+    accountId: input.principal.userId,
+    walletId: input.wallet.walletId,
+    launchId: launch.launchId,
+    projectId: launch.projectId,
+    saleId: saleId.toString(10),
+    chainId: launch.chainId,
+    quoteAssetId: input.quoteAssetId,
+    projectAssetId: launch.projectAssetId,
+    direction: input.kind,
+    expectedReceiveAmount: receiveRaw.toString(10),
+    configVersion: state.configVersion,
+    walletCumulativeUsd1: held.cumulativeUsd1.toString(10),
+    deadline,
+    contractAddress: configured.address,
+    stateTupleDigest: state.stateTupleDigest,
+    snapshotBlockNumber: snapshot.blockNumber.toString(10),
+    snapshotBlockHash: snapshot.blockHash,
+    unsignedTransaction,
+  };
+  const payloadDigest = createHash("sha256")
+    .update(canonicalJson(binding), "utf8")
+    .digest("hex");
+  return Object.freeze({
+    intentId,
+    kind: input.kind,
+    ownerUserId: input.principal.userId,
+    walletId: input.wallet.walletId,
+    launchId: launch.launchId,
+    projectId: launch.projectId,
+    roundId: null,
+    roundIndex: null,
+    saleId: saleId.toString(10),
+    chainId: launch.chainId,
+    quoteAssetId: input.quoteAssetId,
+    projectAssetId: launch.projectAssetId,
+    payAmountRaw: "0",
+    expectedReceiveRaw: receiveRaw.toString(10),
+    minTokenAmountRaw: "0",
+    configVersion: state.configVersion,
+    walletCumulativeRaw: held.cumulativeUsd1.toString(10),
+    contractAddress: configured.address,
+    stateTupleDigest: state.stateTupleDigest,
+    snapshotBlockNumber: snapshot.blockNumber.toString(10),
+    snapshotBlockHash: snapshot.blockHash,
+    payloadDigest,
+    state: simulation.status === "passed" ? "awaiting_signature" : "prepared",
+    deadline,
+    eligibilityProof: Object.freeze([]),
     unsignedTransaction,
     policy,
     expiresAt: deadline,

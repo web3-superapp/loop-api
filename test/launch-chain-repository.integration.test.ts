@@ -799,6 +799,7 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
       builds += 1;
       return Promise.resolve({
         intentId: randomUUID(),
+        kind: "buy",
         ownerUserId: a.userId,
         walletId: a.walletId,
         launchId,
@@ -958,6 +959,7 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
         build: () =>
           Promise.resolve({
             intentId: randomUUID(),
+            kind: "buy",
             ownerUserId: b.userId,
             walletId: b.walletId,
             launchId,
@@ -1163,5 +1165,388 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
         values: [receiptIntent.intentId],
       }),
     ).rejects.toThrow(/launch_intents_revert_reason_check/);
+  });
+
+  it("claim / claimRefund Intents: kind round-trips, Claimed / Refunded logs of the Intent's wallet confirm them, receipts settle reverted / expired, settlements list both kinds (Decision 0087)", async () => {
+    const claimSale = await createLaunch({ projectTokenAddress: projectToken });
+    const refundSale = await createLaunch({
+      projectTokenAddress: projectToken,
+    });
+    await register(claimSale.launchId, "21");
+    await register(refundSale.launchId, "22");
+    const a = users["a"]!;
+    const b = users["b"]!;
+    const deadline = new Date(Date.now() + 120_000).toISOString();
+    const later = (): Date => new Date(Date.now() + 2 * 3_600_000);
+
+    function settlementInput(
+      kind: "claim" | "claimRefund",
+      launch: { launchId: string; projectId: string },
+      saleId: string,
+      overrides: Partial<CreateLaunchIntentInput> = {},
+    ): CreateLaunchIntentInput {
+      return {
+        intentId: randomUUID(),
+        kind,
+        ownerUserId: a.userId,
+        walletId: a.walletId,
+        launchId: launch.launchId,
+        projectId: launch.projectId,
+        roundId: null,
+        roundIndex: null,
+        saleId,
+        chainId,
+        quoteAssetId: `${chainId}:${usd1}`,
+        projectAssetId: `${chainId}:${projectToken}`,
+        payAmountRaw: "0",
+        expectedReceiveRaw: (2_500n * oneUsd1).toString(),
+        minTokenAmountRaw: "0",
+        configVersion,
+        walletCumulativeRaw: (100n * oneUsd1).toString(),
+        contractAddress: mockLaunchpadAddress,
+        stateTupleDigest: digest,
+        snapshotBlockNumber: "900",
+        snapshotBlockHash: fixtureBlockHash(900n),
+        payloadDigest: "a".repeat(64),
+        state: "awaiting_signature",
+        deadline,
+        eligibilityProof: [],
+        unsignedTransaction: {
+          chainId: 97,
+          from: a.address,
+          to: mockLaunchpadAddress,
+          data: "0x",
+          value: "0x0",
+        },
+        policy: { configVersion: "bscWriteCanaryV1", valueUsd: "0" },
+        expiresAt: deadline,
+        ...overrides,
+      };
+    }
+
+    async function reported(
+      kind: "claim" | "claimRefund",
+      launch: { launchId: string; projectId: string },
+      saleId: string,
+      block: bigint,
+    ): Promise<{ readonly intentId: string; readonly tx: string }> {
+      const created = await chain.createIntent({
+        ownerUserId: a.userId,
+        idempotencyKey: randomUUID(),
+        requestSha256: randomUUID().replaceAll("-", "").padEnd(64, "0"),
+        build: () => Promise.resolve(settlementInput(kind, launch, saleId)),
+      });
+      expect(created.intent).toMatchObject({
+        kind,
+        roundId: null,
+        roundIndex: null,
+        payAmountRaw: "0",
+      });
+      const tx = fixtureTxHash(block, 0);
+      await chain.reportIntentBroadcast({
+        ownerUserId: a.userId,
+        intentId: created.intent.intentId,
+        transactionHash: tx,
+        payloadVerified: true,
+      });
+      return { intentId: created.intent.intentId, tx };
+    }
+
+    // The schema keeps a claim round-less and unpaid, and a buy with a round.
+    for (const overrides of [
+      { roundId: claimSale.roundIds[0]! },
+      { payAmountRaw: "1" },
+    ]) {
+      await expect(
+        chain.createIntent({
+          ownerUserId: a.userId,
+          idempotencyKey: randomUUID(),
+          requestSha256: "3".repeat(64),
+          build: () =>
+            Promise.resolve(
+              settlementInput("claim", claimSale, "21", overrides),
+            ),
+        }),
+      ).rejects.toThrow();
+    }
+    await expect(
+      pool.query({
+        text: `update public.launch_intents set round_id = null where direction = 'buy'`,
+      }),
+    ).rejects.toThrow(/launch_intents_kind_round_check/);
+
+    const claimed = await reported("claim", claimSale, "21", 1_401n);
+    const wrongWallet = await reported("claim", claimSale, "21", 1_402n);
+    const claimReverted = await reported("claim", claimSale, "21", 1_403n);
+    const claimMissing = await reported("claim", claimSale, "21", 1_404n);
+    const refunded = await reported("claimRefund", refundSale, "22", 1_405n);
+    const refundReverted = await reported(
+      "claimRefund",
+      refundSale,
+      "22",
+      1_406n,
+    );
+
+    const intentState = async (launchId: string, intentId: string) =>
+      chain.getIntent({ ownerUserId: a.userId, launchId, intentId });
+
+    // Lane: a Claimed log of a's claim tx confirms it; a Claimed log in the
+    // other tx names wallet b, so a's Intent stays submitted; a Refunded
+    // log of a's refund tx confirms the refund.
+    await commit(
+      [
+        fixtureEvent(
+          claimSale.launchId,
+          "Claimed",
+          {
+            saleId: 21n,
+            wallet: a.address,
+            tokenAmount: 2_500n * oneUsd1,
+            cumulativeClaimed: 2_500n * oneUsd1,
+          },
+          { block: 1_401n, logIndex: 0 },
+        ),
+        fixtureEvent(
+          claimSale.launchId,
+          "Claimed",
+          {
+            saleId: 21n,
+            wallet: b.address,
+            tokenAmount: 500n * oneUsd1,
+            cumulativeClaimed: 500n * oneUsd1,
+          },
+          { block: 1_402n, logIndex: 0 },
+        ),
+        fixtureEvent(
+          refundSale.launchId,
+          "Refunded",
+          {
+            saleId: 22n,
+            wallet: a.address,
+            usd1Amount: 30n * oneUsd1,
+            cumulativeRefunded: 30n * oneUsd1,
+          },
+          { block: 1_405n, logIndex: 0 },
+        ),
+      ],
+      1_410n,
+    );
+    expect(
+      await intentState(claimSale.launchId, claimed.intentId),
+    ).toMatchObject({ kind: "claim", state: "confirmed" });
+    expect(
+      (await intentState(claimSale.launchId, wrongWallet.intentId))?.state,
+    ).toBe("submitted");
+    expect(
+      await intentState(refundSale.launchId, refunded.intentId),
+    ).toMatchObject({ kind: "claimRefund", state: "confirmed" });
+
+    // History: each log is a settlement with its own kind and asset.
+    const claimHistory = await chain.listHistory({
+      launchId: claimSale.launchId,
+      ownerUserId: a.userId,
+      limit: 500,
+    });
+    expect(claimHistory.settlements).toEqual([
+      expect.objectContaining({
+        kind: "claimed",
+        walletId: a.walletId,
+        assetId: `${chainId}:${projectToken}`,
+        amount: (2_500n * oneUsd1).toString(),
+        cumulativeAmount: (2_500n * oneUsd1).toString(),
+        transactionHash: claimed.tx,
+        logIndex: 0,
+        blockNumber: "1401",
+        // The helper confirms through block 105 only: still pending.
+        confirmationState: "pending",
+      }),
+    ]);
+    const bClaims = await chain.listHistory({
+      launchId: claimSale.launchId,
+      ownerUserId: b.userId,
+      limit: 500,
+    });
+    expect(bClaims.settlements).toEqual([
+      expect.objectContaining({ kind: "claimed", walletId: b.walletId }),
+    ]);
+    const refundHistory = await chain.listHistory({
+      launchId: refundSale.launchId,
+      ownerUserId: a.userId,
+      limit: 500,
+    });
+    expect(refundHistory.settlements).toEqual([
+      expect.objectContaining({
+        kind: "refunded",
+        assetId: `${chainId}:${usd1}`,
+        amount: (30n * oneUsd1).toString(),
+        transactionHash: refunded.tx,
+      }),
+    ]);
+    // Replaying the segment keeps the same opaque settlement ID.
+    const settlementId = claimHistory.settlements[0]?.settlementRecordId;
+    await commit(
+      [
+        fixtureEvent(
+          claimSale.launchId,
+          "Claimed",
+          {
+            saleId: 21n,
+            wallet: a.address,
+            tokenAmount: 2_500n * oneUsd1,
+            cumulativeClaimed: 2_500n * oneUsd1,
+          },
+          { block: 1_401n, logIndex: 0 },
+        ),
+      ],
+      1_410n,
+    );
+    expect(
+      (
+        await chain.listHistory({
+          launchId: claimSale.launchId,
+          ownerUserId: a.userId,
+          limit: 500,
+        })
+      ).settlements[0]?.settlementRecordId,
+    ).toBe(settlementId);
+
+    // Receipts: reverted claim / refund, a claim with no trace expires.
+    const receipts = new Map<string, Partial<BscTransactionReceiptObservation>>(
+      [
+        [claimReverted.tx, { status: "reverted" }],
+        [refundReverted.tx, { status: "reverted" }],
+      ],
+    );
+    const client: BscChainCallClient = {
+      ...createUnavailableBscReadClient({
+        chainId,
+        chainReference: 97,
+        confirmations: 5,
+        reorgDepthBlocks: 15,
+      }),
+      getHead: () =>
+        Promise.resolve({
+          blockNumber: 1_500n,
+          blockHash: fixtureBlockHash(1_500n),
+          observedAt: new Date().toISOString(),
+        }),
+      getTransaction: () => Promise.resolve(null),
+      getTransactionReceipt: (hash: string) => {
+        const receipt = receipts.get(hash);
+        return Promise.resolve(
+          receipt === undefined
+            ? null
+            : {
+                hash,
+                status: "success" as const,
+                blockNumber: 1_450n,
+                blockHash: fixtureBlockHash(1_450n),
+                gasUsed: 60_000n,
+                effectiveGasPrice: 1_000_000_000n,
+                ...receipt,
+              },
+        );
+      },
+    };
+    const reconciler = createLaunchIntentReconciler({
+      repository: chain,
+      readClient: client,
+      chainId,
+      now: later,
+    });
+    const tick = await reconciler.reconcileOnce();
+    const settled = new Map(
+      (tick.status === "available" ? tick.transitions : []).map((item) => [
+        item.intentId,
+        item,
+      ]),
+    );
+    expect(settled.get(claimReverted.intentId)).toEqual({
+      intentId: claimReverted.intentId,
+      toState: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+    });
+    expect(settled.get(refundReverted.intentId)?.toState).toBe("reverted");
+    expect(settled.get(claimMissing.intentId)).toEqual({
+      intentId: claimMissing.intentId,
+      toState: "expired",
+      reasonCode: "LAUNCH_TX_NOT_OBSERVED",
+    });
+    expect(
+      await intentState(claimSale.launchId, claimReverted.intentId),
+    ).toMatchObject({
+      kind: "claim",
+      state: "reverted",
+      reasonCode: "LAUNCH_TX_REVERTED",
+      revertReason: null,
+    });
+
+    // claim() has no on-chain deadline: a late Claimed log of the expired
+    // Intent's transaction confirms it (evidence wins, as for 0080 buys).
+    await commit(
+      [
+        fixtureEvent(
+          claimSale.launchId,
+          "Claimed",
+          {
+            saleId: 21n,
+            wallet: a.address,
+            tokenAmount: 100n * oneUsd1,
+            cumulativeClaimed: 2_600n * oneUsd1,
+          },
+          { block: 1_404n, logIndex: 0 },
+        ),
+      ],
+      1_420n,
+    );
+    expect(
+      (await intentState(claimSale.launchId, claimMissing.intentId))?.state,
+    ).toBe("confirmed");
+    expect(
+      (await intentState(claimSale.launchId, claimReverted.intentId))?.state,
+    ).toBe("reverted");
+
+    // Once the confirmation depth passes, pending settlements confirm.
+    await chain.commitSegment({
+      chainId,
+      events: [],
+      projections: [],
+      checkpoint: {
+        lastBlockNumber: "1430",
+        lastBlockHash: fixtureBlockHash(1_430n),
+        startedFromBlockNumber: "100",
+      },
+      confirmedThroughBlockNumber: "1425",
+    });
+    expect(
+      (
+        await chain.listHistory({
+          launchId: refundSale.launchId,
+          ownerUserId: a.userId,
+          limit: 500,
+        })
+      ).settlements[0]?.confirmationState,
+    ).toBe("confirmed");
+
+    // A reorg removes the first Claimed: its settlement is kept as reorged
+    // and its Intent returns to submitted.
+    await commit([], 1_430n, { rewindFromBlockNumber: "1401" });
+    expect(
+      (await intentState(claimSale.launchId, claimed.intentId))?.state,
+    ).toBe("submitted");
+    const afterReorg = await chain.listHistory({
+      launchId: claimSale.launchId,
+      ownerUserId: a.userId,
+      limit: 500,
+    });
+    expect(
+      afterReorg.settlements.map((item) => [
+        item.transactionHash,
+        item.confirmationState,
+      ]),
+    ).toEqual([
+      [claimMissing.tx, "reorged"],
+      [claimed.tx, "reorged"],
+    ]);
   });
 });

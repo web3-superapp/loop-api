@@ -122,10 +122,31 @@ export interface LaunchRefundRecord {
   readonly frozenAtBlock: string | null;
 }
 
+/**
+ * One `Claimed` or `Refunded` log of the caller's wallet (Decision 0087).
+ * `amount` is in the base units of `assetId`: the project token for
+ * `claimed`, USD1 for `refunded`.
+ */
+export interface LaunchSettlementRecord {
+  readonly settlementRecordId: string;
+  readonly kind: "claimed" | "refunded";
+  readonly walletId: string;
+  readonly assetId: string;
+  readonly amount: string;
+  readonly cumulativeAmount: string;
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly confirmationState: "pending" | "confirmed" | "reorged";
+  readonly observedAt: string;
+}
+
 export interface LaunchHistoryRecord {
   readonly purchaseRecords: readonly LaunchPurchaseRecord[];
   readonly entitlements: readonly LaunchEntitlementRecord[];
   readonly refunds: readonly LaunchRefundRecord[];
+  readonly settlements: readonly LaunchSettlementRecord[];
 }
 
 export interface LaunchEconomyChainRecord {
@@ -156,14 +177,24 @@ export interface LaunchAllowlistRootRecord {
   readonly computedAt: string;
 }
 
+/**
+ * Decision 0087: the contract call an Intent seals. `buy` is 06 §4.1
+ * `buy(...)`; `claim` and `claimRefund` are `claim(saleId)` and
+ * `claimRefund(saleId)` and name no round.
+ */
+export const launchIntentKinds = ["buy", "claim", "claimRefund"] as const;
+export type LaunchIntentKind = (typeof launchIntentKinds)[number];
+
 export interface CreateLaunchIntentInput {
   readonly intentId: string;
+  readonly kind: LaunchIntentKind;
   readonly ownerUserId: string;
   readonly walletId: string;
   readonly launchId: string;
   readonly projectId: string;
-  readonly roundId: string;
-  readonly roundIndex: number;
+  /** Null for `claim` / `claimRefund`. */
+  readonly roundId: string | null;
+  readonly roundIndex: number | null;
   readonly saleId: string;
   readonly chainId: LaunchChainId;
   readonly quoteAssetId: string;

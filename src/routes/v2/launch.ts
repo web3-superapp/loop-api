@@ -417,7 +417,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2LaunchHistory",
         summary: "Get the caller's participation records for a launch",
         description:
-          "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'.",
+          "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'. Decision 0087: while source is available, settlements lists the caller's Claimed (kind claimed) and Refunded (kind refunded) events.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -445,9 +445,9 @@ export function registerV2LaunchRoutes(
     {
       schema: {
         operationId: "prepareV2LaunchIntent",
-        summary: "Prepare a Launch purchase Intent",
+        summary: "Prepare a Launch purchase, claim, or refund Intent",
         description:
-          "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists.",
+          "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists. Decision 0087: body kind (default buy) also admits claim and claimRefund with walletId only. Both read the 0085 sale snapshot and getPosition at one block. claim needs entitlementState VESTING or COMPLETED, operationalState ACTIVE, and claimableTokens > 0; claimRefund needs saleState FAILED or CANCELLED with entitlementState REFUNDING, ACTIVE, and refundableUsd1 > 0. Refusals are 409 DATA_STALE with detailsSafe.reasonCode LAUNCH_CLAIM_NOT_OPEN, LAUNCH_REFUND_NOT_OPEN, LAUNCH_SALE_PAUSED, LAUNCH_NOT_PARTICIPANT, LAUNCH_NOTHING_TO_CLAIM, or LAUNCH_NOTHING_TO_REFUND. The 201 carries kind, roundId and roundIndex null, and the unsigned claim(saleId) / claimRefund(saleId) transaction.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -478,9 +478,9 @@ export function registerV2LaunchRoutes(
     {
       schema: {
         operationId: "reportV2LaunchIntentBroadcast",
-        summary: "Report the device broadcast of a Launch purchase Intent",
+        summary: "Report the device broadcast of a Launch Intent",
         description:
-          "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed when the launch_event lane indexes a Purchased log of that transaction or the reconcile lane reads its successful receipt at the launch slot's confirmation depth; a status 0x0 receipt settles it reverted, no receipt after the deadline plus grace expired (Decision 0080). History always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank.",
+          "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed when the launch_event lane indexes a Purchased log of that transaction or the reconcile lane reads its successful receipt at the launch slot's confirmation depth; a status 0x0 receipt settles it reverted, no receipt after the deadline plus grace expired (Decision 0080). History always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank. Decision 0087: the same for claim / claimRefund Intents, confirmed by a Claimed / Refunded log of that transaction naming the Intent's wallet.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -517,9 +517,9 @@ export function registerV2LaunchRoutes(
     {
       schema: {
         operationId: "getV2LaunchIntent",
-        summary: "Get one Launch purchase Intent",
+        summary: "Get one Launch Intent",
         description:
-          "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane.",
+          "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane. Decision 0087: claim / claimRefund Intents carry kind; a buy has none.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

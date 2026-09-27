@@ -1052,6 +1052,59 @@ const entitlementRecordSchema = {
   },
 } as const;
 
+/** One Claimed / Refunded log of the caller's wallet (Decision 0087). */
+const settlementRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "settlementRecordId",
+    "kind",
+    "walletId",
+    "assetId",
+    "amount",
+    "cumulativeAmount",
+    "transactionHash",
+    "logIndex",
+    "blockNumber",
+    "blockHash",
+    "confirmationState",
+    "observedAt",
+  ],
+  properties: {
+    settlementRecordId: { type: "string", pattern: opaqueIdPatternSource },
+    kind: {
+      type: "string",
+      enum: ["claimed", "refunded"],
+      description:
+        "claimed: a Claimed log (project token received). refunded: a Refunded log (USD1 returned).",
+    },
+    walletId: { type: "string", pattern: opaqueIdPatternSource },
+    assetId: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description:
+        "The project token (claimed) or USD1 (refunded) on the launch chain.",
+    },
+    amount: {
+      ...uintStringSchema,
+      description:
+        "Claimed.tokenAmount or Refunded.usd1Amount, base units of assetId.",
+    },
+    cumulativeAmount: {
+      ...uintStringSchema,
+      description:
+        "Claimed.cumulativeClaimed or Refunded.cumulativeRefunded after this log.",
+    },
+    transactionHash: { type: "string", pattern: transactionHashPatternSource },
+    logIndex: { type: "integer", minimum: 0 },
+    blockNumber: blockNumberStringSchema,
+    blockHash: bytes32Schema,
+    confirmationState: confirmationStateSchema,
+    observedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
 /** Wallet-level refund liability after FAILED/CANCELLED (03 §8.3 RefundLiability). */
 const refundRecordSchema = {
   type: "object",
@@ -1109,6 +1162,13 @@ export const historyResourceSchema = {
       maxItems: 500,
       items: refundRecordSchema,
       description: "Always empty while source is unavailable.",
+    },
+    settlements: {
+      type: "array",
+      maxItems: 500,
+      items: settlementRecordSchema,
+      description:
+        "Optional (Decision 0087): present only while source is available (absent otherwise, so the unavailable bytes are unchanged). The caller's Claimed (kind claimed) and Refunded (kind refunded) events observed by the launch_event lane, newest first; reorged rows are kept with confirmationState reorged.",
     },
     source: {
       anyOf: [
@@ -1217,18 +1277,39 @@ export const milestonesResourceSchema = {
  */
 export const launchIntentRequestSchema = {
   type: "object",
-  additionalProperties: false,
-  required: ["walletId", "roundId", "payAmount"],
-  properties: {
-    walletId: { type: "string", pattern: opaqueIdPatternSource },
-    roundId: { type: "string", pattern: opaqueIdPatternSource },
-    payAmount: {
-      type: "string",
-      pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
-      description:
-        "USD1 amount as a decimal string; a JSON number is INVALID_REQUEST.",
+  description:
+    "Decision 0087: kind selects the contract call. Absent or buy: buy() with walletId, roundId, payAmount (the pre-0087 body). claim / claimRefund: claim(saleId) / claimRefund(saleId) with walletId only; a roundId or payAmount on them is INVALID_REQUEST.",
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["walletId", "roundId", "payAmount"],
+      properties: {
+        kind: {
+          type: "string",
+          const: "buy",
+          description: "Optional (Decision 0087); absent means buy.",
+        },
+        walletId: { type: "string", pattern: opaqueIdPatternSource },
+        roundId: { type: "string", pattern: opaqueIdPatternSource },
+        payAmount: {
+          type: "string",
+          pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+          description:
+            "USD1 amount as a decimal string; a JSON number is INVALID_REQUEST.",
+        },
+      },
     },
-  },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "walletId"],
+      properties: {
+        kind: { type: "string", enum: ["claim", "claimRefund"] },
+        walletId: { type: "string", pattern: opaqueIdPatternSource },
+      },
+    },
+  ],
 } as const;
 
 /**
@@ -1276,6 +1357,12 @@ export const launchIntentResourceSchema = {
       ],
       properties: {
         launchIntentId: { type: "string", pattern: opaqueIdPatternSource },
+        kind: {
+          type: "string",
+          enum: ["buy", "claim", "claimRefund"],
+          description:
+            "Optional (Decision 0087): present on claim / claimRefund Intents only. Absent means buy, so a purchase keeps its pre-0087 bytes.",
+        },
         state: {
           type: "string",
           enum: [
@@ -1295,15 +1382,30 @@ export const launchIntentResourceSchema = {
         launchId: { type: "string", pattern: opaqueIdPatternSource },
         projectId: { type: "string", pattern: opaqueIdPatternSource },
         walletId: { type: "string", pattern: opaqueIdPatternSource },
-        roundId: { type: "string", pattern: opaqueIdPatternSource },
-        roundIndex: onChainRoundIndexSchema,
+        roundId: {
+          anyOf: [
+            { type: "string", pattern: opaqueIdPatternSource },
+            { type: "null" },
+          ],
+          description:
+            "The opaque round ID of a buy; null on claim / claimRefund (Decision 0087).",
+        },
+        roundIndex: {
+          anyOf: [onChainRoundIndexSchema, { type: "null" }],
+          description:
+            "The contract's roundId of a buy; null on claim / claimRefund (Decision 0087).",
+        },
         chainId: { type: "string", enum: [...launchChainIds] },
         contractAddress: addressSchema,
         quoteAssetId: { type: "string", minLength: 1, maxLength: 128 },
-        usd1Amount: uintStringSchema,
+        usd1Amount: {
+          ...uintStringSchema,
+          description: "USD1 the wallet pays; 0 on claim / claimRefund.",
+        },
         expectedTokenAmount: {
           ...uintStringSchema,
-          description: "quote() at the snapshot block.",
+          description:
+            "buy: quote() at the snapshot block. claim: getPosition.claimableTokens at the snapshot block. claimRefund: 0.",
         },
         minTokenAmount: uintStringSchema,
         walletCumulativeUsd1: uintStringSchema,
@@ -1348,6 +1450,16 @@ export const launchIntentResourceSchema = {
           ...uintStringSchema,
           description:
             "Optional (0077): the contract's saleId, decimal string.",
+        },
+        claimableTokens: {
+          ...uintStringSchema,
+          description:
+            "Optional (Decision 0087), claim only: getPosition.claimableTokens at snapshotBlockNumber (project token base units).",
+        },
+        refundableUsd1: {
+          ...uintStringSchema,
+          description:
+            "Optional (Decision 0087), claimRefund only: getPosition.refundableUsd1 at snapshotBlockNumber (USD1 base units).",
         },
         walletRoundCapUsd1: {
           ...uintStringSchema,
