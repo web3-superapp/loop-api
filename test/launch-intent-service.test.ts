@@ -292,6 +292,41 @@ describe("Launch Intent prepare (Decision 0077)", () => {
     expect(listRoots).not.toHaveBeenCalled();
   });
 
+  it("refuses a non-zero-root round while tierModeV1 is unconfirmed with TIER_MODE_PENDING (S83b6)", async () => {
+    const root = rootRecord([walletAddress, other]);
+    const rounds = createFakeLaunchChainState().rounds.map((round) =>
+      round.roundId === 1 ? { ...round, allowlistRoot: root.root } : round,
+    );
+    const pending = setup({
+      chainState: { rounds },
+      roots: [root],
+      detail: registeredDetail(""),
+    });
+    const listRoots = vi.spyOn(pending.chain, "listAllowlistRoots");
+    expect(await refusal(prepare(pending.service))).toMatchObject({
+      code: "POLICY_BLOCKED",
+      reasonCode: "TIER_MODE_PENDING",
+    });
+    expect(listRoots).not.toHaveBeenCalled();
+  });
+
+  it("prepares the same non-zero-root round once tierModeV1 is confirmed (S83b6)", async () => {
+    const root = rootRecord([walletAddress, other]);
+    const rounds = createFakeLaunchChainState().rounds.map((round) =>
+      round.roundId === 1 ? { ...round, allowlistRoot: root.root } : round,
+    );
+    const confirmed = setup({
+      chainState: { rounds },
+      roots: [root],
+      detail: registeredDetail("whitelist"),
+    });
+    const { created, resource } = await prepare(confirmed.service);
+    expect(created).toBe(true);
+    expect(resource.launchIntent["eligibilityProof"]).toEqual(
+      buildLaunchMerkleTree(root.members).proofFor(walletAddress),
+    );
+  });
+
   const base = createFakeLaunchChainState();
   const round1 = base.rounds[0]!;
   const cases: readonly {

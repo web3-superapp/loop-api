@@ -62,3 +62,24 @@ chain read; no fixture or default stands in for the root.
 
 1. Intent prepare should refuse a non-zero-root round while `tierModeV1` is unconfirmed, matching eligibility's `TIER_MODE_PENDING`; tracked as S83b6.
 2. `GET /v2/launch/overview.myEligibility` stays unavailable for now; the home page does not render round eligibility.
+
+## S83b6 (2026-09-27)
+
+Implements ruling 1. Baseline `integration/v2` = `099d3b7`.
+
+- `POST /v2/launch/{launchId}/intents`: after the 06 §4.1 checks, a round
+  whose chain `allowlistRoot` is non-zero while `tierModeV1` is unconfirmed
+  is refused with `403 POLICY_BLOCKED`, `detailsSafe.reasonCode:
+TIER_MODE_PENDING`, before the stored roots are queried. `POLICY_BLOCKED`
+  is the Decision 0077 category of every other eligibility refusal of the
+  Intent (`LAUNCH_ALLOWLIST_*`, `LAUNCH_WALLET_NOT_ELIGIBLE`); the reason
+  code is the one `GET …/eligibility` already returns for the same state.
+- Unchanged: an all-zero root still prepares with an empty proof without
+  consulting the mode or stored roots; a confirmed mode keeps the stored-root
+  selection and its refusals. No response-shape change, no new reason code,
+  no migration. Decision point 3 above ("it has never refused on an
+  unconfirmed mode") is superseded by this section.
+- Tests (`test/launch-intent-service.test.ts`): non-zero root + unset mode
+  with a matching stored root → `POLICY_BLOCKED` / `TIER_MODE_PENDING` and
+  the root table is not queried; the same round with `tierModeV1 =
+whitelist` prepares with the member proof.

@@ -54,6 +54,7 @@ import {
 } from "./launch-chain-repository.js";
 import {
   launchContractReasonCodes,
+  launchReasonCodes,
   type LaunchEligibilityMode,
 } from "./launch-contract.js";
 import { decideEligibility, isOpenRoot } from "./launch-eligibility.js";
@@ -606,11 +607,16 @@ async function buildIntent(
 
   // --- Eligibility: the chain root selects the stored allowlist. ---
   // Decision 0084: an all-zero root is a public round; no stored root, no
-  // mode, and no proof are consulted.
-  const roots = isOpenRoot(chainRound.allowlistRoot)
+  // mode, and no proof are consulted. A non-zero root needs a confirmed
+  // `tierModeV1` (S83b6), matching GET …/eligibility's TIER_MODE_PENDING.
+  const openRound = isOpenRoot(chainRound.allowlistRoot);
+  const mode = deps.eligibilityMode(input.detail);
+  if (!openRound && mode === "unavailable") {
+    refuse("POLICY_BLOCKED", launchReasonCodes.tierModePending);
+  }
+  const roots = openRound
     ? []
     : await deps.chain.listAllowlistRoots(launch.launchId, input.roundIndex);
-  const mode = deps.eligibilityMode(input.detail);
   const decision = decideEligibility({
     chainRoot: chainRound.allowlistRoot,
     roots,
