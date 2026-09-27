@@ -284,3 +284,7 @@ launch:register-sale … --rescan` (resets the lane). A dedicated
 5. **Project token record.** The confirmed configuration's `projectTokenAddress` is LOOP's record; `LAUNCH_PROJECT_TOKEN_UNRECORDED` when absent. Accepted.
 6. **Production rule.** Confirmed: without `--confirm` the script is always a dry run; under `NODE_ENV=production` it refuses without `--confirm`.
 7. **`holderCount` = distinct buyers.** Accepted; the client copy must say 参与人数, not 持有人 (frontend follow-up).
+
+## Amendment S83b6 (2026-09-27, Decision 0084)
+
+Intent refusal table, new row: `403 POLICY_BLOCKED` / `TIER_MODE_PENDING` — the round's on-chain `allowlistRoot` is non-zero while `tierModeV1` is unconfirmed. A zero root (open round) never hits this.
