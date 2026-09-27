@@ -245,3 +245,8 @@ balances.head.blockNumber })`. A single `withDeadline` (3000 ms) still
   block as `atBlock` and are present even with a fake whose unpinned head
   would be one block ahead; and a refused pinned block gives `200` with the
   pair absent.
+
+## Main-agent rulings on S86b (2026-09-27)
+
+1. Reading the pinned block's header rather than copying the balance read's hash: accepted.
+2. A single ~300 ms retry of the header read for the behind-backend case is deferred until a measurement on the real endpoints shows it matters.
