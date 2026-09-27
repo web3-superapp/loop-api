@@ -1,3 +1,4 @@
+import { TimeoutError } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedLoopPrincipal } from "../src/core/http/authentication.js";
@@ -17,6 +18,7 @@ import {
   walletReasonCodes,
   type WalletBalancesResource,
 } from "../src/features/wallet/wallet-read-service.js";
+import { V2ApiError } from "../src/core/http/v2-error.js";
 import type {
   BscBalanceReadResult,
   BscReadClient,
@@ -172,6 +174,7 @@ function harness(
     >;
     readonly prices?: () => Promise<readonly AssetPriceFact[]>;
     readonly walletInventoryTtlMs?: number;
+    readonly primaryReadHedgeDelayMs?: number;
     readonly now?: () => Date;
   } = {},
 ): Harness {
@@ -305,6 +308,9 @@ function harness(
       ? {}
       : { walletInventoryTtlMs: options.walletInventoryTtlMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.primaryReadHedgeDelayMs === undefined
+      ? {}
+      : { primaryReadHedgeDelayMs: options.primaryReadHedgeDelayMs }),
   });
   return {
     service,
@@ -519,5 +525,54 @@ describe("wallet inventory reuse", () => {
     });
 
     expect(subject.listEthereumWallets).toHaveBeenCalledTimes(2);
+  });
+
+  describe("primary block hedge (Decision 0082)", () => {
+    const rpcTimeout = (): TimeoutError =>
+      new TimeoutError({
+        body: { method: "eth_getBlockByNumber", params: ["latest", false] },
+        url: "https://rpc.example.com",
+      });
+    const chainReads = (subject: Harness): number =>
+      subject.started.filter((leg) => leg === "chainBalances").length;
+
+    it("starts a second read beside a primary read that has not answered and takes the first answer", async () => {
+      let calls = 0;
+      const subject = harness({
+        primaryReadHedgeDelayMs: 10,
+        chainBalances: () => {
+          calls += 1;
+          return calls === 1
+            ? new Promise<BscBalanceReadResult>(() => undefined)
+            : Promise.resolve(balanceResult());
+        },
+      });
+      const resource = await getBalances(subject);
+      expect(chainReads(subject)).toBe(2);
+      expect(resource.snapshot.blockNumber).toBe(headNumber.toString(10));
+    });
+
+    it("does not start a second read when the first answers inside the delay", async () => {
+      const subject = harness({ primaryReadHedgeDelayMs: 60_000 });
+      await getBalances(subject);
+      expect(chainReads(subject)).toBe(1);
+    });
+
+    it("reports two transport failures as CAPABILITY_UNAVAILABLE with BSC_RPC_UNREACHABLE", async () => {
+      const subject = harness({
+        primaryReadHedgeDelayMs: 60_000,
+        chainBalances: () => Promise.reject(rpcTimeout()),
+      });
+      const failure = await getBalances(subject).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(chainReads(subject)).toBe(2);
+      expect(failure).toBeInstanceOf(V2ApiError);
+      expect(failure).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        detailsSafe: { reasonCode: "BSC_RPC_UNREACHABLE" },
+      });
+    });
   });
 });

@@ -356,6 +356,19 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
   图表仍无后端，显示 unavailable。
 - 链读不可用（未配置 RPC、端点不可达、chainId 不符）→ `503
 CAPABILITY_UNAVAILABLE`。后端**不会**回放历史快照当成当前余额。
+- 决策 0082（2026-09-27）：主链区块读 1.5s 未答、或 RPC 超时/HTTP 失败、或 chainId
+  探测未答时，后端**自动再读一次**主链区块（与第一次并行，谁先完整返回用谁；
+  最坏多花约 2.5s）；两次都失败才返回 `503
+CAPABILITY_UNAVAILABLE`，此时 `detailsSafe` 为
+  `{"reasonCode": "BSC_RPC_UNREACHABLE"}`（`retryable: true`，可稍后重试整页）。
+  其余原因（未配置、chainId 不符）的 503 仍是 `detailsSafe: null`。**不再**出现
+  因 RPC 超时导致的 `500 INTERNAL_ERROR`。
+- 决策 0082：`launchChain`、`launchChain.usd1`、根 `launchUsd1`、估值各自兜底，
+  任何一格读失败都**不会**让整页失败：`launchChain` 降级为 unavailable（超时/HTTP
+  失败 → `LAUNCH_CHAIN_RPC_UNREACHABLE`，其它未分类失败 → `BSC_BALANCE_CALL_FAILED`），
+  `usd1` / `launchUsd1` 缺省（不是 null），价格整体读失败时每行 `valuation` 为
+  `unavailable` + `MARKET_PROVIDER_UNREACHABLE`。Launch 认购页看到 `usd1` 缺省时应
+  显示"授权额度暂未读取"并允许**单独重拉**余额，不要把整条购买链路判死。
 
 ### 6.1 `launchChain`：Launch 链槽位上的 tBNB 余额（S9 / 决策 0038）
 

@@ -5,8 +5,11 @@ import {
   createPublicClient,
   fallback,
   http,
+  HttpRequestError,
   InvalidParamsRpcError,
   LimitExceededRpcError,
+  SocketClosedError,
+  TimeoutError,
   type Address,
   type Chain,
   type Hex,
@@ -783,6 +786,22 @@ function walkCauses(error: unknown): unknown[] {
     current = "cause" in current ? current.cause : undefined;
   }
   return chain;
+}
+
+/**
+ * True when the error (or any error in its cause chain) is a transport-level
+ * failure of an RPC request: viem's per-request timeout, an HTTP/socket
+ * failure, or a closed socket (Decision 0082). Such a failure says nothing
+ * about the chain; it only says the endpoint did not answer in time, so a
+ * read route reports it as unreachable instead of an internal error.
+ */
+export function isBscRpcTransportError(error: unknown): boolean {
+  return walkCauses(error).some(
+    (candidate) =>
+      candidate instanceof TimeoutError ||
+      candidate instanceof HttpRequestError ||
+      candidate instanceof SocketClosedError,
+  );
 }
 
 function numberField(candidate: unknown, key: string): number | null {

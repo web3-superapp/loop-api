@@ -17,6 +17,7 @@ import {
   requestAbortDeadlineMilliseconds,
 } from "./core/http/request-abort-signal.js";
 import { createV2CursorCodec } from "./core/http/v2-cursor.js";
+import { summarizeErrorForLog } from "./core/http/error-log.js";
 import {
   isV2RequestPath,
   projectV2Error,
@@ -124,8 +125,10 @@ import {
 } from "./features/watchlist/watchlist-v2-service.js";
 import {
   asChainCallClient,
+  BscReadUnavailableError,
   createBscReadClient,
   createUnavailableBscReadClient,
+  isBscRpcTransportError,
   type BscChainCallClient,
   type BscReadClient,
 } from "./integrations/bsc/rpc-client.js";
@@ -2003,8 +2006,19 @@ export async function buildApp(
 
   app.setErrorHandler(async (error, request, reply) => {
     if (isV2RequestPath(request.raw.url)) {
-      const projection = projectV2Error(error, request.id);
+      const projection = projectV2Error(
+        chainReadUnavailableFor(request.method, error) ?? error,
+        request.id,
+      );
       const failure = classifyRequestError(error);
+      if (projection.response.code === "INTERNAL_ERROR") {
+        // Decision 0082: the cause of an internal error is logged once, at
+        // error level, redacted; nothing of it reaches the response body.
+        request.log.error(
+          { requestId: request.id, ...summarizeErrorForLog(error) },
+          "Unhandled error in V2 request",
+        );
+      }
       const validationIssues = (error as { validation?: unknown }).validation;
       const validationPaths = Array.isArray(validationIssues)
         ? validationIssues.map((issue: unknown) => {
@@ -2114,4 +2128,30 @@ export async function buildApp(
   });
 
   return app;
+}
+
+/**
+ * Last line of defence for read routes (Decision 0082): a chain read that
+ * was not classified by its feature — a `BscReadUnavailableError`, or a viem
+ * timeout/HTTP/socket failure — is the capability being unavailable, never
+ * an internal error. Write routes keep their own classification.
+ */
+function chainReadUnavailableFor(
+  method: string,
+  error: unknown,
+): V2ApiError | null {
+  if (method !== "GET" && method !== "HEAD") {
+    return null;
+  }
+  if (error instanceof BscReadUnavailableError) {
+    return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: error.reasonCode,
+    });
+  }
+  if (isBscRpcTransportError(error)) {
+    return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: "BSC_RPC_UNREACHABLE",
+    });
+  }
+  return null;
 }

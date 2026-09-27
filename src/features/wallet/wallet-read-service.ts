@@ -19,6 +19,8 @@ import {
   asChainCallClient,
   BscChainMismatchError,
   BscReadUnavailableError,
+  isBscRpcTransportError,
+  summarizeRpcError,
   type BscBalanceReadResult,
   type BscChainCallClient,
   type BscReadClient,
@@ -354,6 +356,8 @@ export interface WalletReadService {
  */
 export interface WalletReadServiceLogger {
   debug(context: Record<string, unknown>, message: string): void;
+  /** A secondary leg that was reported unavailable (Decision 0082). */
+  warn?(context: Record<string, unknown>, message: string): void;
 }
 
 export interface CreateWalletReadServiceInput {
@@ -377,6 +381,8 @@ export interface CreateWalletReadServiceInput {
   readonly launchUsd1?: LaunchChainUsd1Target | null;
   /** Absent means the segment timings are not logged (tests, scripts). */
   readonly logger?: WalletReadServiceLogger;
+  /** Overrides `primaryReadHedgeDelayMs`; zero disables the hedge timer. */
+  readonly primaryReadHedgeDelayMs?: number;
   /**
    * How long one Privy wallet inventory observation may be reused before the
    * Provider is asked again (Decision 0063). Zero disables the reuse.
@@ -467,6 +473,109 @@ function unavailable(reasonCode: string): UnavailableProjection {
   return Object.freeze({ status: "unavailable" as const, reasonCode });
 }
 
+/**
+ * A primary read failure that says only "the endpoint did not answer": a
+ * transport failure, or a chain-id probe that timed out (the client reports
+ * it as `BSC_RPC_UNREACHABLE`). A mismatch or a missing endpoint is final.
+ */
+function isRetryablePrimaryFailure(error: unknown): boolean {
+  return (
+    isBscRpcTransportError(error) ||
+    (error instanceof BscReadUnavailableError &&
+      error.reasonCode === bscRpcUnreachableReasonCode)
+  );
+}
+
+/**
+ * How long the primary block read may go unanswered before a second read is
+ * started beside it (Decision 0082). Well under the 2500 ms point-read
+ * budget: a stalled endpoint answers the second request long before the
+ * first times out.
+ */
+export const primaryReadHedgeDelayMs = 1_500;
+
+/**
+ * Runs `start` and, when it has not settled inside `hedgeDelayMs` or fails
+ * with a retryable error first, runs it exactly once more. Resolves with the
+ * first success; rejects on the first non-retryable failure or when both
+ * attempts failed (with the last error).
+ */
+function hedgedRead<T>(
+  start: () => Promise<T>,
+  hedgeDelayMs: number,
+  isRetryable: (error: unknown) => boolean,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let secondStarted = false;
+    let inFlight = 0;
+    let timer: NodeJS.Timeout | undefined;
+    const settle = (): boolean => {
+      if (settled) {
+        return false;
+      }
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      return true;
+    };
+    const attempt = (): void => {
+      inFlight += 1;
+      start().then(
+        (value) => {
+          inFlight -= 1;
+          if (settle()) {
+            resolve(value);
+          }
+        },
+        (error: Error) => {
+          inFlight -= 1;
+          if (settled) {
+            return;
+          }
+          if (!isRetryable(error)) {
+            settle();
+            reject(error);
+            return;
+          }
+          if (!secondStarted) {
+            startSecond();
+            return;
+          }
+          if (inFlight === 0) {
+            settle();
+            reject(error);
+          }
+        },
+      );
+    };
+    const startSecond = (): void => {
+      if (secondStarted || settled) {
+        return;
+      }
+      secondStarted = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      attempt();
+    };
+    attempt();
+    if (hedgeDelayMs > 0) {
+      timer = setTimeout(() => {
+        startSecond();
+      }, hedgeDelayMs);
+      timer.unref();
+    }
+  });
+}
+
+/** Marks a price read that failed outright (Decision 0082). */
+const priceReadFailure: unique symbol = Symbol("priceReadFailure");
+
+/** Existing BSC read reason code for an endpoint that did not answer. */
+const bscRpcUnreachableReasonCode = "BSC_RPC_UNREACHABLE";
+
 function chainUnavailable(error: unknown): never {
   if (
     error instanceof BscReadUnavailableError ||
@@ -474,7 +583,35 @@ function chainUnavailable(error: unknown): never {
   ) {
     throw V2ApiError.capabilityUnavailable();
   }
+  // Decision 0082: an endpoint that did not answer (viem timeout, HTTP or
+  // socket failure) is the chain being unreachable, never an internal error.
+  if (isBscRpcTransportError(error)) {
+    throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: bscRpcUnreachableReasonCode,
+    });
+  }
   throw error as Error;
+}
+
+/**
+ * Operator-only summary of an error absorbed by a leg: the class name,
+ * whether it was a transport failure, and the Decision 0068 RPC summary
+ * (class, HTTP status, JSON-RPC code, host, method). No message, URL path,
+ * address, or amount is carried (Decision 0082).
+ */
+function degradedLegContext(
+  leg: string,
+  error: unknown,
+): Record<string, unknown> {
+  return {
+    leg,
+    errorName: error instanceof Error ? error.name : typeof error,
+    transport: isBscRpcTransportError(error),
+    ...(error instanceof BscReadUnavailableError
+      ? { reasonCode: error.reasonCode }
+      : {}),
+    rpcError: summarizeRpcError(error),
+  };
 }
 
 /** A read that did not answer inside its own budget, never a chain fact. */
@@ -624,7 +761,8 @@ async function readLaunchChainUsd1(
     if (
       error instanceof ReadDeadlineExceededError ||
       error instanceof BscChainMismatchError ||
-      error instanceof BscReadUnavailableError
+      error instanceof BscReadUnavailableError ||
+      isBscRpcTransportError(error)
     ) {
       return null;
     }
@@ -653,7 +791,10 @@ async function projectLaunchChainNative(
       deadlineMs,
     );
   } catch (error) {
-    if (error instanceof ReadDeadlineExceededError) {
+    if (
+      error instanceof ReadDeadlineExceededError ||
+      isBscRpcTransportError(error)
+    ) {
       return unavailableLaunchChain(
         chainId,
         launchChainReasonCodes.unreachable,
@@ -1021,14 +1162,31 @@ export function createWalletReadService(
       // The launch slot is a secondary fact of the same page and shares no
       // input with the primary read beyond the address, so it runs alongside
       // it instead of after it (Decision 0063).
-      const launchChainPending = timings.measure("launchChain", () =>
-        projectLaunchChainBalance(
-          input.launchChainReadClient,
-          wallet.address,
-          input.gasReserveRawWei,
-          input.launchUsd1 ?? null,
-        ),
-      );
+      // Decision 0082: every secondary leg settles on its own. A leg that
+      // fails for a reason its projection does not classify is reported
+      // unavailable with an existing reason code and logged; it never
+      // rejects the page.
+      const launchChainClient = input.launchChainReadClient;
+      const launchChainPending = timings
+        .measure("launchChain", () =>
+          projectLaunchChainBalance(
+            launchChainClient,
+            wallet.address,
+            input.gasReserveRawWei,
+            input.launchUsd1 ?? null,
+          ),
+        )
+        .catch((error: unknown): LaunchChainBalanceProjection | null => {
+          noteDegradedLeg("launchChain", error);
+          return launchChainClient === null
+            ? null
+            : unavailableLaunchChain(
+                launchChainClient.chainId,
+                isBscRpcTransportError(error)
+                  ? launchChainReasonCodes.unreachable
+                  : walletReasonCodes.balanceCallFailed,
+              );
+        });
       // Decision 0081: a shared launch slot has no `launchChain` block, so
       // the USD1 balance/allowance pair is read on the primary client and
       // published at the root. Nothing is read while the slot is separate.
@@ -1039,14 +1197,19 @@ export function createWalletReadService(
       const launchUsd1Pending =
         sharedUsd1Target === null
           ? Promise.resolve(null)
-          : timings.measure("launchUsd1", () =>
-              readLaunchChainUsd1(
-                input.readClient,
-                wallet.address,
-                sharedUsd1Target,
-                launchChainReadDeadlineMs,
-              ),
-            );
+          : timings
+              .measure("launchUsd1", () =>
+                readLaunchChainUsd1(
+                  input.readClient,
+                  wallet.address,
+                  sharedUsd1Target,
+                  launchChainReadDeadlineMs,
+                ),
+              )
+              .catch((error: unknown): null => {
+                noteDegradedLeg("launchUsd1", error);
+                return null;
+              });
       const checkpointPending = timings.measure("indexerCheckpoint", () =>
         input.indexerRepository.getCheckpoint("erc20_transfer", input.chainId),
       );
@@ -1060,22 +1223,48 @@ export function createWalletReadService(
       // still decides whether a row is valued at all, and a row whose balance
       // could not be read is reported unvalued, price in hand or not.
       const marketFacts = input.marketFacts;
+      // A price read that fails outright (fact store or Provider) leaves
+      // every row unvalued with the Provider-unreachable reason; it never
+      // fails the balances (Decision 0082).
       const pricesPending =
         marketFacts === null
           ? Promise.resolve(null)
-          : timings.measure("assetPrices", () =>
-              marketFacts.readAssetPrices(assets, { signal }),
-            );
+          : timings
+              .measure("assetPrices", () =>
+                marketFacts.readAssetPrices(assets, { signal }),
+              )
+              .catch((error: unknown): typeof priceReadFailure => {
+                noteDegradedLeg("assetPrices", error);
+                return priceReadFailure;
+              });
 
+      const readPrimary = (): Promise<BscBalanceReadResult> =>
+        input.readClient.readBalances(
+          wallet.address,
+          assets.map((asset) => ({
+            assetId: asset.assetId,
+            address: asset.address,
+          })),
+        );
+      // Decision 0082: the primary block is the page's gate. One more read
+      // is started when the first has not answered inside the hedge delay,
+      // or as soon as it fails with "the endpoint did not answer"; the first
+      // complete read wins. Any other failure, or both reads failing, is
+      // reported below; nothing is substituted.
+      let primaryAttempts = 0;
       let read: BscBalanceReadResult;
       try {
         read = await timings.measure("chainBalances", () =>
-          input.readClient.readBalances(
-            wallet.address,
-            assets.map((asset) => ({
-              assetId: asset.assetId,
-              address: asset.address,
-            })),
+          hedgedRead(
+            () => {
+              primaryAttempts += 1;
+              return readPrimary().catch((error: unknown) => {
+                noteDegradedLeg("chainBalancesAttempt", error);
+                throw error;
+              });
+            },
+            input.primaryReadHedgeDelayMs ?? primaryReadHedgeDelayMs,
+            isRetryablePrimaryFailure,
           ),
         );
       } catch (error) {
@@ -1146,7 +1335,7 @@ export function createWalletReadService(
       // The cross-check, the pending totals, the per-asset prices, and the
       // audit snapshots all depend only on the one block already read, so
       // they observe the same facts whether they run in sequence or together.
-      const [pendingTotals, crossCheck, prices, , launchChain, launchUsd1] =
+      const [pendingTotals, crossCheck, priceRead, , launchChain, launchUsd1] =
         await Promise.all([
           pendingPending,
           privyObservationPending.then((observation) =>
@@ -1172,9 +1361,12 @@ export function createWalletReadService(
           launchUsd1Pending,
         ]);
 
+      const prices = priceRead === priceReadFailure ? null : priceRead;
       const rowValuations = assets.map((_asset, index) =>
         valueRow(
-          prices?.[index] ?? null,
+          priceRead === priceReadFailure
+            ? priceReadFailure
+            : (prices?.[index] ?? null),
           rowBalances[index] ??
             unavailable(walletReasonCodes.balanceCallFailed),
         ),
@@ -1243,6 +1435,7 @@ export function createWalletReadService(
             valuation.status === "available",
         );
       timings.report(input.logger, {
+        primaryAttempts,
         assetCount: assets.length,
         valuedCount: valuations.length,
       });
@@ -1275,9 +1468,12 @@ export function createWalletReadService(
        * priced through WBNB or any other proxy.
        */
       function valueRow(
-        price: AssetPriceFact | null,
+        price: AssetPriceFact | null | typeof priceReadFailure,
         balance: WalletBalanceAmounts | UnavailableProjection,
       ): WalletValuationProjection | UnavailableProjection {
+        if (price === priceReadFailure) {
+          return unavailable(marketReasonCodes.providerUnreachable);
+        }
         if (price === null) {
           return unavailable(walletReasonCodes.marketRuntimeMissing);
         }
@@ -1344,6 +1540,13 @@ export function createWalletReadService(
           asOf: asOf ?? now().toISOString(),
           isSpendable: false as const,
         });
+      }
+
+      function noteDegradedLeg(leg: string, error: unknown): void {
+        input.logger?.warn?.(
+          degradedLegContext(leg, error),
+          "Wallet balances leg reported unavailable",
+        );
       }
 
       async function recordSnapshot(

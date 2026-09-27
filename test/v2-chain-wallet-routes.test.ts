@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import type { FastifyInstance } from "fastify";
+import { TimeoutError } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -1903,6 +1904,201 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: "VERSION_CONFLICT" });
+  });
+
+  describe("RPC timeouts on the balances legs (Decision 0082)", () => {
+    const usd1 = "0x2222222222222222222222222222222222222222";
+    const launchContract = "0x1111111111111111111111111111111111111111";
+    const contractKeys = {
+      LAUNCH_CONTRACT_ADDRESS: launchContract,
+      LAUNCH_CONTRACT_VERSION: "1.0.0",
+      LAUNCH_CONTRACT_START_BLOCK: "1",
+      LAUNCH_USD1_ADDRESS: usd1,
+    };
+    /** The error viem's point-read transport raised in production. */
+    const rpcTimeout = (): TimeoutError =>
+      new TimeoutError({
+        body: { method: "eth_getBlockByNumber", params: ["latest", false] },
+        url: "https://bsc-rpc.publicnode.com",
+      });
+    const readBalances = async (app: FastifyInstance) =>
+      app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      });
+
+    /** A launch slot whose every chain read times out, like `readHead`. */
+    function timingOutLaunchClient(): BscReadClient {
+      return {
+        ...launchClientFake(),
+        getHead: () => Promise.reject(rpcTimeout()),
+        readBalances: () => Promise.reject(rpcTimeout()),
+        readAllowances: () => Promise.reject(rpcTimeout()),
+      } as unknown as BscReadClient;
+    }
+
+    it("asks the primary block once more after a point-read timeout and serves 200", async () => {
+      const base = readClientFake();
+      const primaryRead = vi
+        .fn<BscReadClient["readBalances"]>()
+        .mockRejectedValueOnce(rpcTimeout())
+        .mockImplementation((owner, items) => base.readBalances(owner, items));
+      const { app } = await createApp({
+        ...fakes(),
+        bscReadClient: { ...base, readBalances: primaryRead },
+      });
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      expect(primaryRead).toHaveBeenCalledTimes(2);
+      expect(
+        response.json<{ readonly snapshot: { readonly blockNumber: string } }>()
+          .snapshot.blockNumber,
+      ).toBe(headNumber.toString(10));
+    });
+
+    it("reports a primary chain that times out twice as CAPABILITY_UNAVAILABLE, never INTERNAL_ERROR", async () => {
+      const base = readClientFake();
+      const primaryRead = vi.fn<BscReadClient["readBalances"]>(() =>
+        Promise.reject(rpcTimeout()),
+      );
+      const { app } = await createApp({
+        ...fakes(),
+        bscReadClient: {
+          ...base,
+          getHead: () => Promise.reject(rpcTimeout()),
+          readBalances: primaryRead,
+        },
+      });
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(503);
+      expect(primaryRead).toHaveBeenCalledTimes(2);
+      expect(response.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        retryable: true,
+        detailsSafe: { reasonCode: "BSC_RPC_UNREACHABLE" },
+        providerReferenceSafe: null,
+      });
+      expect(response.body).not.toContain("publicnode");
+    });
+
+    it("asks once more after a chain-id probe that did not answer", async () => {
+      const base = readClientFake();
+      const primaryRead = vi
+        .fn<BscReadClient["readBalances"]>()
+        .mockRejectedValueOnce(
+          new BscReadUnavailableError("BSC_RPC_UNREACHABLE"),
+        )
+        .mockImplementation((owner, items) => base.readBalances(owner, items));
+      const { app } = await createApp({
+        ...fakes(),
+        bscReadClient: { ...base, readBalances: primaryRead },
+      });
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      expect(primaryRead).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry a primary failure that is final", async () => {
+      const base = readClientFake();
+      const primaryRead = vi.fn<BscReadClient["readBalances"]>(() =>
+        Promise.reject(new BscChainMismatchError()),
+      );
+      const { app } = await createApp({
+        ...fakes(),
+        bscReadClient: { ...base, readBalances: primaryRead },
+      });
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(503);
+      expect(primaryRead).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the page 200 when the launch slot's head read times out", async () => {
+      const { app } = await createApp(
+        { ...fakes(), launchChainReadClient: timingOutLaunchClient() },
+        { LAUNCH_CHAIN_ID: "97", ...contractKeys },
+      );
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      const body = response.json<
+        BalancesBody & { readonly launchChain: unknown }
+      >();
+      expect(body.balances).toHaveLength(2);
+      // The usd1 pair is absent (never null, never a guess).
+      expect(body.launchChain).toEqual({
+        chainId: "eip155:97",
+        availability: "unavailable",
+        reasonCode: "LAUNCH_CHAIN_RPC_UNREACHABLE",
+        nativeBalance: null,
+      });
+    });
+
+    it("reports an unclassified launch-slot failure inside launchChain", async () => {
+      const client = {
+        ...launchClientFake(),
+        readBalances: () => Promise.reject(new TypeError("unexpected shape")),
+      } as unknown as BscReadClient;
+      const { app } = await createApp(
+        { ...fakes(), launchChainReadClient: client },
+        { LAUNCH_CHAIN_ID: "97" },
+      );
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      expect(
+        response.json<{ readonly launchChain: unknown }>().launchChain,
+      ).toEqual({
+        chainId: "eip155:97",
+        availability: "unavailable",
+        reasonCode: "BSC_BALANCE_CALL_FAILED",
+        nativeBalance: null,
+      });
+    });
+
+    it("leaves launchUsd1 absent on a shared slot whose USD1 reads time out", async () => {
+      const base = readClientFake();
+      const primary = {
+        ...base,
+        readBalances: (
+          owner: string,
+          items: readonly { assetId: string; address: string | null }[],
+        ) =>
+          items.length === 1 && items[0]?.address === usd1
+            ? Promise.reject(rpcTimeout())
+            : base.readBalances(owner, items),
+        readAllowances: () => Promise.reject(rpcTimeout()),
+      } as unknown as BscReadClient;
+      const { app } = await createApp(
+        { ...fakes(), bscReadClient: primary },
+        { LAUNCH_CHAIN_ID: "56", ...contractKeys },
+      );
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      const body = response.json<Record<string, unknown>>();
+      expect(body).not.toHaveProperty("launchUsd1");
+      expect(body).not.toHaveProperty("launchChain");
+    });
+
+    it("leaves every row unvalued when the price read fails outright", async () => {
+      const facts = marketFactsFake("fresh");
+      const { app } = await createApp(
+        fakes(),
+        {},
+        {
+          ...facts,
+          readAssetPrices: vi.fn(() => Promise.reject(rpcTimeout())),
+        },
+      );
+      const response = await readBalances(app);
+      expect(response.statusCode).toBe(200);
+      const body = response.json<BalancesBody>();
+      for (const row of body.balances) {
+        expect(row.valuation).toEqual({
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+        });
+        expect(row.balance["status"]).toBe("available");
+      }
+    });
   });
 
   it("requires the V2 contract header and a Bearer token", async () => {
