@@ -57,3 +57,8 @@ chain read; no fixture or default stands in for the root.
   → open and the root table is not queried; non-zero root → the three refusals.
   `test/launch-intent-service.test.ts`: open round with an unset mode and no
   stored root prepares with `eligibilityProof: []` without querying roots.
+
+## Main-agent rulings (2026-09-27)
+
+1. Intent prepare should refuse a non-zero-root round while `tierModeV1` is unconfirmed, matching eligibility's `TIER_MODE_PENDING`; tracked as S83b6.
+2. `GET /v2/launch/overview.myEligibility` stays unavailable for now; the home page does not render round eligibility.
