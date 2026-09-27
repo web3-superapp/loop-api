@@ -1,4 +1,4 @@
-import { RpcRequestError } from "viem";
+import { RpcRequestError, TimeoutError } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -437,6 +437,60 @@ describe("launch_event lane (Decision 0077)", () => {
     }).runOnce();
     expect(other.reasonCode).toBe("LAUNCH_CONTRACT_READ_FAILED");
     expect(other).not.toHaveProperty("behindBlocks");
+  });
+
+  it("logs the classified Provider error with an unavailable outcome, never the URL path or query (Decision 0085)", async () => {
+    const { fake } = repository();
+    const onUnavailable = vi.fn();
+    const failing = {
+      ...adapter(logs),
+      readLogs: () =>
+        Promise.reject(
+          new LaunchContractUnavailableError("LAUNCH_CONTRACT_READ_FAILED", {
+            cause: new TimeoutError({
+              body: { method: "eth_getLogs", params: [] },
+              url: "https://bsc-testnet.nodereal.io/v1/secret-key-path?apikey=secret-query",
+            }),
+          }),
+        ),
+    };
+    const controller = new AbortController();
+    const worker = createLaunchIndexerWorker({
+      repository: fake,
+      readClient: readClient({ block: 200n }),
+      adapter: failing,
+      chainId: "eip155:97",
+      onUnavailable: (reasonCode: string, detail?: unknown) => {
+        onUnavailable(reasonCode, detail);
+        controller.abort();
+      },
+    });
+    const outcome = await worker.runOnce();
+    expect(outcome).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
+      rpcError: {
+        errorClass: "TimeoutError",
+        rpcUrlHost: "bsc-testnet.nodereal.io",
+      },
+    });
+    await worker.run(controller.signal);
+    expect(onUnavailable).toHaveBeenCalledOnce();
+    const [reasonCode, detail] = onUnavailable.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(reasonCode).toBe("LAUNCH_CONTRACT_READ_FAILED");
+    // The same field names as "LOOP BSC indexer lane is unavailable".
+    expect(detail).toEqual({
+      errorClass: "TimeoutError",
+      rpcStatus: null,
+      rpcCode: null,
+      rpcUrlHost: "bsc-testnet.nodereal.io",
+      // viem keeps no request body on a TimeoutError, so no method either.
+      method: null,
+    });
+    expect(JSON.stringify(detail)).not.toMatch(/secret|apikey|\/v1\//);
   });
 
   it("stores every argument of the 14 events as strings under its 06 name", () => {

@@ -490,6 +490,12 @@ false`。金额（`*Usd1`、`*Tokens`、`priceUsd1PerToken`）一律十进制整
 `config` **在同一个区块**读出（`onChainState.snapshotBlockNumber/Hash`），`configPending`
 为 `null`：
 
+（Decision 0085）同一个 sale 的这份快照在服务端内存里最多复用 1.5 秒
+（`LAUNCH_SNAPSHOT_CACHE_TTL_MS`），详情与 `eligibility` 共用：复用期内两次请求返回相同的
+`snapshotBlockNumber` / `snapshotBlockHash` / `stateTupleDigest`（都是那次读链的真值，
+不是推算），过期后下一次请求重新读链。读失败不缓存。客户端要判断“是否更新”请比较
+`snapshotBlockNumber`，不要比较请求时间。
+
 ```json
 {
   "launch": {

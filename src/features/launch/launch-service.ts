@@ -932,13 +932,14 @@ export function createLaunchService(
     }
     const saleId = BigInt(detail.launch.saleId as string);
     try {
-      const snapshot = await contract.takeSnapshot();
-      const [tuple, rounds, config] = await Promise.all([
-        contract.getState(saleId, snapshot),
-        contract.getRounds(saleId, snapshot),
-        contract.getSaleConfig(saleId, snapshot),
-      ]);
-      await contract.confirmSnapshot(snapshot);
+      // Decision 0085: one head read, one Multicall3 eth_call at that block,
+      // one reorg check; a read shared within LAUNCH_SNAPSHOT_CACHE_TTL_MS
+      // is returned unchanged (same block, same digest).
+      const read = await contract.readSaleSnapshot(saleId);
+      const snapshot = read.snapshot;
+      const tuple = { value: read.state };
+      const rounds = { value: read.rounds };
+      const config = { value: read.config };
       if (isZeroBytes32(tuple.value.configVersion)) {
         return {
           status: "unavailable",
@@ -1135,9 +1136,10 @@ export function createLaunchService(
       return beforeRoot(launchContractReasonCodes.walletNotFound);
     }
     const saleId = BigInt(detail.launch.saleId as string);
-    const snapshot = await contract.takeSnapshot();
-    const rounds = await contract.getRounds(saleId, snapshot);
-    await contract.confirmSnapshot(snapshot);
+    // Decision 0085: the same sale snapshot as the detail page's.
+    const read = await contract.readSaleSnapshot(saleId);
+    const snapshot = read.snapshot;
+    const rounds = { value: read.rounds };
     const nowSeconds = BigInt(Math.floor(now().getTime() / 1000));
     const round =
       requestedRound !== null
@@ -1245,8 +1247,13 @@ export function createLaunchService(
   return Object.freeze({
     async getOverview() {
       try {
-        const launches = await repository.listLaunches();
-        const checkpoint = await readCheckpoint();
+        // Decision 0085: the overview never reads the chain; its three
+        // PostgreSQL reads are one list, one checkpoint (concurrently), and
+        // one batched projection query for every listed launch.
+        const [launches, checkpoint] = await Promise.all([
+          repository.listLaunches(),
+          readCheckpoint(),
+        ]);
         let projections: ReadonlyMap<string, LaunchStateProjectionRecord> =
           new Map();
         if (checkpoint !== null && chain !== null) {

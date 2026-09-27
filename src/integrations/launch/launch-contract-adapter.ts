@@ -6,6 +6,7 @@ import {
   http,
   type Address,
   type Chain,
+  type ContractFunctionReturnType,
   type Hex,
   type PublicClient,
   type Transport,
@@ -116,6 +117,18 @@ export interface LaunchContractPosition {
   readonly claimedTokens: bigint;
   readonly refundableUsd1: bigint;
   readonly refundedUsd1: bigint;
+}
+
+/**
+ * The sale-level reads of one projection (Decision 0085): `getState`,
+ * `getRounds`, and `getSaleConfig` in one Multicall3 `aggregate3` pinned to
+ * `snapshot.blockNumber`, confirmed afterwards like any explicit snapshot.
+ */
+export interface LaunchSaleSnapshotRead {
+  readonly snapshot: LaunchContractSnapshot;
+  readonly state: LaunchSaleStateTuple;
+  readonly rounds: readonly LaunchContractRound[];
+  readonly config: LaunchContractSaleConfig;
 }
 
 /** Calldata for one user call. `value` is always 0: the contract takes no BNB. */
@@ -284,6 +297,13 @@ export interface LaunchContractAdapter {
   takeSnapshot(): Promise<LaunchContractSnapshot>;
   /** Throws `LAUNCH_SNAPSHOT_REORGED` when the block hash has changed. */
   confirmSnapshot(snapshot: LaunchContractSnapshot): Promise<void>;
+  /**
+   * Decision 0085: the four axes, rounds, and configuration of one sale at
+   * one block, in one `eth_call` (Multicall3) between the head read and the
+   * reorg check. A successful read may be served again, unchanged, for
+   * `snapshotCacheTtlMs`; a failed read is never cached.
+   */
+  readSaleSnapshot(saleId: bigint): Promise<LaunchSaleSnapshotRead>;
   getState(
     saleId: bigint,
     snapshot?: LaunchContractSnapshot,
@@ -647,6 +667,67 @@ function projectEvent(
 }
 
 // ---------------------------------------------------------------------------
+// Read projections (one per struct-returning function; shared by the single
+// reads and the Decision 0085 multicall)
+// ---------------------------------------------------------------------------
+
+type LaunchpadOutput<Name extends "getState" | "getRounds" | "getSaleConfig"> =
+  ContractFunctionReturnType<typeof launchpadAbiV1, "view", Name>;
+
+function stateTupleFrom(
+  state: LaunchpadOutput<"getState">,
+): LaunchSaleStateTuple {
+  return Object.freeze({
+    saleState: enumAt(launchSaleStates, state.saleState),
+    entitlementState: enumAt(launchEntitlementStates, state.entitlementState),
+    liquidityState: enumAt(launchLiquidityStates, state.liquidityState),
+    operationalState: enumAt(launchOperationalStates, state.operationalState),
+    configVersion: lower(state.configVersion),
+    stateTupleDigest: lower(state.stateTupleDigest),
+  });
+}
+
+function roundsFrom(
+  rounds: LaunchpadOutput<"getRounds">,
+): readonly LaunchContractRound[] {
+  return Object.freeze(
+    rounds.map((round) =>
+      Object.freeze({
+        roundId: round.roundId,
+        startAt: round.startAt,
+        endAt: round.endAt,
+        priceUsd1PerToken: round.priceUsd1PerToken,
+        roundCapUsd1: round.roundCapUsd1,
+        walletRoundCapUsd1: round.walletRoundCapUsd1,
+        allowlistRoot: lower(round.allowlistRoot),
+        raisedUsd1: round.raisedUsd1,
+      }),
+    ),
+  );
+}
+
+function saleConfigFrom(
+  config: LaunchpadOutput<"getSaleConfig">,
+): LaunchContractSaleConfig {
+  return Object.freeze({
+    projectToken: lower(config.projectToken),
+    usd1: lower(config.usd1),
+    softCapUsd1: config.softCapUsd1,
+    hardCapUsd1: config.hardCapUsd1,
+    walletProjectCapUsd1: config.walletProjectCapUsd1,
+    minPurchaseUsd1: config.minPurchaseUsd1,
+    protocolFeeBps: config.protocolFeeBps,
+    liquidityBps: config.liquidityBps,
+    tgeBps: config.tgeBps,
+    cliffSeconds: config.cliffSeconds,
+    vestingSeconds: config.vestingSeconds,
+    poolFeeTier: config.poolFeeTier,
+    lpLockSeconds: config.lpLockSeconds,
+    configVersion: lower(config.configVersion),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
 
@@ -670,6 +751,14 @@ export interface CreateLaunchContractAdapterInput {
   readonly verifyChain: () => Promise<ChainVerificationState>;
   /** Test seam: a mock transport instead of HTTP. */
   readonly transportFactory?: LaunchContractTransportFactory;
+  /**
+   * Decision 0085: how long (ms) a successful `readSaleSnapshot` is served
+   * again from memory. 0 (the default) disables the cache; the API passes
+   * `LAUNCH_SNAPSHOT_CACHE_TTL_MS`.
+   */
+  readonly snapshotCacheTtlMs?: number;
+  /** Test seam: the cache clock, in milliseconds. */
+  readonly nowMs?: () => number;
   readonly logger?: LaunchContractAdapterLogger;
 }
 
@@ -885,34 +974,136 @@ export function createLaunchContractAdapter(
     try {
       value = await read(readClient, address, anchor.blockNumber);
     } catch (error) {
-      if (
-        error instanceof LaunchContractUnavailableError ||
-        error instanceof RangeError
-      ) {
-        throw error instanceof RangeError
-          ? new LaunchContractUnavailableError(
-              launchContractReasonCodes.readInvalid,
-              { cause: error },
-            )
-          : error;
-      }
-      if (
-        error instanceof Error &&
-        /AbiDecodingDataSizeTooSmall|AbiDecodingZeroData|InvalidAbiDecoding|PositionOutOfBounds/.test(
-          error.name,
-        )
-      ) {
-        throw new LaunchContractUnavailableError(
-          launchContractReasonCodes.readInvalid,
-          { cause: error },
-        );
-      }
-      return readFailed(error);
+      return callFailed(error);
     }
     if (snapshot === undefined) {
       await confirmSnapshot(anchor);
     }
     return Object.freeze({ value, snapshot: anchor });
+  }
+
+  /** One classification for every `eth_call` failure (Decision 0076). */
+  function callFailed(error: unknown): never {
+    if (
+      error instanceof LaunchContractUnavailableError ||
+      error instanceof RangeError
+    ) {
+      throw error instanceof RangeError
+        ? new LaunchContractUnavailableError(
+            launchContractReasonCodes.readInvalid,
+            { cause: error },
+          )
+        : error;
+    }
+    if (
+      error instanceof Error &&
+      /AbiDecodingDataSizeTooSmall|AbiDecodingZeroData|InvalidAbiDecoding|PositionOutOfBounds/.test(
+        error.name,
+      )
+    ) {
+      throw new LaunchContractUnavailableError(
+        launchContractReasonCodes.readInvalid,
+        { cause: error },
+      );
+    }
+    return readFailed(error);
+  }
+
+  /**
+   * Decision 0085: head → one Multicall3 `aggregate3` at that block carrying
+   * `getState`, `getRounds`, `getSaleConfig` → reorg check. Three round
+   * trips, one `eth_call`; any failure is the whole read's failure, so a
+   * partial or mixed-block result can never be returned.
+   */
+  async function readSaleUncached(
+    saleId: bigint,
+  ): Promise<LaunchSaleSnapshotRead> {
+    const { client: readClient, address } = await requireReadable();
+    const anchor = await takeSnapshot();
+    let values: Omit<LaunchSaleSnapshotRead, "snapshot">;
+    try {
+      const id = requireUint(saleId, maximumUint256, "saleId");
+      const [state, rounds, config] = await readClient.multicall({
+        allowFailure: false,
+        blockNumber: anchor.blockNumber,
+        contracts: [
+          {
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getState",
+            args: [id],
+          },
+          {
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getRounds",
+            args: [id],
+          },
+          {
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getSaleConfig",
+            args: [id],
+          },
+        ],
+      });
+      values = {
+        state: stateTupleFrom(state),
+        rounds: roundsFrom(rounds),
+        config: saleConfigFrom(config),
+      };
+    } catch (error) {
+      return callFailed(error);
+    }
+    await confirmSnapshot(anchor);
+    return Object.freeze({ snapshot: anchor, ...values });
+  }
+
+  const snapshotCacheTtlMs = Math.max(0, input.snapshotCacheTtlMs ?? 0);
+  const nowMs = input.nowMs ?? ((): number => Date.now());
+  /**
+   * saleId → the in-flight or settled read. In memory only; a pending entry
+   * is shared by concurrent callers, a settled one lives `snapshotCacheTtlMs`
+   * from the moment its read started, a rejected one is dropped at once.
+   */
+  const saleSnapshots = new Map<
+    string,
+    { promise: Promise<LaunchSaleSnapshotRead>; expiresAt: number }
+  >();
+
+  function readSaleSnapshot(saleId: bigint): Promise<LaunchSaleSnapshotRead> {
+    if (snapshotCacheTtlMs === 0) {
+      return readSaleUncached(saleId);
+    }
+    const key = saleId.toString();
+    const startedAt = nowMs();
+    const cached = saleSnapshots.get(key);
+    if (cached !== undefined && startedAt < cached.expiresAt) {
+      return cached.promise;
+    }
+    for (const [staleKey, entry] of saleSnapshots) {
+      if (entry.expiresAt <= startedAt) {
+        saleSnapshots.delete(staleKey);
+      }
+    }
+    const entry = {
+      promise: Promise.resolve() as unknown as Promise<LaunchSaleSnapshotRead>,
+      expiresAt: Number.POSITIVE_INFINITY,
+    };
+    entry.promise = readSaleUncached(saleId).then(
+      (value) => {
+        entry.expiresAt = startedAt + snapshotCacheTtlMs;
+        return value;
+      },
+      (error: unknown) => {
+        if (saleSnapshots.get(key) === entry) {
+          saleSnapshots.delete(key);
+        }
+        throw error;
+      },
+    );
+    saleSnapshots.set(key, entry);
+    return entry.promise;
   }
 
   function requireCallTarget(): string {
@@ -962,85 +1153,48 @@ export function createLaunchContractAdapter(
 
     takeSnapshot,
     confirmSnapshot,
+    readSaleSnapshot,
 
     getState(saleId, snapshot) {
-      return pinned(snapshot, async (readClient, address, blockNumber) => {
-        const state = await readClient.readContract({
-          address,
-          abi: launchpadAbiV1,
-          functionName: "getState",
-          args: [requireUint(saleId, maximumUint256, "saleId")],
-          blockNumber,
-        });
-        return Object.freeze({
-          saleState: enumAt(launchSaleStates, state.saleState),
-          entitlementState: enumAt(
-            launchEntitlementStates,
-            state.entitlementState,
-          ),
-          liquidityState: enumAt(launchLiquidityStates, state.liquidityState),
-          operationalState: enumAt(
-            launchOperationalStates,
-            state.operationalState,
-          ),
-          configVersion: lower(state.configVersion),
-          stateTupleDigest: lower(state.stateTupleDigest),
-        });
-      });
+      return pinned(snapshot, async (readClient, address, blockNumber) =>
+        stateTupleFrom(
+          await readClient.readContract({
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getState",
+            args: [requireUint(saleId, maximumUint256, "saleId")],
+            blockNumber,
+          }),
+        ),
+      );
     },
 
     getRounds(saleId, snapshot) {
-      return pinned(snapshot, async (readClient, address, blockNumber) => {
-        const rounds = await readClient.readContract({
-          address,
-          abi: launchpadAbiV1,
-          functionName: "getRounds",
-          args: [requireUint(saleId, maximumUint256, "saleId")],
-          blockNumber,
-        });
-        return Object.freeze(
-          rounds.map((round) =>
-            Object.freeze({
-              roundId: round.roundId,
-              startAt: round.startAt,
-              endAt: round.endAt,
-              priceUsd1PerToken: round.priceUsd1PerToken,
-              roundCapUsd1: round.roundCapUsd1,
-              walletRoundCapUsd1: round.walletRoundCapUsd1,
-              allowlistRoot: lower(round.allowlistRoot),
-              raisedUsd1: round.raisedUsd1,
-            }),
-          ),
-        );
-      });
+      return pinned(snapshot, async (readClient, address, blockNumber) =>
+        roundsFrom(
+          await readClient.readContract({
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getRounds",
+            args: [requireUint(saleId, maximumUint256, "saleId")],
+            blockNumber,
+          }),
+        ),
+      );
     },
 
     getSaleConfig(saleId, snapshot) {
-      return pinned(snapshot, async (readClient, address, blockNumber) => {
-        const config = await readClient.readContract({
-          address,
-          abi: launchpadAbiV1,
-          functionName: "getSaleConfig",
-          args: [requireUint(saleId, maximumUint256, "saleId")],
-          blockNumber,
-        });
-        return Object.freeze({
-          projectToken: lower(config.projectToken),
-          usd1: lower(config.usd1),
-          softCapUsd1: config.softCapUsd1,
-          hardCapUsd1: config.hardCapUsd1,
-          walletProjectCapUsd1: config.walletProjectCapUsd1,
-          minPurchaseUsd1: config.minPurchaseUsd1,
-          protocolFeeBps: config.protocolFeeBps,
-          liquidityBps: config.liquidityBps,
-          tgeBps: config.tgeBps,
-          cliffSeconds: config.cliffSeconds,
-          vestingSeconds: config.vestingSeconds,
-          poolFeeTier: config.poolFeeTier,
-          lpLockSeconds: config.lpLockSeconds,
-          configVersion: lower(config.configVersion),
-        });
-      });
+      return pinned(snapshot, async (readClient, address, blockNumber) =>
+        saleConfigFrom(
+          await readClient.readContract({
+            address,
+            abi: launchpadAbiV1,
+            functionName: "getSaleConfig",
+            args: [requireUint(saleId, maximumUint256, "saleId")],
+            blockNumber,
+          }),
+        ),
+      );
     },
 
     quote(request, snapshot) {

@@ -153,6 +153,22 @@ export function createFakeLaunchAdapter(
     verifyAtStartup: () => Promise.resolve(availability()),
     takeSnapshot: () => Promise.resolve(snapshot),
     confirmSnapshot: () => Promise.resolve(),
+    readSaleSnapshot: () => {
+      state.calls.push("readSaleSnapshot");
+      if (state.unavailable !== null) {
+        return Promise.reject(
+          new LaunchContractUnavailableError(state.unavailable),
+        );
+      }
+      return Promise.resolve(
+        Object.freeze({
+          snapshot,
+          state: state.tuple,
+          rounds: Object.freeze([...state.rounds]),
+          config: state.config,
+        }),
+      );
+    },
     getState: () => read("getState", () => state.tuple),
     getRounds: () => read("getRounds", () => state.rounds),
     getSaleConfig: () => read("getSaleConfig", () => state.config),

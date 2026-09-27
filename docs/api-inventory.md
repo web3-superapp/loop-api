@@ -231,6 +231,11 @@ response is byte-identical to before. Only `GET /v2/launches/{launchId}` reads
 the chain (four axes, rounds, config at one block) once the contract is
 verified and the sale is registered; `pnpm launch:abi-check <abi.json>`
 accepts or refuses a delivered ABI.
+Since Decision 0085 (S83b8) that read is one head read, one Multicall3
+`eth_call` carrying `getState`/`getRounds`/`getSaleConfig` at that block, and
+one reorg check; a successful sale snapshot is reused in memory for
+`LAUNCH_SNAPSHOT_CACHE_TTL_MS` (default 1500) by the detail and eligibility
+reads. No request, response, or error changes.
 
 | Method and path                                                        | Request                                                                   | Success projection                                                                                                                                                                                                                                   | Interface     | Capability                                                                                                                                                                                                 |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -602,6 +602,20 @@ describe("launch chain slot (Decision 0038)", () => {
     expect(Object.isFrozen(config.launchChain)).toBe(true);
   });
 
+  it("defaults the Launch sale snapshot cache to 1500 ms and bounds it (Decision 0085)", () => {
+    expect(loadConfig(validEnvironment()).launchSnapshotCacheTtlMs).toBe(1_500);
+    const disabled = validEnvironment();
+    disabled["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] = "0";
+    expect(loadConfig(disabled).launchSnapshotCacheTtlMs).toBe(0);
+    for (const value of ["-1", "10001", "1.5", "soon"]) {
+      const environment = validEnvironment();
+      environment["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /LAUNCH_SNAPSHOT_CACHE_TTL_MS/,
+      );
+    }
+  });
+
   it("keeps the shared slot without endpoints when the primary chain has none", () => {
     const config = loadConfig(validEnvironment());
     expect(config.launchChain).toEqual({
