@@ -189,3 +189,10 @@ balances `503`), `LAUNCH_CHAIN_RPC_UNREACHABLE`, `BSC_BALANCE_CALL_FAILED`,
   failed. Pinning the allowance multicall to the balance block (on the
   point-read lane) needs an rpc-client interface change and is left for a
   ruling; it is the remaining cause of that message.
+
+## Main-agent rulings (2026-09-27)
+
+1. **Same-block rule miss (usd1 absent ~3% of reads):** fix by pinning the allowance read to the balance head block on the point-read lane; tracked as S86b (rpc-client interface change), not folded into this fix.
+2. Both primary reads failing stays 503 for now; the `snapshot` contract change is not worth it while a second mainnet endpoint is pending.
+3. Ops: a second mainnet endpoint (NodeReal paid tier) is on the user's list; until then the extra read carries the tail.
+4. Probe-unreachable triggering the extra read: kept.
