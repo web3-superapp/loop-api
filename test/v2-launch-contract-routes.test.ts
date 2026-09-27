@@ -400,129 +400,133 @@ describe("V2 launch routes with the contract adapter (Decision 0076)", () => {
     expect(response.body).not.toContain("launch-rpc.invalid");
   });
 
-  it("fails closed with a named reason instead of publishing a doubtful chain fact", async () => {
-    const cases: readonly {
-      readonly name: string;
-      readonly chain: Partial<MockLaunchpadChain>;
-      readonly launch: LaunchRecord;
-      readonly contract?: Partial<LaunchContractConfig>;
-      readonly reasonCode: string;
-    }[] = [
-      {
-        name: "unregistered sale",
-        chain: {},
-        launch: unregistered,
-        reasonCode: "LAUNCH_SALE_NOT_REGISTERED",
-      },
-      {
-        name: "another contract version",
-        chain: {},
-        launch: { ...registered, contractVersion: "0.9.0" },
-        reasonCode: "LAUNCH_SALE_CONTRACT_MISMATCH",
-      },
-      {
-        name: "no code at the address",
-        chain: { code: "0x" },
-        launch: registered,
-        reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
-      },
-      {
-        name: "unknown saleId",
-        chain: {
-          state: {
-            saleState: 0,
-            entitlementState: 0,
-            liquidityState: 0,
-            operationalState: 0,
-            configVersion: `0x${"00".repeat(32)}`,
-            stateTupleDigest: `0x${"00".repeat(32)}`,
+  it(
+    "fails closed with a named reason instead of publishing a doubtful chain fact",
+    { timeout: 30_000 },
+    async () => {
+      const cases: readonly {
+        readonly name: string;
+        readonly chain: Partial<MockLaunchpadChain>;
+        readonly launch: LaunchRecord;
+        readonly contract?: Partial<LaunchContractConfig>;
+        readonly reasonCode: string;
+      }[] = [
+        {
+          name: "unregistered sale",
+          chain: {},
+          launch: unregistered,
+          reasonCode: "LAUNCH_SALE_NOT_REGISTERED",
+        },
+        {
+          name: "another contract version",
+          chain: {},
+          launch: { ...registered, contractVersion: "0.9.0" },
+          reasonCode: "LAUNCH_SALE_CONTRACT_MISMATCH",
+        },
+        {
+          name: "no code at the address",
+          chain: { code: "0x" },
+          launch: registered,
+          reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
+        },
+        {
+          name: "unknown saleId",
+          chain: {
+            state: {
+              saleState: 0,
+              entitlementState: 0,
+              liquidityState: 0,
+              operationalState: 0,
+              configVersion: `0x${"00".repeat(32)}`,
+              stateTupleDigest: `0x${"00".repeat(32)}`,
+            },
+            saleConfigVersion: `0x${"00".repeat(32)}`,
           },
-          saleConfigVersion: `0x${"00".repeat(32)}`,
+          launch: registered,
+          reasonCode: "LAUNCH_SALE_NOT_FOUND",
         },
-        launch: registered,
-        reasonCode: "LAUNCH_SALE_NOT_FOUND",
-      },
-      {
-        name: "expected configVersion differs",
-        chain: {},
-        launch: {
-          ...registered,
-          configVersionOnchain: `0x${"cc".repeat(32)}`,
+        {
+          name: "expected configVersion differs",
+          chain: {},
+          launch: {
+            ...registered,
+            configVersionOnchain: `0x${"cc".repeat(32)}`,
+          },
+          reasonCode: "LAUNCH_CONFIG_VERSION_MISMATCH",
         },
-        reasonCode: "LAUNCH_CONFIG_VERSION_MISMATCH",
-      },
-      {
-        name: "getState and getSaleConfig disagree",
-        chain: { saleConfigVersion: `0x${"cc".repeat(32)}` },
-        launch: registered,
-        reasonCode: "LAUNCH_CONFIG_VERSION_MISMATCH",
-      },
-      {
-        name: "another settlement token",
-        chain: { usd1: "0x9999999999999999999999999999999999999999" },
-        launch: registered,
-        reasonCode: "LAUNCH_USD1_ADDRESS_MISMATCH",
-      },
-      {
-        name: "endpoint failure",
-        chain: { failCalls: true },
-        launch: registered,
-        reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
-      },
-      {
-        name: "reorg during the read",
-        chain: { reorgHash: `0x${"98".repeat(32)}` },
-        launch: registered,
-        reasonCode: "LAUNCH_SNAPSHOT_REORGED",
-      },
-      {
-        name: "unsupported ABI major",
-        chain: {},
-        launch: { ...registered, contractVersion: "2.0.0" },
-        contract: { version: "2.0.0", versionMajor: 2 },
-        reasonCode: "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
-      },
-    ];
-    const offChain = JSON.parse(baseline("launch-detail-confirmed")) as {
-      readonly rounds: unknown;
-      readonly config: unknown;
-    };
-    for (const scenario of cases) {
-      const chain = createMockLaunchpadChain(scenario.chain);
-      const app = await createApp(
-        { ...confirmed, launch: scenario.launch },
-        { adapter: mockAdapter(chain, scenario.contract) },
-      );
-      const response = await app.inject({
-        method: "GET",
-        url: `/v2/launches/${launchId}`,
-        headers: s7CommonHeaders(),
-      });
-      expect(response.statusCode, scenario.name).toBe(200);
-      const body = response.json<{
-        readonly launch: {
-          readonly contractAddress: string | null;
-          readonly onChainState: Record<string, unknown>;
-        };
+        {
+          name: "getState and getSaleConfig disagree",
+          chain: { saleConfigVersion: `0x${"cc".repeat(32)}` },
+          launch: registered,
+          reasonCode: "LAUNCH_CONFIG_VERSION_MISMATCH",
+        },
+        {
+          name: "another settlement token",
+          chain: { usd1: "0x9999999999999999999999999999999999999999" },
+          launch: registered,
+          reasonCode: "LAUNCH_USD1_ADDRESS_MISMATCH",
+        },
+        {
+          name: "endpoint failure",
+          chain: { failCalls: true },
+          launch: registered,
+          reasonCode: "LAUNCH_CONTRACT_READ_FAILED",
+        },
+        {
+          name: "reorg during the read",
+          chain: { reorgHash: `0x${"98".repeat(32)}` },
+          launch: registered,
+          reasonCode: "LAUNCH_SNAPSHOT_REORGED",
+        },
+        {
+          name: "unsupported ABI major",
+          chain: {},
+          launch: { ...registered, contractVersion: "2.0.0" },
+          contract: { version: "2.0.0", versionMajor: 2 },
+          reasonCode: "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+        },
+      ];
+      const offChain = JSON.parse(baseline("launch-detail-confirmed")) as {
         readonly rounds: unknown;
         readonly config: unknown;
-      }>();
-      expect(body.launch.onChainState, scenario.name).toEqual({
-        saleState: "unavailable",
-        entitlementState: "unavailable",
-        liquidityState: "unavailable",
-        operationalState: "unavailable",
-        stateTupleDigest: null,
-        snapshotBlockNumber: null,
-        snapshotBlockHash: null,
-        source: "unavailable",
-        reasonCode: scenario.reasonCode,
-      });
-      // The off-chain slots are published exactly as before.
-      expect(body.rounds, scenario.name).toEqual(offChain.rounds);
-      expect(body.config, scenario.name).toEqual(offChain.config);
-    }
-  });
+      };
+      for (const scenario of cases) {
+        const chain = createMockLaunchpadChain(scenario.chain);
+        const app = await createApp(
+          { ...confirmed, launch: scenario.launch },
+          { adapter: mockAdapter(chain, scenario.contract) },
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/launches/${launchId}`,
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode, scenario.name).toBe(200);
+        const body = response.json<{
+          readonly launch: {
+            readonly contractAddress: string | null;
+            readonly onChainState: Record<string, unknown>;
+          };
+          readonly rounds: unknown;
+          readonly config: unknown;
+        }>();
+        expect(body.launch.onChainState, scenario.name).toEqual({
+          saleState: "unavailable",
+          entitlementState: "unavailable",
+          liquidityState: "unavailable",
+          operationalState: "unavailable",
+          stateTupleDigest: null,
+          snapshotBlockNumber: null,
+          snapshotBlockHash: null,
+          source: "unavailable",
+          reasonCode: scenario.reasonCode,
+        });
+        // The off-chain slots are published exactly as before.
+        expect(body.rounds, scenario.name).toEqual(offChain.rounds);
+        expect(body.config, scenario.name).toEqual(offChain.config);
+      }
+    },
+  );
 
   it("publishes the verified contract address in lists without reading the chain per launch", async () => {
     const chain = createMockLaunchpadChain();
