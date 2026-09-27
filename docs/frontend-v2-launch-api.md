@@ -987,7 +987,7 @@ Content-Type: application/json
 ```
 
 - `balance` = USD1 余额，`allowance` = 对 `LAUNCH_CONTRACT_ADDRESS` 的授权额，都是 18 位最小单位十进制字符串。
-- 仅当后端配置了 `LAUNCH_USD1_ADDRESS`、`launchChain` 块存在、且两个值在同一区块读到时出现；否则整个 `usd1` 键缺席（不会是 `null`）。
+- 仅当后端配置了 `LAUNCH_USD1_ADDRESS`、`launchChain` 块存在、且两个值在同一区块读到时出现；否则整个 `usd1` 键缺席（不会是 `null`）。自 S86b 起授权额固定在余额读到的那个区块上读取，"同一区块"成为常态；只有端点已无法提供该区块（极少）或任一读失败/超时才缺席。
 - 不出现在 Intent `201` 里。
 
 ### S83b.10 `GET /v2/launch/economy` → `onChain`
@@ -1144,8 +1144,8 @@ X-Loop-Contract-Version: 2.0
 
 - 形状与 `launchChain.usd1` 完全相同（决策 0088）：18 位最小单位十进制字符串；`allowance` 是对
   `LAUNCH_CONTRACT_ADDRESS` 的授权额。
-- 仅当：槽位共享 + 四个 `LAUNCH_CONTRACT_*` 键已配置 + 两个值在同一区块读到。否则整个键缺席
-  （不会是 `null`），读失败不影响页面其余部分。
+- 仅当：槽位共享 + 四个 `LAUNCH_CONTRACT_*` 键已配置 + 两个值在同一区块读到（S86b 起授权额固定在余额区块上读，
+  同块是常态）。否则整个键缺席（不会是 `null`），读失败不影响页面其余部分。
 - `launchUsd1` 与 `launchChain.usd1` 永不同时出现。客户端读法：`launchChain?.usd1 ?? launchUsd1`，都缺席即“未知”，
   不得当作 0。
 - 注意：槽位共享时 `POST /v2/wallet-intents/approve` 对 USD1 → Launch 合约仍是 `422 CHAIN_MISMATCH`

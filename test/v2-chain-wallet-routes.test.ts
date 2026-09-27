@@ -2078,6 +2078,162 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       expect(body).not.toHaveProperty("launchChain");
     });
 
+    describe("USD1 allowance pinned to the balance block (S86b)", () => {
+      /**
+       * A slot whose USD1 balance read observes `balanceHead`, and whose
+       * allowance read answers at the pinned block when given one, else at
+       * the next block (the ~3% race S86b removes). `refusePinned` stands for
+       * an endpoint that no longer serves the pinned block.
+       */
+      function pinningClient(
+        base: BscReadClient,
+        balanceHead: bigint,
+        blockHash: string,
+        options: {
+          readonly pinnedAt: (bigint | undefined)[];
+          readonly refusePinned?: boolean;
+        },
+      ): BscReadClient {
+        return {
+          ...base,
+          readBalances: (
+            owner: string,
+            items: readonly { assetId: string; address: string | null }[],
+          ) =>
+            items.length === 1 && items[0]?.address === usd1
+              ? Promise.resolve({
+                  head: { blockNumber: balanceHead, blockHash, observedAt },
+                  balances: [
+                    {
+                      assetId: items[0].assetId,
+                      rawValue: 9_000_000_000_000_000_000n,
+                      reasonCode: null,
+                    },
+                  ],
+                })
+              : base.readBalances(owner, items),
+          readAllowances: (
+            _owner: string,
+            items: readonly { assetId: string; spender: string }[],
+            readOptions?: { readonly atBlock?: bigint },
+          ) => {
+            options.pinnedAt.push(readOptions?.atBlock);
+            if (options.refusePinned === true) {
+              return Promise.reject(
+                new BscReadUnavailableError("BSC_PINNED_BLOCK_UNAVAILABLE"),
+              );
+            }
+            return Promise.resolve({
+              head: {
+                blockNumber: readOptions?.atBlock ?? balanceHead + 1n,
+                blockHash,
+                observedAt,
+              },
+              allowances: items.map((item) => ({
+                assetId: item.assetId,
+                spender: item.spender,
+                rawValue: 4_000_000_000_000_000_000n,
+                reasonCode: null,
+              })),
+            });
+          },
+        } as unknown as BscReadClient;
+      }
+      const pair = {
+        balance: "9000000000000000000",
+        allowance: "4000000000000000000",
+      };
+
+      it("reads launchChain.usd1 at the block its balance read observed", async () => {
+        const pinnedAt: (bigint | undefined)[] = [];
+        const { app } = await createApp(
+          {
+            ...fakes(),
+            launchChainReadClient: pinningClient(
+              launchClientFake(),
+              launchHeadNumber,
+              launchHeadHash,
+              { pinnedAt },
+            ),
+          },
+          { LAUNCH_CHAIN_ID: "97", ...contractKeys },
+        );
+        const response = await readBalances(app);
+        expect(response.statusCode).toBe(200);
+        expect(
+          response.json<{ readonly launchChain: Record<string, unknown> }>()
+            .launchChain["usd1"],
+        ).toEqual(pair);
+        expect(pinnedAt).toEqual([launchHeadNumber]);
+      });
+
+      it("reads the shared-slot launchUsd1 at the block its balance read observed", async () => {
+        const pinnedAt: (bigint | undefined)[] = [];
+        const { app } = await createApp(
+          {
+            ...fakes(),
+            bscReadClient: pinningClient(
+              readClientFake(),
+              headNumber,
+              headHash,
+              { pinnedAt },
+            ),
+          },
+          { LAUNCH_CHAIN_ID: "56", ...contractKeys },
+        );
+        const response = await readBalances(app);
+        expect(response.statusCode).toBe(200);
+        expect(response.json<Record<string, unknown>>()["launchUsd1"]).toEqual(
+          pair,
+        );
+        expect(pinnedAt).toEqual([headNumber]);
+      });
+
+      it("omits the pair, never a 500, when the endpoint refuses the pinned block", async () => {
+        const separatePinned: (bigint | undefined)[] = [];
+        const { app: separate } = await createApp(
+          {
+            ...fakes(),
+            launchChainReadClient: pinningClient(
+              launchClientFake(),
+              launchHeadNumber,
+              launchHeadHash,
+              { pinnedAt: separatePinned, refusePinned: true },
+            ),
+          },
+          { LAUNCH_CHAIN_ID: "97", ...contractKeys },
+        );
+        const split = await readBalances(separate);
+        expect(split.statusCode).toBe(200);
+        const launchChain = split.json<{
+          readonly launchChain: Record<string, unknown>;
+        }>().launchChain;
+        expect(launchChain).not.toHaveProperty("usd1");
+        expect(launchChain["availability"]).toBe("available");
+        expect(separatePinned).toEqual([launchHeadNumber]);
+
+        const sharedPinned: (bigint | undefined)[] = [];
+        const { app: shared } = await createApp(
+          {
+            ...fakes(),
+            bscReadClient: pinningClient(
+              readClientFake(),
+              headNumber,
+              headHash,
+              { pinnedAt: sharedPinned, refusePinned: true },
+            ),
+          },
+          { LAUNCH_CHAIN_ID: "56", ...contractKeys },
+        );
+        const joined = await readBalances(shared);
+        expect(joined.statusCode).toBe(200);
+        expect(joined.json<Record<string, unknown>>()).not.toHaveProperty(
+          "launchUsd1",
+        );
+        expect(sharedPinned).toEqual([headNumber]);
+      });
+    });
+
     it("leaves every row unvalued when the price read fails outright", async () => {
       const facts = marketFactsFake("fresh");
       const { app } = await createApp(

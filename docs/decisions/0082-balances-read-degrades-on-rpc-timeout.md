@@ -196,3 +196,52 @@ balances `503`), `LAUNCH_CHAIN_RPC_UNREACHABLE`, `BSC_BALANCE_CALL_FAILED`,
 2. Both primary reads failing stays 503 for now; the `snapshot` contract change is not worth it while a second mainnet endpoint is pending.
 3. Ops: a second mainnet endpoint (NodeReal paid tier) is on the user's list; until then the extra read carries the tail.
 4. Probe-unreachable triggering the extra read: kept.
+
+## S86b: allowance read pinned to the balance block (ruling 1)
+
+- **Interface.** `BscChainCallClient.readAllowances(owner, items, options?)`
+  takes `options.atBlock?: bigint` (`BscAllowanceReadOptions`). Without it
+  nothing changes (head from `latest` on the aggregate lane). With it:
+  - the allowance multicall names `atBlock` (`eth_call` block parameter),
+    never `latest`;
+  - the returned `head.blockNumber` is `atBlock`, and `head.blockHash` comes
+    from `eth_getBlockByNumber(atBlock)` on the same endpoint list. The
+    header read runs concurrently with the multicall (no added round trip)
+    and doubles as proof that the endpoint still serves that block. We read
+    the hash rather than copy the balance read's hash so that the result
+    carries only facts that this read observed; the wallet service compares
+    block numbers, as before;
+  - both reads use the interactive point-read lane (`pointReadAggregate`,
+    same endpoints and order, short budget, no whole-chain retry), which is
+    the lane the balance read used. This makes a same-endpoint answer the
+    usual case;
+  - if the header read fails or returns no block, the read fails closed as
+    `BscReadUnavailableError("BSC_PINNED_BLOCK_UNAVAILABLE")` with the
+    `summarizeRpcError` summary. A refused `eth_call` at that block becomes
+    the per-item `BSC_ALLOWANCE_CALL_FAILED` (`rawValue: null`) through
+    `allowFailure`. In neither case is a value from another block returned.
+  - `asChainCallClient` and the unavailable client keep rejecting; the
+    optional parameter only widens the signature.
+- **Wallet service.** `readLaunchChainUsd1` (serving both
+  `launchChain.usd1` and the shared-slot `launchUsd1`) now reads the USD1
+  balance first and then calls `readAllowances(..., { atBlock:
+balances.head.blockNumber })`. A single `withDeadline` (3000 ms) still
+  bounds both reads. The Decision 0077 block-equality check stays as a
+  guard. `BSC_PINNED_BLOCK_UNAVAILABLE` is a `BscReadUnavailableError`, so
+  the pair is absent (not `null`, not `500`), as for every other failure.
+- **Cost.** The two reads are now sequential rather than parallel. That adds
+  one point-read round trip (the multicall and the header together) to this
+  leg, which runs concurrently with the other balances legs. The same 3 s
+  deadline applies.
+- **Response shape.** Unchanged. The field is still absent when the
+  endpoint has pruned or not yet caught up to the block, when a read fails,
+  or when the deadline elapses.
+- **Tests.** `test/bsc-rpc-client.test.ts` covers four cases: the pinned
+  `eth_call` and header name `atBlock`, with no `latest`; the head equals
+  that of a preceding balance read, while an unpinned read would have
+  straddled; a refused or missing header gives `BSC_PINNED_BLOCK_UNAVAILABLE`;
+  and a refused pinned `eth_call` gives a failed item. `test/v2-chain-wallet-routes.test.ts`
+  covers three cases: `launchChain.usd1` and `launchUsd1` pass the balance
+  block as `atBlock` and are present even with a fake whose unpinned head
+  would be one block ahead; and a refused pinned block gives `200` with the
+  pair absent.

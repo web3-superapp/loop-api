@@ -196,6 +196,18 @@ export interface BscAllowanceReadResult {
   readonly allowances: readonly BscAllowanceResult[];
 }
 
+/**
+ * Pins an allowance read to a block another read already observed (Decision
+ * 0082, S86b). With `atBlock` every `eth_call` names that block, and the
+ * returned `head` is that block (its hash read by number), never `latest`.
+ * An endpoint that can no longer (or not yet) serve the block fails the read
+ * as `BscReadUnavailableError("BSC_PINNED_BLOCK_UNAVAILABLE")`; the pair is
+ * then absent, never mixed with another block.
+ */
+export interface BscAllowanceReadOptions {
+  readonly atBlock?: bigint;
+}
+
 /** Exact call shape LOOP pre-executes and estimates: from is always the wallet. */
 export interface BscCallRequest {
   readonly from: string;
@@ -323,6 +335,7 @@ export interface BscChainCallClient extends BscReadClient {
   readAllowances(
     owner: string,
     items: readonly BscAllowanceRequestItem[],
+    options?: BscAllowanceReadOptions,
   ): Promise<BscAllowanceReadResult>;
 }
 
@@ -2048,23 +2061,69 @@ export function createBscReadClient(
     async readAllowances(
       owner: string,
       items: readonly BscAllowanceRequestItem[],
+      options: BscAllowanceReadOptions = {},
     ): Promise<BscAllowanceReadResult> {
       await requireVerifiedChain();
-      const head = await readHead(aggregate);
+      const ownerAddress = asAddress(owner);
+      const contracts = items.map((item) => ({
+        address: asAddress(item.token),
+        abi: erc20AllowanceAbi,
+        functionName: "allowance" as const,
+        args: [ownerAddress, asAddress(item.spender)] as const,
+      }));
+      const { atBlock } = options;
+      let head: BscChainHead;
+      let results: Awaited<
+        ReturnType<typeof aggregate.multicall<typeof contracts, true>>
+      >;
+      if (atBlock === undefined) {
+        head = await readHead(aggregate);
+        results =
+          items.length === 0
+            ? []
+            : await aggregate.multicall({
+                allowFailure: true,
+                blockNumber: head.blockNumber,
+                contracts,
+              });
+      } else {
+        // Pinned (Decision 0082, S86b): the caller already observed
+        // `atBlock` on the interactive lane, so the header and the calls go
+        // to the same lane, together. The header read is both the hash and
+        // the proof the endpoint still serves the block; a refusal there
+        // fails the read closed. A refused `eth_call` becomes a per-item
+        // failure through `allowFailure`, never a value from another block.
+        const readPinnedHead = async (): Promise<BscChainHead> => {
+          try {
+            const block = await pointReadAggregate.getBlock({
+              blockNumber: atBlock,
+            });
+            return Object.freeze({
+              blockNumber: atBlock,
+              blockHash: normalizeHex(block.hash),
+              observedAt: now().toISOString(),
+            });
+          } catch (error) {
+            throw new BscReadUnavailableError("BSC_PINNED_BLOCK_UNAVAILABLE", {
+              cause: error,
+              rpcError: summarizeRpcError(error),
+            });
+          }
+        };
+        [head, results] = await Promise.all([
+          readPinnedHead(),
+          items.length === 0
+            ? Promise.resolve([])
+            : pointReadAggregate.multicall({
+                allowFailure: true,
+                blockNumber: atBlock,
+                contracts,
+              }),
+        ]);
+      }
       if (items.length === 0) {
         return Object.freeze({ head, allowances: Object.freeze([]) });
       }
-      const ownerAddress = asAddress(owner);
-      const results = await aggregate.multicall({
-        allowFailure: true,
-        blockNumber: head.blockNumber,
-        contracts: items.map((item) => ({
-          address: asAddress(item.token),
-          abi: erc20AllowanceAbi,
-          functionName: "allowance" as const,
-          args: [ownerAddress, asAddress(item.spender)] as const,
-        })),
-      });
       return Object.freeze({
         head,
         allowances: Object.freeze(
