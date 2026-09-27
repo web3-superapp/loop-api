@@ -414,7 +414,18 @@ time through the same single-token Provider endpoint and the same cache rows,
 never the batch endpoint. A point read (head, balances) is given 2500 ms per RPC
 endpoint before the next endpoint is tried; scans and estimates keep 6000 ms. A
 launch slot that has not answered in 3000 ms is published as
-`LAUNCH_CHAIN_RPC_UNREACHABLE` and never gates the primary balances. `GET
+`LAUNCH_CHAIN_RPC_UNREACHABLE` and never gates the primary balances. Decision
+0082: every leg settles on its own — a launch-slot RPC timeout or HTTP failure
+is `LAUNCH_CHAIN_RPC_UNREACHABLE` (an unclassified launch failure
+`BSC_BALANCE_CALL_FAILED`), a failed USD1 pair leaves `usd1`/`launchUsd1`
+absent, a failed price read leaves every row `MARKET_PROVIDER_UNREACHABLE`;
+the primary block gets one hedged second read (started after 1500 ms without
+an answer, or at once after a transport failure or an unanswered chain-id
+probe; the first complete read wins) and only then fails as `503 CAPABILITY_UNAVAILABLE` with
+`detailsSafe.reasonCode: BSC_RPC_UNREACHABLE`, never `500`. Any V2 read route
+maps a stray `BscReadUnavailableError` or viem timeout/HTTP/socket failure to
+`503 CAPABILITY_UNAVAILABLE` (`detailsSafe.reasonCode`), and every V2
+`INTERNAL_ERROR` is logged at error level with the redacted cause. `GET
 /v2/wallets` reuses one Privy inventory observation for 30 s and reports in
 `source.observedAt` when Privy was actually read; the list itself is rebuilt
 from the database every call, so an active-wallet switch is immediate.
