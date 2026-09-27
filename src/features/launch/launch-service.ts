@@ -303,6 +303,8 @@ export interface LaunchHistoryResource {
   readonly purchaseRecords: readonly unknown[];
   readonly entitlements: readonly unknown[];
   readonly refunds: readonly unknown[];
+  /** Decision 0087: present only while `source` is available. */
+  readonly settlements?: readonly unknown[];
   readonly source:
     | UnavailableProjection
     | {
@@ -1651,6 +1653,7 @@ export function createLaunchService(
           purchaseRecords: records.purchaseRecords,
           entitlements: records.entitlements,
           refunds: records.refunds,
+          settlements: records.settlements,
           source: Object.freeze({
             status: "available" as const,
             indexedBlockNumber: checkpoint.lastBlockNumber,

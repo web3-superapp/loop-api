@@ -20,6 +20,7 @@ import {
   type LaunchAllowlistRootRecord,
   type LaunchChainRepository,
   type LaunchCheckpointRecord,
+  type LaunchIntentKind,
   type LaunchIntentRecord,
   type LaunchStateProjectionRecord,
   type RegisterLaunchSaleInput,
@@ -134,7 +135,7 @@ function mapRoot(raw: unknown): LaunchAllowlistRootRecord {
 }
 
 const intentColumns = `
-  intent_id, owner_user_id, wallet_id, launch_id, project_id, round_id,
+  intent_id, direction, owner_user_id, wallet_id, launch_id, project_id, round_id,
   round_index, sale_id::text as sale_id, chain_id, quote_asset_id, project_asset_id,
   pay_amount_raw::text as pay_amount_raw,
   expected_receive_raw::text as expected_receive_raw,
@@ -159,12 +160,13 @@ const intentReceiptSchema = z.object({
 
 const intentRowSchema = z.object({
   intent_id: uuidSchema,
+  direction: z.enum(["buy", "claim", "claim_refund"]),
   owner_user_id: uuidSchema,
   wallet_id: uuidSchema,
   launch_id: uuidSchema,
   project_id: uuidSchema,
-  round_id: uuidSchema,
-  round_index: z.number().int(),
+  round_id: uuidSchema.nullable(),
+  round_index: z.number().int().nullable(),
   sale_id: z.string(),
   chain_id: z.enum(launchChainIds),
   quote_asset_id: z.string(),
@@ -194,10 +196,45 @@ const intentRowSchema = z.object({
   revert_reason: z.string().nullable(),
 });
 
+/** Decision 0087: wire kind ↔ `launch_intents.direction`. */
+function kindFromDirection(
+  direction: "buy" | "claim" | "claim_refund",
+): LaunchIntentKind {
+  return direction === "claim_refund" ? "claimRefund" : direction;
+}
+
+function directionFromKind(
+  kind: LaunchIntentKind,
+): "buy" | "claim" | "claim_refund" {
+  return kind === "claimRefund" ? "claim_refund" : kind;
+}
+
+/**
+ * The event that settles an Intent of each kind (Decision 0087), as SQL over
+ * `li` (launch_intents) and `e` (launch_indexed_events) of the same launch
+ * (hence the same saleId) and transaction. A claim or refund log must also
+ * name the Intent's own wallet; a Purchased log keeps its 0077 rule.
+ */
+const intentEvidenceSql = `
+  e.event_name = case li.direction
+    when 'claim' then 'Claimed'
+    when 'claim_refund' then 'Refunded'
+    else 'Purchased'
+  end
+  and (
+    li.direction = 'buy'
+    or e.wallet_address = (
+      select aw.address from public.account_wallets as aw
+      where aw.wallet_id = li.wallet_id
+    )
+  )
+`;
+
 function mapIntent(raw: unknown): LaunchIntentRecord {
   const row = intentRowSchema.parse(raw);
   return Object.freeze({
     intentId: row.intent_id,
+    kind: kindFromDirection(row.direction),
     ownerUserId: row.owner_user_id,
     walletId: row.wallet_id,
     launchId: row.launch_id,
@@ -308,6 +345,53 @@ async function reprojectLaunch(
     `,
     values: [launchId, confirmedThroughBlockNumber],
   });
+  // Decision 0087: one settlement record per Claimed / Refunded log whose
+  // wallet resolves to exactly one LOOP account (reorged rows are kept).
+  await client.query({
+    text: `
+      with ${resolvedWalletsCte}
+      insert into public.launch_settlement_records (
+        launch_id, owner_user_id, wallet_id, chain_id, kind, asset_id,
+        amount_raw, cumulative_raw, transaction_hash, log_index, block_number,
+        block_hash, confirmation_state, removed
+      )
+      select
+        e.launch_id, w.owner_user_id, w.wallet_id, e.chain_id,
+        case e.event_name when 'Claimed' then 'claimed' else 'refunded' end,
+        case e.event_name when 'Claimed' then l.project_asset_id else l.quote_asset_id end,
+        case e.event_name
+          when 'Claimed' then (e.payload ->> 'tokenAmount')::numeric
+          else (e.payload ->> 'usd1Amount')::numeric
+        end,
+        case e.event_name
+          when 'Claimed' then (e.payload ->> 'cumulativeClaimed')::numeric
+          else (e.payload ->> 'cumulativeRefunded')::numeric
+        end,
+        e.transaction_hash, e.log_index, e.block_number, e.block_hash,
+        case
+          when e.removed then 'reorged'
+          when e.block_number <= $2::numeric then 'confirmed'
+          else 'pending'
+        end,
+        e.removed
+      from public.launch_indexed_events as e
+      join public.launches as l on l.launch_id = e.launch_id
+      join resolved as w on w.address = e.wallet_address
+      where e.launch_id = $1
+        and e.event_name in ('Claimed', 'Refunded')
+        and (
+          (e.event_name = 'Claimed' and l.project_asset_id is not null)
+          or (e.event_name = 'Refunded' and l.quote_asset_id is not null)
+        )
+      on conflict (transaction_hash, log_index) do update set
+        block_number = excluded.block_number,
+        block_hash = excluded.block_hash,
+        removed = excluded.removed,
+        confirmation_state = excluded.confirmation_state,
+        observed_at = clock_timestamp()
+    `,
+    values: [launchId, confirmedThroughBlockNumber],
+  });
   // A reported Intent is confirmed by a surviving Purchased log of its
   // transaction or by a finalized success receipt the reconcile lane stored
   // (Decision 0080, first evidence wins); a reorg of the log alone sends it
@@ -321,8 +405,9 @@ async function reprojectLaunch(
         state = case
           when exists (
             select 1 from public.launch_indexed_events as e
-            where e.launch_id = li.launch_id and e.event_name = 'Purchased'
+            where e.launch_id = li.launch_id
               and e.transaction_hash = li.transaction_hash and not e.removed
+              and ${intentEvidenceSql}
           ) or li.receipt ->> 'status' = 'success' then 'confirmed'
           when li.state = 'expired' then 'expired'
           else 'submitted'
@@ -715,6 +800,15 @@ export function createPostgresLaunchChainRepository(
           });
           await client.query({
             text: `
+              update public.launch_settlement_records
+              set confirmation_state = 'confirmed', observed_at = clock_timestamp()
+              where chain_id = $1 and not removed and confirmation_state = 'pending'
+                and block_number <= $2::numeric
+            `,
+            values: [input.chainId, confirmedThrough],
+          });
+          await client.query({
+            text: `
               insert into public.indexer_checkpoints (
                 lane, chain_id, last_block_number, last_block_hash,
                 started_from_block_number, reorg_count
@@ -804,9 +898,10 @@ export function createPostgresLaunchChainRepository(
         const launchId = uuidSchema.parse(input.launchId);
         const ownerUserId = uuidSchema.parse(input.ownerUserId);
         const limit = z.number().int().min(1).max(500).parse(input.limit);
-        const [purchases, entitlements, refunds] = await Promise.all([
-          pool.query<Record<string, unknown>>({
-            text: `
+        const [purchases, entitlements, refunds, settlements] =
+          await Promise.all([
+            pool.query<Record<string, unknown>>({
+              text: `
               select
                 pr.purchase_record_id, pr.wallet_id,
                 coalesce(pr.round_id, r.round_id) as round_id, pr.round_index,
@@ -822,10 +917,10 @@ export function createPostgresLaunchChainRepository(
               order by pr.block_number desc, pr.log_index desc
               limit $3
             `,
-            values: [launchId, ownerUserId, limit],
-          }),
-          pool.query<Record<string, unknown>>({
-            text: `
+              values: [launchId, ownerUserId, limit],
+            }),
+            pool.query<Record<string, unknown>>({
+              text: `
               select entitlement_id, wallet_id, total_raw::text as total_raw,
                 claimed_raw::text as claimed_raw, state,
                 frozen_at_block::text as frozen_at_block
@@ -834,10 +929,10 @@ export function createPostgresLaunchChainRepository(
               order by created_at, entitlement_id
               limit $3
             `,
-            values: [launchId, ownerUserId, limit],
-          }),
-          pool.query<Record<string, unknown>>({
-            text: `
+              values: [launchId, ownerUserId, limit],
+            }),
+            pool.query<Record<string, unknown>>({
+              text: `
               select refund_liability_id, wallet_id, amount_raw::text as amount_raw,
                 refunded_raw::text as refunded_raw, state,
                 frozen_at_block::text as frozen_at_block
@@ -846,9 +941,24 @@ export function createPostgresLaunchChainRepository(
               order by created_at, refund_liability_id
               limit $3
             `,
-            values: [launchId, ownerUserId, limit],
-          }),
-        ]);
+              values: [launchId, ownerUserId, limit],
+            }),
+            pool.query<Record<string, unknown>>({
+              text: `
+              select settlement_record_id, kind, wallet_id, asset_id,
+                amount_raw::text as amount_raw,
+                cumulative_raw::text as cumulative_raw,
+                transaction_hash, log_index,
+                block_number::text as block_number, block_hash,
+                confirmation_state, observed_at
+              from public.launch_settlement_records
+              where launch_id = $1 and owner_user_id = $2
+              order by block_number desc, log_index desc
+              limit $3
+            `,
+              values: [launchId, ownerUserId, limit],
+            }),
+          ]);
         return Object.freeze({
           purchaseRecords: Object.freeze(
             purchases.rows.map((row) =>
@@ -886,6 +996,28 @@ export function createPostgresLaunchChainRepository(
                 frozenAtBlock: blockSchema
                   .nullable()
                   .parse(row["frozen_at_block"]),
+              }),
+            ),
+          ),
+          settlements: Object.freeze(
+            settlements.rows.map((row) =>
+              Object.freeze({
+                settlementRecordId: uuidSchema.parse(
+                  row["settlement_record_id"],
+                ),
+                kind: z.enum(["claimed", "refunded"]).parse(row["kind"]),
+                walletId: uuidSchema.parse(row["wallet_id"]),
+                assetId: z.string().min(1).parse(row["asset_id"]),
+                amount: rawSchema.parse(row["amount_raw"]),
+                cumulativeAmount: rawSchema.parse(row["cumulative_raw"]),
+                transactionHash: hashSchema.parse(row["transaction_hash"]),
+                logIndex: z.number().int().parse(row["log_index"]),
+                blockNumber: blockSchema.parse(row["block_number"]),
+                blockHash: hashSchema.parse(row["block_hash"]),
+                confirmationState: z
+                  .enum(["pending", "confirmed", "reorged"])
+                  .parse(row["confirmation_state"]),
+                observedAt: toIsoString(dateSchema.parse(row["observed_at"])),
               }),
             ),
           ),
@@ -1170,7 +1302,7 @@ export function createPostgresLaunchChainRepository(
               eligibility_proof, unsigned_transaction, policy, idempotency_record_id
             )
             values (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, 'buy', $10::numeric, $11::numeric,
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $29, $10::numeric, $11::numeric,
               $12, $13::numeric, $14, $15, $16::numeric, $17, $18, $19, $20::timestamptz,
               $21::numeric, $22, $23::numeric, $24::timestamptz, $25::jsonb, $26::jsonb,
               $27::jsonb, $28
@@ -1184,7 +1316,7 @@ export function createPostgresLaunchChainRepository(
             uuidSchema.parse(built.walletId),
             uuidSchema.parse(built.launchId),
             uuidSchema.parse(built.projectId),
-            uuidSchema.parse(built.roundId),
+            built.roundId === null ? null : uuidSchema.parse(built.roundId),
             built.chainId,
             built.quoteAssetId,
             built.projectAssetId,
@@ -1207,6 +1339,7 @@ export function createPostgresLaunchChainRepository(
             JSON.stringify(built.unsignedTransaction),
             JSON.stringify(built.policy),
             claim.recordId,
+            directionFromKind(built.kind),
           ],
         });
         if (inserted.rows[0] !== undefined) {
@@ -1283,8 +1416,9 @@ export function createPostgresLaunchChainRepository(
                 reported_at = clock_timestamp(),
                 state = case when exists (
                   select 1 from public.launch_indexed_events as e
-                  where e.launch_id = li.launch_id and e.event_name = 'Purchased'
+                  where e.launch_id = li.launch_id
                     and e.transaction_hash = $3 and not e.removed
+                    and ${intentEvidenceSql}
                 ) then 'confirmed' else 'submitted' end,
                 reconcile_after = null,
                 updated_at = clock_timestamp()

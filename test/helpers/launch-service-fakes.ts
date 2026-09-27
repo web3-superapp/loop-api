@@ -216,6 +216,7 @@ export function chainRepositoryFake(
         ],
         entitlements: [],
         refunds: [],
+        settlements: [],
       }),
     getEconomyChain: () =>
       Promise.resolve({

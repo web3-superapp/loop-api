@@ -38,6 +38,7 @@ function record(
 ): LaunchIntentRecord {
   return {
     intentId,
+    kind: "buy",
     ownerUserId: "1c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
     walletId: "2c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
     launchId: "3c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",

@@ -93618,7 +93618,7 @@
         "operationId": "getV2LaunchHistory",
         "summary": "Get the caller's participation records for a launch",
         "tags": ["launch"],
-        "description": "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'.",
+        "description": "purchaseRecords, entitlements, and refunds are three separate objects (03 §8.3), projected by the launch_event lane for the caller's wallets (Decision 0077). While source is unavailable every list is empty and an empty list is never 'no participation'. Decision 0087: while source is available, settlements lists the caller's Claimed (kind claimed) and Refunded (kind refunded) events.",
         "parameters": [
           {
             "schema": {
@@ -93851,6 +93851,81 @@
                         }
                       },
                       "description": "Always empty while source is unavailable."
+                    },
+                    "settlements": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "settlementRecordId",
+                          "kind",
+                          "walletId",
+                          "assetId",
+                          "amount",
+                          "cumulativeAmount",
+                          "transactionHash",
+                          "logIndex",
+                          "blockNumber",
+                          "blockHash",
+                          "confirmationState",
+                          "observedAt"
+                        ],
+                        "properties": {
+                          "settlementRecordId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["claimed", "refunded"],
+                            "description": "claimed: a Claimed log (project token received). refunded: a Refunded log (USD1 returned)."
+                          },
+                          "walletId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "assetId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "description": "The project token (claimed) or USD1 (refunded) on the launch chain."
+                          },
+                          "amount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$",
+                            "description": "Claimed.tokenAmount or Refunded.usd1Amount, base units of assetId."
+                          },
+                          "cumulativeAmount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$",
+                            "description": "Claimed.cumulativeClaimed or Refunded.cumulativeRefunded after this log."
+                          },
+                          "transactionHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "logIndex": { "type": "integer", "minimum": 0 },
+                          "blockNumber": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,19})$"
+                          },
+                          "blockHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "confirmationState": {
+                            "type": "string",
+                            "enum": ["pending", "confirmed", "reorged"]
+                          },
+                          "observedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "description": "Optional (Decision 0087): present only while source is available (absent otherwise, so the unavailable bytes are unchanged). The caller's Claimed (kind claimed) and Refunded (kind refunded) events observed by the launch_event lane, newest first; reorged rows are kept with confirmationState reorged."
                     },
                     "source": {
                       "anyOf": [
@@ -94347,35 +94422,62 @@
     "/v2/launch/{launchId}/intents": {
       "post": {
         "operationId": "prepareV2LaunchIntent",
-        "summary": "Prepare a Launch purchase Intent",
+        "summary": "Prepare a Launch purchase, claim, or refund Intent",
         "tags": ["launch"],
-        "description": "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists.",
+        "description": "Decision 0077. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the Launch contract keys are blank. Otherwise every 06 §4.1 buy() check runs server-side at one snapshot block (LIVE, round window, not paused, minPurchase, wallet round/project caps, round/hard cap, deadline, allowlist proof) and the Decision 0065 canary applies with USD1 at 1 USD; a refusal carries detailsSafe.reasonCode. The 201 binds every 03 §8.2 field and the unsigned buy() transaction for the device signing exit. Idempotency-Key replays the same Intent. Separate from wallet intents; no sell or redeem exists. Decision 0087: body kind (default buy) also admits claim and claimRefund with walletId only. Both read the 0085 sale snapshot and getPosition at one block. claim needs entitlementState VESTING, operationalState ACTIVE, and claimableTokens > 0; claimRefund needs saleState FAILED or CANCELLED with entitlementState REFUNDING, ACTIVE, and refundableUsd1 > 0. Refusals are 409 DATA_STALE with detailsSafe.reasonCode LAUNCH_CLAIM_NOT_OPEN, LAUNCH_REFUND_NOT_OPEN, LAUNCH_SALE_PAUSED, LAUNCH_NOT_PARTICIPANT, LAUNCH_NOTHING_TO_CLAIM, or LAUNCH_NOTHING_TO_REFUND. The 201 carries kind, roundId and roundIndex null, and the unsigned claim(saleId) / claimRefund(saleId) transaction.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["walletId", "roundId", "payAmount"],
-                "properties": {
-                  "walletId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                "description": "Decision 0087: kind selects the contract call. Absent or buy: buy() with walletId, roundId, payAmount (the pre-0087 body). claim / claimRefund: claim(saleId) / claimRefund(saleId) with walletId only; a roundId or payAmount on them is INVALID_REQUEST.",
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["walletId", "roundId", "payAmount"],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "description": "Optional (Decision 0087); absent means buy.",
+                        "enum": ["buy"]
+                      },
+                      "walletId": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      },
+                      "roundId": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      },
+                      "payAmount": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                        "description": "USD1 amount as a decimal string; a JSON number is INVALID_REQUEST."
+                      }
+                    }
                   },
-                  "roundId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "payAmount": {
-                    "type": "string",
-                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
-                    "description": "USD1 amount as a decimal string; a JSON number is INVALID_REQUEST."
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "walletId"],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["claim", "claimRefund"]
+                      },
+                      "walletId": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
-          }
+          },
+          "description": "Decision 0087: kind selects the contract call. Absent or buy: buy() with walletId, roundId, payAmount (the pre-0087 body). claim / claimRefund: claim(saleId) / claimRefund(saleId) with walletId only; a roundId or payAmount on them is INVALID_REQUEST."
         },
         "parameters": [
           {
@@ -94469,6 +94571,11 @@
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["buy", "claim", "claimRefund"],
+                          "description": "Optional (Decision 0087): present on claim / claimRefund Intents only. Absent means buy, so a purchase keeps its pre-0087 bytes."
+                        },
                         "state": {
                           "type": "string",
                           "enum": [
@@ -94497,14 +94604,26 @@
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
                         "roundId": {
-                          "type": "string",
-                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The opaque round ID of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "roundIndex": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 65535,
-                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535,
+                              "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The contract's roundId of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "chainId": {
                           "type": "string",
@@ -94521,12 +94640,13 @@
                         },
                         "usd1Amount": {
                           "type": "string",
-                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "USD1 the wallet pays; 0 on claim / claimRefund."
                         },
                         "expectedTokenAmount": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
-                          "description": "quote() at the snapshot block."
+                          "description": "buy: quote() at the snapshot block. claim: getPosition.claimableTokens at the snapshot block. claimRefund: 0."
                         },
                         "minTokenAmount": {
                           "type": "string",
@@ -94644,6 +94764,16 @@
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
                           "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "claimableTokens": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claim only: getPosition.claimableTokens at snapshotBlockNumber (project token base units)."
+                        },
+                        "refundableUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claimRefund only: getPosition.refundableUsd1 at snapshotBlockNumber (USD1 base units)."
                         },
                         "walletRoundCapUsd1": {
                           "type": "string",
@@ -95349,9 +95479,9 @@
     "/v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report": {
       "post": {
         "operationId": "reportV2LaunchIntentBroadcast",
-        "summary": "Report the device broadcast of a Launch purchase Intent",
+        "summary": "Report the device broadcast of a Launch Intent",
         "tags": ["launch"],
-        "description": "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed when the launch_event lane indexes a Purchased log of that transaction or the reconcile lane reads its successful receipt at the launch slot's confirmation depth; a status 0x0 receipt settles it reverted, no receipt after the deadline plus grace expired (Decision 0080). History always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank.",
+        "description": "Decision 0077, same discipline as the wallet-intent broadcast report (0035): awaiting_signature → submitted with the reported txHash, verified against the sealed payload when the launch slot already sees the transaction (a mismatch is VALIDATION_FAILED / LAUNCH_TX_PAYLOAD_MISMATCH). Reporting the same hash again returns the Intent unchanged; another hash is DATA_STALE / LAUNCH_INTENT_ALREADY_REPORTED. A report past expiresAt is accepted only when the transaction is already observable. The report is pending evidence: state becomes confirmed when the launch_event lane indexes a Purchased log of that transaction or the reconcile lane reads its successful receipt at the launch slot's confirmation depth; a status 0x0 receipt settles it reverted, no receipt after the deadline plus grace expired (Decision 0080). History always reads the index. 503 CAPABILITY_UNAVAILABLE while BSC_WRITES_ENABLED is off or the contract keys are blank. Decision 0087: the same for claim / claimRefund Intents, confirmed by a Claimed / Refunded log of that transaction naming the Intent's wallet.",
         "requestBody": {
           "required": true,
           "content": {
@@ -95472,6 +95602,11 @@
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["buy", "claim", "claimRefund"],
+                          "description": "Optional (Decision 0087): present on claim / claimRefund Intents only. Absent means buy, so a purchase keeps its pre-0087 bytes."
+                        },
                         "state": {
                           "type": "string",
                           "enum": [
@@ -95500,14 +95635,26 @@
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
                         "roundId": {
-                          "type": "string",
-                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The opaque round ID of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "roundIndex": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 65535,
-                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535,
+                              "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The contract's roundId of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "chainId": {
                           "type": "string",
@@ -95524,12 +95671,13 @@
                         },
                         "usd1Amount": {
                           "type": "string",
-                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "USD1 the wallet pays; 0 on claim / claimRefund."
                         },
                         "expectedTokenAmount": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
-                          "description": "quote() at the snapshot block."
+                          "description": "buy: quote() at the snapshot block. claim: getPosition.claimableTokens at the snapshot block. claimRefund: 0."
                         },
                         "minTokenAmount": {
                           "type": "string",
@@ -95647,6 +95795,16 @@
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
                           "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "claimableTokens": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claim only: getPosition.claimableTokens at snapshotBlockNumber (project token base units)."
+                        },
+                        "refundableUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claimRefund only: getPosition.refundableUsd1 at snapshotBlockNumber (USD1 base units)."
                         },
                         "walletRoundCapUsd1": {
                           "type": "string",
@@ -96352,9 +96510,9 @@
     "/v2/launch/{launchId}/intents/{launchIntentId}": {
       "get": {
         "operationId": "getV2LaunchIntent",
-        "summary": "Get one Launch purchase Intent",
+        "summary": "Get one Launch Intent",
         "tags": ["launch"],
-        "description": "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane.",
+        "description": "Decision 0081. The same launchIntent projection as the prepare 201 and the broadcast report: every 03 §8.2 field, the unsigned buy() transaction, state including the Decision 0080 settlements (reverted, expired, failed) and revertReason present only on a reverted Intent, and transactionHash as lowercase 0x-prefixed 64 hex or null. Readable only by the owning account; another account's Intent, an unknown id, or an Intent of another launch is NOT_FOUND without enumeration. 503 CAPABILITY_UNAVAILABLE with the unchanged body while BSC_WRITES_ENABLED is off or the contract keys are blank. A read never advances state; confirmation still comes only from the launch_event lane or the reconcile lane. Decision 0087: claim / claimRefund Intents carry kind; a buy has none.",
         "parameters": [
           {
             "schema": {
@@ -96447,6 +96605,11 @@
                           "type": "string",
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["buy", "claim", "claimRefund"],
+                          "description": "Optional (Decision 0087): present on claim / claimRefund Intents only. Absent means buy, so a purchase keeps its pre-0087 bytes."
+                        },
                         "state": {
                           "type": "string",
                           "enum": [
@@ -96475,14 +96638,26 @@
                           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                         },
                         "roundId": {
-                          "type": "string",
-                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The opaque round ID of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "roundIndex": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 65535,
-                          "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535,
+                              "description": "The contract's roundId (uint16, 06 §4.2). Equals launch_rounds.roundIndex; LOOP's roundId stays the opaque round ID (Decision 0076)."
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The contract's roundId of a buy; null on claim / claimRefund (Decision 0087)."
                         },
                         "chainId": {
                           "type": "string",
@@ -96499,12 +96674,13 @@
                         },
                         "usd1Amount": {
                           "type": "string",
-                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "USD1 the wallet pays; 0 on claim / claimRefund."
                         },
                         "expectedTokenAmount": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
-                          "description": "quote() at the snapshot block."
+                          "description": "buy: quote() at the snapshot block. claim: getPosition.claimableTokens at the snapshot block. claimRefund: 0."
                         },
                         "minTokenAmount": {
                           "type": "string",
@@ -96622,6 +96798,16 @@
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$",
                           "description": "Optional (0077): the contract's saleId, decimal string."
+                        },
+                        "claimableTokens": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claim only: getPosition.claimableTokens at snapshotBlockNumber (project token base units)."
+                        },
+                        "refundableUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Optional (Decision 0087), claimRefund only: getPosition.refundableUsd1 at snapshotBlockNumber (USD1 base units)."
                         },
                         "walletRoundCapUsd1": {
                           "type": "string",

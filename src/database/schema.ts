@@ -1,4 +1,4 @@
-export const latestMigrationName = "000043_v2_launch_intent_reconcile";
+export const latestMigrationName = "000044_v2_launch_claim_refund_intents";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -113,4 +113,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch_indexed_events",
   "public.launch_allowlists",
   "public.launch_round_allowlist_roots",
+  "public.launch_settlement_records",
 ] as const);
