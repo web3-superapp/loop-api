@@ -288,3 +288,11 @@ launch:register-sale … --rescan` (resets the lane). A dedicated
 ## Amendment S83b6 (2026-09-27, Decision 0084)
 
 Intent refusal table, new row: `403 POLICY_BLOCKED` / `TIER_MODE_PENDING` — the round's on-chain `allowlistRoot` is non-zero while `tierModeV1` is unconfirmed. A zero root (open round) never hits this.
+
+## Amendment S83b7 (2026-09-27): overview segments follow the projected sale axis
+
+- **Problem.** `GET /v2/launch/overview` segmented only by `launches.schedule_status`. Sales registered with `pnpm launch:register-sale` never go through LOOP scheduling, so a sale that is `LIVE` on chain (and on the detail page) sat in `awaitingSchedule`.
+- **Rule.** A summary whose `onChainState.source` is `chain` — i.e. the adapter is available, the sale is registered on the configured contract/version, the lane has a checkpoint, and the launch has a projection row — is segmented by `saleState`: `SCHEDULED` → `upcoming`, `LIVE` → `live`, `ENDED` / `SUCCEEDED` / `FAILED` / `CANCELLED` → `ended`. Every other summary (no contract, unregistered, contract mismatch, no checkpoint, no projection row, projection read failed) keeps the `scheduleStatus` rule byte for byte. A projected sale is therefore never in `awaitingSchedule`.
+- **Unchanged.** `scheduleStatus` is not rewritten (it still describes LOOP-side scheduling); no schema shape change (only the four segment `description`s in the OpenAPI); no new reason code; no migration. With the four `LAUNCH_*` keys blank the response is byte-identical to the S83a baseline (regression fixtures pass).
+- **`graduated` not changed.** The overview schema declares `graduated` as `unavailableSchema` only — S83a froze no `available` branch for it (Decision 0076 ruling 5). Publishing the `liquidityState ∈ {LP_LOCKED, COMPLETED}` list needs a new union branch, i.e. a shape change, which this amendment is not allowed to make. It stays `unavailable(LAUNCH_CONTRACT_BASELINE_PENDING)` in every state until the main agent rules on a shape.
+- **Hero copy.** The overview carries no top-level on-chain availability field; the list page's "链上状态、价格与毕业进度暂时读不到 / OFF-CHAIN" caption is a client constant (`loop-mobile/lib/features/launch/launch_screen.dart`), not a server field. The client can derive it from `segments.*[].onChainState.source`.

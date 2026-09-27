@@ -84748,7 +84748,8 @@
                                 "format": "date-time"
                               }
                             }
-                          }
+                          },
+                          "description": "onChainState.saleState = LIVE when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = live."
                         },
                         "upcoming": {
                           "type": "array",
@@ -84982,7 +84983,7 @@
                               }
                             }
                           },
-                          "description": "scheduleStatus = scheduled only."
+                          "description": "onChainState.saleState = SCHEDULED when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = scheduled only."
                         },
                         "awaitingSchedule": {
                           "type": "array",
@@ -85216,7 +85217,7 @@
                               }
                             }
                           },
-                          "description": "scheduleStatus = unscheduled: approved catalog entries with no schedule yet; never merged into upcoming."
+                          "description": "scheduleStatus = unscheduled and no on-chain projection (onChainState.source is unavailable): approved catalog entries with no schedule yet; never merged into upcoming."
                         },
                         "ended": {
                           "type": "array",
@@ -85449,7 +85450,8 @@
                                 "format": "date-time"
                               }
                             }
-                          }
+                          },
+                          "description": "onChainState.saleState in ENDED, SUCCEEDED, FAILED, CANCELLED when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = ended."
                         }
                       }
                     },
