@@ -680,6 +680,24 @@ Base URL：`https://api-dev.<域名>`（与其它 V2 模块相同）。Headers�
 `LAUNCH_ONCHAIN_STATE_NOT_PROJECTED`（有检查点但这个 sale 还没投影到），其余沿用 S83a。
 `snapshotBlockNumber` 是投影区块，可能落后链头几个块。
 
+#### S83b7 补充：分段按链上 `saleState` 推导（决策 0077 修订 S83b7）
+
+列表项 `onChainState.source == "chain"`（合约可用 + sale 已登记且合约地址/版本一致 + lane 有检查点 + 该 launch 有投影行）时，分段由 `saleState` 决定：
+
+| `saleState`                                    | 分段       |
+| ---------------------------------------------- | ---------- |
+| `SCHEDULED`                                    | `upcoming` |
+| `LIVE`                                         | `live`     |
+| `ENDED` / `SUCCEEDED` / `FAILED` / `CANCELLED` | `ended`    |
+
+其余列表项（`source == "unavailable"`，任何 reasonCode）仍按 `scheduleStatus`：`live`→`live`、`scheduled`→`upcoming`、`unscheduled`→`awaitingSchedule`、`ended`→`ended`。
+
+- `scheduleStatus` 字段**不改**：一个 `scheduleStatus: "unscheduled"` 的项可以出现在 `live` 分段里（用 `register-sale` 登记、没走 LOOP 排期的 sale 就是这样）。客户端**不要**再用 `scheduleStatus` 重新分段，直接用服务端给的四个数组。
+- 有投影的 sale 永远不会出现在 `awaitingSchedule`。
+- 响应形状不变、无新错误码、无新 reasonCode；四个 `LAUNCH_*` 键为空时字节与 S83a 基线相同。
+- `graduated` 本单**不变**：OpenAPI 中它只有 `unavailable` 分支（`LAUNCH_CONTRACT_BASELINE_PENDING`），没有冻结的 `available` 形状，待主代理定形状后另开单。
+- 列表页 hero 的「链上状态、价格与毕业进度暂时读不到」与 `OFF-CHAIN` 是客户端常量，服务端没有对应字段；如需随链上状态变化，请按 `segments.*[].onChainState.source` 在客户端推导。
+
 ### S83b.3 `GET /v2/launch/{launchId}/holders`
 
 ```json

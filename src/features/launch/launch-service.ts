@@ -531,6 +531,43 @@ function summaryProjection(
   });
 }
 
+type LaunchOverviewSegment = "live" | "upcoming" | "awaitingSchedule" | "ended";
+
+/**
+ * The overview segment of one summary (Decision 0077, S83b7). The sale axis
+ * decides only when the summary carries the lane's projection (`source:
+ * "chain"`, which requires a registered sale on the configured contract);
+ * otherwise the LOOP schedule decides, exactly as before.
+ */
+function overviewSegment(
+  summary: LaunchSummaryProjection,
+): LaunchOverviewSegment {
+  const state = summary.onChainState;
+  if (state.source === "chain") {
+    switch (state.saleState) {
+      case "SCHEDULED":
+        return "upcoming";
+      case "LIVE":
+        return "live";
+      case "ENDED":
+      case "SUCCEEDED":
+      case "FAILED":
+      case "CANCELLED":
+        return "ended";
+    }
+  }
+  switch (summary.scheduleStatus) {
+    case "live":
+      return "live";
+    case "scheduled":
+      return "upcoming";
+    case "unscheduled":
+      return "awaitingSchedule";
+    case "ended":
+      return "ended";
+  }
+}
+
 function configSlot(
   config: LaunchConfigRecord,
   key: keyof LaunchConfigProjection["slots"],
@@ -1228,24 +1265,19 @@ export function createLaunchService(
             publishedContractAddress(record.launch),
           ),
         );
+        // Decision 0077 S83b7: a registered sale with a lane projection is
+        // segmented by its on-chain sale axis; every other launch keeps the
+        // LOOP-side schedule. `scheduleStatus` itself is never rewritten.
+        const inSegment = (segment: LaunchOverviewSegment) =>
+          Object.freeze(
+            summaries.filter((launch) => overviewSegment(launch) === segment),
+          );
         return Object.freeze({
           segments: Object.freeze({
-            live: Object.freeze(
-              summaries.filter((launch) => launch.scheduleStatus === "live"),
-            ),
-            upcoming: Object.freeze(
-              summaries.filter(
-                (launch) => launch.scheduleStatus === "scheduled",
-              ),
-            ),
-            awaitingSchedule: Object.freeze(
-              summaries.filter(
-                (launch) => launch.scheduleStatus === "unscheduled",
-              ),
-            ),
-            ended: Object.freeze(
-              summaries.filter((launch) => launch.scheduleStatus === "ended"),
-            ),
+            live: inSegment("live"),
+            upcoming: inSegment("upcoming"),
+            awaitingSchedule: inSegment("awaitingSchedule"),
+            ended: inSegment("ended"),
           }),
           // "Graduated" is a projection of the liquidity axis, which has no
           // contract baseline; it is never derived from scheduleStatus.

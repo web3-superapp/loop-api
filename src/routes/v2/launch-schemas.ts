@@ -461,21 +461,34 @@ export const overviewResourceSchema = {
       additionalProperties: false,
       required: ["live", "upcoming", "awaitingSchedule", "ended"],
       properties: {
-        live: { type: "array", maxItems: 200, items: launchSummarySchema },
+        live: {
+          type: "array",
+          maxItems: 200,
+          items: launchSummarySchema,
+          description:
+            "onChainState.saleState = LIVE when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = live.",
+        },
         upcoming: {
           type: "array",
           maxItems: 200,
           items: launchSummarySchema,
-          description: "scheduleStatus = scheduled only.",
+          description:
+            "onChainState.saleState = SCHEDULED when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = scheduled only.",
         },
         awaitingSchedule: {
           type: "array",
           maxItems: 200,
           items: launchSummarySchema,
           description:
-            "scheduleStatus = unscheduled: approved catalog entries with no schedule yet; never merged into upcoming.",
+            "scheduleStatus = unscheduled and no on-chain projection (onChainState.source is unavailable): approved catalog entries with no schedule yet; never merged into upcoming.",
         },
-        ended: { type: "array", maxItems: 200, items: launchSummarySchema },
+        ended: {
+          type: "array",
+          maxItems: 200,
+          items: launchSummarySchema,
+          description:
+            "onChainState.saleState in ENDED, SUCCEEDED, FAILED, CANCELLED when onChainState.source is chain (Decision 0077, S83b7); otherwise scheduleStatus = ended.",
+        },
       },
     },
     graduated: unavailableSchema,

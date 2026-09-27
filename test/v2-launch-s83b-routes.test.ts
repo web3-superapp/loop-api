@@ -135,6 +135,109 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     });
   });
 
+  describe("overview segments follow the sale axis of a projected sale (S83b7)", () => {
+    const unscheduled = (saleId: string | null = "7"): LaunchDetailRecord => {
+      const detail = registeredDetail();
+      return {
+        ...detail,
+        launch: { ...detail.launch, saleId, scheduleStatus: "unscheduled" },
+      };
+    };
+    const projectedAs = (saleState: string): LaunchChainRepository => {
+      const base = chainRepositoryFake();
+      return {
+        ...base,
+        listStateProjections: async (ids) => {
+          const map = await base.listStateProjections(ids);
+          return new Map(
+            [...map].map(([id, record]) => [
+              id,
+              { ...record, saleState } as typeof record,
+            ]),
+          );
+        },
+      };
+    };
+    const segmentsOf = async (app: FastifyInstance) => {
+      const response = await get(app, "/v2/launch/overview");
+      expect(response.statusCode).toBe(200);
+      const segments = response.json<{
+        segments: Record<
+          string,
+          { launchId: string; scheduleStatus: string }[]
+        >;
+      }>().segments;
+      return Object.fromEntries(
+        Object.entries(segments).map(([name, list]) => [
+          name,
+          list.map((item) => `${item.launchId}:${item.scheduleStatus}`),
+        ]),
+      );
+    };
+    const only = (segment: string) => ({
+      live: segment === "live" ? [`${launchId}:unscheduled`] : [],
+      upcoming: segment === "upcoming" ? [`${launchId}:unscheduled`] : [],
+      awaitingSchedule:
+        segment === "awaitingSchedule" ? [`${launchId}:unscheduled`] : [],
+      ended: segment === "ended" ? [`${launchId}:unscheduled`] : [],
+    });
+
+    it.each([
+      ["SCHEDULED", "upcoming"],
+      ["LIVE", "live"],
+      ["ENDED", "ended"],
+      ["SUCCEEDED", "ended"],
+      ["FAILED", "ended"],
+      ["CANCELLED", "ended"],
+    ])(
+      "registered + %s projection lands in %s; scheduleStatus stays unscheduled",
+      async (saleState, segment) => {
+        const app = await createApp({
+          detail: unscheduled(),
+          chain: projectedAs(saleState),
+        });
+        expect(await segmentsOf(app)).toEqual(only(segment));
+      },
+    );
+
+    it("an unregistered sale keeps its schedule segment", async () => {
+      const app = await createApp({ detail: unscheduled(null) });
+      expect(await segmentsOf(app)).toEqual(only("awaitingSchedule"));
+    });
+
+    it("a registered sale without a checkpoint keeps its schedule segment", async () => {
+      const app = await createApp({
+        detail: unscheduled(),
+        chain: chainRepositoryFake({ checkpoint: null }),
+      });
+      expect(await segmentsOf(app)).toEqual(only("awaitingSchedule"));
+    });
+
+    it("a registered sale with no projection row keeps its schedule segment", async () => {
+      const app = await createApp({
+        detail: unscheduled(),
+        chain: {
+          ...chainRepositoryFake(),
+          listStateProjections: () => Promise.resolve(new Map()),
+        },
+      });
+      expect(await segmentsOf(app)).toEqual(only("awaitingSchedule"));
+    });
+
+    it("graduated keeps its frozen unavailable branch (no available branch in the OpenAPI)", async () => {
+      const app = await createApp({
+        detail: unscheduled(),
+        chain: projectedAs("SUCCEEDED"),
+      });
+      expect((await get(app, "/v2/launch/overview")).json()).toMatchObject({
+        graduated: {
+          status: "unavailable",
+          reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+        },
+      });
+    });
+  });
+
   it("holders: index count, getPosition, and the wallet caps at one block", async () => {
     const app = await createApp();
     const response = await get(app, `/v2/launch/${launchId}/holders`);
