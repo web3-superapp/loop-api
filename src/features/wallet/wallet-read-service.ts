@@ -386,14 +386,21 @@ export interface CreateWalletReadServiceInput {
   readonly primaryReadHedgeDelayMs?: number;
   /**
    * How long one Privy wallet inventory observation may be reused before the
-   * Provider is asked again (Decision 0063). Zero disables the reuse.
+   * Provider is asked again (Decisions 0063, 0086). Past half of it a call
+   * is still answered from the observation and Privy is re-read beside it.
+   * Zero disables the reuse.
    */
   readonly walletInventoryTtlMs?: number;
   readonly now?: () => Date;
 }
 
-/** Default reuse window for the Privy wallet inventory observation. */
-export const defaultWalletInventoryTtlMs = 30_000;
+/**
+ * Default reuse window for the Privy wallet inventory observation. Decision
+ * 0086 raised it from 30 s to 60 s, the ceiling the coordinator set: one
+ * Privy user read costs 280–1100 ms from the API host (measured 2026-09-27),
+ * which was the whole of a slow `GET /v2/wallets`.
+ */
+export const defaultWalletInventoryTtlMs = 60_000;
 
 /**
  * Per-request leg timings for one balances read. `measure` starts the clock
@@ -869,10 +876,35 @@ async function projectLaunchChainNative(
 interface WalletInventoryObservation {
   readonly wallets: readonly PrivyWalletAccount[];
   readonly observedAt: string;
+  /** When the Privy read was started; the reuse window counts from here. */
+  readonly requestedAtMs: number;
   readonly expiresAtMs: number;
 }
 
 const walletInventoryCacheMaxEntries = 1_000;
+
+/** Stop waiting for a shared read when this caller's request is aborted. */
+function raceAbort<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(new Error("aborted"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(new Error("aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    read.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error("read failed"));
+      },
+    );
+  });
+}
 
 export function createWalletReadService(
   input: CreateWalletReadServiceInput,
@@ -881,6 +913,47 @@ export function createWalletReadService(
   const walletInventoryTtlMs =
     input.walletInventoryTtlMs ?? defaultWalletInventoryTtlMs;
   const walletInventoryCache = new Map<string, WalletInventoryObservation>();
+  /** One Privy inventory read per subject at a time (Decision 0086). */
+  const walletInventoryReads = new Map<
+    string,
+    Promise<WalletInventoryObservation>
+  >();
+
+  /**
+   * Read the Privy inventory for one subject. Concurrent callers share the
+   * read, so it is not bound to any one caller's abort signal: the SDK's own
+   * 4 s timeout bounds it, and a caller that went away simply stops waiting.
+   * The observation is remembered whatever caller asked for it.
+   */
+  function observeInventory(
+    privyUserId: string,
+  ): Promise<WalletInventoryObservation> {
+    const pending = walletInventoryReads.get(privyUserId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const tracked = (async (): Promise<WalletInventoryObservation> => {
+      const requestedAtMs = now().getTime();
+      const observed = await input.walletReader.listEthereumWallets({
+        privyUserId,
+        signal: new AbortController().signal,
+      });
+      const observation: WalletInventoryObservation = Object.freeze({
+        wallets: observed,
+        observedAt: now().toISOString(),
+        requestedAtMs,
+        expiresAtMs: requestedAtMs + walletInventoryTtlMs,
+      });
+      rememberInventory(privyUserId, observation);
+      return observation;
+    })().finally(() => {
+      if (walletInventoryReads.get(privyUserId) === tracked) {
+        walletInventoryReads.delete(privyUserId);
+      }
+    });
+    walletInventoryReads.set(privyUserId, tracked);
+    return tracked;
+  }
 
   function rememberInventory(
     privyUserId: string,
@@ -1073,22 +1146,22 @@ export function createWalletReadService(
       let observation: WalletInventoryObservation;
       if (cached !== undefined && cached.expiresAtMs > nowMs) {
         observation = cached;
+        // Past half the window the observation is still served, and Privy
+        // is re-read beside this call (Decision 0086), so a user who keeps
+        // using the app never waits for Privy while every answer stays
+        // inside the window.
+        if (nowMs - cached.requestedAtMs >= walletInventoryTtlMs / 2) {
+          observeInventory(principal.privyUserId).catch(() => undefined);
+        }
       } else {
-        let observed: readonly PrivyWalletAccount[];
         try {
-          observed = await input.walletReader.listEthereumWallets({
-            privyUserId: principal.privyUserId,
+          observation = await raceAbort(
+            observeInventory(principal.privyUserId),
             signal,
-          });
+          );
         } catch {
           throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
         }
-        observation = Object.freeze({
-          wallets: observed,
-          observedAt: now().toISOString(),
-          expiresAtMs: nowMs + walletInventoryTtlMs,
-        });
-        rememberInventory(principal.privyUserId, observation);
       }
       let records;
       try {

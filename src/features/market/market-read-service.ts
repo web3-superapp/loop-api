@@ -65,6 +65,7 @@ import {
   selectPrimaryPair,
   type CachedFact,
   type MarketFactService,
+  type RememberedPriceChange,
   type UnlistedTokenFact,
 } from "./market-fact-service.js";
 import {
@@ -461,8 +462,35 @@ export interface CreateMarketReadServiceInput {
    * other fact uses.
    */
   readonly staleGraceSeconds: number;
+  /**
+   * How long the overview waits for its Provider reads before it answers
+   * from what it has (Decision 0086). Defaults to
+   * `marketOverviewProviderDeadlineMs`.
+   */
+  readonly overviewProviderDeadlineMs?: number;
   readonly now?: () => Date;
   readonly createRecommendationId?: () => string;
+}
+
+/**
+ * The overview's Provider deadline (Decision 0086). The adapters' own
+ * timeout is 8 s, which is what one stalled DexScreener or GeckoTerminal
+ * request used to cost the whole landing page (2026-09-27, 8422 ms). Past
+ * this deadline the read is abandoned and every fact takes the path it takes
+ * for an unreachable Provider: the cached value inside its stale grace as
+ * `stale`, otherwise `unavailable` with `MARKET_PROVIDER_UNREACHABLE`.
+ */
+export const marketOverviewProviderDeadlineMs = 1_200;
+
+/**
+ * Reads shared by every row of one overview request (Decision 0086): the
+ * batched pairs answer, and the remembered 24h changes, so an address that
+ * appears in the watchlist and in the trending scan (or the native asset
+ * and WBNB) is read once.
+ */
+interface PairFactsMemo {
+  readonly prefetched: ReadonlyMap<string, CachedFact<TokenPairsSnapshot>>;
+  readonly recalled: Map<string, Promise<RememberedPriceChange | null>>;
 }
 
 const tradesCursorRoute = "marketTrades";
@@ -700,6 +728,8 @@ export function createMarketReadService(
 ): MarketReadService {
   const now = input.now ?? ((): Date => new Date());
   const createRecommendationId = input.createRecommendationId ?? randomUUID;
+  const overviewProviderDeadlineMs =
+    input.overviewProviderDeadlineMs ?? marketOverviewProviderDeadlineMs;
 
   async function requireAsset(assetId: unknown): Promise<AssetRecord> {
     const resolved = await resolveAsset(assetId);
@@ -915,7 +945,7 @@ export function createMarketReadService(
   async function pairFactsFor(
     asset: AssetRecord,
     signal: AbortSignal | undefined,
-    prefetched?: ReadonlyMap<string, CachedFact<TokenPairsSnapshot>>,
+    memo?: PairFactsMemo,
   ): Promise<PairFacts> {
     if (asset.status === "blocked") {
       return pairFactsFromSnapshot({
@@ -932,7 +962,7 @@ export function createMarketReadService(
     // published as `proxied`; nothing else is ever substituted.
     const address = asset.address ?? bscWrappedNativeAddress;
     const fact =
-      prefetched?.get(address) ??
+      memo?.prefetched.get(address) ??
       (await input.facts.readTokenPairs(
         address,
         signal === undefined ? {} : { signal },
@@ -947,10 +977,14 @@ export function createMarketReadService(
       facts.priceChange24h.quality === "unavailable" &&
       facts.priceChange24h.reasonCode === marketReasonCodes.factMissing
     ) {
-      const remembered = await input.facts.recallPrimaryPairPriceChange(
-        address,
-        facts.primaryPair.pairAddress,
-      );
+      const pairAddress = facts.primaryPair.pairAddress;
+      const recallKey = `${address}|${pairAddress}`;
+      let recall = memo?.recalled.get(recallKey);
+      if (recall === undefined) {
+        recall = input.facts.recallPrimaryPairPriceChange(address, pairAddress);
+        memo?.recalled.set(recallKey, recall);
+      }
+      const remembered = await recall;
       if (remembered !== null) {
         return Object.freeze({
           ...facts,
@@ -1098,33 +1132,66 @@ export function createMarketReadService(
   const service: MarketReadService = {
     async getOverview({ principal, signal }) {
       const observedAt = now().toISOString();
-      const readable = await input.registry.listReadableAssets(input.chainId);
+      // Decision 0086: the registry and the watchlist are independent reads,
+      // and the watchlist is read once for both the row set and the block.
+      const [readable, snapshot] = await Promise.all([
+        input.registry.listReadableAssets(input.chainId),
+        input.watchlist === null
+          ? Promise.resolve(null)
+          : input.watchlist.get(principal.userId),
+      ]);
       const byId = new Map(readable.map((asset) => [asset.assetId, asset]));
       // One batched Provider read covers the watchlist and the trending scan.
       const scanned = readable.slice(0, trendingScanLimit);
       const watchlistIds = new Set<string>();
-      if (input.watchlist !== null) {
-        for (const group of (await input.watchlist.get(principal.userId))
-          .groups) {
+      if (snapshot !== null) {
+        for (const group of snapshot.groups) {
           for (const item of group.items) {
             watchlistIds.add(item.assetId);
           }
         }
       }
       const rowAddresses = [
-        ...scanned,
-        ...readable.filter((asset) => watchlistIds.has(asset.assetId)),
-      ].map((asset) => asset.address ?? bscWrappedNativeAddress);
-      const prefetched = await input.facts.readTokenPairsBatch(
-        rowAddresses,
-        signal === undefined ? {} : { signal },
-      );
-      // Row sparklines (Decision 0074): one cache read for every row, never
-      // a Provider call. A disabled OHLCV Provider publishes nothing, as
-      // for every other fact of a disabled Provider.
-      const sparklineRows = input.facts.candlesProviderEnabled
-        ? await readSparklineRows(input.cache, [...new Set(rowAddresses)])
-        : new Map<string, MarketFactCacheRecord>();
+        ...new Set(
+          [
+            ...scanned,
+            ...readable.filter((asset) => watchlistIds.has(asset.assetId)),
+          ].map((asset) => asset.address ?? bscWrappedNativeAddress),
+        ),
+      ];
+      // Both Provider reads of the page (the pairs batch and the new-pools
+      // list) and the sparkline cache read go out together, under one
+      // deadline (Decision 0086). A read cut off by the deadline is answered
+      // exactly as an unreachable Provider: stale inside the grace window,
+      // otherwise unavailable, row by row.
+      const providerSignal = AbortSignal.any([
+        ...(signal === undefined ? [] : [signal]),
+        AbortSignal.timeout(overviewProviderDeadlineMs),
+      ]);
+      const [prefetched, sparklineRows, newPoolsFact] = await Promise.all([
+        input.facts.readTokenPairsBatch(rowAddresses, {
+          signal: providerSignal,
+        }),
+        // Row sparklines (Decision 0074): one cache read for every row,
+        // never a Provider call. A disabled OHLCV Provider publishes
+        // nothing, as for every other fact of a disabled Provider.
+        input.facts.candlesProviderEnabled
+          ? readSparklineRows(input.cache, rowAddresses)
+          : Promise.resolve(new Map<string, MarketFactCacheRecord>()),
+        input.facts.candlesProviderEnabled
+          ? input.facts.readNewPools({ signal: providerSignal })
+          : Promise.resolve(null),
+      ]);
+      const memo: PairFactsMemo = { prefetched, recalled: new Map() };
+      const factsByAsset = new Map<string, Promise<PairFacts>>();
+      const factsOf = (asset: AssetRecord): Promise<PairFacts> => {
+        let facts = factsByAsset.get(asset.assetId);
+        if (facts === undefined) {
+          facts = pairFactsFor(asset, signal, memo);
+          factsByAsset.set(asset.assetId, facts);
+        }
+        return facts;
+      };
       const nowMs = now().getTime();
       const sparklineFor = (asset: AssetRecord): SparklineProjection => {
         if (asset.status === "blocked") {
@@ -1146,12 +1213,11 @@ export function createMarketReadService(
       };
 
       let watchlist: MarketOverviewResource["watchlist"];
-      if (input.watchlist === null) {
+      if (snapshot === null) {
         watchlist = unavailableBlock(marketReasonCodes.watchlistUnavailable);
       } else {
-        const snapshot = await input.watchlist.get(principal.userId);
         const seen = new Set<string>();
-        const rows: MarketAssetRow[] = [];
+        const pending: Promise<MarketAssetRow>[] = [];
         for (const group of snapshot.groups) {
           for (const item of group.items) {
             if (seen.has(item.assetId)) {
@@ -1160,37 +1226,41 @@ export function createMarketReadService(
             seen.add(item.assetId);
             const asset = byId.get(item.assetId);
             if (asset === undefined) {
-              rows.push(
-                Object.freeze({
-                  assetId: item.assetId,
-                  asset: null,
-                  // The rule URL follows from the address alone; a row the
-                  // registry cannot vouch for still shows its picture.
-                  logo: projectTokenLogoForAssetId(item.assetId),
-                  price: unavailableFact("ASSET_NOT_READABLE"),
-                  priceChange24h: unavailableFact("ASSET_NOT_READABLE"),
-                  sparkline: unavailableSparkline("ASSET_NOT_READABLE"),
-                }),
+              pending.push(
+                Promise.resolve(
+                  Object.freeze({
+                    assetId: item.assetId,
+                    asset: null,
+                    // The rule URL follows from the address alone; a row the
+                    // registry cannot vouch for still shows its picture.
+                    logo: projectTokenLogoForAssetId(item.assetId),
+                    price: unavailableFact("ASSET_NOT_READABLE"),
+                    priceChange24h: unavailableFact("ASSET_NOT_READABLE"),
+                    sparkline: unavailableSparkline("ASSET_NOT_READABLE"),
+                  }),
+                ),
               );
               continue;
             }
-            const facts = await pairFactsFor(asset, signal, prefetched);
-            rows.push(
-              Object.freeze({
-                assetId: asset.assetId,
-                asset: summarize(asset),
-                logo: projectTokenLogo({
-                  chainId: asset.chainId,
-                  address: asset.address,
-                  providerImage: facts.logoImage,
+            pending.push(
+              factsOf(asset).then((facts) =>
+                Object.freeze({
+                  assetId: asset.assetId,
+                  asset: summarize(asset),
+                  logo: projectTokenLogo({
+                    chainId: asset.chainId,
+                    address: asset.address,
+                    providerImage: facts.logoImage,
+                  }),
+                  price: facts.price,
+                  priceChange24h: facts.priceChange24h,
+                  sparkline: sparklineFor(asset),
                 }),
-                price: facts.price,
-                priceChange24h: facts.priceChange24h,
-                sparkline: sparklineFor(asset),
-              }),
+              ),
             );
           }
         }
+        const rows = await Promise.all(pending);
         watchlist = Object.freeze({
           status: "available",
           version: snapshot.version,
@@ -1198,13 +1268,15 @@ export function createMarketReadService(
         });
       }
 
+      const trendingAssets = scanned.filter((asset) => asset.address !== null);
+      const trendingFacts = await Promise.all(trendingAssets.map(factsOf));
       const candidates: TrendingRow[] = [];
       let lastTrendingReason: string | null = null;
-      for (const asset of scanned) {
-        if (asset.address === null) {
+      for (const [index, asset] of trendingAssets.entries()) {
+        const facts = trendingFacts[index];
+        if (facts === undefined) {
           continue;
         }
-        const facts = await pairFactsFor(asset, signal, prefetched);
         if (facts.volumeForOrdering === null) {
           lastTrendingReason =
             facts.volume24h.reasonCode ?? marketReasonCodes.factMissing;
@@ -1255,12 +1327,10 @@ export function createMarketReadService(
             });
 
       let newPairs: MarketOverviewResource["newPairs"];
-      if (!input.facts.candlesProviderEnabled) {
+      if (newPoolsFact === null) {
         newPairs = unavailableBlock(marketReasonCodes.geckoterminalDisabled);
       } else {
-        const fact = await input.facts.readNewPools(
-          signal === undefined ? {} : { signal },
-        );
+        const fact = newPoolsFact;
         newPairs =
           fact.value === null || fact.fetchedAt === null
             ? unavailableBlock(

@@ -1,5 +1,5 @@
 import { TimeoutError } from "viem";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type { AuthenticatedLoopPrincipal } from "../src/core/http/authentication.js";
 import type {
@@ -161,7 +161,7 @@ interface Harness {
   readonly service: ReturnType<typeof createWalletReadService>;
   readonly started: string[];
   readonly logger: { debug: ReturnType<typeof vi.fn> };
-  readonly listEthereumWallets: ReturnType<typeof vi.fn>;
+  readonly listEthereumWallets: Mock<PrivyWalletReader["listEthereumWallets"]>;
   readonly recordBalanceSnapshot: ReturnType<typeof vi.fn>;
 }
 
@@ -257,14 +257,15 @@ function harness(
       )();
     }),
   } as unknown as BscReadClient;
-  const listEthereumWallets = vi.fn(() =>
-    Promise.resolve([
-      {
-        address: walletAddress,
-        kind: "embedded" as const,
-        providerWalletId: "wallet_privy_1",
-      },
-    ]),
+  const listEthereumWallets = vi.fn<PrivyWalletReader["listEthereumWallets"]>(
+    () =>
+      Promise.resolve([
+        {
+          address: walletAddress,
+          kind: "embedded" as const,
+          providerWalletId: "wallet_privy_1",
+        },
+      ]),
   );
   const walletReader: PrivyWalletReader = { listEthereumWallets };
   const balanceReader: PrivyBalanceReader = {
@@ -482,34 +483,103 @@ describe("wallet balances read", () => {
 });
 
 describe("wallet inventory reuse", () => {
-  it("serves one Privy observation for the window and reports when it was observed", async () => {
+  const list = (subject: Harness) =>
+    subject.service.listWallets({
+      principal,
+      signal: new AbortController().signal,
+    });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("serves one Privy observation for 60 s by default and re-reads Privy beside a call past half of it (Decision 0086)", async () => {
+    let currentMs = Date.parse(observedAt);
+    const subject = harness({ now: () => new Date(currentMs) });
+
+    const first = await list(subject);
+    expect(first.source.observedAt).toBe(observedAt);
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(1);
+
+    currentMs += 20_000;
+    const second = await list(subject);
+    expect(second.source.observedAt).toBe(observedAt);
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(1);
+
+    // Past half the window: answered from the observation, Privy re-read beside it.
+    currentMs += 11_000;
+    const refreshedAt = new Date(currentMs).toISOString();
+    const third = await list(subject);
+    expect(third.source.observedAt).toBe(observedAt);
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(2);
+    await flush();
+
+    currentMs += 9_000;
+    const fourth = await list(subject);
+    expect(fourth.source.observedAt).toBe(refreshedAt);
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(2);
+
+    // Nobody called for longer than the window: the caller waits for Privy.
+    currentMs += 61_000;
+    const fifth = await list(subject);
+    expect(fifth.source.observedAt).toBe(new Date(currentMs).toISOString());
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(3);
+  });
+
+  it("never serves an observation older than the window", async () => {
     let currentMs = Date.parse(observedAt);
     const subject = harness({
       walletInventoryTtlMs: 30_000,
       now: () => new Date(currentMs),
     });
+    await list(subject);
+    currentMs += 30_000;
+    const second = await list(subject);
+    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(2);
+    expect(second.source.observedAt).toBe(new Date(currentMs).toISOString());
+  });
 
-    const first = await subject.service.listWallets({
-      principal,
-      signal: new AbortController().signal,
+  it("shares one Privy read between concurrent calls for the same subject", async () => {
+    const subject = harness();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    currentMs += 29_000;
-    const second = await subject.service.listWallets({
-      principal,
-      signal: new AbortController().signal,
+    const wallets = [
+      {
+        address: walletAddress,
+        kind: "embedded" as const,
+        providerWalletId: "wallet_privy_1",
+      },
+    ];
+    subject.listEthereumWallets.mockImplementation(async () => {
+      await gate;
+      return wallets;
     });
+
+    const calls = [list(subject), list(subject), list(subject)];
+    await flush();
+    release?.();
+    const resources = await Promise.all(calls);
 
     expect(subject.listEthereumWallets).toHaveBeenCalledTimes(1);
-    expect(second.source.observedAt).toBe(first.source.observedAt);
-    expect(first.source.observedAt).toBe(observedAt);
+    expect(new Set(resources.map((r) => r.source.observedAt)).size).toBe(1);
+  });
 
-    currentMs += 2_000;
-    const third = await subject.service.listWallets({
-      principal,
-      signal: new AbortController().signal,
+  it("keeps serving the observation when the refresh beside a call fails, and fails closed once it has expired", async () => {
+    let currentMs = Date.parse(observedAt);
+    const subject = harness({ now: () => new Date(currentMs) });
+    await list(subject);
+    subject.listEthereumWallets.mockImplementation(() =>
+      Promise.reject(new Error("privy down")),
+    );
+
+    currentMs += 45_000;
+    const served = await list(subject);
+    expect(served.source.observedAt).toBe(observedAt);
+    await flush();
+
+    currentMs += 16_000;
+    await expect(list(subject)).rejects.toMatchObject({
+      code: "PROVIDER_DISCONNECTED",
     });
-    expect(subject.listEthereumWallets).toHaveBeenCalledTimes(2);
-    expect(third.source.observedAt).toBe(new Date(currentMs).toISOString());
   });
 
   it("asks the Provider every time when the window is disabled", async () => {
