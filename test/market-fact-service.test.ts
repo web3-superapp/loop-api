@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { MarketConfig } from "../src/config.js";
-import type {
-  MarketFactCacheRecord,
-  MarketFactCacheRepository,
+import {
+  MarketFactCacheUnavailableError,
+  type MarketFactCacheRecord,
+  type MarketFactCacheRepository,
 } from "../src/database/market-fact-cache-repository.js";
 import {
   createMarketFactService,
@@ -201,15 +202,27 @@ function cacheFake(initial: MarketFactCacheRecord | null = null) {
     rows.set(keyOf(input.subjectKey, input.factKind, input.source), record);
     return Promise.resolve(record);
   });
+  const getMany = vi.fn(
+    (subjectKeys: readonly string[], factKind: string, source: string) =>
+      Promise.resolve(
+        new Map(
+          subjectKeys.flatMap((subjectKey) => {
+            const record = rows.get(keyOf(subjectKey, factKind, source));
+            return record === undefined ? [] : [[subjectKey, record] as const];
+          }),
+        ),
+      ),
+  );
   const repository: MarketFactCacheRepository = {
     get,
-    getMany: vi.fn(() => Promise.resolve(new Map())),
+    getMany,
     put,
     findVerifiedCommunityByAssetId: vi.fn(() => Promise.resolve(null)),
   };
   return {
     repository,
     get,
+    getMany,
     put,
     current: () =>
       rows.get(keyOf(`token:${wbnb}`, "token_pairs", "dexscreener")) ?? null,
@@ -465,6 +478,138 @@ describe("market fact service", () => {
     expect(facts.get(wbnb)?.rawDigest).toBe("b".repeat(64));
     expect(facts.get(usdt)?.rawDigest).toBe("c".repeat(64));
     expect(provider.calls()).toBe(1);
+  });
+
+  describe("batched pairs read (Decision 0086)", () => {
+    const address = (index: number): string =>
+      `0x${index.toString(16).padStart(40, "0")}`;
+
+    it("reads every cache row in one query, not one round trip per subject", async () => {
+      const cache = cacheFake();
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: providerFake(() => snapshot("747.39")),
+        securityProvider: null,
+        candlesProvider: null,
+      });
+      await service.readTokenPairsBatch([wbnb, usdt, weth]);
+      expect(cache.getMany).toHaveBeenCalledTimes(1);
+      expect(cache.getMany).toHaveBeenCalledWith(
+        [`token:${wbnb}`, `token:${usdt}`, `token:${weth}`],
+        "token_pairs",
+        "dexscreener",
+      );
+      expect(cache.get).not.toHaveBeenCalled();
+    });
+
+    it("sends the chunks of a large batch together, each once, and no address twice", async () => {
+      let inFlight = 0;
+      let peak = 0;
+      const requested: string[][] = [];
+      const provider: MarketPairsProvider = {
+        ...providerFake(() => snapshot("747.39")),
+        readTokenPairsBatch: async (addresses) => {
+          requested.push([...addresses]);
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+          return {
+            value: addresses.map((tokenAddress) => ({
+              tokenAddress,
+              pairs: [],
+            })),
+            source: "dexscreener" as const,
+            fetchedAt: "2026-09-08T00:00:00.000Z",
+            rawDigest: "b".repeat(64),
+          };
+        },
+      };
+      const addresses = Array.from({ length: 45 }, (_, index) =>
+        address(index + 1),
+      );
+      const service = createMarketFactService({
+        config,
+        cache: cacheFake().repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+      });
+      const facts = await service.readTokenPairsBatch([
+        ...addresses,
+        ...addresses.slice(0, 10),
+      ]);
+      expect(facts.size).toBe(45);
+      expect(requested).toHaveLength(2);
+      expect(peak).toBe(2);
+      const flat = requested.flat();
+      expect(flat).toHaveLength(45);
+      expect(new Set(flat).size).toBe(45);
+    });
+
+    it("keeps each address's own answer when one chunk fails: stale inside grace, otherwise unavailable", async () => {
+      const cache = cacheFake({
+        subjectKey: `token:${usdt}`,
+        factKind: "token_pairs",
+        source: "dexscreener",
+        value: { tokenAddress: usdt, pairs: [] } as unknown as Record<
+          string,
+          unknown
+        >,
+        rawDigest: "c".repeat(64),
+        fetchedAt: "2026-09-08T00:00:00.000Z",
+        ttlSeconds: 30,
+      });
+      const provider: MarketPairsProvider = {
+        ...providerFake(() => snapshot("747.39")),
+        readTokenPairsBatch: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_unreachable",
+              "MARKET_PROVIDER_UNREACHABLE",
+            ),
+          ),
+      };
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:01:00.000Z"),
+      });
+      const facts = await service.readTokenPairsBatch([wbnb, usdt]);
+      expect(facts.get(usdt)).toMatchObject({
+        quality: "stale",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      });
+      expect(facts.get(wbnb)).toMatchObject({
+        quality: "unavailable",
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      });
+    });
+
+    it("answers every address cache-unavailable when the batched cache read fails", async () => {
+      const cache = cacheFake();
+      cache.getMany.mockImplementationOnce(() =>
+        Promise.reject(new MarketFactCacheUnavailableError()),
+      );
+      const provider = providerFake(() => snapshot("747.39"));
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+      });
+      const facts = await service.readTokenPairsBatch([wbnb, usdt]);
+      expect([...facts.values()].map((fact) => fact.reasonCode)).toEqual([
+        "MARKET_FACT_CACHE_UNAVAILABLE",
+        "MARKET_FACT_CACHE_UNAVAILABLE",
+      ]);
+      expect(provider.calls()).toBe(0);
+    });
   });
 
   it("prices the native asset through WBNB and names the proxy", async () => {

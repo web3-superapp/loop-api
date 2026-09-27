@@ -170,6 +170,11 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
   （Provider 确实没给）。`MARKET_PAIR_UNREPRESENTABLE` 则是"Provider 给了交易对但每一条
   都解析失败"（§2 表）。
 - **每行必填 `sparkline`（决策 0074，见 §3a）。严格 codec 必须把它加进两种行的键集合。**
+- **响应时间（决策 0086）**：总览的两次 Provider 读取（DexScreener 批量、GeckoTerminal
+  新池）同时发出，共用 1.2 s 截止。某个 Provider 卡住时总览仍在约 1.2 s 内返回，
+  受影响的 fact 按"Provider 不可达"处理：宽限期内有缓存就是 `quality: "stale"` +
+  `reasonCode: "MARKET_PROVIDER_UNREACHABLE"`，否则 `unavailable` + 同一 reasonCode；
+  其它行、其它块不受影响。形状与 reasonCode 集合不变，客户端无需改动。
 - **`newPairs`（决策 0053）**：可用变体是 `{ "status": "available", "omittedCount": 0 }`，
   `omittedCount` **必填**、与 `GET /v2/market/new-pairs` 的 `newPairs.omittedCount`
   **同源同值**（同一份 GeckoTerminal 缓存 fact）。`available` 现在意味着新币页此刻

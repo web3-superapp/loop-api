@@ -227,6 +227,34 @@ export interface CreateMarketFactServiceInput {
  */
 const assetPriceConcurrency = 4;
 
+/**
+ * How many cache rows one batch read writes at once (Decision 0086). The
+ * rows of one Provider answer are independent upserts; running them a few at
+ * a time keeps the request off a serial chain of round trips without taking
+ * every connection of the pool.
+ */
+const cacheWriteConcurrency = 4;
+
+async function runBounded(
+  tasks: readonly (() => Promise<void>)[],
+  concurrency: number,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const task = tasks[next];
+      next += 1;
+      if (task === undefined) {
+        return;
+      }
+      await task();
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tasks.length) }, worker),
+  );
+}
+
 export const marketFactKinds = Object.freeze({
   tokenPairs: "token_pairs",
   pair: "pair",
@@ -557,24 +585,23 @@ export function createMarketFactService(
         }
         return results;
       }
-      const nowMs = now().getTime();
-      const misses: {
-        readonly address: string;
-        readonly cached: MarketFactCacheRecord | null;
-        readonly ageSeconds: number;
-      }[] = [];
-      for (const address of unique) {
-        let cached: MarketFactCacheRecord | null;
-        try {
-          cached = await input.cache.get(
-            `token:${address}`,
-            marketFactKinds.tokenPairs,
-            "dexscreener",
-          );
-        } catch (error) {
-          if (!(error instanceof MarketFactCacheUnavailableError)) {
-            throw error;
-          }
+      if (unique.length === 0) {
+        return results;
+      }
+      // One cache query for every subject (Decision 0086): the rows used to
+      // be read one round trip after another before the Provider was asked.
+      let cachedRows: ReadonlyMap<string, MarketFactCacheRecord>;
+      try {
+        cachedRows = await input.cache.getMany(
+          unique.map((address) => `token:${address}`),
+          marketFactKinds.tokenPairs,
+          "dexscreener",
+        );
+      } catch (error) {
+        if (!(error instanceof MarketFactCacheUnavailableError)) {
+          throw error;
+        }
+        for (const address of unique) {
           results.set(
             address,
             unavailableFact(
@@ -583,8 +610,17 @@ export function createMarketFactService(
               marketReasonCodes.cacheUnavailable,
             ),
           );
-          continue;
         }
+        return results;
+      }
+      const nowMs = now().getTime();
+      const misses: {
+        readonly address: string;
+        readonly cached: MarketFactCacheRecord | null;
+        readonly ageSeconds: number;
+      }[] = [];
+      for (const address of unique) {
+        const cached = cachedRows.get(`token:${address}`) ?? null;
         const ageSeconds =
           cached === null
             ? Number.POSITIVE_INFINITY
@@ -599,84 +635,96 @@ export function createMarketFactService(
         }
         misses.push({ address, cached, ageSeconds });
       }
+      const chunks: (typeof misses)[] = [];
       for (
         let offset = 0;
         offset < misses.length;
         offset += marketPairsBatchLimit
       ) {
-        const chunk = misses.slice(offset, offset + marketPairsBatchLimit);
-        let observation: ProviderObservation<
-          readonly TokenPairsSnapshot[]
-        > | null = null;
-        let reasonCode: string = marketReasonCodes.providerUnreachable;
-        try {
-          observation = await provider.readTokenPairsBatch(
-            chunk.map((miss) => miss.address),
-            options.signal === undefined ? {} : { signal: options.signal },
-          );
-        } catch (error) {
-          if (!(error instanceof MarketProviderError)) {
-            throw error;
-          }
-          reasonCode = error.reasonCode;
-        }
-        for (const miss of chunk) {
-          const snapshot = observation?.value.find(
-            (entry) => entry.tokenAddress === miss.address,
-          );
-          if (observation !== null && snapshot !== undefined) {
-            try {
-              await input.cache.put({
-                subjectKey: `token:${miss.address}`,
-                factKind: marketFactKinds.tokenPairs,
-                source: "dexscreener",
-                value: snapshot as unknown as Record<string, unknown>,
-                rawDigest: observation.rawDigest,
-                fetchedAt: observation.fetchedAt,
-                ttlSeconds: input.config.priceTtlSeconds,
-              });
-            } catch (error) {
-              if (!(error instanceof MarketFactCacheUnavailableError)) {
-                throw error;
-              }
-            }
-            await rememberPriceChange(snapshot, observation);
-            results.set(
-              miss.address,
-              Object.freeze({
-                value: snapshot,
-                source: "dexscreener" as const,
-                fetchedAt: observation.fetchedAt,
-                ttlSeconds: input.config.priceTtlSeconds,
-                quality: "fresh" as const,
-                reasonCode: null,
-                rawDigest: observation.rawDigest,
-              }),
-            );
-            continue;
-          }
-          if (
-            miss.cached !== null &&
-            options.requireFresh !== true &&
-            miss.ageSeconds <
-              miss.cached.ttlSeconds + input.config.staleGraceSeconds
-          ) {
-            results.set(
-              miss.address,
-              pairsFact(miss.cached, "stale", reasonCode),
-            );
-            continue;
-          }
-          results.set(
-            miss.address,
-            unavailableFact(
-              "dexscreener",
-              input.config.priceTtlSeconds,
-              reasonCode,
-            ),
-          );
-        }
+        chunks.push(misses.slice(offset, offset + marketPairsBatchLimit));
       }
+      // Every chunk is one Provider request through the adapter's throttle;
+      // the chunks go out together rather than one after another.
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          let observation: ProviderObservation<
+            readonly TokenPairsSnapshot[]
+          > | null = null;
+          let reasonCode: string = marketReasonCodes.providerUnreachable;
+          try {
+            observation = await provider.readTokenPairsBatch(
+              chunk.map((miss) => miss.address),
+              options.signal === undefined ? {} : { signal: options.signal },
+            );
+          } catch (error) {
+            if (!(error instanceof MarketProviderError)) {
+              throw error;
+            }
+            reasonCode = error.reasonCode;
+          }
+          const writes: (() => Promise<void>)[] = [];
+          for (const miss of chunk) {
+            const snapshot = observation?.value.find(
+              (entry) => entry.tokenAddress === miss.address,
+            );
+            if (observation !== null && snapshot !== undefined) {
+              const observed = observation;
+              writes.push(async () => {
+                try {
+                  await input.cache.put({
+                    subjectKey: `token:${miss.address}`,
+                    factKind: marketFactKinds.tokenPairs,
+                    source: "dexscreener",
+                    value: snapshot as unknown as Record<string, unknown>,
+                    rawDigest: observed.rawDigest,
+                    fetchedAt: observed.fetchedAt,
+                    ttlSeconds: input.config.priceTtlSeconds,
+                  });
+                } catch (error) {
+                  if (!(error instanceof MarketFactCacheUnavailableError)) {
+                    throw error;
+                  }
+                }
+                await rememberPriceChange(snapshot, observed);
+              });
+              results.set(
+                miss.address,
+                Object.freeze({
+                  value: snapshot,
+                  source: "dexscreener" as const,
+                  fetchedAt: observation.fetchedAt,
+                  ttlSeconds: input.config.priceTtlSeconds,
+                  quality: "fresh" as const,
+                  reasonCode: null,
+                  rawDigest: observation.rawDigest,
+                }),
+              );
+              continue;
+            }
+            if (
+              miss.cached !== null &&
+              options.requireFresh !== true &&
+              miss.ageSeconds <
+                miss.cached.ttlSeconds + input.config.staleGraceSeconds
+            ) {
+              results.set(
+                miss.address,
+                pairsFact(miss.cached, "stale", reasonCode),
+              );
+              continue;
+            }
+            results.set(
+              miss.address,
+              unavailableFact(
+                "dexscreener",
+                input.config.priceTtlSeconds,
+                reasonCode,
+              ),
+            );
+          }
+          await runBounded(writes, cacheWriteConcurrency);
+        }),
+      );
       return results;
     },
 
