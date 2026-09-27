@@ -21,6 +21,7 @@ import {
   BscReadUnavailableError,
   isBscRpcTransportError,
   summarizeRpcError,
+  type BscAllowanceReadResult,
   type BscBalanceReadResult,
   type BscChainCallClient,
   type BscReadClient,
@@ -733,15 +734,24 @@ async function readLaunchChainUsd1(
       ? (client as BscChainCallClient)
       : asChainCallClient(client);
   try {
+    // The allowance read is pinned to the block the balance read observed
+    // (Decision 0082, S86b): two independent `latest` reads straddled a block
+    // boundary in about 3% of reads and the same-block rule (Decision 0077)
+    // then withheld the pair. One deadline still bounds both reads.
     const [balances, allowances] = await withDeadline(
-      Promise.all([
-        client.readBalances(address, [
+      (async (): Promise<
+        readonly [BscBalanceReadResult, BscAllowanceReadResult]
+      > => {
+        const balanceRead = await client.readBalances(address, [
           { assetId, address: target.usd1Address },
-        ]),
-        allowanceClient.readAllowances(address, [
-          { assetId, token: target.usd1Address, spender: target.spender },
-        ]),
-      ]),
+        ]);
+        const allowanceRead = await allowanceClient.readAllowances(
+          address,
+          [{ assetId, token: target.usd1Address, spender: target.spender }],
+          { atBlock: balanceRead.head.blockNumber },
+        );
+        return [balanceRead, allowanceRead] as const;
+      })(),
       deadlineMs,
     );
     const balance = balances.balances[0]?.rawValue ?? null;

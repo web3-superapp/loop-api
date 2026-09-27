@@ -369,6 +369,10 @@ CAPABILITY_UNAVAILABLE`，此时 `detailsSafe` 为
   `usd1` / `launchUsd1` 缺省（不是 null），价格整体读失败时每行 `valuation` 为
   `unavailable` + `MARKET_PROVIDER_UNREACHABLE`。Launch 认购页看到 `usd1` 缺省时应
   显示"授权额度暂未读取"并允许**单独重拉**余额，不要把整条购买链路判死。
+- 决策 0082 / S86b：`usd1` / `launchUsd1` 的余额与授权额必须来自同一区块。S86b 前两次读
+  各自取最新块，约 3% 的读因相差一个块而缺席；现在授权额固定在余额读到的区块上读取，
+  同块成为常态。仍会缺席的情况只剩：端点已无法提供该区块（极少）、任一读失败或 3s 总期限到。
+  响应形状不变。
 
 ### 6.1 `launchChain`：Launch 链槽位上的 tBNB 余额（S9 / 决策 0038）
 

@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BscChainConfig } from "../src/config.js";
 import {
+  erc20AllowanceAbi,
   erc20BalanceAbi,
   erc20IdentityAbi,
 } from "../src/integrations/bsc/erc20-abi.js";
@@ -146,6 +147,16 @@ function answerMulticall(data: `0x${string}`): `0x${string}` {
             abi: erc20BalanceAbi,
             functionName: "balanceOf",
             result: 123_456_789_000_000_000n,
+          }),
+        };
+      }
+      case "0xdd62ed3e": {
+        return {
+          success: true,
+          returnData: encodeFunctionResult({
+            abi: erc20AllowanceAbi,
+            functionName: "allowance",
+            result: 5_000_000_000_000_000_000n,
           }),
         };
       }
@@ -349,6 +360,206 @@ describe("BSC read client", () => {
     expect(
       started.filter((method) => method === "eth_getBlockByNumber"),
     ).toHaveLength(1);
+  });
+
+  describe("allowance reads pinned to an observed block (Decision 0082, S86b)", () => {
+    const usd1 = "0x2222222222222222222222222222222222222222";
+    const spender = "0x1111111111111111111111111111111111111111";
+    const item = { assetId: `eip155:56:${usd1}`, token: usd1, spender };
+    const pinned = headNumber - 1n;
+    const pinnedHash =
+      "0x7777777777777777777777777777777777777777777777777777777777777777";
+
+    function pinnedTransport(options: {
+      readonly requests: RpcRequest[];
+      readonly refuseBlock?: "error" | "null";
+      readonly refuseCall?: boolean;
+    }): Transport {
+      return custom({
+        request: (request: RpcRequest): Promise<unknown> => {
+          options.requests.push(request);
+          switch (request.method) {
+            case "eth_chainId": {
+              return Promise.resolve("0x38");
+            }
+            case "eth_getBlockByNumber": {
+              const [tag] = request.params as readonly [string, boolean];
+              if (tag === "latest") {
+                return Promise.resolve(blockResponse(headNumber, headHash));
+              }
+              if (options.refuseBlock === "error") {
+                return Promise.reject(
+                  new RpcRequestError({
+                    body: { method: "eth_getBlockByNumber" },
+                    url: "https://rpc-a.example/",
+                    error: { code: -32000, message: "header not found" },
+                  }),
+                );
+              }
+              if (options.refuseBlock === "null") {
+                return Promise.resolve(null);
+              }
+              return Promise.resolve(blockResponse(BigInt(tag), pinnedHash));
+            }
+            case "eth_call": {
+              if (options.refuseCall === true) {
+                return Promise.reject(
+                  new RpcRequestError({
+                    body: { method: "eth_call" },
+                    url: "https://rpc-a.example/",
+                    error: { code: -32000, message: "header not found" },
+                  }),
+                );
+              }
+              const params = request.params as readonly [
+                { readonly data: `0x${string}` },
+              ];
+              return Promise.resolve(answerMulticall(params[0].data));
+            }
+            default: {
+              return Promise.reject(new Error(`unmocked ${request.method}`));
+            }
+          }
+        },
+      });
+    }
+
+    it("names the pinned block on every call and returns it as the head", async () => {
+      const requests: RpcRequest[] = [];
+      const client = createBscReadClient({
+        config: chainConfig(),
+        transportFactory: () => pinnedTransport({ requests }),
+      });
+
+      const result = await client.readAllowances(owner, [item], {
+        atBlock: pinned,
+      });
+
+      expect(result.head.blockNumber).toBe(pinned);
+      expect(result.head.blockHash).toBe(pinnedHash);
+      expect(result.allowances).toEqual([
+        {
+          assetId: item.assetId,
+          spender,
+          rawValue: 5_000_000_000_000_000_000n,
+          reasonCode: null,
+        },
+      ]);
+      const calls = requests.filter((request) => request.method === "eth_call");
+      expect(calls).toHaveLength(1);
+      expect((calls[0]?.params as readonly unknown[])[1]).toBe(
+        numberToHex(pinned),
+      );
+      const headers = requests.filter(
+        (request) => request.method === "eth_getBlockByNumber",
+      );
+      expect(
+        headers.map((request) => (request.params as readonly unknown[])[0]),
+      ).toEqual([numberToHex(pinned)]);
+    });
+
+    it("shares the head of a balance read when pinned to it", async () => {
+      const requests: RpcRequest[] = [];
+      const client = createBscReadClient({
+        config: chainConfig(),
+        transportFactory: () =>
+          custom({
+            request: (request: RpcRequest): Promise<unknown> => {
+              if (request.method === "eth_getBlockByNumber") {
+                const [tag] = request.params as readonly [string, boolean];
+                // The balance read observes one head; any later `latest`
+                // would already be the next block.
+                const seen = requests.some(
+                  (earlier) => earlier.method === "eth_getBlockByNumber",
+                );
+                requests.push(request);
+                return Promise.resolve(
+                  tag === "latest"
+                    ? blockResponse(
+                        seen ? headNumber + 1n : headNumber,
+                        headHash,
+                      )
+                    : blockResponse(BigInt(tag), headHash),
+                );
+              }
+              requests.push(request);
+              return request.method === "eth_chainId"
+                ? Promise.resolve("0x38")
+                : Promise.resolve(
+                    answerMulticall(
+                      (
+                        request.params as readonly [
+                          { readonly data: `0x${string}` },
+                        ]
+                      )[0].data,
+                    ),
+                  );
+            },
+          }),
+      });
+
+      const balances = await client.readBalances(owner, [
+        { assetId: item.assetId, address: usd1 },
+      ]);
+      const allowances = await client.readAllowances(owner, [item], {
+        atBlock: balances.head.blockNumber,
+      });
+
+      expect(allowances.head.blockNumber).toBe(balances.head.blockNumber);
+      expect(allowances.head.blockHash).toBe(balances.head.blockHash);
+      // Unpinned, the same sequence would have straddled the boundary.
+      const unpinned = await client.readAllowances(owner, [item]);
+      expect(unpinned.head.blockNumber).toBe(headNumber + 1n);
+    });
+
+    it.each(["error", "null"] as const)(
+      "fails closed as BSC_PINNED_BLOCK_UNAVAILABLE when the endpoint no longer serves the block (%s)",
+      async (refuseBlock) => {
+        const client = createBscReadClient({
+          config: chainConfig(),
+          transportFactory: () =>
+            pinnedTransport({ requests: [], refuseBlock }),
+        });
+
+        const failure = await client
+          .readAllowances(owner, [item], { atBlock: pinned })
+          .catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(BscReadUnavailableError);
+        expect(failure).toMatchObject({
+          reasonCode: "BSC_PINNED_BLOCK_UNAVAILABLE",
+        });
+      },
+    );
+
+    it("reports a refused pinned eth_call as a failed item, never a value from another block", async () => {
+      const requests: RpcRequest[] = [];
+      const client = createBscReadClient({
+        config: chainConfig(),
+        transportFactory: () => pinnedTransport({ requests, refuseCall: true }),
+      });
+
+      const result = await client.readAllowances(owner, [item], {
+        atBlock: pinned,
+      });
+
+      expect(result.head.blockNumber).toBe(pinned);
+      expect(result.allowances).toEqual([
+        {
+          assetId: item.assetId,
+          spender,
+          rawValue: null,
+          reasonCode: "BSC_ALLOWANCE_CALL_FAILED",
+        },
+      ]);
+      expect(
+        requests.some(
+          (request) =>
+            request.method === "eth_getBlockByNumber" &&
+            (request.params as readonly unknown[])[0] === "latest",
+        ),
+      ).toBe(false);
+    });
   });
 
   it("gives point reads a shorter per-endpoint budget than range scans", async () => {
