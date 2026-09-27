@@ -472,6 +472,10 @@ describe("LOOP API V2 meta policy gates", () => {
       communityAiRuntimeAvailable: false,
       pushRuntimeAvailable: false,
       launchChainId: "eip155:56",
+      launchContractEvidence: () => ({
+        status: "pending" as const,
+        reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+      }),
     } as const;
     for (const moduleId of v2ModuleIds) {
       const capabilityId = v2ModuleCapabilityIds[moduleId];

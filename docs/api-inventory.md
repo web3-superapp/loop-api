@@ -82,13 +82,13 @@ and deployed-environment evidence remain unverified.
   D20 security/settings/support contract is in
   `docs/frontend-v2-security-settings-api.md`.
 
-| Method and path              | Request                                                                 | Success projection                                            | Interface     | Capability                                                                               |
-| ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
-| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab; configuration-driven version/terms gates | `implemented` | `implemented`; gates are `available` only from complete config, region stays unavailable |
-| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence         | `implemented` | `implemented`; deferred capabilities remain unavailable                                  |
-| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID     | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified                      |
-| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection        | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping           |
-| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`     | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external        |
+| Method and path              | Request                                                                 | Success projection                                            | Interface     | Capability                                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab; configuration-driven version/terms gates | `implemented` | `implemented`; gates are `available` only from complete config, region stays unavailable               |
+| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence         | `implemented` | `implemented`; deferred capabilities remain unavailable; `launch` evidence confirmed per Decision 0083 |
+| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID     | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified                                    |
+| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection        | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping                         |
+| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`     | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external                      |
 
 ### V2 profile module (Decision 0030, `V2_MODULES_ENABLED=profile`)
 
@@ -215,6 +215,12 @@ exist behind `BSC_WRITES_ENABLED`, eligibility is a stored Merkle root
 `pnpm launch:register-sale`, and a USD1 approve towards the Launch contract
 runs on the launch slot through `POST /v2/wallet-intents/approve` with
 `assetId = eip155:97:<LAUNCH_USD1_ADDRESS>`.
+Since Decision 0083 (S83b4) the `launch` capability's `evidence` follows the
+adapter's startup observation: `pending` with the adapter's reason
+(`LAUNCH_CONTRACT_BASELINE_PENDING` while the keys are blank, byte-identical
+to before; `LAUNCH_CONTRACT_CODE_MISSING`, `LAUNCH_CONTRACT_VERSION_UNSUPPORTED`,
+`LAUNCH_CONTRACT_VERIFICATION_PENDING`, `LAUNCH_CHAIN_*`), or `confirmed` with
+`LAUNCH_CONTRACT_CONFIRMED` and the optional `launchContractVersion`.
 
 Decision 0076 (S83a) adopts LOOP 06 as the contract interface: ABI v1
 (`src/integrations/launch/launchpad-abi.v1.json`), a read/encode/decode

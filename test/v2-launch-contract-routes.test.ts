@@ -10,6 +10,7 @@ import {
   type LaunchRecord,
   type LaunchRepository,
 } from "../src/features/launch/launch-repository.js";
+import { launchContractEvidenceFrom } from "../src/features/meta/product-policy.js";
 import {
   createLaunchContractAdapter,
   type LaunchContractAdapter,
@@ -585,5 +586,153 @@ describe("V2 launch routes with the contract adapter (Decision 0076)", () => {
       headers: s7CommonHeaders(),
     });
     expect(response.body).toBe(baseline("launch-detail-confirmed"));
+  });
+
+  describe("launch capability evidence (Decision 0083)", () => {
+    async function launchCapability(
+      app: FastifyInstance,
+    ): Promise<Record<string, unknown>> {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      expect(response.statusCode).toBe(200);
+      const capability = response
+        .json<{
+          readonly capabilities: readonly Record<string, unknown>[];
+        }>()
+        .capabilities.find((entry) => entry["capabilityId"] === "launch");
+      expect(capability).toBeDefined();
+      return capability as Record<string, unknown>;
+    }
+
+    it("stays BASELINE_PENDING with the pre-0083 bytes while the four keys are blank", async () => {
+      for (const env of [{}, { LAUNCH_CHAIN_ID: "97" }]) {
+        const app = await createApp(
+          { ...confirmed, launch: registered },
+          {
+            env,
+          },
+        );
+        const capability = await launchCapability(app);
+        expect(capability).toEqual({
+          capabilityId: "launch",
+          availability: "available",
+          reasonCode: null,
+          evidence: {
+            status: "pending",
+            reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+            ...(env.LAUNCH_CHAIN_ID === "97"
+              ? { launchChainId: "eip155:97" }
+              : {}),
+          },
+        });
+        expect(
+          Object.keys(capability["evidence"] as Record<string, unknown>),
+        ).toEqual(
+          env.LAUNCH_CHAIN_ID === "97"
+            ? ["status", "reasonCode", "launchChainId"]
+            : ["status", "reasonCode"],
+        );
+      }
+    });
+
+    it("stays pending with the adapter's reason when the code is missing or the ABI major is unsupported", async () => {
+      const cases = [
+        {
+          chain: { code: "0x" as const },
+          contract: {},
+          reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
+        },
+        {
+          chain: {},
+          contract: { version: "2.0.0", versionMajor: 2 },
+          reasonCode: "LAUNCH_CONTRACT_VERSION_UNSUPPORTED",
+        },
+      ];
+      for (const scenario of cases) {
+        const adapter = mockAdapter(
+          createMockLaunchpadChain(scenario.chain),
+          scenario.contract,
+        );
+        const app = await createApp(
+          { ...confirmed, launch: registered },
+          { env: { LAUNCH_CHAIN_ID: "97" }, adapter },
+        );
+        await adapter.availability();
+        expect((await launchCapability(app))["evidence"]).toEqual({
+          status: "pending",
+          reasonCode: scenario.reasonCode,
+          launchChainId: "eip155:97",
+        });
+      }
+    });
+
+    it("is confirmed with the contract version once the adapter observed the code", async () => {
+      const adapter = mockAdapter(createMockLaunchpadChain());
+      const app = await createApp(
+        { ...confirmed, launch: registered },
+        { env: { LAUNCH_CHAIN_ID: "97" }, adapter },
+      );
+      await adapter.availability();
+      const capability = await launchCapability(app);
+      expect(capability).toEqual({
+        capabilityId: "launch",
+        availability: "available",
+        reasonCode: null,
+        evidence: {
+          status: "confirmed",
+          reasonCode: "LAUNCH_CONTRACT_CONFIRMED",
+          launchChainId: "eip155:97",
+          launchContractVersion: "1.0.0",
+        },
+      });
+      // Mining and referral keep their own pending evidence.
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const others = response
+        .json<{
+          readonly capabilities: readonly {
+            readonly capabilityId: string;
+            readonly evidence: Record<string, unknown>;
+          }[];
+        }>()
+        .capabilities.filter(
+          (entry) =>
+            entry.capabilityId === "mining" ||
+            entry.capabilityId === "referral",
+        );
+      expect(others).toHaveLength(2);
+      for (const entry of others) {
+        expect(entry.evidence["status"]).toBe("pending");
+        expect(Object.keys(entry.evidence)).toEqual(["status", "reasonCode"]);
+      }
+    });
+
+    it("stays VERIFICATION_PENDING before the startup probe settled, without probing", () => {
+      let probes = 0;
+      const adapter = createLaunchContractAdapter({
+        contract,
+        chain: {
+          chainId: "eip155:97",
+          chainReference: 97,
+          rpcUrls: ["https://launch-rpc.invalid/"],
+        },
+        verifyChain: () => {
+          probes += 1;
+          return Promise.resolve("verified");
+        },
+        transportFactory: mockLaunchpadTransportFactory(
+          createMockLaunchpadChain(),
+        ),
+      });
+      expect(launchContractEvidenceFrom(adapter)()).toEqual({
+        status: "pending",
+        reasonCode: "LAUNCH_CONTRACT_VERIFICATION_PENDING",
+      });
+      expect(probes).toBe(0);
+    });
   });
 });

@@ -1156,3 +1156,24 @@ X-Loop-Contract-Version: 2.0
   或回报前为 `null`。
 - `broadcast-report` 的 `txHash` 接受任意大小写，存库与响应一律小写；同一 hash 换大小写再回报是同一次回报
   （`200`、同字节），不会是 `LAUNCH_INTENT_ALREADY_REPORTED`。客户端可以直接字节比较。
+
+## S83b4：`launch` 能力的 evidence 何时 `confirmed`（决策 0083）
+
+`GET /v2/meta/capabilities`（无需 headers 以外的输入）里 `capabilityId: "launch"` 的 `evidence`
+现在按合约适配器的启动观测投影，不再恒为 `pending`。`availability` 与其它能力不变。
+
+| 后端状态                       | `evidence`                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| 四个 `LAUNCH_*` 键全空         | `{"status":"pending","reasonCode":"LAUNCH_CONTRACT_BASELINE_PENDING"}`（与之前字节相同）          |
+| 键已配，合约 ABI 主版本不支持  | `{"status":"pending","reasonCode":"LAUNCH_CONTRACT_VERSION_UNSUPPORTED"}`                         |
+| 键已配，地址上无合约代码       | `{"status":"pending","reasonCode":"LAUNCH_CONTRACT_CODE_MISSING"}`                                |
+| 启动探测尚未完成（API 刚启动） | `{"status":"pending","reasonCode":"LAUNCH_CONTRACT_VERIFICATION_PENDING"}`                        |
+| 链 ID 不符 / RPC 未配或不可达  | `{"status":"pending","reasonCode":"LAUNCH_CHAIN_ID_MISMATCH"}` 等 `LAUNCH_CHAIN_*`                |
+| 适配器可用                     | `{"status":"confirmed","reasonCode":"LAUNCH_CONTRACT_CONFIRMED","launchContractVersion":"1.0.0"}` |
+
+- `launchChainId`（仅 `LAUNCH_CHAIN_ID=97` 时出现）规则不变，每一行都可能带。
+- `launchContractVersion` 为可选字段，只在 `confirmed` 时出现；与文档顶层的 `contractVersion: "2.0"`（API 契约版本）无关。
+- 客户端只需判断 `status == "confirmed"`；任何其它值都按 pending 处理，不要枚举 reasonCode 做业务分支（可用于展示/日志）。
+- 这是启动时的一次性观测（决策 0076），不轮询；链上状态变化需 API 重启后反映。单个 launch 的可读性仍以
+  `GET /v2/launches/{launchId}` 各字段自身的 `status`/`reasonCode` 为准。
+- 无新增错误码。

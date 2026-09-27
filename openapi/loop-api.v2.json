@@ -1233,6 +1233,12 @@
                                 "enum": ["eip155:56", "eip155:97"],
                                 "description": "Present on the launch capability only (Decision 0038): the chain slot the Launch module points at."
                               },
+                              "launchContractVersion": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$",
+                                "maxLength": 32,
+                                "description": "Present on the launch capability only while status is confirmed (Decision 0083): the configured Launch contract version whose code the API observed on the launch slot at startup. status confirmed carries reasonCode LAUNCH_CONTRACT_CONFIRMED; while pending, reasonCode is the adapter's reason (LAUNCH_CONTRACT_BASELINE_PENDING, LAUNCH_CONTRACT_CODE_MISSING, LAUNCH_CONTRACT_VERSION_UNSUPPORTED, LAUNCH_CONTRACT_VERIFICATION_PENDING, LAUNCH_CHAIN_*)."
+                              },
                               "reference": {
                                 "type": "string",
                                 "minLength": 1,

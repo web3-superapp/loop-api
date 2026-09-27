@@ -113,6 +113,13 @@ export interface V2CapabilityProjection {
      */
     readonly launchChainId?: LaunchChainId;
     /**
+     * `launch` only, and only while `status` is `confirmed` (Decision 0083):
+     * the configured `LAUNCH_CONTRACT_VERSION` whose code the API observed on
+     * the launch slot at startup. Absent otherwise, keeping every pending
+     * document byte-identical.
+     */
+    readonly launchContractVersion?: string;
+    /**
      * `voiceRooms` only, and only while `status` is `confirmed` (Decision
      * 0039): the operator's archive reference for the Stream Dashboard
      * evidence. Absent on every other capability and while the evidence is
@@ -210,6 +217,13 @@ export interface V2ProductPolicyRuntime {
   readonly launchRuntimeAvailable: boolean;
   /** The configured `launch` chain slot (Decision 0038). */
   readonly launchChainId: LaunchChainId;
+  /**
+   * What the Launch contract adapter last observed (Decision 0083): the four
+   * keys, the ABI major, the chain ID, and the startup `eth_getCode`. Read
+   * per request without probing; `confirmed` only once the adapter is
+   * available.
+   */
+  readonly launchContractEvidence: () => V2LaunchContractEvidence;
   /** `mining` module enabled with the mining repository composed (Decision 0036). */
   readonly miningRuntimeAvailable: boolean;
   /**
@@ -330,6 +344,55 @@ export const v2LaunchRuntimeUnavailableReasonCode =
 /** No 02 contract baseline: every on-chain Launch fact stays unavailable. */
 export const v2LaunchEvidencePendingReasonCode =
   "LAUNCH_CONTRACT_BASELINE_PENDING" as const;
+/** The adapter observed the configured contract's code (Decision 0083). */
+export const v2LaunchEvidenceConfirmedReasonCode =
+  "LAUNCH_CONTRACT_CONFIRMED" as const;
+
+/**
+ * The `launch` capability's evidence input (Decision 0083). `pending` carries
+ * the adapter's unavailability reason (`LAUNCH_CONTRACT_BASELINE_PENDING`
+ * while the four keys are blank, `LAUNCH_CONTRACT_CODE_MISSING`,
+ * `LAUNCH_CONTRACT_VERSION_UNSUPPORTED`, or the chain/verification reasons).
+ */
+export type V2LaunchContractEvidence =
+  | { readonly status: "pending"; readonly reasonCode: string }
+  | { readonly status: "confirmed"; readonly contractVersion: string };
+
+/** Structural view of the Launch contract adapter; never probes. */
+export interface V2LaunchContractEvidenceSource {
+  readonly contract: { readonly version: string } | null;
+  currentAvailability():
+    | { readonly status: "available" }
+    | { readonly status: "unavailable"; readonly reasonCode: string };
+}
+
+/**
+ * Projects the adapter's last observation (startup `eth_getCode` + ABI major
+ * + chain ID, Decision 0076) into the capability evidence. Blank keys stay
+ * `LAUNCH_CONTRACT_BASELINE_PENDING`, the pre-0083 bytes.
+ */
+export function launchContractEvidenceFrom(
+  source: V2LaunchContractEvidenceSource,
+): () => V2LaunchContractEvidence {
+  return () => {
+    if (source.contract === null) {
+      return Object.freeze({
+        status: "pending" as const,
+        reasonCode: v2LaunchEvidencePendingReasonCode,
+      });
+    }
+    const state = source.currentAvailability();
+    return state.status === "available"
+      ? Object.freeze({
+          status: "confirmed" as const,
+          contractVersion: source.contract.version,
+        })
+      : Object.freeze({
+          status: "pending" as const,
+          reasonCode: state.reasonCode,
+        });
+  };
+}
 export const v2MiningModuleDeferredReasonCode =
   "V2_MINING_RUNTIME_DEFERRED" as const;
 export const v2MiningRuntimeUnavailableReasonCode =
@@ -595,12 +658,21 @@ function evidencePendingModuleCapability(
   unavailableReasonCode: string,
   evidencePendingReasonCode: string,
   launchChainId?: LaunchChainId,
+  launchContract?: V2LaunchContractEvidence,
 ): V2CapabilityProjection {
-  const evidence = Object.freeze({
-    status: "pending" as const,
-    reasonCode: evidencePendingReasonCode,
-    ...(launchChainId === undefined ? {} : { launchChainId }),
-  });
+  const evidence =
+    launchContract?.status === "confirmed"
+      ? Object.freeze({
+          status: "confirmed" as const,
+          reasonCode: v2LaunchEvidenceConfirmedReasonCode,
+          ...(launchChainId === undefined ? {} : { launchChainId }),
+          launchContractVersion: launchContract.contractVersion,
+        })
+      : Object.freeze({
+          status: "pending" as const,
+          reasonCode: launchContract?.reasonCode ?? evidencePendingReasonCode,
+          ...(launchChainId === undefined ? {} : { launchChainId }),
+        });
   if (!config.v2ModulesEnabled.has(moduleId)) {
     return Object.freeze({
       capabilityId,
@@ -963,6 +1035,8 @@ export async function createV2CapabilitiesProjection(
       v2LaunchRuntimeUnavailableReasonCode,
       v2LaunchEvidencePendingReasonCode,
       runtime.launchChainId === bscChainId ? undefined : runtime.launchChainId,
+      // Decision 0083: pending until the adapter observed the contract.
+      runtime.launchContractEvidence(),
     ),
     evidencePendingModuleCapability(
       config,

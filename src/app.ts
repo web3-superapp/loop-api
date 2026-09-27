@@ -35,6 +35,7 @@ import { createUnavailableMarketFactCacheRepository } from "./database/market-fa
 import { createUnavailableAlertV2Repository } from "./database/alert-v2-repository.js";
 import { createUnavailableNotificationRepository } from "./database/notification-repository.js";
 import { createUnavailablePushRepository } from "./features/push/push-repository.js";
+import { launchContractEvidenceFrom } from "./features/meta/product-policy.js";
 import {
   createPushDispatchService,
   createUnavailablePushDispatchService,
@@ -1928,6 +1929,9 @@ export async function buildApp(
         privySwapRuntimeAvailable,
         launchRuntimeAvailable,
         launchChainId: config.launchChain.chainId,
+        launchContractEvidence: launchContractEvidenceFrom(
+          launchContractAdapter,
+        ),
         miningRuntimeAvailable,
         miningFormulaBaseline,
         referralRuntimeAvailable,
