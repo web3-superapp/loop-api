@@ -1218,7 +1218,7 @@ Base URL 与 headers 不变（见文首与 S83b.6）：写接口带 `Authorizati
 
 | 按钮 | 前端显示条件（仅提示，最终以 prepare 的回答为准）                                                                  |
 | ---- | ------------------------------------------------------------------------------------------------------------------ |
-| 领取 | `entitlementState == "VESTING"`、`operationalState == "ACTIVE"`、`myPosition.claimableTokens != "0"`               |
+| 领取 | `entitlementState ∈ {VESTING, COMPLETED}`、`operationalState == "ACTIVE"`、`myPosition.claimableTokens != "0"`     |
 | 退款 | `saleState ∈ {FAILED, CANCELLED}`、`entitlementState == "REFUNDING"`、`ACTIVE`、`myPosition.refundableUsd1 != "0"` |
 
 注意：`GET /v2/launches/{launchId}` **没有** `myPosition`；持仓只在 holders 上。金额都是 18 位最小单位十进制字符串。
@@ -1372,7 +1372,7 @@ Content-Type: application/json
 
 | HTTP / code                  | `detailsSafe.reasonCode`（附加字段）                                                                                                                                                           | 适用        | 前端建议                           |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------- |
-| `409 DATA_STALE`             | `LAUNCH_CLAIM_NOT_OPEN`（`entitlementState`）：未 TGE / 池未建好（FROZEN）、未最终化（NONE）、已 COMPLETED / 退款态                                                                            | claim       | 显示「尚未开放领取」，刷新详情     |
+| `409 DATA_STALE`             | `LAUNCH_CLAIM_NOT_OPEN`（`entitlementState`）：未 TGE / 池未建好（FROZEN）、未最终化（NONE）、退款态（VESTING 与 COMPLETED 均可领取）                                                          | claim       | 显示「尚未开放领取」，刷新详情     |
 | `409 DATA_STALE`             | `LAUNCH_REFUND_NOT_OPEN`（`saleState`, `entitlementState`）：sale 不是 FAILED / CANCELLED，或不在 REFUNDING（窗口已关为 REFUNDED）                                                             | claimRefund | 显示「当前不可退款」               |
 | `409 DATA_STALE`             | `LAUNCH_SALE_PAUSED`：合约暂停                                                                                                                                                                 | 两者        | 显示「已暂停」，稍后重试           |
 | `409 DATA_STALE`             | `LAUNCH_NOT_PARTICIPANT`：该钱包没有参与该 sale                                                                                                                                                | 两者        | 隐藏按钮                           |
@@ -1409,7 +1409,7 @@ Content-Type: application/json
 ### S92a.6 广播回报、读取与状态
 
 与购买完全相同：设备 `eth_sendTransaction` → `POST …/intents/{launchIntentId}/broadcast-report {txHash}` →
-轮询 `GET …/intents/{launchIntentId}`（两者都原样带 `kind`）。状态：
+轮询 `GET …/intents/{launchIntentId}`（两者都原样带 `kind`）。领取在 `entitlementState` 为 `VESTING` 或 `COMPLETED` 时都可发起（与参考合约一致，释放全部到期后仍可领取未领完的部分）。状态：
 
 | 从          | 到          | 触发（领取 / 退款）                                                                                   |
 | ----------- | ----------- | ----------------------------------------------------------------------------------------------------- |

@@ -75,15 +75,15 @@ then:
    `409 DATA_STALE LAUNCH_CONFIG_VERSION_MISMATCH`.
 4. Kind rules (all `409 DATA_STALE`, `detailsSafe.reasonCode`):
 
-| Kind          | reasonCode (extra `detailsSafe`)                           | Rule                                                                                          |
-| ------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `claim`       | `LAUNCH_CLAIM_NOT_OPEN` (`entitlementState`)               | `entitlementState ≠ VESTING` (NONE, FROZEN before TGE / pool, COMPLETED, REFUNDING, REFUNDED) |
-| both          | `LAUNCH_SALE_PAUSED`                                       | `operationalState = PAUSED`                                                                   |
-| `claim`       | `LAUNCH_NOT_PARTICIPANT`                                   | `cumulativeUsd1 = purchasedTokens = entitledTokens = claimedTokens = 0`                       |
-| `claim`       | `LAUNCH_NOTHING_TO_CLAIM`                                  | `claimableTokens = 0` (nothing matured yet, or everything already claimed)                    |
-| `claimRefund` | `LAUNCH_REFUND_NOT_OPEN` (`saleState`, `entitlementState`) | `saleState ∉ {FAILED, CANCELLED}` **or** `entitlementState ≠ REFUNDING`                       |
-| `claimRefund` | `LAUNCH_NOT_PARTICIPANT`                                   | `cumulativeUsd1 = refundableUsd1 = refundedUsd1 = 0`                                          |
-| `claimRefund` | `LAUNCH_NOTHING_TO_REFUND`                                 | `refundableUsd1 = 0` (already refunded)                                                       |
+| Kind          | reasonCode (extra `detailsSafe`)                           | Rule                                                                                            |
+| ------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `claim`       | `LAUNCH_CLAIM_NOT_OPEN` (`entitlementState`)               | `entitlementState ∉ {VESTING, COMPLETED}` (NONE, FROZEN before TGE / pool, REFUNDING, REFUNDED) |
+| both          | `LAUNCH_SALE_PAUSED`                                       | `operationalState = PAUSED`                                                                     |
+| `claim`       | `LAUNCH_NOT_PARTICIPANT`                                   | `cumulativeUsd1 = purchasedTokens = entitledTokens = claimedTokens = 0`                         |
+| `claim`       | `LAUNCH_NOTHING_TO_CLAIM`                                  | `claimableTokens = 0` (nothing matured yet, or everything already claimed)                      |
+| `claimRefund` | `LAUNCH_REFUND_NOT_OPEN` (`saleState`, `entitlementState`) | `saleState ∉ {FAILED, CANCELLED}` **or** `entitlementState ≠ REFUNDING`                         |
+| `claimRefund` | `LAUNCH_NOT_PARTICIPANT`                                   | `cumulativeUsd1 = refundableUsd1 = refundedUsd1 = 0`                                            |
+| `claimRefund` | `LAUNCH_NOTHING_TO_REFUND`                                 | `refundableUsd1 = 0` (already refunded)                                                         |
 
 The brief asked for `saleState ∈ {FAILED, CANCELLED}` for refunds; 06
 §4.1 makes the contract require `entitlementState = REFUNDING`. Both are
@@ -182,7 +182,7 @@ refusal. A launch slot without an RPC leaves reported Intents `submitted`
 - `test/launch-claim-refund-intents.test.ts` (23): claim and claimRefund
   prepare (full claim body, decoded `claim(7)` / `claimRefund(7)`, reads are
   exactly `readSaleSnapshot` + `getPosition`); every 409 of both kinds
-  (FROZEN / NONE / COMPLETED / paused / not participant / nothing matured /
+  (FROZEN / NONE / refund states / paused / not participant / nothing matured /
   claimed all; LIVE / SUCCEEDED / REFUNDED / paused / not participant /
   refunded all); shared refusals (config drift, gas, counterparty,
   unreadable chain, unknown sale); no asset-canary requirement; reverted
@@ -234,3 +234,11 @@ or any non-buy Intent exists, then restores the buy-only checks.
 5. **`kind` on buy Intents.** Omitted to keep the buy bytes; the client
    reads a missing `kind` as `buy`. Emitting `kind: "buy"` everywhere is a
    one-line change if strict decoders prefer it.
+
+## Main-agent rulings (2026-09-27)
+
+1. `myPosition` stays on `GET /v2/launch/{id}/holders`; the detail route does not get it.
+2. The reference `LoopLaunchpad.claim` admits `entitlementState ∈ {VESTING, COMPLETED}` (`if (e != E_VESTING && e != E_COMPLETED) revert`). The backend follows the contract: a claim is admitted in `COMPLETED`, and `LAUNCH_CLAIM_NOT_OPEN` is returned only outside those two (NONE, FROZEN, REFUNDING, REFUNDED). 06 §4.1 now says so. This supersedes open question 2 and the COMPLETED row of the section 3 table.
+3. The refund gate requiring both `saleState ∈ {FAILED, CANCELLED}` and `entitlementState = REFUNDING` is accepted.
+4. The claim / refund canary policy (counterparty allowlist only, value 0 USD, no daily exposure) is accepted.
+5. Buy responses carry no `kind`; accepted.

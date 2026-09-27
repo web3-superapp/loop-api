@@ -263,6 +263,39 @@ describe("Launch claim / claimRefund Intent prepare (Decision 0087)", () => {
     });
   });
 
+  it("prepares a claim once vesting is COMPLETED (the contract admits VESTING and COMPLETED)", async () => {
+    const { service } = setup({
+      chainState: {
+        ...vesting,
+        tuple: { ...vesting.tuple!, entitlementState: "COMPLETED" },
+      },
+    });
+    const { resource } = await prepare(service, { kind: "claim", walletId });
+    expect(resource.launchIntent).toMatchObject({
+      kind: "claim",
+      state: "awaiting_signature",
+      claimableTokens: (2_500n * oneUsd1).toString(),
+    });
+  });
+
+  it("refuses a claim in a refund state with LAUNCH_CLAIM_NOT_OPEN", async () => {
+    for (const entitlementState of ["REFUNDING", "REFUNDED"] as const) {
+      const { service } = setup({
+        chainState: {
+          ...vesting,
+          tuple: { ...vesting.tuple!, entitlementState },
+        },
+      });
+      expect(
+        await refusal(prepare(service, { kind: "claim", walletId })),
+      ).toMatchObject({
+        code: "DATA_STALE",
+        reasonCode: "LAUNCH_CLAIM_NOT_OPEN",
+        details: { entitlementState },
+      });
+    }
+  });
+
   it("prepares claimRefund(saleId) for a FAILED or CANCELLED sale in REFUNDING", async () => {
     for (const saleState of ["FAILED", "CANCELLED"] as const) {
       const { service } = setup({
@@ -321,15 +354,6 @@ describe("Launch claim / claimRefund Intent prepare (Decision 0087)", () => {
       chainState: { position: vesting.position! },
       reasonCode: "LAUNCH_CLAIM_NOT_OPEN",
       details: { entitlementState: "NONE" },
-    },
-    {
-      name: "entitlement COMPLETED (06 §4.1 claim needs VESTING)",
-      chainState: {
-        ...vesting,
-        tuple: { ...vesting.tuple!, entitlementState: "COMPLETED" },
-      },
-      reasonCode: "LAUNCH_CLAIM_NOT_OPEN",
-      details: { entitlementState: "COMPLETED" },
     },
     {
       name: "paused",

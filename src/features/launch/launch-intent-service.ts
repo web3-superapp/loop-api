@@ -105,7 +105,7 @@ export const launchIntentReasonCodes = Object.freeze({
   txReverted: "LAUNCH_TX_REVERTED",
   /** Decision 0080: no receipt once the deadline plus grace has passed. */
   txNotObserved: "LAUNCH_TX_NOT_OBSERVED",
-  /** Decision 0087: entitlementState is not VESTING (FROZEN, before TGE / pool). */
+  /** Decision 0087: entitlementState is neither VESTING nor COMPLETED (NONE, FROZEN before TGE / pool, refund states). */
   claimNotOpen: "LAUNCH_CLAIM_NOT_OPEN",
   /** Decision 0087: the wallet took part but nothing is claimable now. */
   nothingToClaim: "LAUNCH_NOTHING_TO_CLAIM",
@@ -948,7 +948,12 @@ async function buildSettlementIntent(
   const held = position.value;
   let receiveRaw: bigint;
   if (input.kind === "claim") {
-    if (state.entitlementState !== "VESTING") {
+    // The reference LoopLaunchpad.claim admits VESTING and COMPLETED (a
+    // fully matured schedule still pays out what was not yet claimed).
+    if (
+      state.entitlementState !== "VESTING" &&
+      state.entitlementState !== "COMPLETED"
+    ) {
       refuse("DATA_STALE", launchIntentReasonCodes.claimNotOpen, {
         entitlementState: state.entitlementState,
       });
