@@ -56,6 +56,11 @@ import {
 import { generateOpaqueId } from "../core/ids/opaque-id.js";
 import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
 import { communityPersonaAliasPatternSource } from "../features/communication/community-persona-generator.js";
+import {
+  communityMembershipStatuses,
+  communityRoles,
+  communityStreamChannelRole,
+} from "../features/community/community-policy.js";
 
 interface DatabaseClient {
   query<Row extends Record<string, unknown>>(config: {
@@ -1931,7 +1936,19 @@ export function createPostgresCommunityChannelSyncRepository(
               from public.community_channel_members as member
               where member.community_id = job.community_id
                 and member.state = 'synced'
-            ) as synced_member_count
+            ) as synced_member_count,
+            (
+              select membership.role
+              from public.community_memberships as membership
+              where membership.community_id = job.community_id
+                and membership.owner_user_id = job.owner_user_id
+            ) as membership_role,
+            (
+              select membership.status
+              from public.community_memberships as membership
+              where membership.community_id = job.community_id
+                and membership.owner_user_id = job.owner_user_id
+            ) as membership_status
         `,
         values: [workerId, leaseSeconds, limit],
       });
@@ -1951,6 +1968,18 @@ export function createPostgresCommunityChannelSyncRepository(
               userIdSchema.parse(row["owner_user_id"]),
             ),
             kind: z.enum(["add", "remove"]).parse(row["kind"]),
+            // A job whose membership row is gone (the account left) holds
+            // no elevated role.
+            memberChannelRole:
+              row["membership_role"] === null ||
+              row["membership_role"] === undefined
+                ? ("channel_member" as const)
+                : communityStreamChannelRole(
+                    z.enum(communityRoles).parse(row["membership_role"]),
+                    z
+                      .enum(communityMembershipStatuses)
+                      .parse(row["membership_status"]),
+                  ),
             attempts: z.number().int().parse(row["attempts"]),
             channelProvisioned: row["channel_provisioned"] === true,
             channelName: z.string().min(1).parse(row["channel_name"]),

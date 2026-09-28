@@ -192,7 +192,7 @@ describe("Stream fixed messaging channel gateway", () => {
       data: {
         created_by_id: firstUserId,
         members: [
-          { user_id: firstUserId },
+          { user_id: firstUserId, channel_role: "channel_moderator" },
           { user_id: secondUserId },
           { user_id: thirdUserId },
         ],

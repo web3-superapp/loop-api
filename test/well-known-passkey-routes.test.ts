@@ -194,7 +194,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
         details: [
           {
             appIDs: ["867CN6U7W9.com.cywd.loop"],
-            components: [{ "/": "/u/*" }],
+            components: [{ "/": "/u/*" }, { "/": "/c/*" }],
           },
         ],
       },

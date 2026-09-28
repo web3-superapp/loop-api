@@ -1098,15 +1098,43 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机本身，例如
 `https://api-dev.quant-dinger.cc`、`https://api-staging.quant-dinger.cc`。
 
-| 路径                                          | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                                                                                             |
-| --------------------------------------------- | ---- | -------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /.well-known/apple-app-site-association` | 200  | `application/json`         | `public, max-age=3600` | `applinks.details[0] = {appIDs:["867CN6U7W9.com.cywd.loop"], components:[{"/":"/u/*"}]}`；配置了 `PASSKEY_IOS_TEAM_ID` 时另有 `webcredentials.apps`（决策 0063）                 |
-| `GET /.well-known/assetlinks.json`            | 200  | `application/json`         | `public, max-age=3600` | 第一条：`handle_all_urls`、`com.cywd.loop`、debug keystore 指纹 + `ANDROID_RELEASE_CERT_SHA256`；配置了 `PASSKEY_ANDROID_CERT_SHA256` 时第二条是 passkey 声明（决策 0063，不变） |
-| `GET /u/{loopId}`                             | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：大写 LOOP ID +「在 LOOP 里添加好友」；`APP_DOWNLOAD_URL` 配置时多一个「下载 LOOP」链接                                                                      |
-| `GET /u/<格式不对>`                           | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                                                                                   |
+| 路径                                          | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                                                                                                                |
+| --------------------------------------------- | ---- | -------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/apple-app-site-association` | 200  | `application/json`         | `public, max-age=3600` | `applinks.details[0] = {appIDs:["867CN6U7W9.com.cywd.loop"], components:[{"/":"/u/*"},{"/":"/c/*"}]}`（`/c/*` 自决策 0091）；配置了 `PASSKEY_IOS_TEAM_ID` 时另有 `webcredentials.apps`（决策 0063） |
+| `GET /.well-known/assetlinks.json`            | 200  | `application/json`         | `public, max-age=3600` | 第一条：`handle_all_urls`、`com.cywd.loop`、debug keystore 指纹 + `ANDROID_RELEASE_CERT_SHA256`；配置了 `PASSKEY_ANDROID_CERT_SHA256` 时第二条是 passkey 声明（决策 0063，不变）                    |
+| `GET /u/{loopId}`                             | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：大写 LOOP ID +「在 LOOP 里添加好友」；`APP_DOWNLOAD_URL` 配置时多一个「下载 LOOP」链接                                                                                         |
+| `GET /u/<格式不对>`                           | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                                                                                                      |
 
 - `/u/{loopId}` 接受 `LOOP-` + 8 位字母数字，大小写不敏感；**不查库**，页面只回显 URL
   里的 ID，不说明账号是否存在，不含任何用户资料、脚本或第三方资源（CSP `default-src 'none'`）。
 - 装了 App 时系统直接把 `https://<host>/u/LOOP-XXXXXXXX` 交给 App（客户端决策 0104），
   这个页面不会出现。
 - 无 unavailable 状态：两份关联文件总是发布；passkey 部分缺配置时只是不出现对应字段/声明。
+
+## 语音房分享链接 `/c/{communityId}/room` 与群聊置顶权限（决策 0091，S99b）
+
+### 链接
+
+| 路径                        | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                            |
+| --------------------------- | ---- | -------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GET /c/{communityId}/room` | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：「语音房邀请」+「在 LOOP 里加入这个社区的语音房」；有 `APP_DOWNLOAD_URL` 时多「下载 LOOP」 |
+| `GET /c/<格式不对>/room`    | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                  |
+
+- 同 `/u/`：不在 `/v2`、不进 OpenAPI、无 header/鉴权、**不查库**；页面**不回显** communityId，
+  不说明社区或语音房是否存在（CSP `default-src 'none'`，`Referrer-Policy: no-referrer`，`X-Robots-Tag: noindex`）。
+- `communityId` 必须是接口返回的规范小写 UUIDv4；大写或其他形状 → 404。
+- AASA 已声明 `/c/*`，装了 App 时 `https://<host>/c/<communityId>/room` 由系统直接交给 App；
+  App 需在 Associated Domains / 路由表里接住 `/c/{communityId}/room`（跳到该社区语音房入口，
+  进房仍走 `GET /v2/communities/{communityId}/voice-rooms` + `POST /v2/voice-rooms/{id}/join`）。
+  Android 侧 `assetlinks.json` 是整域声明，路径过滤在 App manifest 的 intent-filter 里加 `/c/`。
+- 无 unavailable 状态。
+
+### 置顶（Stream 能力，无新接口）
+
+- 社区官方频道里，owner / admin 的 Stream 频道角色为 `channel_moderator`，member 为 `channel_member`；
+  由后端同步（加入/审核通过、设为/撤销管理员、转让、封禁/解封、退出），客户端不写角色。
+- 频道类型 grants 由运维脚本收紧后（主代理决定何时执行），`channel_member` 与应用角色 `user` 不再有任何置顶权限，
+  `channel_moderator` 与 Stream `admin` 持有 `pin-message`。客户端**不要自己按社区角色判断**是否显示「置顶」，只看 Stream 频道的
+  `ownCapabilities` 是否含 `pin-message`（stream_chat_flutter 默认即如此）。
+- 好友群聊与私聊用同一个 `messaging` 类型（主代理 2026-09-28 裁决）：好友群**创建者**为 `channel_moderator`，
+  可置顶；其他群成员不能置顶；私聊里双方都不能置顶。客户端同样只看 `ownCapabilities`。

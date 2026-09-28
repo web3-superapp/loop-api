@@ -38,6 +38,19 @@ const assetLinksRelations = Object.freeze([
  */
 export const wellKnownCacheControl = "public, max-age=3600";
 
+/**
+ * Universal Link paths the app claims: shared LOOP IDs (Decision 0090) and
+ * voice-room share links `/c/{communityId}/room` (Decision 0091).
+ */
+export const appleAppLinkComponents = Object.freeze([
+  Object.freeze({ "/": "/u/*" }),
+  Object.freeze({ "/": "/c/*" }),
+]);
+
+/** Community IDs are canonical lower-case UUIDv4 (Decision 0032). */
+const landingCommunityIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 /** `/u/{loopId}` accepts the same loose shape as the search box. */
 const landingLoopIdPattern = /^LOOP-[0-9A-Z]{8}$/i;
 
@@ -205,7 +218,7 @@ export function registerWellKnownRoutes(
           details: [
             {
               appIDs: [...config.appLinks.iosAppIds],
-              components: [{ "/": "/u/*" }],
+              components: [...appleAppLinkComponents],
             },
           ],
         },
@@ -232,11 +245,7 @@ export function registerWellKnownRoutes(
     },
     async (request, reply) => {
       const raw = request.params.loopId;
-      reply.header("content-type", "text/html; charset=utf-8");
-      reply.header("content-security-policy", landingContentSecurityPolicy);
-      reply.header("referrer-policy", "no-referrer");
-      reply.header("x-content-type-options", "nosniff");
-      reply.header("x-robots-tag", "noindex");
+      setLandingHeaders(reply);
       if (!landingLoopIdPattern.test(raw)) {
         reply.header("cache-control", "no-store");
         return reply.code(404).send(renderLandingPage(null, null));
@@ -247,6 +256,42 @@ export function registerWellKnownRoutes(
       );
     },
   );
+
+  app.get<{ Params: { communityId: string } }>(
+    "/c/:communityId/room",
+    {
+      schema: {
+        hide: true,
+        operationId: "getVoiceRoomLandingPage",
+        summary: "Landing page for a shared voice-room link without the app",
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["communityId"],
+          properties: { communityId: { type: "string", maxLength: 64 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      setLandingHeaders(reply);
+      if (!landingCommunityIdPattern.test(request.params.communityId)) {
+        reply.header("cache-control", "no-store");
+        return reply.code(404).send(renderVoiceRoomLandingPage(false, null));
+      }
+      reply.header("cache-control", wellKnownCacheControl);
+      return reply.send(
+        renderVoiceRoomLandingPage(true, config.appLinks.downloadUrl),
+      );
+    },
+  );
+}
+
+function setLandingHeaders(reply: FastifyReply): void {
+  reply.header("content-type", "text/html; charset=utf-8");
+  reply.header("content-security-policy", landingContentSecurityPolicy);
+  reply.header("referrer-policy", "no-referrer");
+  reply.header("x-content-type-options", "nosniff");
+  reply.header("x-robots-tag", "noindex");
 }
 
 const landingContentSecurityPolicy =
@@ -274,11 +319,33 @@ export function renderLandingPage(
   const body =
     loopId === null
       ? `<p class="label">LOOP</p><h1>链接无效</h1><p>这个链接里没有有效的 LOOP ID。</p>`
-      : `<p class="label">LOOP ID</p><h1 class="id">${escapeHtml(loopId)}</h1><p>在 LOOP 里添加好友</p><p class="hint">安装 LOOP 后打开这个链接，或在 LOOP 的搜索里粘贴上面的 LOOP ID。</p>${
-          downloadUrl === null
-            ? ""
-            : `<a class="cta" href="${escapeHtml(downloadUrl)}" rel="noopener noreferrer">下载 LOOP</a>`
-        }`;
+      : `<p class="label">LOOP ID</p><h1 class="id">${escapeHtml(loopId)}</h1><p>在 LOOP 里添加好友</p><p class="hint">安装 LOOP 后打开这个链接，或在 LOOP 的搜索里粘贴上面的 LOOP ID。</p>${downloadLink(downloadUrl)}`;
+  return renderLandingDocument(body);
+}
+
+/**
+ * Minimal static page for a shared voice-room link `/c/{communityId}/room`
+ * opened without LOOP installed (Decision 0091). Like `/u/`, it never reads
+ * the database and never echoes the community ID: nothing says whether the
+ * community or a live room exists.
+ */
+export function renderVoiceRoomLandingPage(
+  valid: boolean,
+  downloadUrl: string | null,
+): string {
+  const body = valid
+    ? `<p class="label">LOOP</p><h1>语音房邀请</h1><p>在 LOOP 里加入这个社区的语音房</p><p class="hint">安装 LOOP 后再次打开这个链接即可进入。</p>${downloadLink(downloadUrl)}`
+    : `<p class="label">LOOP</p><h1>链接无效</h1><p>这个语音房链接无效。</p>`;
+  return renderLandingDocument(body);
+}
+
+function downloadLink(downloadUrl: string | null): string {
+  return downloadUrl === null
+    ? ""
+    : `<a class="cta" href="${escapeHtml(downloadUrl)}" rel="noopener noreferrer">下载 LOOP</a>`;
+}
+
+function renderLandingDocument(body: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>

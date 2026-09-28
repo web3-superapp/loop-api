@@ -425,6 +425,12 @@ export interface CommunityChannelSyncJobRecord {
   readonly channelCreatedByStreamUserId: string;
   readonly memberStreamUserId: string;
   readonly kind: CommunityChannelSyncKind;
+  /**
+   * Decision 0091: the channel role an `add` must leave the member with,
+   * derived at claim time from the current community membership, so a job
+   * enqueued before a later role change still applies the latest role.
+   */
+  readonly memberChannelRole: "channel_moderator" | "channel_member";
   readonly attempts: number;
   readonly channelProvisioned: boolean;
   readonly channelName: string;

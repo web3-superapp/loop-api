@@ -23,6 +23,7 @@ import {
   canPerformTargetAction,
   communityMembershipStatuses,
   communityRoles,
+  communityStreamChannelRole,
   membershipAfterAction,
   targetStateAllowsAction,
   viewerPermissions,
@@ -2183,6 +2184,26 @@ export function createPostgresCommunityRepository(
               communityId,
               ownerUserId: targetUserId,
               kind: action === "ban" ? "remove" : "add",
+              requestId,
+            });
+          }
+          // Decision 0091: a role change that moves the account between
+          // `channel_member` and `channel_moderator` re-runs the idempotent
+          // `add`, which assigns the channel role the membership holds when
+          // the job is claimed. The outgoing owner of a transfer becomes an
+          // admin and stays a moderator, so only the target is enqueued.
+          if (
+            action !== "ban" &&
+            action !== "unban" &&
+            communityStreamChannelRole(
+              targetMembership.role,
+              targetMembership.status,
+            ) !== communityStreamChannelRole(next.role, next.status)
+          ) {
+            await enqueueCommunityChannelSync(client, {
+              communityId,
+              ownerUserId: targetUserId,
+              kind: "add",
               requestId,
             });
           }

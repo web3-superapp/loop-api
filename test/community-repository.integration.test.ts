@@ -16,6 +16,8 @@ import {
   type PostgresDatabase,
 } from "../src/database/database.js";
 import { createPostgresProfileV2Repository } from "../src/database/profile-v2-repository.js";
+import { createPostgresCommunityChannelSyncRepository } from "../src/database/communication-repository.js";
+import { createPostgresCommunityChannelRoleRepository } from "../src/database/community-channel-role-repository.js";
 import {
   commandDigest,
   updateCommunityDigestParts,
@@ -2152,6 +2154,200 @@ describe("PostgreSQL V2 community and social graph repository", () => {
 
     const after = await listVerifiedCommunitiesWithoutChannel(pool);
     expect(after.map((row) => row.communityId)).not.toContain(communityId);
+  });
+
+  describe("Stream channel role sync (Decision 0091)", () => {
+    async function settleJobs(communityId: string): Promise<void> {
+      await pool.query({
+        text: `
+          update public.community_channels
+          set provisioned_at = coalesce(provisioned_at, clock_timestamp())
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+      await pool.query({
+        text: `
+          update public.community_channel_sync_jobs
+          set state = 'succeeded', lease_worker_id = null, lease_expires_at = null
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+      await pool.query({
+        text: `
+          update public.community_channel_members
+          set state = case when state = 'pending' then 'synced' else state end
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+    }
+
+    async function pendingJobs(
+      communityId: string,
+    ): Promise<readonly { owner_user_id: string; kind: string }[]> {
+      const result = await pool.query<{ owner_user_id: string; kind: string }>({
+        text: `
+          select owner_user_id, kind from public.community_channel_sync_jobs
+          where community_id = $1 and state = 'pending'
+          order by owner_user_id
+        `,
+        values: [communityId],
+      });
+      return result.rows;
+    }
+
+    function govern(
+      actorUserId: string,
+      communityId: string,
+      targetPublicProfileId: string,
+      action: "assignAdmin" | "revokeAdmin" | "mute" | "transferOwnership",
+    ): Promise<unknown> {
+      return repository.governMember({
+        actorUserId,
+        communityId,
+        targetPublicProfileId,
+        action,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          targetPublicProfileId,
+          action,
+        ]),
+        requestId: randomUUID(),
+      });
+    }
+
+    async function claimRoles(
+      communityId: string,
+    ): Promise<Map<string, { kind: string; role: string }>> {
+      const jobs = await createPostgresCommunityChannelSyncRepository(
+        pool,
+      ).claimDueJobs({ workerId: randomUUID(), leaseSeconds: 30, limit: 100 });
+      return new Map(
+        jobs
+          .filter((job) => job.communityId === communityId)
+          .map((job) => [
+            job.ownerUserId,
+            { kind: job.kind, role: job.memberChannelRole },
+          ]),
+      );
+    }
+
+    it("carries the membership's channel role on join, promotion, demotion, and leave", async () => {
+      const owner = await createAccount("role-sync-owner");
+      const member = await createAccount("role-sync-member");
+      const communityId = await createCommunity(owner.userId, "role-sync");
+      await join(member.userId, communityId);
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+
+      // Join / verification: owner moderates, member does not.
+      const initial = await claimRoles(communityId);
+      expect(initial.get(owner.userId)).toEqual({
+        kind: "add",
+        role: "channel_moderator",
+      });
+      expect(initial.get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_member",
+      });
+      await settleJobs(communityId);
+
+      // Promotion re-enqueues the idempotent add as channel_moderator.
+      await govern(
+        owner.userId,
+        communityId,
+        member.publicProfileId,
+        "assignAdmin",
+      );
+      expect(await pendingJobs(communityId)).toEqual([
+        { owner_user_id: member.userId, kind: "add" },
+      ]);
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_moderator",
+      });
+      await settleJobs(communityId);
+      const roles = createPostgresCommunityChannelRoleRepository(pool);
+      const synced = await roles.listSyncedMemberRoles({
+        limit: 100,
+        after: null,
+      });
+      expect(
+        synced
+          .filter((row) => row.communityId === communityId)
+          .map((row) => [row.ownerUserId, row.desiredChannelRole]),
+      ).toEqual(
+        expect.arrayContaining([
+          [owner.userId, "channel_moderator"],
+          [member.userId, "channel_moderator"],
+        ]),
+      );
+
+      // Mute keeps the channel role: nothing is enqueued.
+      await govern(owner.userId, communityId, member.publicProfileId, "mute");
+      expect(await pendingJobs(communityId)).toEqual([]);
+
+      // Demotion re-enqueues the add as channel_member.
+      await govern(
+        owner.userId,
+        communityId,
+        member.publicProfileId,
+        "revokeAdmin",
+      );
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_member",
+      });
+      await settleJobs(communityId);
+
+      // Leaving removes the member; the remove carries no elevated role.
+      await repository.leaveCommunity({
+        ownerUserId: member.userId,
+        communityId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "leaveCommunity", [
+          communityId,
+        ]),
+        requestId: randomUUID(),
+      });
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "remove",
+        role: "channel_member",
+      });
+    });
+
+    it("does not re-sync an ownership transfer between two moderators", async () => {
+      const owner = await createAccount("role-transfer-owner");
+      const admin = await createAccount("role-transfer-admin");
+      const communityId = await createCommunity(owner.userId, "role-transfer");
+      await join(admin.userId, communityId);
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await govern(
+        owner.userId,
+        communityId,
+        admin.publicProfileId,
+        "assignAdmin",
+      );
+      await settleJobs(communityId);
+
+      await govern(
+        owner.userId,
+        communityId,
+        admin.publicProfileId,
+        "transferOwnership",
+      );
+      expect(await pendingJobs(communityId)).toEqual([]);
+    });
   });
 
   it("raises NOT_FOUND semantics for an unknown community", async () => {
