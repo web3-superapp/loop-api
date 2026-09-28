@@ -1052,6 +1052,67 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ).toBe(false);
   });
 
+  it("admits a non-discoverable recipient to message requests but not to follow (Decision 0090)", async () => {
+    const sender = await createAccount("s98-mr-sender");
+    const hiddenOpen = await createAccount("s98-mr-hidden-open");
+    const hiddenClosed = await createAccount("s98-mr-hidden-closed");
+    const hiddenBlocked = await createAccount("s98-mr-hidden-blocked");
+    for (const account of [hiddenOpen, hiddenClosed, hiddenBlocked]) {
+      await pool.query({
+        text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
+        values: [account.userId],
+      });
+    }
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        ) values ($1, 'disabled', 'friends', 'friends')
+      `,
+      values: [hiddenClosed.userId],
+    });
+    await repository.blockUser({
+      ownerUserId: hiddenBlocked.userId,
+      stableId: sender.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        sender.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const send = (targetPublicProfileId: string) =>
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          targetPublicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    const sent = await send(hiddenOpen.publicProfileId);
+    expect(sent.profile.publicProfileId).toBe(hiddenOpen.publicProfileId);
+    const inbox = await repository.listMessageRequests({
+      ownerUserId: hiddenOpen.userId,
+      limit: 20,
+    });
+    expect(inbox.map((item) => item.messageRequestId)).toEqual([
+      sent.messageRequestId,
+    ]);
+
+    await expect(send(hiddenClosed.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(hiddenBlocked.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(
+      follow(sender.userId, hiddenOpen.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
   describe("LOOP ID exact match (Decision 0090)", () => {
     async function loopIdOf(userId: string): Promise<string> {
       const result = await pool.query<{ loop_id: string }>({
@@ -1276,11 +1337,11 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         requestId: randomUUID(),
       });
 
-    // A non-discoverable target and the sender itself are both the same
-    // non-enumerating failure.
-    await expect(send(hidden.publicProfileId)).rejects.toBeInstanceOf(
-      CommunityTargetUnavailableError,
-    );
+    // Decision 0090: a non-discoverable target still receives a request
+    // (it is reached by an exact LOOP ID); the sender itself and a target
+    // with `friendRequests` disabled are the same non-enumerating failure.
+    const toHidden = await send(hidden.publicProfileId);
+    expect(toHidden.profile.publicProfileId).toBe(hidden.publicProfileId);
     await expect(send(sender.publicProfileId)).rejects.toBeInstanceOf(
       CommunityTargetUnavailableError,
     );
@@ -1316,13 +1377,25 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         select event_type, subject_id
         from public.social_graph_events
         where actor_user_id = $1 and event_type = 'message_request_sent'
+        order by subject_id
       `,
         values: [sender.userId],
       },
     );
-    expect(events.rows).toEqual([
-      { event_type: "message_request_sent", subject_id: sent.messageRequestId },
-    ]);
+    // One event per created request: the non-discoverable target (Decision
+    // 0090) and the recipient; the replay and the refusals write none.
+    expect(events.rows).toEqual(
+      [
+        {
+          event_type: "message_request_sent",
+          subject_id: toHidden.messageRequestId,
+        },
+        {
+          event_type: "message_request_sent",
+          subject_id: sent.messageRequestId,
+        },
+      ].sort((left, right) => left.subject_id.localeCompare(right.subject_id)),
+    );
   });
 
   it("refuses a message request across a block in either direction", async () => {

@@ -54,14 +54,14 @@ None new. Search stays governed by the `search` capability. The association file
 ## Consequences
 
 - A pasted or linked LOOP ID finds any active, unblocked account other than the viewer, whatever its `discoverable` value. Alias-prefix browsing still shows only discoverable accounts.
-- **Follow (`POST /v2/connections/follow/{id}`) and message requests (`POST /v2/message-requests`) still require `discoverable = true`** (Decisions 0031, 0070); this change does not touch them. An account found by exact LOOP ID but not discoverable therefore still answers `404 NOT_FOUND` to "add friend" — see the open question below.
+- Message requests ("add friend") no longer consult `discoverable` (ruling 4 below); follow still does. An account found by exact LOOP ID can therefore be sent a friend request unless it turned `friendRequests` off or a block exists.
 - Platform verification (Apple CDN fetch, Android `autoVerify`) and the TF build 8 Associated Domains entitlement are unverified until tested on devices against api-dev / api-staging.
 
 ## Open questions for the main agent
 
 1. ~~Should an exact LOOP ID match bypass `discoverable`?~~ Ruled below.
 2. ~~`PASSKEY_IOS_TEAM_ID` on api-dev / staging~~ — the main agent sets it in ops.
-3. **Open:** follow and message-request admission still require `discoverable = true`. With this ruling a non-discoverable account can be found by LOOP ID but cannot be sent a friend request (`404 NOT_FOUND`), so the add-friend complaint persists for the default (`false`) account. Should `POST /v2/message-requests` (and follow) admit a target the caller reached by exact LOOP ID — e.g. drop `discoverable` from those gates, leaving `friendRequests` (Decision 0070) as the recipient's opt-out?
+3. ~~**Open:**~~ Ruled below (ruling 4). Follow and message-request admission still require `discoverable = true`. With this ruling a non-discoverable account can be found by LOOP ID but cannot be sent a friend request (`404 NOT_FOUND`), so the add-friend complaint persists for the default (`false`) account. Should `POST /v2/message-requests` (and follow) admit a target the caller reached by exact LOOP ID — e.g. drop `discoverable` from those gates, leaving `friendRequests` (Decision 0070) as the recipient's opt-out?
 
 ## Main-agent ruling (2026-09-28)
 
@@ -69,8 +69,11 @@ None new. Search stays governed by the `search` capability. The association file
 2. `PASSKEY_IOS_TEAM_ID=867CN6U7W9` is set in ops by the main agent (no code change).
 3. `Cache-Control: public, max-age=3600` for the passkey files as well: accepted.
 
+4. **(2026-09-28, closes open question 3) `POST /v2/message-requests` no longer requires the target to be `discoverable`.** The recipient-side gates are exactly two: the recipient's `friendRequests` switch (Decision 0070, default `enabled`) and a block in either direction; an unactivated target and self stay excluded. Every refusal is still the same non-enumerating `404 NOT_FOUND`; the V1 state-machine conflicts (existing friendship, pending pair, rejection cooldown) are still `409 DATA_STALE`. **`POST /v2/connections/follow/{publicProfileId}` keeps requiring `discoverable = true`**: a follow cannot be refused, so passive visibility stays under the target's control. This revises **Decision 0031** (the message-request admission row "identical to `follow` … `discoverable = true`") and **Decision 0070** item 4 ("`discoverable` is unchanged and still required for message requests") and its `friendRequests` table row. The frozen V1 `/v1` friend-request path is not changed.
+   - Privacy-center meaning (client copy to be aligned by the frontend): 「可被发现」 = others can find you by alias and follow you; your LOOP ID can always be searched exactly and used to send you a friend request unless 「允许陌生人发好友申请」(`friendRequests`) is off.
+
 ## Evidence
 
 - `test/v2-community-routes.test.ts` — LOOP ID case/whitespace variants pin the exact row first; non-LOOP-ID shapes pass no `exactLoopId`; cursor pages never re-pin; a page holding only the pinned row restarts the alias rows.
-- `test/community-repository.integration.test.ts` — exact row first then alias rows, no duplicates, limit 1, unknown ID, non-discoverable and privacy-row-less accounts found by exact ID but not by alias prefix, self, blocked in both directions, plain alias search unchanged.
+- `test/community-repository.integration.test.ts` — a non-discoverable recipient receives a message request, `friendRequests=disabled` and a block still refuse, follow still refuses a non-discoverable target; exact row first then alias rows, no duplicates, limit 1, unknown ID, non-discoverable and privacy-row-less accounts found by exact ID but not by alias prefix, self, blocked in both directions, plain alias search unchanged.
 - `test/well-known-app-links-routes.test.ts`, `test/well-known-passkey-routes.test.ts` — status, content type, cache header, exact bodies, release fingerprint, config validation, landing page with/without download link, malformed IDs, OpenAPI exclusion.

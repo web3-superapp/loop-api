@@ -227,7 +227,8 @@ body：
 }
 ```
 
-- `discoverable`：显示 LOOP ID、允许被搜索；`anonymousMode`：只显示别名、
+- `discoverable`：允许别人按**别名**搜到你、关注你（决策 0090 起，按精确 LOOP ID
+  搜索与发好友申请都不看它）；`anonymousMode`：只显示别名、
   永不显示钱包地址；四个 visibility 各为 `self | everyone`。
 - 与 V1 `/v1/profile/privacy` 完全独立（各自的表与 version）；不存在
   `copyTradeVisibility`，传入任何未知字段都是 `400`。
@@ -235,11 +236,11 @@ body：
 
 ### 社交开关（决策 0070，2026-09-23 新增）
 
-| 字段             | 取值                  | 默认      | 服务端在哪里读它                                                                                  |
-| ---------------- | --------------------- | --------- | ------------------------------------------------------------------------------------------------- |
-| `friendRequests` | `enabled \| disabled` | `enabled` | `POST /v2/message-requests`：目标关闭则 `404 NOT_FOUND`（**同时仍要求目标 `discoverable=true`**） |
-| `groupInvites`   | `friends \| disabled` | `friends` | `POST /v2/chat/groups`：任一被邀请好友关闭则 `404 NOT_FOUND`                                      |
-| `directMessages` | `friends \| disabled` | `friends` | `POST /v2/chat/direct-channels`：目标关闭则 `404 NOT_FOUND`（好友关系仍是前提）                   |
+| 字段             | 取值                  | 默认      | 服务端在哪里读它                                                                                   |
+| ---------------- | --------------------- | --------- | -------------------------------------------------------------------------------------------------- |
+| `friendRequests` | `enabled \| disabled` | `enabled` | `POST /v2/message-requests`：目标关闭则 `404 NOT_FOUND`（决策 0090 起**不再**要求 `discoverable`） |
+| `groupInvites`   | `friends \| disabled` | `friends` | `POST /v2/chat/groups`：任一被邀请好友关闭则 `404 NOT_FOUND`                                       |
+| `directMessages` | `friends \| disabled` | `friends` | `POST /v2/chat/direct-channels`：目标关闭则 `404 NOT_FOUND`（好友关系仍是前提）                    |
 
 - **`PUT` 是整体替换，三个字段全部必填**；缺任一字段或值不在枚举内 →
   `400 INVALID_REQUEST`。前端保存时把 `GET` 读到的九个值一起回传。
@@ -247,8 +248,9 @@ body：
   无行账号首次写入（`expectedVersion: 0`）后 `version` 为 1。
 - "缺行即默认"：从未进过隐私中心的账号在服务端就是 `enabled/friends/friends`，
   不需要前端做任何初始化写入。用户主动关掉的值会被原样保留。
-- 语义文案建议：`friendRequests` = "允许陌生人发消息请求"（副标题提示需同时打开
-  "显示 LOOP ID / 可被发现"才会被找到）；`directMessages` = "允许好友发起私聊"；
+- 语义文案建议（决策 0090 更新，客户端文案由前端后续对齐）：`discoverable` =
+  "可被发现"（副标题："允许别人按昵称搜到你、关注你；LOOP ID 始终可被精确搜索"）；
+  `friendRequests` = "允许陌生人发好友申请"（副标题："知道你 LOOP ID 的人可以加你"）；`directMessages` = "允许好友发起私聊"；
   `groupInvites` = "允许好友拉我进群"。
 - 旧 `/v1/profile/social-privacy` 已退役，不要再调用；它的默认值也已同步为开启。
 

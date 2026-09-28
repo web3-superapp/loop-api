@@ -222,7 +222,8 @@ const privacyValuesSchema = {
   properties: {
     discoverable: {
       type: "boolean",
-      description: "Show the LOOP ID and allow search; presentation only.",
+      description:
+        "Allow alias-prefix search and follow by others. An exact LOOP ID search and message requests do not depend on it (Decision 0090).",
     },
     anonymousMode: {
       type: "boolean",
@@ -243,7 +244,7 @@ const privacyValuesSchema = {
       type: "string",
       enum: [...privacyFriendRequestsValues],
       description:
-        "Whether strangers may send this account a message request (POST /v2/message-requests). Default enabled; the target must also be discoverable. Decision 0070.",
+        "Whether strangers may send this account a message request (POST /v2/message-requests). Default enabled; this and a block are the only recipient-side gates (discoverable is not consulted since Decision 0090). Decision 0070.",
     },
     groupInvites: {
       type: "string",

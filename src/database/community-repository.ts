@@ -2750,9 +2750,13 @@ export function createPostgresCommunityRepository(
      * Send a stranger message request (Decision 0031 revision, 2026-09-08).
      * It writes the frozen V1 `friend_requests` storage and obeys the V1 state
      * machine (one pending row per pair, the seven-day lifetime, the rejection
-     * cooldown), but admission is the V2 rule set: an active profile,
-     * `privacy_preferences_v2.discoverable`, and no block in either direction.
-     * Every ineligible target answers the same non-enumerating NOT_FOUND.
+     * cooldown), but admission is the V2 rule set: an active profile other
+     * than the sender, no block in either direction, and the recipient's
+     * `friendRequests` gate (Decision 0070). Since Decision 0090 (main-agent
+     * ruling, 2026-09-28) `discoverable` is not consulted: a stranger reaches
+     * this command through an exact LOOP ID the recipient handed out, and the
+     * recipient's opt-out is `friendRequests`. Every ineligible target answers
+     * the same non-enumerating NOT_FOUND.
      */
     async sendMessageRequest(
       rawInput: SendMessageRequestInput,
@@ -2781,7 +2785,7 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId,
-            requireDiscoverable: true,
+            requireDiscoverable: false,
             requireUnblocked: true,
           });
           // The same pair lock the V1 sender takes, so two concurrent sends

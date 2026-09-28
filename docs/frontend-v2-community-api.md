@@ -69,7 +69,7 @@ Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
 
 另外，`privacy_preferences_v2.discoverable` 默认 `false`（决策 0030 fail-closed）。
 **未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 的别名前缀搜索结果里**
-（按精确 LOOP ID 仍可搜到，决策 0090）
+（按精确 LOOP ID 仍可搜到、仍可收到好友申请，决策 0090）
 （统一返回 `404 NOT_FOUND`，不可枚举）。`connections` 与 `blocklist` 页面要在文案里
 提示用户：想被别人找到需要在隐私设置里打开"可被发现"。
 成员目录、取关、屏蔽不受此限制。
@@ -812,12 +812,12 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 
 - `profile` 是**对方（收件人）**的身份投影；列表接口里的 `profile` 是发起人，
   因为那是收件人视角。两者字段完全一致。
-- 准入与「关注」完全一致：对方资料已激活、`discoverable=true`、双方均未屏蔽、
-  不能是自己；另外（决策 0070，2026-09-23）对方隐私中心的 `friendRequests` 不能是
-  `disabled`——该开关**默认开启**，缺行即开启，只有对方主动关闭才拦。
+- 准入（决策 0090，2026-09-28 起）：对方资料已激活、双方均未屏蔽、不能是自己，
+  且对方隐私中心的 `friendRequests` 不是 `disabled`（决策 0070，**默认开启**，缺行即开启）。
+  **不再要求对方 `discoverable=true`**——这与「关注」不同，关注仍要求。
   **任何不可达都返回同一个 `404 NOT_FOUND`**（不可枚举），前端不要
-  据此推断对方是否存在。`discoverable` 默认仍是 `false`，所以想收到陌生人请求的
-  账号必须先在隐私中心打开"可被发现"；这一点不变。
+  据此推断对方是否存在。`discoverable` 默认仍是 `false`，但它只影响别名搜索与关注；
+  想拒绝陌生人好友申请的用户应关闭「允许陌生人发好友申请」。
 - 已是好友、任一方向已有 pending 请求、处于 24 小时拒绝冷却 → `409 DATA_STALE`，
   提示刷新后再试。
 - 同一个 `Idempotency-Key` 重放返回**首次创建的那条**请求（即使对方已处理）。
@@ -872,9 +872,9 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
     不是本人、双方均未屏蔽，按 LOOP ID 就能搜到；「可被发现」只管别名前缀搜索。
     查不到时就是空 `results`（与“账号不存在”无法区分，这是有意的防枚举）。
     本人的 LOOP ID 搜不到自己。
-  - **注意**：关注与发好友请求（`POST /v2/message-requests`）的准入**仍要求**对方
-    `discoverable=true`（见 4.11 节）；对未开启「可被发现」的账号，按 LOOP ID 搜到后
-    发请求仍会得到 `404 NOT_FOUND`，待主代理另行裁决。
+  - 搜到后发好友申请（`POST /v2/message-requests`，见 4.11 节）**不看 `discoverable`**
+    （主代理裁决 2026-09-28）：只要对方没关「允许陌生人发好友申请」、双方未屏蔽即可。
+    **关注**（4.8 节）仍要求对方 `discoverable=true`，对未开启的账号返回 `404 NOT_FOUND`。
   - 其它形状（`LOOP-ABCDE` 5 位邀请码、`LOOP FE3EMCPE`、9 位等）行为与以前一样，
     只做别名前缀匹配。
   - 请求示例：`GET /v2/search?domain=users&q=LOOP-FE3EMCPE`（headers 同本节其它
