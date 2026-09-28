@@ -1,6 +1,6 @@
 # Decision 0063: the API domain is the Passkey relying party and publishes two static association files
 
-- Status: Accepted (S64; main-agent task sheet 2026-09-21)
+- Status: Accepted (S64; main-agent task sheet 2026-09-21). Amended by Decision 0090 (S98, 2026-09-28): both files are now always published with the `/u/*` App Links / Universal Links association, `Cache-Control` is `public, max-age=3600`, and the passkey parts below (`webcredentials`, the `get_login_creds` statement) keep their fail-closed rule.
 - Date: 2026-09-21
 - Scope: two unauthenticated `GET /.well-known/*` routes, four `PASSKEY_*` configuration keys, one `ops/api-dev.env` value. No migration, no new entity, no state machine, no `/v2` operation, no change to any existing route, capability, or OpenAPI artifact.
 

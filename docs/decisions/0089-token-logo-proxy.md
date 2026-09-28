@@ -225,6 +225,7 @@ by it.
 ## 主代理裁决（2026-09-28）
 
 状态：Accepted，随 `integration/v2` 合并。
+
 1. `PROVIDER_UNREACHABLE`（502）进错误目录：接受。
 2. `native.png`：接受。
 3. 超大图 24 h 标记 + 302：接受。

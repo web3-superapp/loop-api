@@ -330,11 +330,20 @@ export interface SearchUsersInput {
   readonly after?:
     | { readonly lastSearchKey: string; readonly lastPublicProfileId: string }
     | undefined;
+  /**
+   * Upper-cased LOOP ID when the query has the LOOP ID shape (Decision 0090).
+   * The matching account is always excluded from the alias-prefix rows and
+   * is returned first only when `includeExactMatch` is true (first page).
+   */
+  readonly exactLoopId?: string | undefined;
+  readonly includeExactMatch?: boolean | undefined;
 }
 
 export interface SearchUserRecord {
   readonly profile: IdentityProjection;
-  readonly searchKey: string;
+  /** Alias search key; `null` only for an exact LOOP ID row without alias. */
+  readonly searchKey: string | null;
+  readonly exactLoopIdMatch: boolean;
 }
 
 export interface SearchCommunitiesInput {

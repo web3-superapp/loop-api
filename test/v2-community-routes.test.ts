@@ -294,7 +294,9 @@ function communityRepositoryFake() {
       }),
     ),
     searchUsers: vi.fn(() =>
-      Promise.resolve([{ profile, searchKey: "frog_maxi" }]),
+      Promise.resolve([
+        { profile, searchKey: "frog_maxi", exactLoopIdMatch: false },
+      ]),
     ),
     searchCommunities: vi.fn(() =>
       Promise.resolve([
@@ -1545,6 +1547,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
             publicProfileId: `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${String(index).padStart(2, "0")}`,
           },
           searchKey: `frog_${String(index).padStart(2, "0")}`,
+          exactLoopIdMatch: false,
         })),
       ),
     );
@@ -1565,6 +1568,210 @@ describe("LOOP API V2 community, social, and search modules", () => {
       headers: commonHeaders(),
     });
     expect(replayed.statusCode).toBe(200);
+  });
+
+  describe("LOOP ID exact match (Decision 0090)", () => {
+    const pinnedProfile = {
+      ...profile,
+      publicProfileId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e99",
+      loopId: "LOOP-FE3EMCPE" as const,
+      alias: "pinned_friend" as const,
+    };
+
+    it.each([
+      ["LOOP-FE3EMCPE", "LOOP-FE3EMCPE"],
+      ["loop-fe3emcpe", "LOOP-FE3EMCPE"],
+      ["  Loop-Fe3eMcPe  ", "LOOP-FE3EMCPE"],
+    ])(
+      "asks the repository for the exact account for %j",
+      async (raw, expected) => {
+        const dependencies = fakes();
+        const searchUsers = vi.fn(() =>
+          Promise.resolve([
+            {
+              profile: pinnedProfile,
+              searchKey: "pinned_friend",
+              exactLoopIdMatch: true,
+            },
+            {
+              profile,
+              searchKey: "loop-fe3emcpe_fan",
+              exactLoopIdMatch: false,
+            },
+          ]),
+        );
+        dependencies.communityRepository.searchUsers = searchUsers;
+        const { app } = await createApp(dependencies);
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/search?domain=users&q=${encodeURIComponent(raw)}`,
+          headers: commonHeaders(),
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(searchUsers).toHaveBeenCalledWith(
+          expect.objectContaining({
+            exactLoopId: expected,
+            includeExactMatch: true,
+          }),
+        );
+        const body = response.json<{
+          results: {
+            stableId: string;
+            displaySnapshot: { subtitle: string };
+          }[];
+        }>();
+        expect(Object.keys(response.json<object>()).sort()).toEqual([
+          "contractVersion",
+          "domain",
+          "nextCursor",
+          "reasonCode",
+          "results",
+          "status",
+        ]);
+        expect(body.results[0]).toMatchObject({
+          stableId: pinnedProfile.publicProfileId,
+          displaySnapshot: { subtitle: "LOOP-FE3EMCPE" },
+        });
+        expect(body.results).toHaveLength(2);
+      },
+    );
+
+    it.each([
+      "frog",
+      "LOOP-FE3EMCP",
+      "LOOP-FE3EMCPE1",
+      "LOOP-ABCDE",
+      "LOOP FE3EMCPE",
+    ])("keeps the alias-prefix behaviour for %j", async (raw) => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(() =>
+        Promise.resolve([
+          { profile, searchKey: "frog_maxi", exactLoopIdMatch: false },
+        ]),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const input = (
+        searchUsers.mock.calls as unknown as [Record<string, unknown>][]
+      )[0]?.[0];
+      expect(input).toBeDefined();
+      expect(input).not.toHaveProperty("exactLoopId");
+      expect(input).not.toHaveProperty("includeExactMatch");
+    });
+
+    it("does not pin the exact account again on the next page", async () => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(
+        (input: { includeExactMatch?: boolean | undefined }) =>
+          Promise.resolve(
+            input.includeExactMatch === true
+              ? [
+                  {
+                    profile: pinnedProfile,
+                    searchKey: "pinned_friend",
+                    exactLoopIdMatch: true,
+                  },
+                  ...Array.from({ length: 20 }, (_value, index) => ({
+                    profile: {
+                      ...profile,
+                      publicProfileId: `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${String(index).padStart(2, "0")}`,
+                    },
+                    searchKey: `loop-fe3emcpe_${String(index).padStart(2, "0")}`,
+                    exactLoopIdMatch: false,
+                  })),
+                ]
+              : [],
+          ),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/search?domain=users&q=LOOP-FE3EMCPE",
+        headers: commonHeaders(),
+      });
+      const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+      expect(cursor).not.toBeNull();
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=LOOP-FE3EMCPE&cursor=${encodeURIComponent(cursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(second.statusCode).toBe(200);
+      expect(searchUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          exactLoopId: "LOOP-FE3EMCPE",
+          includeExactMatch: false,
+          after: {
+            lastSearchKey: "loop-fe3emcpe_18",
+            lastPublicProfileId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e18",
+          },
+        }),
+      );
+    });
+
+    it("starts the alias rows from the top when a page held only the pinned account", async () => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(
+        (input: { includeExactMatch?: boolean | undefined }) =>
+          Promise.resolve(
+            input.includeExactMatch === true
+              ? [
+                  {
+                    profile: pinnedProfile,
+                    searchKey: null,
+                    exactLoopIdMatch: true,
+                  },
+                  {
+                    profile,
+                    searchKey: "loop-fe3emcpe_a",
+                    exactLoopIdMatch: false,
+                  },
+                ]
+              : [],
+          ),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/search?domain=users&q=LOOP-FE3EMCPE&limit=1",
+        headers: commonHeaders(),
+      });
+      expect(first.statusCode).toBe(200);
+      const firstBody = first.json<{
+        results: { stableId: string }[];
+        nextCursor: string | null;
+      }>();
+      expect(firstBody.results.map((item) => item.stableId)).toEqual([
+        pinnedProfile.publicProfileId,
+      ]);
+      expect(firstBody.nextCursor).not.toBeNull();
+
+      await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=LOOP-FE3EMCPE&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      const lastInput = (
+        searchUsers.mock.calls as unknown as [Record<string, unknown>][]
+      ).at(-1)?.[0];
+      expect(lastInput).toMatchObject({
+        exactLoopId: "LOOP-FE3EMCPE",
+        includeExactMatch: false,
+        limit: 2,
+      });
+      expect(lastInput).not.toHaveProperty("after");
+    });
   });
 
   it("passes the member alias prefix through as the trimmed raw text", async () => {

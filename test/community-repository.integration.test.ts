@@ -1052,6 +1052,153 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ).toBe(false);
   });
 
+  describe("LOOP ID exact match (Decision 0090)", () => {
+    async function loopIdOf(userId: string): Promise<string> {
+      const result = await pool.query<{ loop_id: string }>({
+        text: `select loop_id from public.loop_users where id = $1`,
+        values: [userId],
+      });
+      const loopId = result.rows[0]?.loop_id;
+      if (loopId === undefined) {
+        throw new Error("The account has no LOOP ID");
+      }
+      return loopId;
+    }
+
+    function searchByLoopId(
+      viewerUserId: string,
+      loopId: string,
+      includeExactMatch = true,
+    ) {
+      return repository.searchUsers({
+        viewerUserId,
+        prefix: loopId,
+        limit: 20,
+        exactLoopId: loopId,
+        includeExactMatch,
+      });
+    }
+
+    it("pins the exact account first and never repeats it in the alias rows", async () => {
+      const viewer = await createAccount("loopid-viewer");
+      const target = await createAccount("loopid-target", "zz_target");
+      const loopId = await loopIdOf(target.userId);
+      // An alias that starts with the same text as the LOOP ID sorts in the
+      // prefix branch; the pinned account is always in front of it.
+      const fan = await createAccount(
+        "loopid-fan",
+        `${loopId.toLowerCase()}_fan`,
+      );
+
+      const first = await searchByLoopId(viewer.userId, loopId);
+      expect(
+        first.map((item) => [
+          item.profile.publicProfileId,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([
+        [target.publicProfileId, true],
+        [fan.publicProfileId, false],
+      ]);
+      expect(first[0]?.profile.loopId).toBe(loopId);
+
+      // Later pages carry only the alias rows.
+      const later = await searchByLoopId(viewer.userId, loopId, false);
+      expect(later.map((item) => item.profile.publicProfileId)).toEqual([
+        fan.publicProfileId,
+      ]);
+
+      // The pinned row counts against the page size.
+      const one = await repository.searchUsers({
+        viewerUserId: viewer.userId,
+        prefix: loopId,
+        limit: 1,
+        exactLoopId: loopId,
+        includeExactMatch: true,
+      });
+      expect(one.map((item) => item.profile.publicProfileId)).toEqual([
+        target.publicProfileId,
+      ]);
+    });
+
+    it("finds nobody for an unknown LOOP ID", async () => {
+      const viewer = await createAccount("loopid-unknown-viewer");
+      await expect(
+        searchByLoopId(viewer.userId, "LOOP-ZZZZZZZZ"),
+      ).resolves.toEqual([]);
+    });
+
+    it("applies the discoverable rule to an exact match", async () => {
+      const viewer = await createAccount("loopid-hidden-viewer");
+      const hidden = await createAccount("loopid-hidden");
+      const loopId = await loopIdOf(hidden.userId);
+      await pool.query({
+        text: `
+          update public.privacy_preferences_v2
+          set discoverable = false
+          where owner_user_id = $1
+        `,
+        values: [hidden.userId],
+      });
+
+      await expect(searchByLoopId(viewer.userId, loopId)).resolves.toEqual([]);
+    });
+
+    it("excludes the viewer and blocked accounts from an exact match", async () => {
+      const viewer = await createAccount("loopid-self-viewer");
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(viewer.userId)),
+      ).resolves.toEqual([]);
+
+      const blocker = await createAccount("loopid-blocker");
+      const blockedByViewer = await createAccount("loopid-blocked");
+      await repository.blockUser({
+        ownerUserId: viewer.userId,
+        stableId: blockedByViewer.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "block", [
+          "user",
+          blockedByViewer.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+      await repository.blockUser({
+        ownerUserId: blocker.userId,
+        stableId: viewer.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "block", [
+          "user",
+          viewer.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(blockedByViewer.userId)),
+      ).resolves.toEqual([]);
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(blocker.userId)),
+      ).resolves.toEqual([]);
+    });
+
+    it("leaves a plain alias search unchanged", async () => {
+      const viewer = await createAccount("loopid-alias-viewer");
+      const target = await createAccount("loopid-alias-target", "qq_alias_s98");
+      const results = await repository.searchUsers({
+        viewerUserId: viewer.userId,
+        prefix: "qq_alias",
+        limit: 20,
+      });
+      expect(
+        results.map((item) => [
+          item.profile.publicProfileId,
+          item.searchKey,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([[target.publicProfileId, "qq_alias_s98", false]]);
+    });
+  });
+
   it("sends a message request under the V2 admission rules and replays by key", async () => {
     const sender = await createAccount("send-sender");
     const recipient = await createAccount("send-recipient");

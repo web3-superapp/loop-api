@@ -862,6 +862,47 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   `displaySnapshot.title` 是 alias（无 alias 时是 loopId），`subtitle` 是 loopId，
   `memberCount`/`verificationStatus` 为 `null`。只返回已激活且 `discoverable`
   的账号，排除双向屏蔽。
+- **`users` 域的 LOOP ID 精确匹配（决策 0090，S98）**：`q` 去掉首尾空白后若形如
+  `LOOP-` + 8 位字母或数字（大小写不敏感，例如 `loop-fe3emcpe`、` LOOP-FE3EMCPE`），
+  后端先按转大写后的 LOOP ID 精确查找账号，命中时它是**第一页的第一条**，
+  其后照常是别名前缀结果（同一账号不会出现两次；它占第一页 `limit` 的一个名额，
+  后续页不再出现）。响应形状不变，没有新字段，客户端不需要区分“精确命中”。
+  - 精确命中同样只包括已激活、`discoverable = true`、非本人、未双向屏蔽的账号；
+    查不到时就是空 `results`（与“账号不存在”无法区分，这是有意的防枚举）。
+    **对方关掉「可被发现」时按 LOOP ID 也搜不到**；本人的 LOOP ID 搜不到自己。
+  - 其它形状（`LOOP-ABCDE` 5 位邀请码、`LOOP FE3EMCPE`、9 位等）行为与以前一样，
+    只做别名前缀匹配。
+  - 请求示例：`GET /v2/search?domain=users&q=LOOP-FE3EMCPE`（headers 同本节其它
+    请求：`Authorization: Bearer <Privy token>`、`X-Loop-Contract-Version: 2.0`、
+    `X-Loop-Client-Version`）。命中时：
+
+    ```json
+    {
+      "domain": "users",
+      "status": "available",
+      "reasonCode": null,
+      "results": [
+        {
+          "resultType": "user",
+          "stableId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e99",
+          "displaySnapshot": {
+            "title": "pinned_friend",
+            "subtitle": "LOOP-FE3EMCPE",
+            "avatarRef": "avatar:preset/people-03",
+            "logo": null,
+            "memberCount": null,
+            "verificationStatus": null
+          },
+          "destination": { "kind": "publicProfile" }
+        }
+      ],
+      "nextCursor": null,
+      "contractVersion": "2.0"
+    }
+    ```
+
+  - 错误码与其它 `users` 查询完全相同（`INVALID_REQUEST`、`RATE_LIMITED`、
+    `UNAUTHENTICATED`、`CAPABILITY_UNAVAILABLE` 等，见第 3 节）；消耗同一个公共搜索配额。
 - `communities`：只返回 `verified`；`verification=all` 只对当前账号已加入的社区
   额外放行。匹配 name 前缀或 slug 前缀。
 - **`assets`（决策 0071，2026-09-23 起可用）**：搜的是资产注册表（`pnpm asset:register`
@@ -1045,3 +1086,22 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   rejected →「你创建的社区未通过审核」/「{communityName}：{reason}」（feed 行内用
   payload 渲染；推送本地化文案不含变量）。
 - 同一社区被驳回、重新提交、再驳回会产生两条 feed 行（按审计事件去重），不是覆盖。
+
+## App Links / Universal Links 与 `/u/{loopId}`（决策 0090，S98）
+
+这三条路径**不在 `/v2` 下、不进 OpenAPI**，无需任何 header 或鉴权，由系统（Apple
+CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机本身，例如
+`https://api-dev.quant-dinger.cc`、`https://api-staging.quant-dinger.cc`。
+
+| 路径                                          | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                                                                                             |
+| --------------------------------------------- | ---- | -------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/apple-app-site-association` | 200  | `application/json`         | `public, max-age=3600` | `applinks.details[0] = {appIDs:["867CN6U7W9.com.cywd.loop"], components:[{"/":"/u/*"}]}`；配置了 `PASSKEY_IOS_TEAM_ID` 时另有 `webcredentials.apps`（决策 0063）                 |
+| `GET /.well-known/assetlinks.json`            | 200  | `application/json`         | `public, max-age=3600` | 第一条：`handle_all_urls`、`com.cywd.loop`、debug keystore 指纹 + `ANDROID_RELEASE_CERT_SHA256`；配置了 `PASSKEY_ANDROID_CERT_SHA256` 时第二条是 passkey 声明（决策 0063，不变） |
+| `GET /u/{loopId}`                             | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：大写 LOOP ID +「在 LOOP 里添加好友」；`APP_DOWNLOAD_URL` 配置时多一个「下载 LOOP」链接                                                                      |
+| `GET /u/<格式不对>`                           | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                                                                                   |
+
+- `/u/{loopId}` 接受 `LOOP-` + 8 位字母数字，大小写不敏感；**不查库**，页面只回显 URL
+  里的 ID，不说明账号是否存在，不含任何用户资料、脚本或第三方资源（CSP `default-src 'none'`）。
+- 装了 App 时系统直接把 `https://<host>/u/LOOP-XXXXXXXX` 交给 App（客户端决策 0104），
+  这个页面不会出现。
+- 无 unavailable 状态：两份关联文件总是发布；passkey 部分缺配置时只是不出现对应字段/声明。
