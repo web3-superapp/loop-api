@@ -708,6 +708,8 @@ Base URL：`https://api-dev.<域名>`（与其它 V2 模块相同）。Headers�
 
 **形状变更**：`graduated` 从单一 `unavailable` 对象变为按 `status` 区分的联合（OpenAPI `oneOf`）。严格解码的客户端必须同批改。
 
+**灰度开关**：服务端 `LAUNCH_GRADUATED_LIST=off|on`，缺省 `off`。`off` 时 `graduated` 与改动前逐字节相同（恒为 `LAUNCH_CONTRACT_BASELINE_PENDING`，即使合约已配置）；只有所有在用客户端都能解码 `available` 分支后才会切 `on`。新客户端两种情况都要能处理。
+
 `available`：
 
 ```json

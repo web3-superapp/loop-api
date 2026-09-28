@@ -1615,6 +1615,7 @@ export async function buildApp(
           contract: launchContractAdapter,
           chain: database.launchChain ?? null,
           wallets: database.accountWallets ?? null,
+          graduatedListEnabled: config.launchGraduatedListEnabled,
           // Decision 0077: the Intent prepare reads the launch slot and
           // walks the Decision 0065 canary; BSC_WRITES_ENABLED stays the
           // only switch.

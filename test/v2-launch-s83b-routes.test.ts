@@ -291,6 +291,12 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       };
       return { launch, chain };
     };
+    // LAUNCH_GRADUATED_LIST=on unless a test says otherwise.
+    const createOn = (options: Parameters<typeof createApp>[0] = {}) =>
+      createApp({
+        ...options,
+        env: { LAUNCH_GRADUATED_LIST: "on", ...options.env },
+      });
     const graduatedOf = async (app: FastifyInstance) => {
       const response = await get(app, "/v2/launch/overview");
       expect(response.statusCode).toBe(200);
@@ -309,7 +315,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     };
 
     it("is available with an empty list when no projected sale has LP-lock evidence", async () => {
-      const app = await createApp({
+      const app = await createOn({
         ...scenario([
           {
             n: 1,
@@ -346,7 +352,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     });
 
     it("lists LP_LOCKED and COMPLETED sales, latest LPNFTLocked block first, in the segment summary shape", async () => {
-      const app = await createApp({
+      const app = await createOn({
         ...scenario([
           {
             n: 1,
@@ -420,7 +426,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
         liquidityState: "LP_LOCKED",
         lpLockedBlockNumber: String(100 + index),
       }));
-      const app = await createApp({ ...scenario(rows) });
+      const app = await createOn({ ...scenario(rows) });
       const body = await graduatedOf(app);
       expect(body.graduated.launches).toHaveLength(50);
       expect(body.graduated.launches?.[0]?.launchId).toBe(idFor(55));
@@ -428,7 +434,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     });
 
     it("says LAUNCH_ONCHAIN_STATE_NOT_INDEXED without a lane checkpoint", async () => {
-      const app = await createApp({
+      const app = await createOn({
         chain: chainRepositoryFake({ checkpoint: null }),
       });
       expect((await graduatedOf(app)).graduated).toEqual({
@@ -438,7 +444,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
     });
 
     it("says LAUNCH_ONCHAIN_STATE_READ_FAILED when the projections cannot be read; segments keep their fallback", async () => {
-      const app = await createApp({
+      const app = await createOn({
         chain: {
           ...chainRepositoryFake(),
           listStateProjections: () =>
@@ -468,7 +474,7 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
         status: "unavailable",
         reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
       } as const;
-      const app = await createApp({
+      const app = await createOn({
         adapter: {
           ...createFakeLaunchAdapter(createFakeLaunchChainState()),
           currentAvailability: () => missing,
@@ -482,8 +488,31 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       });
     });
 
+    it("LAUNCH_GRADUATED_LIST=off (default) keeps the pre-S83b7b bytes with a configured, indexed contract", async () => {
+      const graduatedRows = scenario([
+        {
+          n: 1,
+          saleState: "SUCCEEDED",
+          liquidityState: "LP_LOCKED",
+          lpLockedBlockNumber: "900",
+        },
+      ]);
+      for (const env of [{}, { LAUNCH_GRADUATED_LIST: "off" }]) {
+        const app = await createApp({ env, ...graduatedRows });
+        const response = await get(app, "/v2/launch/overview");
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toContain(
+          '"graduated":{"status":"unavailable","reasonCode":"LAUNCH_CONTRACT_BASELINE_PENDING"},"myEligibility":',
+        );
+        // The segments still follow the projection (S83b7 is not gated).
+        expect(
+          response.json<{ segments: { ended: unknown[] } }>().segments.ended,
+        ).toHaveLength(1);
+      }
+    });
+
     it("keeps the Decision 0036 bytes without a configured contract", async () => {
-      const app = await createApp({
+      const app = await createOn({
         env: {
           LAUNCH_CONTRACT_ADDRESS: "",
           LAUNCH_CONTRACT_VERSION: "",

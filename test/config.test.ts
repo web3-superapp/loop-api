@@ -632,6 +632,27 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses LAUNCH_GRADUATED_LIST as off|on, default off, and refuses anything else (Decision 0077 S83b7b)", () => {
+    expect(loadConfig(validEnvironment()).launchGraduatedListEnabled).toBe(
+      false,
+    );
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["LAUNCH_GRADUATED_LIST"] = value;
+      expect(loadConfig(environment).launchGraduatedListEnabled).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1", "yes"]) {
+      const environment = validEnvironment();
+      environment["LAUNCH_GRADUATED_LIST"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /LAUNCH_GRADUATED_LIST/,
+      );
+    }
+  });
+
   it("keeps the shared slot without endpoints when the primary chain has none", () => {
     const config = loadConfig(validEnvironment());
     expect(config.launchChain).toEqual({

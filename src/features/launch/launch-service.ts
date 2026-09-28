@@ -107,6 +107,12 @@ export interface LaunchServiceDependencies {
   readonly wallets?: AccountWalletRepository | null;
   /** Intent prepare runtime; absent keeps the Intent route 503. */
   readonly intentRuntime?: LaunchIntentRuntime | null;
+  /**
+   * `LAUNCH_GRADUATED_LIST=on` (Decision 0077 S83b7b). Absent or false keeps
+   * `graduated` at `unavailable(LAUNCH_CONTRACT_BASELINE_PENDING)` in every
+   * state, byte-identical to before, for clients without the new branch.
+   */
+  readonly graduatedListEnabled?: boolean;
   readonly now?: () => Date;
 }
 
@@ -813,6 +819,7 @@ export function createLaunchService(
   const chain = dependencies.chain ?? null;
   const wallets = dependencies.wallets ?? null;
   const intentRuntime = dependencies.intentRuntime ?? null;
+  const graduatedListEnabled = dependencies.graduatedListEnabled === true;
   const now = dependencies.now ?? ((): Date => new Date());
 
   /** The lane checkpoint of the launch chain, or null (never throws). */
@@ -1027,7 +1034,11 @@ export function createLaunchService(
     projections: ReadonlyMap<string, LaunchStateProjectionRecord>,
     projectionsReadFailed: boolean,
   ): UnavailableProjection | LaunchGraduatedAvailable {
-    if (contract === null || contract.contract === null) {
+    if (
+      !graduatedListEnabled ||
+      contract === null ||
+      contract.contract === null
+    ) {
       return unavailable(launchReasonCodes.contractBaselinePending);
     }
     const state = contract.currentAvailability();
