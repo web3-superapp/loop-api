@@ -684,8 +684,10 @@ describe("LOOP API V2 market module", () => {
   async function createApp(
     dependencies = fakes(),
     overrides: Readonly<Record<string, string>> = {},
+    tokenLogoFetch?: typeof fetch,
   ) {
     const app = await buildApp({
+      ...(tokenLogoFetch === undefined ? {} : { tokenLogoFetch }),
       config: testConfig(overrides),
       contractSurface: "v2",
       database: dependencies.database,
@@ -986,12 +988,13 @@ describe("LOOP API V2 market module", () => {
     ]);
   });
 
-  describe("token logos (Decision 0072)", () => {
-    const trustWallet =
-      "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain";
-    const wbnbLogo = `${trustWallet}/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png`;
-    const usdtLogo = `${trustWallet}/assets/0x55d398326f99059fF775485246999027B3197955/logo.png`;
-    const nativeLogo = `${trustWallet}/info/logo.png`;
+  describe("token logos (Decisions 0072, 0089)", () => {
+    // Decision 0089: every published URL is this API's logo proxy; `source`
+    // and `observedAt` still name the 0072 origin the projection chose.
+    const proxy = "http://127.0.0.1:3000/v2/market/logos/eip155:56";
+    const wbnbLogo = `${proxy}/${wbnb}.png`;
+    const usdtLogo = `${proxy}/${usdt}.png`;
+    const nativeLogo = `${proxy}/native.png`;
     const dexscreenerImage = `https://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`;
 
     /** The standard pairs fake with `imageUrl` on WBNB's deepest (v2) pair. */
@@ -1050,7 +1053,7 @@ describe("LOOP API V2 market module", () => {
       ]);
       expect(body.watchlist.items[0]?.logo).toEqual({
         status: "available",
-        url: dexscreenerImage,
+        url: wbnbLogo,
         source: "dexscreener",
         observedAt: fetchedAt,
       });
@@ -1065,13 +1068,56 @@ describe("LOOP API V2 market module", () => {
         assetId: wbnbAssetId,
         logo: {
           status: "available",
-          url: dexscreenerImage,
+          url: wbnbLogo,
           source: "dexscreener",
         },
       });
     });
 
-    it("drops a Provider image off the host allow-list and publishes the rule URL", async () => {
+    it("serves the published URL through the proxy from the DexScreener image cached with the pair fact", async () => {
+      const picture = Buffer.alloc(96, 7);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(
+        picture,
+      );
+      const upstream: string[] = [];
+      const tokenLogoFetch = ((input: string | URL | Request) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        upstream.push(url);
+        return Promise.resolve(
+          url === dexscreenerImage
+            ? new Response(new Uint8Array(picture), { status: 200 })
+            : new Response(null, { status: 404 }),
+        );
+      }) as typeof fetch;
+      const { app } = await createApp(
+        { ...fakes(), pairsProvider: pairsProviderWithImage(dexscreenerImage) },
+        {},
+        tokenLogoFetch,
+      );
+      const asset = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets/${wbnbAssetId}`,
+        headers: commonHeaders(),
+      });
+      const logo = asset.json<{ logo: { url: string; source: string } }>().logo;
+      expect(logo).toMatchObject({ url: wbnbLogo, source: "dexscreener" });
+      // An image loader: no Bearer, no LOOP headers.
+      const image = await app.inject({
+        method: "GET",
+        url: new URL(logo.url).pathname,
+      });
+      expect(image.statusCode).toBe(200);
+      expect(image.headers["content-type"]).toBe("image/png");
+      expect(image.rawPayload.equals(picture)).toBe(true);
+      expect(upstream).toEqual([dexscreenerImage]);
+    });
+
+    it("drops a Provider image off the host allow-list and names the rule origin", async () => {
       const { app } = await createApp({
         ...fakes(),
         pairsProvider: pairsProviderWithImage("https://evil.example/logo.png"),
@@ -1103,7 +1149,7 @@ describe("LOOP API V2 market module", () => {
         [
           wbnbAssetId,
           {
-            url: dexscreenerImage,
+            url: wbnbLogo,
             source: "dexscreener",
             observedAt: fetchedAt,
           },
@@ -1130,7 +1176,7 @@ describe("LOOP API V2 market module", () => {
       }
     });
 
-    it("publishes the rule URL even when no Provider is configured: a logo is not a market fact", async () => {
+    it("publishes the logo even when no Provider is configured: a logo is not a market fact", async () => {
       const { app } = await createApp(fakes({ providers: false }));
       const response = await app.inject({
         method: "GET",
@@ -1143,7 +1189,7 @@ describe("LOOP API V2 market module", () => {
       });
     });
 
-    it("publishes the base token's rule URL on new-pairs rows and unavailable when the Provider named no base token", async () => {
+    it("publishes the base token's logo on new-pairs rows and unavailable when the Provider named no base token", async () => {
       const { provider } = candlesProviderFake();
       const candlesProvider: CandlesProvider = {
         ...provider,
@@ -1799,7 +1845,7 @@ describe("LOOP API V2 market module", () => {
         // The unregistered path carries DexScreener's picture too (Decision 0072).
         logo: {
           status: "available",
-          url: `https://cdn.dexscreener.com/tokens/bsc/${weth}.png`,
+          url: `http://127.0.0.1:3000/v2/market/logos/eip155:56/${weth}.png`,
           source: "dexscreener",
           observedAt: fetchedAt,
         },

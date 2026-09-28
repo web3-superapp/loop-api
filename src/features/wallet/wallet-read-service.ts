@@ -56,8 +56,8 @@ import type {
 } from "../market/market-fact-service.js";
 import {
   observedLogoImage,
-  projectTokenLogo,
   type TokenLogoProjection,
+  type TokenLogoProjector,
 } from "../market/token-logo.js";
 
 /**
@@ -362,6 +362,8 @@ export interface WalletReadServiceLogger {
 }
 
 export interface CreateWalletReadServiceInput {
+  /** Publishes every balance row's logo as this API's proxy URL (Decision 0089). */
+  readonly tokenLogos: TokenLogoProjector;
   readonly repository: AccountWalletRepository;
   readonly indexerRepository: BscIndexerRepository;
   readonly assetRegistry: AssetRegistryService;
@@ -711,6 +713,7 @@ async function projectLaunchChainBalance(
   client: BscReadClient | null,
   address: string,
   gasReserveRawWei: bigint,
+  tokenLogos: TokenLogoProjector,
   usd1Target: LaunchChainUsd1Target | null = null,
   deadlineMs: number = launchChainReadDeadlineMs,
 ): Promise<LaunchChainBalanceProjection | null> {
@@ -762,6 +765,7 @@ async function projectLaunchChainBalance(
     assetId,
     native,
     gasReserveRawWei,
+    tokenLogos,
   );
   const usd1 = usd1FromRead(usd1Read);
   if (usd1 === null) {
@@ -879,6 +883,7 @@ function projectLaunchChainNative(
   assetId: string,
   settled: LaunchSlotRead<BscBalanceReadResult>,
   gasReserveRawWei: bigint,
+  tokenLogos: TokenLogoProjector,
 ): LaunchChainBalanceProjection {
   const chainId = client.chainId;
   if (!("value" in settled)) {
@@ -924,7 +929,7 @@ function projectLaunchChainNative(
       assetId,
       symbol: nativeSymbolForLaunchChain(chainId),
       decimals: bscNativeDecimals,
-      logo: projectTokenLogo({ chainId, address: null, providerImage: null }),
+      logo: tokenLogos.project({ chainId, address: null, providerImage: null }),
       rawValue: rawValue.toString(10),
       displayBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
       availableBalance: formatDecimalAmount(rawValue, bscNativeDecimals),
@@ -1332,6 +1337,7 @@ export function createWalletReadService(
             launchChainClient,
             wallet.address,
             input.gasReserveRawWei,
+            input.tokenLogos,
             input.launchUsd1 ?? null,
           ),
         )
@@ -1555,7 +1561,7 @@ export function createWalletReadService(
             name: asset.name,
             decimals: asset.decimals,
             address: asset.address,
-            logo: projectTokenLogo({
+            logo: input.tokenLogos.project({
               chainId: asset.chainId,
               address: asset.address,
               providerImage: logoImage,

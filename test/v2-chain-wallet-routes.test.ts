@@ -823,7 +823,9 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     // The fixtures were generated from the integration/v2 sources at
     // 25ca0c3 (before this decision) with these same fakes. Decision 0072
     // added the `logo` field to every balance row; the balances fixture
-    // was regenerated with it (rule URLs only: no market runtime here).
+    // was regenerated with it. Decision 0089: without the `market` module
+    // the logo proxy route is not served, so every logo is
+    // TOKEN_LOGO_PROXY_UNAVAILABLE here (regenerated again).
     const baseline = (name: string): string =>
       readFileSync(
         new URL(`./fixtures/s9-baseline/${name}.json`, import.meta.url),
@@ -1860,7 +1862,10 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
   });
 
   it("projects the watchlist with registry identity per asset", async () => {
-    const { app } = await createApp();
+    // `market` serves the logo proxy route the items' logos point at.
+    const { app } = await createApp(fakes(), {
+      V2_MODULES_ENABLED: "chain,wallet,watchlist,market",
+    });
     const response = await app.inject({
       method: "GET",
       url: "/v2/watchlist",
@@ -1885,7 +1890,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
               },
               logo: {
                 status: "available",
-                url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png",
+                url: `http://127.0.0.1:3000/v2/market/logos/eip155:56/${wbnb}.png`,
                 source: "trustwallet",
                 observedAt: null,
               },

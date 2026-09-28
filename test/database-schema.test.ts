@@ -138,6 +138,7 @@ describe("database schema readiness contract", () => {
       "public.launch_allowlists",
       "public.launch_round_allowlist_roots",
       "public.launch_settlement_records",
+      "public.token_logo_cache",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

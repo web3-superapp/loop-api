@@ -1,3 +1,4 @@
+import { configureOutboundKeepAlive } from "./core/http/outbound-keep-alive.js";
 import {
   createBscIndexerWorker,
   type BscIndexerLaneAvailabilityEvent,
@@ -235,6 +236,12 @@ export interface RunReconciliationWorkerOptions {
   readonly createMarketSparklineWarmWorker?: MarketSparklineWarmWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
+  /**
+   * Installs the process-wide outbound keep-alive dispatcher before any
+   * Provider client is built (Decision 0088 ruling 1, S93b). Test seam; the
+   * default is `configureOutboundKeepAlive`.
+   */
+  readonly configureOutboundKeepAlive?: () => unknown;
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -257,6 +264,10 @@ export const processWorkerSignalSource: WorkerSignalSource =
 export async function runReconciliationWorker(
   options: RunReconciliationWorkerOptions,
 ): Promise<void> {
+  // Decision 0088 ruling 1 (S93b): the worker's Provider reads (RPC,
+  // DexScreener, GeckoTerminal, Privy, Stream, FCM) reuse idle connections
+  // for 60 s like the API's, instead of Node's 4 s default.
+  (options.configureOutboundKeepAlive ?? configureOutboundKeepAlive)();
   const signalSource = options.signalSource ?? processWorkerSignalSource;
   const databaseFactory = options.createDatabase ?? createPostgresDatabase;
   const workerFactory = options.createWorker ?? createReconciliationWorker;

@@ -127,6 +127,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/market/assets/{assetId}/candles",
       "/v2/market/assets/{assetId}/holders",
       "/v2/market/assets/{assetId}/trades",
+      "/v2/market/logos/{chainId}/{file}",
       "/v2/market/new-pairs",
       "/v2/market/overview",
       "/v2/market/smart-money",
@@ -188,7 +189,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(137);
+    expect(operationIds).toHaveLength(138);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
@@ -1100,6 +1101,49 @@ describe("committed OpenAPI artifact", () => {
       additionalProperties: false,
       required: ["balance", "allowance"],
     });
+  });
+
+  it("publishes the token logo proxy as a public image route and every logo URL as a proxy URL (Decision 0089)", async () => {
+    const committed = await readFile(openApiV2ArtifactPath, "utf8");
+    const document = JSON.parse(committed) as OpenApiDocument;
+    const operation = document.paths["/v2/market/logos/{chainId}/{file}"]?.[
+      "get"
+    ] as
+      | {
+          readonly operationId?: string;
+          readonly security?: readonly unknown[];
+          readonly parameters?: readonly { readonly name: string }[];
+          readonly responses?: Record<
+            string,
+            { readonly content?: Record<string, unknown> }
+          >;
+        }
+      | undefined;
+    expect(operation?.operationId).toBe("getV2MarketTokenLogo");
+    expect(operation?.security).toEqual([]);
+    expect(operation?.parameters?.map((parameter) => parameter.name)).toEqual([
+      "chainId",
+      "file",
+    ]);
+    expect(Object.keys(operation?.responses ?? {}).sort()).toEqual([
+      "200",
+      "302",
+      "304",
+      "400",
+      "404",
+      "500",
+      "502",
+      "503",
+    ]);
+    expect(Object.keys(operation?.responses?.["200"]?.content ?? {})).toEqual([
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+    ]);
+    // No logo URL pattern names an upstream host any more.
+    expect(committed).not.toContain("githubusercontent");
+    expect(committed).toContain("/v2/market/logos/(eip155:56)/");
   });
 
   it("publishes one notification id pattern across every V2 surface", async () => {

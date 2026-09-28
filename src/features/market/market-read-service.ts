@@ -86,10 +86,8 @@ import { observedHolderCount } from "../../integrations/market/goplus-adapter.js
 import {
   observedLogoImage,
   observedLogoImageFromPairs,
-  projectTokenLogo,
-  projectTokenLogoForAddress,
-  projectTokenLogoForAssetId,
   type ObservedLogoImage,
+  type TokenLogoProjector,
   type TokenLogoProjection,
 } from "./token-logo.js";
 
@@ -462,6 +460,8 @@ export interface CreateMarketReadServiceInput {
    * other fact uses.
    */
   readonly staleGraceSeconds: number;
+  /** Publishes every asset row's logo as this API's proxy URL (Decision 0089). */
+  readonly tokenLogos: TokenLogoProjector;
   /**
    * How long the overview waits for its Provider reads before it answers
    * from what it has (Decision 0086). Defaults to
@@ -1351,7 +1351,7 @@ export function createMarketReadService(
                     asset: null,
                     // The rule URL follows from the address alone; a row the
                     // registry cannot vouch for still shows its picture.
-                    logo: projectTokenLogoForAssetId(item.assetId),
+                    logo: input.tokenLogos.projectForAssetId(item.assetId),
                     price: unavailableFact("ASSET_NOT_READABLE"),
                     priceChange24h: unavailableFact("ASSET_NOT_READABLE"),
                     sparkline: unavailableSparkline("ASSET_NOT_READABLE"),
@@ -1365,7 +1365,7 @@ export function createMarketReadService(
                 Object.freeze({
                   assetId: asset.assetId,
                   asset: summarize(asset),
-                  logo: projectTokenLogo({
+                  logo: input.tokenLogos.project({
                     chainId: asset.chainId,
                     address: asset.address,
                     providerImage: facts.logoImage,
@@ -1404,7 +1404,7 @@ export function createMarketReadService(
           Object.freeze({
             assetId: asset.assetId,
             asset: summarize(asset),
-            logo: projectTokenLogo({
+            logo: input.tokenLogos.project({
               chainId: asset.chainId,
               address: asset.address,
               providerImage: facts.logoImage,
@@ -1509,7 +1509,10 @@ export function createMarketReadService(
           marketCap: facts.marketCap,
           fdv: facts.fdv,
           primaryPair: facts.primaryPair,
-          logo: projectTokenLogoForAssetId(resolved.assetId, facts.logoImage),
+          logo: input.tokenLogos.projectForAssetId(
+            resolved.assetId,
+            facts.logoImage,
+          ),
           community: unavailableBlock(marketReasonCodes.communityNotBound),
           security: goplus.security,
           holderCount: goplus.holderCount,
@@ -1553,7 +1556,7 @@ export function createMarketReadService(
         marketCap: facts.marketCap,
         fdv: facts.fdv,
         primaryPair: facts.primaryPair,
-        logo: projectTokenLogo({
+        logo: input.tokenLogos.project({
           chainId: asset.chainId,
           address: asset.address,
           providerImage: facts.logoImage,
@@ -2156,7 +2159,7 @@ export function createMarketReadService(
                   pool.baseTokenAddress === null
                     ? null
                     : (byAddress.get(pool.baseTokenAddress) ?? null),
-                logo: projectTokenLogoForAddress(
+                logo: input.tokenLogos.projectForAddress(
                   input.chainId,
                   pool.baseTokenAddress,
                 ),

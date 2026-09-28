@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createTokenLogoProjector } from "../src/features/market/token-logo.js";
 import type { MarketConfig } from "../src/config.js";
 import type { BscIndexerRepository } from "../src/database/bsc-indexer-repository.js";
 import type {
@@ -320,6 +321,9 @@ function subject(
     ],
   );
   const service = createMarketReadService({
+    tokenLogos: createTokenLogoProjector({
+      publicBaseUrl: "https://api.loop.test",
+    }),
     registry,
     facts: { ...facts, recallPrimaryPairPriceChange: recall },
     cache: cache.repository,
@@ -466,6 +470,9 @@ describe("market overview reads (Decision 0086)", () => {
       now: () => later,
     });
     const service = createMarketReadService({
+      tokenLogos: createTokenLogoProjector({
+        publicBaseUrl: "https://api.loop.test",
+      }),
       registry: {
         listReadableAssets: vi.fn(() => Promise.resolve(readable)),
       } as unknown as ChainRegistryRepository,
@@ -516,6 +523,9 @@ describe("market asset detail reads (Decision 0088)", () => {
     });
     const token = tokenAsset(usdt, "USDT");
     const service = createMarketReadService({
+      tokenLogos: createTokenLogoProjector({
+        publicBaseUrl: "https://api.loop.test",
+      }),
       registry: {
         getAsset: vi.fn(() => Promise.resolve(token)),
       } as unknown as ChainRegistryRepository,

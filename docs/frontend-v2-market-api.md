@@ -25,7 +25,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 不表示某个数字一定存在。
 
 - 全部读接口；**没有** `Idempotency-Key`（带了返回 `400 INVALID_REQUEST`）。
-- 所有响应 `Cache-Control: no-store`。
+- 所有响应 `Cache-Control: no-store`，**唯一例外**是图片代理 `GET /v2/market/logos/…`
+  的 200/302/304（公开、可被 CDN 缓存，见 §2b）。
 
 ## 2. 事实（fact）的固定形状
 
@@ -76,9 +77,9 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `MARKET_PAIR_UNREPRESENTABLE`            | （决策 0074 §5）Provider **给了**以该资产为 base 的交易对，但每一条都带着本端拒绝的值（池标识不是地址、数字不是规范十进制），所以一条都没发布。与 `MARKET_PAIR_NOT_FOUND`（Provider 不知道任何交易对）区分：前者是"解析失败"，后者是"没有"                                                                                                                                  |
 | `MARKET_SPARKLINE_*`                     | 行折线专用，见 §3a                                                                                                                                                                                                                                                                                                                                                          |
 
-## 2a. 代币 logo：`logo` 字段（决策 0072）
+## 2a. 代币 logo：`logo` 字段（决策 0072，**URL 自决策 0089 起改为 LOOP 自己的图片代理**）
 
-需求方 2026-09-23 裁定"token 都用真实的 logo"。从本步起，**每一处下发资产行的地方**都多一个必填
+需求方 2026-09-23 裁定"token 都用真实的 logo"。**每一处下发资产行的地方**都有一个必填
 `logo` 字段（严格 codec 必须把它加进键集合）：
 
 | 接口                                  | 位置                                                |
@@ -92,35 +93,67 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `GET /v2/search?domain=assets`        | `results[].displaySnapshot.logo`（其它域为 `null`） |
 
 社区详情的"绑定资产卡"没有独立投影（只有 `boundAssetKey`），用
-`GET /v2/market/assets/{assetId}` 的 `logo`。
+`GET /v2/market/assets/{assetId}` 的 `logo`。Launch 项目目前没有任何投影下发 `logo`。
 
-形状（两个变体，一个共享 schema）：
+**为什么改（决策 0089）**：2026-09-28 中国大陆测试者不翻墙时 `raw.githubusercontent.com`
+超时，直连 GitHub / DexScreener CDN 的图标全部加载失败，只剩首字母。从本步起 `url`
+**一律指向本 API 的图片代理**，服务端去上游取图并缓存；上游主机不再出现在任何响应里。
+**响应形状不变**，客户端无需改 codec，只要照旧加载 `url`。
+
+形状（一个共享 schema）：
 
 ```json
-{ "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "2026-09-23T08:00:00.000Z" }
-{ "status": "available", "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png", "source": "trustwallet", "observedAt": null }
+{ "status": "available", "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c.png", "source": "dexscreener", "observedAt": "2026-09-23T08:00:00.000Z" }
+{ "status": "available", "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/native.png", "source": "trustwallet", "observedAt": null }
 { "status": "unavailable", "reasonCode": "TOKEN_LOGO_ADDRESS_UNKNOWN" }
 ```
 
-- **主机白名单**：`url` 只会是 `https://` 且主机严格等于 `cdn.dexscreener.com`、
-  `dd.dexscreener.com`、`raw.githubusercontent.com` 三者之一（OpenAPI 的 `pattern` 已锚定）。
-  后端在 Provider 边界与投影两处各过一次门：其它主机、`http://`、带凭据/端口、超过 512
-  字符的 URL 一律丢弃，**不会**下发。客户端也不要放宽：不是这三个主机的 URL 不要加载。
-- `source: "dexscreener"`：该资产**自己作为 base token** 的 DexScreener 交易对上报的
-  `info.imageUrl`，随价格事实同一份缓存 / TTL 走，`observedAt` = 该事实的 `fetchedAt`。
-  作为 quote 出现的交易对的图片是对方代币的，不会用；原生 BNB 通过 WBNB 代理计价，
-  但 WBNB 的图片不是 BNB 的，原生行永远走下一条规则。
-- `source: "trustwallet"`：固定规则 URL
-  `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/<EIP-55 校验和地址>/logo.png`，原生 BNB 是
-  `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png`。**服务端不探测文件是否存在**，所以 `observedAt` 恒 `null`。
-- **logo 不是行情事实**：Provider 关闭 / 限速 / 不可达时价格块 unavailable，`logo` 仍然是
-  `trustwallet` 规则 URL。它也不能用来合并、匹配或识别资产（决策 0033：只有 `assetId` 是键）。
-- 只有两种 `unavailable`：`TOKEN_LOGO_ADDRESS_UNKNOWN`（new-pairs 里 Provider 没给 base
-  token 地址）、`TOKEN_LOGO_CHAIN_UNSUPPORTED`（Launch 槽 `eip155:97` 的 tBNB 余额行）。
-- **客户端回退规则**：直接加载 `url`（没有服务端图片代理）。任何加载失败（Trust Wallet
-  仓库没有这个代币的文件 → 404、DexScreener CDN 报错、断网）→ 该行回退到现有首字母
-  monogram，**每行每屏只尝试一次，不要循环重试、不要轰炸**。`unavailable` 一开始就画
-  monogram。`source` / `observedAt` 只用于来源展示与排障，不用于选 codec。
+- **`url`** = `<PUBLIC_BASE_URL>/v2/market/logos/eip155:56/<小写地址>.png`，原生 BNB 是
+  `…/native.png`。同一资产在所有接口里是**同一个 URL**（不随来源变化），CDN / 客户端图片缓存
+  按 URL 命中即可。OpenAPI `pattern` 锚定为 `^https?://…/v2/market/logos/eip155:56/(0x[0-9a-f]{40}|native)\.png$`
+  （本地开发 `PUBLIC_BASE_URL` 可能是 http；staging / 生产是 https）。
+- `source` / `observedAt` 含义不变，只说明服务端**优先用哪个上游**：
+  - `dexscreener`：该资产**自己作为 base token** 的 DexScreener 交易对上报的图片，
+    `observedAt` = 该价格事实的 `fetchedAt`。作为 quote 的交易对的图片不用；原生 BNB 虽以
+    WBNB 计价，但 WBNB 的图不是 BNB 的，原生行永远是 `trustwallet`。
+  - `trustwallet`：Trust Wallet 资产仓库的规则文件，`observedAt` 恒 `null`。
+  - 只用于来源展示与排障，**不要**据此选择加载方式。
+- **logo 不是行情事实**：Provider 关闭 / 限速 / 不可达时价格块 unavailable，`logo` 仍下发。
+  它也不能用来合并、匹配或识别资产（只有 `assetId` 是键）。
+- `unavailable` 的 reasonCode（一开始就画 monogram，不要请求任何图片）：
+
+| reasonCode                     | 何时                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| `TOKEN_LOGO_ADDRESS_UNKNOWN`   | new-pairs 里 Provider 没给 base token 地址                                     |
+| `TOKEN_LOGO_CHAIN_UNSUPPORTED` | 非 BSC 主网（Launch 槽 `eip155:97` 的 tBNB 余额行）                            |
+| `TOKEN_LOGO_PROXY_UNAVAILABLE` | 后端未启用 `market` 模块，图片代理路由不存在（已部署的栈都启用，正常不会出现） |
+
+### 2b. `GET /v2/market/logos/{chainId}/{file}` —— 图片代理（决策 0089）
+
+客户端**不需要自己拼这个 URL**，直接用 `logo.url`；这里写清它的行为，便于图片组件与排障。
+
+- **公开资源**：不需要 `Authorization`、不需要 `X-Loop-Contract-Version` 或任何 LOOP 头；
+  普通图片加载器（`Image.network` / `CachedNetworkImage`）直接 GET 即可。带 query 参数 → 400。
+- `chainId` 只接受 `eip155:56`；`file` 只接受 `0x`+40 位十六进制（大小写均可，下发的都是小写）
+  - `.png`，或 `native.png`。
+
+| HTTP | 何时 / 响应                                                                                                                                                                                                                    |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 200  | 图片字节（PNG / JPEG / GIF / WebP，按实际内容给 `Content-Type`，**扩展名恒 `.png` 但内容可能是 JPEG/WebP**，按 `Content-Type` 解码），≤ 256 KiB；`ETag`；`Cache-Control: public, max-age=86400, stale-while-revalidate=604800` |
+| 200  | 同上但 `Cache-Control: public, max-age=300`：优先上游暂时失败，先给了次选来源的图，稍后会换成更好的                                                                                                                            |
+| 304  | 带了 `If-None-Match` 且与当前 `ETag` 相同（空 body）                                                                                                                                                                           |
+| 302  | 原图超过 256 KiB，服务端不代理，`Location` 指向上游（DexScreener / GitHub）。大陆网络下这张图可能仍加载失败 → monogram                                                                                                         |
+| 400  | `INVALID_REQUEST`：链不对、地址不合法、扩展名不对、带 query                                                                                                                                                                    |
+| 404  | `NOT_FOUND`：所有上游都没有这张图（服务端记住 24 h）。新币多半没有，属正常                                                                                                                                                     |
+| 502  | `PROVIDER_UNREACHABLE`（新增错误码，`retryable: true`）：上游 5 s 超时 / 网络错误 / 5xx，服务端没缓存任何东西                                                                                                                  |
+| 500  | `INTERNAL_ERROR`                                                                                                                                                                                                               |
+| 503  | `REQUEST_TIMEOUT`（整请求超时）                                                                                                                                                                                                |
+
+错误体是标准七字段、`Cache-Control: no-store`；图片组件不需要解析它。
+
+**客户端回退规则（不变）**：直接加载 `url`；**任何非 200**（404 / 502 / 302 后加载失败 /
+断网 / 解码失败）→ 该行回退到首字母 monogram，**每行每屏只尝试一次，不要循环重试**。
+`unavailable` 一开始就画 monogram。可以依赖 HTTP 缓存（`ETag` + `max-age`），不需要自建缓存。
 
 ## 3. `GET /v2/market/overview` → `market` 页
 
@@ -133,7 +166,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
       {
         "assetId": "eip155:56:0xbb4c…",
         "asset": { "symbol": "WBNB", "name": "Wrapped BNB", "decimals": 18, "status": "pending" },
-        "logo": { "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
+        "logo": { "status": "available", "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
         "price": { "value": "747.39", "source": "dexscreener", "fetchedAt": "…", "ttlSeconds": 30, "quality": "fresh", "reasonCode": null },
         "priceChange24h": { "value": "0.27", "source": "dexscreener", "…": "…" },
         "sparkline": { "status": "available", "interval": "1h", "closes": ["747.12", "747.48", "…"], "observedAt": "2026-09-23T11:00:00.000Z", "source": "geckoterminal", "quality": "fresh" }
@@ -154,7 +187,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 ```
 
 - `watchlist.items` 顺序 = 自选顺序（跨分组去重）；`asset: null` +
-  `price.reasonCode: ASSET_NOT_READABLE` 表示该资产已不可读（这种行的 `logo` 仍是规则 URL）。
+  `price.reasonCode: ASSET_NOT_READABLE` 表示该资产已不可读（这种行的 `logo` 仍下发，`source: trustwallet`）。
 - 每行必填 `logo`（§2a）。
 - `trending` 只是**按 DexScreener 24h 成交量排序的 registry 资产**（最多 20），
   `recommendationId` 每次响应新生成，UI 上报"看到了哪一份排序"时带上它。
@@ -238,7 +271,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
     "pairAddress": "0x16b9…", "dexId": "pancakeswap", "labels": ["v2"],
     "quoteTokenAddress": "0x55d3…", "quoteTokenSymbol": "USDT", "pairCreatedAt": "2023-04-05T14:12:23.000Z"
   },
-  "logo": { "status": "available", "url": "https://dd.dexscreener.com/ds-data/tokens/bsc/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
+  "logo": { "status": "available", "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0xbb4c….png", "source": "dexscreener", "observedAt": "…" },
   "community": { "status": "unavailable", "reasonCode": "COMMUNITY_NOT_BOUND" },
   "security": {
     "status": "available", "source": "goplus", "fetchedAt": "…", "ttlSeconds": 600, "quality": "fresh", "reasonCode": null,
@@ -256,8 +289,8 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 - `capability.swappable` 恒 `false`；**Swap 入口不渲染**。`capability.value` 与
   `GET /v2/assets/{assetId}` 相同语义。
-- 顶层 `logo` 必填（§2a）：`primaryPair` 带图时是 `dexscreener`，否则（含原生 BNB、
-  Provider 关闭、未登记地址走 GeckoTerminal 路径）是 `trustwallet` 规则 URL。
+- 顶层 `logo` 必填（§2a）：`url` 恒为图片代理；`primaryPair` 带图时 `source: dexscreener`，否则（含原生 BNB、
+  Provider 关闭、未登记地址走 GeckoTerminal 路径）`source: trustwallet`。
 - 价格类事实全部来自 `primaryPair`（以该资产为 base、流动性最深的 DexScreener 交易对）。
   DexScreener 没有可用交易对时，整组事实改由 Provider 顶池查找提供（决策 0064，见 §4a
   末条）：来源在每个事实的 `source` 里自述，不会一个字段来自一个 Provider。仍然没有 →
@@ -585,7 +618,7 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
         "registryAssetId": null,
         "logo": {
           "status": "available",
-          "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x7d03759E5B41E36899833cb2E008455d69A24444/logo.png",
+          "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0x7d03759e5b41e36899833cb2e008455d69a24444.png",
           "source": "trustwallet",
           "observedAt": null
         },
@@ -605,7 +638,7 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
         "registryAssetId": null,
         "logo": {
           "status": "available",
-          "url": "…/assets/<EIP-55>/logo.png",
+          "url": "…/v2/market/logos/eip155:56/<小写地址>.png",
           "source": "trustwallet",
           "observedAt": null
         },
@@ -639,10 +672,10 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
   正常为 0；非 0 时页面可提示"另有 N 行无法识别"。
 - `registryAssetId` 只在 base token 已登记时非空（V4 池同样按 base token 解析）；`dexId` 是 GeckoTerminal 的
   字符串标识（`pancakeswap_v2`、`four-meme`、`uniswap-v4-bsc`……），不要当枚举解析。
-- `logo` 必填（§2a）：新币页没有 DexScreener 交易对事实，一律是 `baseTokenAddress` 的
-  `trustwallet` 规则 URL；`baseTokenAddress: null` 时是
+- `logo` 必填（§2a）：`url` 是 `baseTokenAddress` 的图片代理地址（`source: trustwallet`，
+  代理取图时若该地址已有 DexScreener 交易对缓存则优先用它的图）；`baseTokenAddress: null` 时是
   `{status:"unavailable", reasonCode:"TOKEN_LOGO_ADDRESS_UNKNOWN"}`（画 monogram）。
-  新币多半还没进 Trust Wallet 仓库，加载 404 → monogram，属正常。
+  新币多半没有图，代理回 404 → monogram，属正常。
 
 ## 9. `GET /v2/market/smart-money` → `smart-money` 页
 
@@ -658,6 +691,7 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
 | 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                   |
 | 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56` 的 `assetId`                                                                        |
 | 429  | `RATE_LIMITED`                   | 未登记地址查找配额用尽（asset / candles）                                                          |
+| 502  | `PROVIDER_UNREACHABLE`           | 只有图片代理 `GET /v2/market/logos/…`：上游超时/失败（§2b）                                        |
 | 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置（trades 分页）；未登记地址查找的配额运行时缺失                                   |
 
 Provider 故障**不是 HTTP 错误**：请求 200，受影响的块 `unavailable` 或事实 `quality: stale`。

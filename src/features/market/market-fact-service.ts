@@ -262,6 +262,16 @@ async function runBounded(
   );
 }
 
+/**
+ * Subject-key namespace of the batch snapshots (S93b, Decision 0088 ruling 4).
+ * DexScreener's `/tokens/v1` batch answers one pair per token, its
+ * `/token-pairs/v1` up to 30; the two are not the same fact. The batch row
+ * lives under `tokenbatch:<address>` so it can never overwrite, or be read
+ * as, the per-token `token:<address>` row that every single-token reader
+ * (asset page, wallet prices, alerts, mining) treats as authoritative.
+ */
+export const tokenPairsBatchSubjectPrefix = "tokenbatch:";
+
 export const marketFactKinds = Object.freeze({
   tokenPairs: "token_pairs",
   pair: "pair",
@@ -597,10 +607,15 @@ export function createMarketFactService(
       }
       // One cache query for every subject (Decision 0086): the rows used to
       // be read one round trip after another before the Provider was asked.
+      // It reads both namespaces (S93b): a fresh per-token row is preferred,
+      // then a fresh batch row; only the batch namespace is ever written here.
       let cachedRows: ReadonlyMap<string, MarketFactCacheRecord>;
       try {
         cachedRows = await input.cache.getMany(
-          unique.map((address) => `token:${address}`),
+          unique.flatMap((address) => [
+            `token:${address}`,
+            `${tokenPairsBatchSubjectPrefix}${address}`,
+          ]),
           marketFactKinds.tokenPairs,
           "dexscreener",
         );
@@ -626,21 +641,33 @@ export function createMarketFactService(
         readonly cached: MarketFactCacheRecord | null;
         readonly ageSeconds: number;
       }[] = [];
+      const ageOf = (row: MarketFactCacheRecord | null): number =>
+        row === null
+          ? Number.POSITIVE_INFINITY
+          : (nowMs - Date.parse(row.fetchedAt)) / 1_000;
+      const isFresh = (row: MarketFactCacheRecord | null): boolean => {
+        const age = ageOf(row);
+        return row !== null && age >= 0 && age < row.ttlSeconds;
+      };
       for (const address of unique) {
-        const cached = cachedRows.get(`token:${address}`) ?? null;
-        const ageSeconds =
-          cached === null
-            ? Number.POSITIVE_INFINITY
-            : (nowMs - Date.parse(cached.fetchedAt)) / 1_000;
-        if (
-          cached !== null &&
-          ageSeconds >= 0 &&
-          ageSeconds < cached.ttlSeconds
-        ) {
-          results.set(address, pairsFact(cached, "fresh", null));
+        const single = cachedRows.get(`token:${address}`) ?? null;
+        const batch =
+          cachedRows.get(`${tokenPairsBatchSubjectPrefix}${address}`) ?? null;
+        const fresh = isFresh(single) ? single : isFresh(batch) ? batch : null;
+        if (fresh !== null) {
+          results.set(address, pairsFact(fresh, "fresh", null));
           continue;
         }
-        misses.push({ address, cached, ageSeconds });
+        // Past both TTLs the newer row is the stale fallback.
+        const cached =
+          single === null
+            ? batch
+            : batch === null
+              ? single
+              : Date.parse(batch.fetchedAt) > Date.parse(single.fetchedAt)
+                ? batch
+                : single;
+        misses.push({ address, cached, ageSeconds: ageOf(cached) });
       }
       const chunks: (typeof misses)[] = [];
       for (
@@ -679,7 +706,7 @@ export function createMarketFactService(
               writes.push(async () => {
                 try {
                   await input.cache.put({
-                    subjectKey: `token:${miss.address}`,
+                    subjectKey: `${tokenPairsBatchSubjectPrefix}${miss.address}`,
                     factKind: marketFactKinds.tokenPairs,
                     source: "dexscreener",
                     value: snapshot as unknown as Record<string, unknown>,

@@ -14,6 +14,7 @@ import type { V2SessionService } from "../../features/session/session-service.js
 import type { WalletReadService } from "../../features/wallet/wallet-read-service.js";
 import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-service.js";
 import type { MarketReadService } from "../../features/market/market-read-service.js";
+import type { TokenLogoProxyService } from "../../features/market/token-logo-proxy.js";
 import type { AlertV2Service } from "../../features/alerts/alert-v2-service.js";
 import type { NotificationService } from "../../features/alerts/notification-service.js";
 import type { ApprovalService } from "../../features/wallet-intents/approval-service.js";
@@ -69,6 +70,8 @@ export interface V2RouteDependencies {
   readonly walletReadService: WalletReadService;
   readonly watchlistV2Service: WatchlistV2Service;
   readonly marketReadService: MarketReadService;
+  /** Token logo proxy behind `GET /v2/market/logos/...` (Decision 0089). */
+  readonly tokenLogoProxyService: TokenLogoProxyService;
   readonly alertV2Service: AlertV2Service;
   readonly notificationService: NotificationService;
   readonly chatService: V2ChatService;

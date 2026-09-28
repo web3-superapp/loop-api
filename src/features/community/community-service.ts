@@ -36,8 +36,8 @@ import {
   searchRegistryAssets,
 } from "./asset-search.js";
 import {
-  projectTokenLogoForAssetId,
   type TokenLogoProjection,
+  type TokenLogoProjector,
 } from "../market/token-logo.js";
 import {
   communityPresenceNotObserved,
@@ -955,6 +955,8 @@ interface PageRequest {
 
 export interface CommunityServiceOptions {
   readonly repository: CommunityRepository;
+  /** Publishes the asset search rows' logos as this API's proxy URL (Decision 0089). */
+  readonly tokenLogos: TokenLogoProjector;
   /**
    * Read-only communication projection (Decision 0032). Absent means the
    * communication runtime is not composed, so chat and voice report
@@ -1428,7 +1430,7 @@ export function createCommunityService(
               title: asset.symbol,
               subtitle: asset.name,
               avatarRef: null,
-              logo: projectTokenLogoForAssetId(asset.assetId),
+              logo: options.tokenLogos.projectForAssetId(asset.assetId),
               memberCount: null,
               verificationStatus:
                 asset.status === "verified"

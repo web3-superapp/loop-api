@@ -36,6 +36,10 @@ import {
   type MarketFactCacheRepository,
 } from "./market-fact-cache-repository.js";
 import {
+  createPostgresTokenLogoCacheRepository,
+  type TokenLogoCacheRepository,
+} from "./token-logo-cache-repository.js";
+import {
   createPostgresAlertV2Repository,
   type AlertV2Repository,
 } from "./alert-v2-repository.js";
@@ -163,6 +167,8 @@ export interface Database {
   readonly alerts: AlertRepository;
   /** Market Provider fact cache (Decision 0034). */
   readonly marketFacts?: MarketFactCacheRepository;
+  /** Token logo proxy cache (Decision 0089). */
+  readonly tokenLogoCache?: TokenLogoCacheRepository;
   /** V2 price alerts keyed by asset ID (Decision 0034). */
   readonly alertsV2?: AlertV2Repository;
   /** Context notification feed and V2 preferences (Decision 0034). */
@@ -314,6 +320,7 @@ export function createPostgresDatabase(
   const bscIndexerWallets = createPostgresBscIndexerWalletSetRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
+  const tokenLogoCache = createPostgresTokenLogoCacheRepository(pool);
   const alertsV2 = createPostgresAlertV2Repository(pool);
   const notifications = createPostgresNotificationRepository(pool);
   const push = createPostgresPushRepository(pool);
@@ -372,6 +379,7 @@ export function createPostgresDatabase(
     bscIndexerWallets,
     alerts,
     marketFacts,
+    tokenLogoCache,
     alertsV2,
     notifications,
     push,

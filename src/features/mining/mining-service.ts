@@ -12,8 +12,8 @@ import {
 } from "../community/referral-rules.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
-  projectTokenLogoForAssetId,
   type TokenLogoProjection,
+  type TokenLogoProjector,
 } from "../market/token-logo.js";
 import {
   hasNoMiningSnapshot,
@@ -562,6 +562,8 @@ export function createMiningService(dependencies: {
   readonly repository: MiningRepository;
   /** Asset Registry rows: the only source of a row's `symbol`. */
   readonly registry: Pick<ChainRegistryRepository, "listAssets">;
+  /** Publishes every asset row's logo as this API's proxy URL (Decision 0089). */
+  readonly tokenLogos: TokenLogoProjector;
   readonly now?: () => Date;
 }): MiningService {
   const { repository, registry } = dependencies;
@@ -728,7 +730,7 @@ export function createMiningService(dependencies: {
           return Object.freeze({
             assetId,
             symbol: symbols.get(assetId) ?? null,
-            logo: projectTokenLogoForAssetId(assetId),
+            logo: dependencies.tokenLogos.projectForAssetId(assetId),
             reasonCode:
               selection.kind === "skip"
                 ? selection.reasonCode
@@ -746,7 +748,7 @@ export function createMiningService(dependencies: {
               Object.freeze({
                 assetId: row.assetId,
                 symbol: symbols.get(row.assetId) ?? null,
-                logo: projectTokenLogoForAssetId(row.assetId),
+                logo: dependencies.tokenLogos.projectForAssetId(row.assetId),
                 holding: row.holding,
                 referencePriceUsd: row.referencePriceUsd,
                 referencePriceQuality: row.referencePriceQuality,

@@ -15,7 +15,7 @@ export const v2ErrorCategories = Object.freeze([
 export type V2ErrorCategory = (typeof v2ErrorCategories)[number];
 
 export type V2ErrorStatusCode =
-  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503;
+  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
 
 export interface V2ErrorCatalogEntry {
   readonly statusCode: V2ErrorStatusCode;
@@ -170,6 +170,17 @@ export const v2ErrorCatalog = Object.freeze({
     category: "availability",
     retryable: true,
     userMessageKey: "errors.provider.disconnected",
+    includeBearerChallenge: false,
+  },
+  /**
+   * Decision 0089: an upstream this API proxies (today: the token logo
+   * origins) timed out or failed. Nothing was cached; retry later.
+   */
+  PROVIDER_UNREACHABLE: {
+    statusCode: 502,
+    category: "availability",
+    retryable: true,
+    userMessageKey: "errors.provider.unreachable",
     includeBearerChallenge: false,
   },
   QUOTE_EXPIRED: {

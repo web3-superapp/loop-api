@@ -1139,13 +1139,17 @@ describe("LOOP API V2 community, social, and search modules", () => {
 
   it("searches the Asset Registry by symbol, name, or address prefix without the alias quota", async () => {
     const dependencies = fakes();
-    const { app, consumeIssuanceQuota } = await createApp({
-      ...dependencies,
-      database: {
-        ...dependencies.database,
-        chainRegistry: registryWithAssets(),
+    // `market` serves the logo proxy the rows' logos point at (Decision 0089).
+    const { app, consumeIssuanceQuota } = await createApp(
+      {
+        ...dependencies,
+        database: {
+          ...dependencies.database,
+          chainRegistry: registryWithAssets(),
+        },
       },
-    });
+      { V2_MODULES_ENABLED: "community,search,market" },
+    );
 
     const bySymbol = await app.inject({
       method: "GET",
@@ -1168,7 +1172,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
             avatarRef: null,
             logo: {
               status: "available",
-              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d/logo.png",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d.png",
               source: "trustwallet",
               observedAt: null,
             },
@@ -1186,7 +1190,7 @@ describe("LOOP API V2 community, social, and search modules", () => {
             avatarRef: null,
             logo: {
               status: "available",
-              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x55d398326f99059fF775485246999027B3197955/logo.png",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x55d398326f99059ff775485246999027b3197955.png",
               source: "trustwallet",
               observedAt: null,
             },

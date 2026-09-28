@@ -46992,7 +46992,7 @@
                                 "description": "The token picture of an asset result (Decision 0072); null for user and community results, whose picture is avatarRef.",
                                 "anyOf": [
                                   {
-                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                     "anyOf": [
                                       {
                                         "type": "object",
@@ -47010,7 +47010,7 @@
                                           },
                                           "url": {
                                             "type": "string",
-                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                             "maxLength": 512
                                           },
                                           "source": {
@@ -47623,6 +47623,412 @@
         }
       }
     },
+    "/v2/market/logos/{chainId}/{file}": {
+      "get": {
+        "operationId": "getV2MarketTokenLogo",
+        "summary": "Get a token logo through the LOOP logo proxy",
+        "tags": ["market"],
+        "description": "Public image resource (Decision 0089); no authentication and no LOOP headers. The server picks the picture by the Decision 0072 origin rules (the DexScreener image of the token's own base pair when the pair fact has one, else the Trust Wallet assets-repository file), fetches it once with a 5 s timeout, and keeps it for 7 days. 200: PNG/JPEG/GIF/WebP bytes (<= 256 KiB) with a strong `ETag`; `If-None-Match` answers 304. 302: the picture is larger than 256 KiB and is not proxied; `Location` is the allow-listed upstream. 404 `NOT_FOUND`: no origin has a picture (remembered for 24 h). 502 `PROVIDER_UNREACHABLE`: the upstream timed out or failed; nothing is cached. On any non-200 the client draws its monogram and does not retry in a loop.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "enum": ["eip155:56"] },
+            "in": "path",
+            "name": "chainId",
+            "required": true,
+            "description": "CAIP-2 chain. Only BSC mainnet is served."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(0x[0-9a-fA-F]{40}|native)\\.png$"
+            },
+            "in": "path",
+            "name": "file",
+            "required": true,
+            "description": "`<0x + 40 hex token address>.png` (any case; published URLs are lowercase) or `native.png` for the chain's native coin."
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The logo bytes. `Cache-Control: public, max-age=86400, stale-while-revalidate=604800` (or `public, max-age=300` when a higher-priority origin failed and a lower one was served), `ETag`, `X-Content-Type-Options: nosniff`.",
+            "content": {
+              "image/png": {
+                "schema": { "type": "string", "format": "binary" }
+              },
+              "image/jpeg": {
+                "schema": { "type": "string", "format": "binary" }
+              },
+              "image/gif": {
+                "schema": { "type": "string", "format": "binary" }
+              },
+              "image/webp": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "302": {
+            "description": "The picture exceeds 256 KiB; `Location` is its allow-listed upstream URL."
+          },
+          "304": {
+            "description": "`If-None-Match` matched the current `ETag`."
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PROVIDER_UNREACHABLE"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["REQUEST_TIMEOUT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/market/overview": {
       "get": {
         "operationId": "getV2MarketOverview",
@@ -47748,7 +48154,7 @@
                                     ]
                                   },
                                   "logo": {
-                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                     "anyOf": [
                                       {
                                         "type": "object",
@@ -47766,7 +48172,7 @@
                                           },
                                           "url": {
                                             "type": "string",
-                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                             "maxLength": 512
                                           },
                                           "source": {
@@ -48152,7 +48558,7 @@
                                     ]
                                   },
                                   "logo": {
-                                    "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                    "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                     "anyOf": [
                                       {
                                         "type": "object",
@@ -48170,7 +48576,7 @@
                                           },
                                           "url": {
                                             "type": "string",
-                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                             "maxLength": 512
                                           },
                                           "source": {
@@ -49963,7 +50369,7 @@
                       "description": "The deepest DexScreener pair in which the asset is the base token. Price facts above refer to this pair."
                     },
                     "logo": {
-                      "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                      "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                       "anyOf": [
                         {
                           "type": "object",
@@ -49976,7 +50382,7 @@
                             },
                             "url": {
                               "type": "string",
-                              "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                              "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                               "maxLength": 512
                             },
                             "source": {
@@ -53399,7 +53805,7 @@
                                           },
                                           "url": {
                                             "type": "string",
-                                            "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                            "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                             "maxLength": 512
                                           },
                                           "source": {
@@ -57750,7 +58156,7 @@
                             ]
                           },
                           "logo": {
-                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                             "anyOf": [
                               {
                                 "type": "object",
@@ -57768,7 +58174,7 @@
                                   },
                                   "url": {
                                     "type": "string",
-                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                     "maxLength": 512
                                   },
                                   "source": {
@@ -58190,7 +58596,7 @@
                                   "maximum": 36
                                 },
                                 "logo": {
-                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                   "anyOf": [
                                     {
                                       "type": "object",
@@ -58208,7 +58614,7 @@
                                         },
                                         "url": {
                                           "type": "string",
-                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                           "maxLength": 512
                                         },
                                         "source": {
@@ -99570,7 +99976,7 @@
                             "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
                           },
                           "logo": {
-                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                             "anyOf": [
                               {
                                 "type": "object",
@@ -99588,7 +99994,7 @@
                                   },
                                   "url": {
                                     "type": "string",
-                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                     "maxLength": 512
                                   },
                                   "source": {
@@ -99696,7 +100102,7 @@
                             "description": "The Asset Registry's on-chain symbol() for assetId (BNB for eip155:56:native). null only when the registry has no row for the asset; never a client-side guess."
                           },
                           "logo": {
-                            "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                            "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                             "anyOf": [
                               {
                                 "type": "object",
@@ -99714,7 +100120,7 @@
                                   },
                                   "url": {
                                     "type": "string",
-                                    "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                    "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                     "maxLength": 512
                                   },
                                   "source": {
@@ -115594,7 +116000,7 @@
                                   "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
                                 },
                                 "logo": {
-                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                   "anyOf": [
                                     {
                                       "type": "object",
@@ -115612,7 +116018,7 @@
                                         },
                                         "url": {
                                           "type": "string",
-                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                           "maxLength": 512
                                         },
                                         "source": {
@@ -116376,7 +116782,7 @@
                                   "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
                                 },
                                 "logo": {
-                                  "description": "The asset's logo (Decision 0072). `available`: an https URL on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com only — `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule URL for the address and is never probed by the server (`observedAt` is null). Load it directly; on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover).",
+                                  "description": "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
                                   "anyOf": [
                                     {
                                       "type": "object",
@@ -116394,7 +116800,7 @@
                                         },
                                         "url": {
                                           "type": "string",
-                                          "pattern": "^https://(cdn\\.dexscreener\\.com|dd\\.dexscreener\\.com|raw\\.githubusercontent\\.com)/[^\\s]+$",
+                                          "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?/v2/market/logos/(eip155:56)/(0x[0-9a-f]{40}|native)\\.png$",
                                           "maxLength": 512
                                         },
                                         "source": {
