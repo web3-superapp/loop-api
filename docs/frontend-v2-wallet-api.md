@@ -250,7 +250,7 @@ PUT /v2/wallets/active
       "address": null,
       "logo": {
         "status": "available",
-        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+        "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/native.png",
         "source": "trustwallet",
         "observedAt": null
       },

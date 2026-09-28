@@ -1,4 +1,5 @@
 import { TimeoutError } from "viem";
+import { createTokenLogoProjector } from "../src/features/market/token-logo.js";
 import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type { AuthenticatedLoopPrincipal } from "../src/core/http/authentication.js";
@@ -321,6 +322,9 @@ function harness(
   } as unknown as MarketFactService;
   const logger = { debug: vi.fn() };
   const service = createWalletReadService({
+    tokenLogos: createTokenLogoProjector({
+      publicBaseUrl: "https://api.loop.test",
+    }),
     repository,
     indexerRepository,
     assetRegistry,

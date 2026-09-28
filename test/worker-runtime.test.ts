@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadReconciliationWorkerConfig } from "../src/config.js";
 import type { PerpReconciliationRepository } from "../src/features/perp/perp-reconciliation-contract.js";
@@ -162,6 +163,49 @@ function fakeQuotaRetentionWorker(
 }
 
 describe("reconciliation worker runtime", () => {
+  // The runtime installs the process-wide keep-alive dispatcher (S93b); put
+  // the test process's own dispatcher back after each run.
+  const originalDispatcher = getGlobalDispatcher();
+  afterEach(() => {
+    setGlobalDispatcher(originalDispatcher);
+  });
+
+  it("configures the outbound keep-alive before it touches the database (Decision 0088 ruling 1, S93b)", async () => {
+    const events: string[] = [];
+    const database = fakeDatabase(events);
+    await runReconciliationWorker({
+      config: workerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      configureOutboundKeepAlive: () => {
+        events.push("keep-alive");
+      },
+      createDatabase: () => database,
+      createWorker: () =>
+        fakeWorker(
+          vi.fn(() => {
+            events.push("run");
+            return Promise.resolve();
+          }),
+        ),
+    });
+    expect(events).toEqual(["keep-alive", "ping", "run", "close"]);
+  });
+
+  it("installs the 60 s keep-alive dispatcher by default", async () => {
+    const before = getGlobalDispatcher();
+    await runReconciliationWorker({
+      config: workerConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => fakeDatabase([]),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+    });
+    const after = getGlobalDispatcher();
+    expect(after).not.toBe(before);
+    expect(after.constructor.name).toBe("Agent");
+  });
+
   it("checks readiness before creating and running the worker", async () => {
     const events: string[] = [];
     const database = fakeDatabase(events);

@@ -14,7 +14,7 @@ import {
 import { isAssetId, type AssetStatus } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
-  projectTokenLogoForAssetId,
+  type TokenLogoProjector,
   type TokenLogoProjection,
 } from "../market/token-logo.js";
 
@@ -77,6 +77,8 @@ export interface CreateWatchlistV2ServiceInput {
   readonly repository: WatchlistV2Repository;
   readonly registry: ChainRegistryRepository;
   readonly chainId: string;
+  /** Publishes every item's logo as this API's proxy URL (Decision 0089). */
+  readonly tokenLogos: TokenLogoProjector;
 }
 
 interface ParsedReplaceRequest {
@@ -201,13 +203,13 @@ export function createWatchlistV2Service(
                   return Object.freeze({
                     assetId: item.assetId,
                     asset: null,
-                    logo: projectTokenLogoForAssetId(item.assetId),
+                    logo: input.tokenLogos.projectForAssetId(item.assetId),
                     reasonCode: watchlistV2ReasonCodes.assetNotReadable,
                   });
                 }
                 return Object.freeze({
                   assetId: item.assetId,
-                  logo: projectTokenLogoForAssetId(item.assetId),
+                  logo: input.tokenLogos.projectForAssetId(item.assetId),
                   asset: Object.freeze({
                     symbol: record.symbol,
                     name: record.name,

@@ -30,6 +30,11 @@ import type { TokenPairSnapshot } from "../../integrations/market/market-data-pr
  * a response. The projection is `unavailable` only when no rule URL can be
  * built either: no token address (a Provider pool row without a base token)
  * or a chain the rule does not cover.
+ *
+ * Decision 0089: those origins are now the *upstreams* of this API's own
+ * logo proxy (`GET /v2/market/logos/{chainId}/{file}`). A client is only
+ * ever given the proxy URL; `source` and `observedAt` keep describing the
+ * origin the projection chose.
  */
 
 export const tokenLogoSources = Object.freeze([
@@ -52,6 +57,8 @@ export const tokenLogoReasonCodes = Object.freeze({
   addressUnknown: "TOKEN_LOGO_ADDRESS_UNKNOWN",
   /** The Trust Wallet rule covers BSC mainnet only. */
   chainUnsupported: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
+  /** The logo proxy route is not served by this process (Decision 0089). */
+  proxyUnavailable: "TOKEN_LOGO_PROXY_UNAVAILABLE",
 } as const);
 
 export const trustWalletAssetsBaseUrl =
@@ -155,29 +162,38 @@ export interface ProjectTokenLogoInput {
   readonly providerImage?: ObservedLogoImage | null;
 }
 
-export function projectTokenLogo(
+/**
+ * Where an asset's picture comes from (Decision 0072 origin rules): the
+ * admissible Provider image, else the Trust Wallet rule URL. This is the
+ * upstream the logo proxy fetches (Decision 0089); it is never published to
+ * a client any more.
+ */
+export type TokenLogoOrigin =
+  | Readonly<{
+      status: "available";
+      upstreamUrl: string;
+      source: TokenLogoSource;
+      observedAt: string | null;
+    }>
+  | Readonly<{ status: "unavailable"; reasonCode: string }>;
+
+export function resolveTokenLogoOrigin(
   input: ProjectTokenLogoInput,
-): TokenLogoProjection {
+): TokenLogoOrigin {
   if (input.address !== null && !isNormalizedEvmAddress(input.address)) {
     throw new InvalidChainIdentityError();
   }
   const observed = input.providerImage ?? null;
   if (observed !== null) {
     const url = acceptTokenLogoUrl(observed.url);
-    if (url !== null) {
+    if (url !== null && input.chainId === bscChainId) {
       return Object.freeze({
         status: "available",
-        url,
+        upstreamUrl: url,
         source: "dexscreener",
         observedAt: observed.observedAt,
       });
     }
-  }
-  if (input.chainId !== bscChainId) {
-    return Object.freeze({
-      status: "unavailable",
-      reasonCode: tokenLogoReasonCodes.chainUnsupported,
-    });
   }
   const url = trustWalletLogoUrl(input.chainId, input.address);
   if (url === null) {
@@ -188,37 +204,121 @@ export function projectTokenLogo(
   }
   return Object.freeze({
     status: "available",
-    url,
+    upstreamUrl: url,
     source: "trustwallet",
     observedAt: null,
   });
 }
 
-/** The logo of an asset named only by its canonical `assetId`. */
-export function projectTokenLogoForAssetId(
-  assetId: string,
-  providerImage: ObservedLogoImage | null = null,
-): TokenLogoProjection {
-  const parsed = decomposeAssetId(assetId);
-  return projectTokenLogo({
-    chainId: parsed.chainId,
-    address: parsed.address,
-    providerImage,
-  });
+/** Path prefix of the logo proxy route (Decision 0089). */
+export const tokenLogoProxyPathPrefix = "/v2/market/logos";
+
+/** Chains the logo proxy serves; the Trust Wallet rule covers BSC mainnet only. */
+export const tokenLogoProxyChainIds = Object.freeze([bscChainId] as const);
+
+/** File name of the native asset's logo on the proxy route. */
+export const tokenLogoProxyNativeFile = "native.png";
+
+/**
+ * `/v2/market/logos/<chainId>/<lowercase address>.png`, or `native.png` for
+ * the chain's native asset. The address is the canonical lowercase form, so
+ * every surface publishes one URL per asset and a CDN caches it once.
+ */
+export function tokenLogoProxyPath(
+  chainId: string,
+  address: string | null,
+): string {
+  const file =
+    address === null
+      ? tokenLogoProxyNativeFile
+      : `${address.toLowerCase()}.png`;
+  return `${tokenLogoProxyPathPrefix}/${chainId}/${file}`;
 }
 
-/** The logo of a pool row that may name no base token at all. */
-export function projectTokenLogoForAddress(
-  chainId: string,
-  address: string | null | undefined,
-): TokenLogoProjection {
-  if (address === null || address === undefined) {
+export interface TokenLogoProjector {
+  /** The published logo of one asset row. */
+  project(input: ProjectTokenLogoInput): TokenLogoProjection;
+  /** The logo of an asset named only by its canonical `assetId`. */
+  projectForAssetId(
+    assetId: string,
+    providerImage?: ObservedLogoImage | null,
+  ): TokenLogoProjection;
+  /** The logo of a pool row that may name no base token at all. */
+  projectForAddress(
+    chainId: string,
+    address: string | null | undefined,
+  ): TokenLogoProjection;
+}
+
+export interface CreateTokenLogoProjectorInput {
+  /**
+   * `PUBLIC_BASE_URL` when the logo proxy route is served by this process;
+   * `null` when it is not (the `market` module is not enabled). Without the
+   * proxy nothing is published: the client draws its monogram.
+   */
+  readonly publicBaseUrl: string | null;
+}
+
+/**
+ * The client-facing logo projection (Decisions 0072, 0089). The origin rules
+ * of 0072 still choose *which* picture an asset has and are reported as
+ * `source` / `observedAt`; the URL the client loads is always this API's
+ * own proxy route, because the upstream hosts (raw.githubusercontent.com in
+ * particular) are not reachable from mainland China.
+ */
+export function createTokenLogoProjector(
+  input: CreateTokenLogoProjectorInput,
+): TokenLogoProjector {
+  const base =
+    input.publicBaseUrl === null
+      ? null
+      : input.publicBaseUrl.replace(/\/+$/, "");
+
+  function project(projectInput: ProjectTokenLogoInput): TokenLogoProjection {
+    const origin = resolveTokenLogoOrigin(projectInput);
+    if (origin.status === "unavailable") {
+      return origin;
+    }
+    if (base === null) {
+      return Object.freeze({
+        status: "unavailable",
+        reasonCode: tokenLogoReasonCodes.proxyUnavailable,
+      });
+    }
     return Object.freeze({
-      status: "unavailable",
-      reasonCode: tokenLogoReasonCodes.addressUnknown,
+      status: "available",
+      url: `${base}${tokenLogoProxyPath(projectInput.chainId, projectInput.address)}`,
+      source: origin.source,
+      observedAt: origin.observedAt,
     });
   }
-  return projectTokenLogo({ chainId, address, providerImage: null });
+
+  return Object.freeze({
+    project,
+    projectForAssetId(
+      assetId: string,
+      providerImage: ObservedLogoImage | null = null,
+    ): TokenLogoProjection {
+      const parsed = decomposeAssetId(assetId);
+      return project({
+        chainId: parsed.chainId,
+        address: parsed.address,
+        providerImage,
+      });
+    },
+    projectForAddress(
+      chainId: string,
+      address: string | null | undefined,
+    ): TokenLogoProjection {
+      if (address === null || address === undefined) {
+        return Object.freeze({
+          status: "unavailable",
+          reasonCode: tokenLogoReasonCodes.addressUnknown,
+        });
+      }
+      return project({ chainId, address, providerImage: null });
+    },
+  });
 }
 
 /**

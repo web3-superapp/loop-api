@@ -11,6 +11,7 @@ import {
   validateChainHeaders,
 } from "./chain-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
+import { registerV2MarketLogoRoute } from "./market-logos.js";
 import {
   candlesQuerySchema,
   marketAssetResourceSchema,
@@ -55,6 +56,8 @@ export function registerV2MarketRoutes(
   dependencies: V2RouteDependencies,
 ): void {
   const { authenticateLoopBearer, marketReadService } = dependencies;
+
+  registerV2MarketLogoRoute(app, dependencies.tokenLogoProxyService);
 
   app.get(
     "/v2/market/overview",

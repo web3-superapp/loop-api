@@ -778,7 +778,10 @@ describe("LOOP API V2 mining module", () => {
     });
 
     it("lists the caller's included power rows and re-derives why a held asset was excluded", async () => {
-      const { app } = await createApp(approvedRepository());
+      // `market` serves the logo proxy the rows' logos point at (Decision 0089).
+      const { app } = await createApp(approvedRepository(), {
+        V2_MODULES_ENABLED: "launch,mining,referral,market",
+      });
       const response = await app.inject({
         method: "GET",
         url: "/v2/mining/assets",
@@ -793,7 +796,7 @@ describe("LOOP API V2 mining module", () => {
             symbol: "Cake",
             logo: {
               status: "available",
-              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0000000000000000000000000000000000000002/logo.png",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x0000000000000000000000000000000000000002.png",
               source: "trustwallet",
               observedAt: null,
             },
@@ -811,7 +814,7 @@ describe("LOOP API V2 mining module", () => {
             symbol: "LOOP",
             logo: {
               status: "available",
-              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0000000000000000000000000000000000000001/logo.png",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x0000000000000000000000000000000000000001.png",
               source: "trustwallet",
               observedAt: null,
             },
@@ -833,7 +836,7 @@ describe("LOOP API V2 mining module", () => {
             symbol: "BNB",
             logo: {
               status: "available",
-              url: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/native.png",
               source: "trustwallet",
               observedAt: null,
             },

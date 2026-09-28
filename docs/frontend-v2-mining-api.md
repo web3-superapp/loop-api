@@ -318,7 +318,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
       "symbol": "Cake",
       "logo": {
         "status": "available",
-        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82/logo.png",
+        "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82.png",
         "source": "trustwallet",
         "observedAt": null
       },
@@ -334,7 +334,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
       "symbol": "USDT",
-      "logo": { "…": "trustwallet 规则 URL" },
+      "logo": { "…": "图片代理 URL（决策 0089）" },
       "holding": "0",
       "referencePriceUsd": "0.9994",
       "referencePriceQuality": "fresh",
@@ -347,7 +347,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
     {
       "assetId": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
       "symbol": "WBNB",
-      "logo": { "…": "trustwallet 规则 URL" },
+      "logo": { "…": "图片代理 URL（决策 0089）" },
       "holding": "0",
       "referencePriceUsd": "713.42",
       "referencePriceQuality": "fresh",
@@ -362,7 +362,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
       "symbol": "BNB",
       "logo": {
         "status": "available",
-        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/info/logo.png",
+        "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/native.png",
         "source": "trustwallet",
         "observedAt": null
       },

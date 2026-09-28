@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
+import { createTokenLogoProjector } from "../src/features/market/token-logo.js";
 import pg from "pg";
-import { getAddress } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createV2CursorCodec } from "../src/core/http/v2-cursor.js";
@@ -49,6 +49,9 @@ function buildService() {
     consume: () => Promise.reject(new Error("the asset domain has no quota")),
   };
   return createCommunityService({
+    tokenLogos: createTokenLogoProjector({
+      publicBaseUrl: "https://api.loop.test",
+    }),
     repository: createUnavailableCommunityRepository(),
     assetRegistry: {
       listReadableAssets: () => registry.listReadableAssets(bscChainId),
@@ -131,7 +134,7 @@ describe("V2 asset search over the Asset Registry (integration)", () => {
         avatarRef: null,
         logo: {
           status: "available",
-          url: `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/${getAddress(usdc)}/logo.png`,
+          url: `https://api.loop.test/v2/market/logos/eip155:56/${usdc}.png`,
           source: "trustwallet",
           observedAt: null,
         },

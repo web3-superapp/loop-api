@@ -880,7 +880,7 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
       "avatarRef": null,
       "logo": {
         "status": "available",
-        "url": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain/assets/0x55d398326f99059fF775485246999027B3197955/logo.png",
+        "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0x55d398326f99059ff775485246999027b3197955.png",
         "source": "trustwallet",
         "observedAt": null
       },

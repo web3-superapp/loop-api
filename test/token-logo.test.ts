@@ -5,10 +5,9 @@ import {
   acceptTokenLogoUrl,
   observedLogoImage,
   observedLogoImageFromPairs,
-  projectTokenLogo,
-  projectTokenLogoForAddress,
-  projectTokenLogoForAssetId,
+  createTokenLogoProjector,
   providerImageUrlFromPairs,
+  resolveTokenLogoOrigin,
   toEip55Address,
   tokenLogoAllowedHosts,
   tokenLogoReasonCodes,
@@ -25,6 +24,7 @@ const usdt = "0x55d398326f99059ff775485246999027b3197955";
 const usdtChecksum = "0x55d398326f99059fF775485246999027B3197955";
 const dexscreenerImage = `https://dd.dexscreener.com/ds-data/tokens/bsc/${wbnb}.png`;
 const observedAt = "2026-09-23T08:00:00.000Z";
+const base = "https://api.loop.test";
 
 function pair(overrides: Partial<TokenPairSnapshot>): TokenPairSnapshot {
   return {
@@ -120,17 +120,36 @@ describe("token logo (Decision 0072)", () => {
       }
     });
 
-    it("publishes a pattern that agrees with the gate on the accepted and rejected forms", () => {
+    it("publishes a URL pattern that admits only this API's proxy route (Decision 0089)", () => {
       const pattern = new RegExp(tokenLogoUrlPatternSource);
-      expect(pattern.test(dexscreenerImage)).toBe(true);
+      expect(
+        pattern.test(`${base}/v2/market/logos/eip155:56/${wbnb}.png`),
+      ).toBe(true);
+      expect(pattern.test(`${base}/v2/market/logos/eip155:56/native.png`)).toBe(
+        true,
+      );
+      expect(
+        pattern.test(
+          `http://127.0.0.1:3000/v2/market/logos/eip155:56/${wbnb}.png`,
+        ),
+      ).toBe(true);
+      expect(
+        pattern.test(
+          `https://api.loop.test/prefix/v2/market/logos/eip155:56/${wbnb}.png`,
+        ),
+      ).toBe(true);
+      // The upstream origins are never published any more.
+      expect(pattern.test(dexscreenerImage)).toBe(false);
       expect(
         pattern.test(`${trustWallet}/assets/${wbnbChecksum}/logo.png`),
-      ).toBe(true);
-      expect(pattern.test("https://evil.example/logo.png")).toBe(false);
-      expect(pattern.test("http://dd.dexscreener.com/logo.png")).toBe(false);
-      expect(pattern.test("https://dd.dexscreener.com.evil.example/x")).toBe(
-        false,
-      );
+      ).toBe(false);
+      expect(
+        pattern.test(`${base}/v2/market/logos/eip155:56/${wbnbChecksum}.png`),
+      ).toBe(false);
+      expect(
+        pattern.test(`${base}/v2/market/logos/eip155:97/${wbnb}.png`),
+      ).toBe(false);
+      expect(pattern.test("javascript:alert(1)")).toBe(false);
     });
   });
 
@@ -147,88 +166,139 @@ describe("token logo (Decision 0072)", () => {
     });
   });
 
-  describe("projection", () => {
+  describe("origin (Decision 0072 rules, the proxy's upstream)", () => {
     it("prefers the Provider image and stamps its observation time", () => {
       expect(
-        projectTokenLogo({
+        resolveTokenLogoOrigin({
           chainId: "eip155:56",
           address: wbnb,
           providerImage: { url: dexscreenerImage, observedAt },
         }),
       ).toEqual({
         status: "available",
-        url: dexscreenerImage,
+        upstreamUrl: dexscreenerImage,
         source: "dexscreener",
         observedAt,
       });
     });
 
-    it("falls back to the rule URL without a Provider image, with observedAt null", () => {
-      expect(projectTokenLogo({ chainId: "eip155:56", address: wbnb })).toEqual(
-        {
-          status: "available",
-          url: `${trustWallet}/assets/${wbnbChecksum}/logo.png`,
-          source: "trustwallet",
-          observedAt: null,
-        },
-      );
-      expect(projectTokenLogo({ chainId: "eip155:56", address: null })).toEqual(
-        {
-          status: "available",
-          url: `${trustWallet}/info/logo.png`,
-          source: "trustwallet",
-          observedAt: null,
-        },
-      );
-    });
-
-    it("drops a Provider image off the allow-list and takes the rule URL instead", () => {
+    it("falls back to the Trust Wallet rule, and drops an image off the allow-list", () => {
       expect(
-        projectTokenLogo({
+        resolveTokenLogoOrigin({
           chainId: "eip155:56",
           address: wbnb,
-          providerImage: {
-            url: "https://evil.example/logo.png",
-            observedAt,
-          },
+          providerImage: { url: "https://evil.example/logo.png", observedAt },
         }),
       ).toEqual({
         status: "available",
-        url: `${trustWallet}/assets/${wbnbChecksum}/logo.png`,
+        upstreamUrl: `${trustWallet}/assets/${wbnbChecksum}/logo.png`,
         source: "trustwallet",
         observedAt: null,
       });
+      expect(
+        resolveTokenLogoOrigin({ chainId: "eip155:56", address: null }),
+      ).toMatchObject({ upstreamUrl: `${trustWallet}/info/logo.png` });
+    });
+  });
+
+  describe("projection (Decision 0089: always the proxy URL)", () => {
+    const logos = createTokenLogoProjector({ publicBaseUrl: `${base}/` });
+
+    it("publishes the proxy URL and keeps the Provider as source with its observation time", () => {
+      expect(
+        logos.project({
+          chainId: "eip155:56",
+          address: wbnb,
+          providerImage: { url: dexscreenerImage, observedAt },
+        }),
+      ).toEqual({
+        status: "available",
+        url: `${base}/v2/market/logos/eip155:56/${wbnb}.png`,
+        source: "dexscreener",
+        observedAt,
+      });
     });
 
-    it("is unavailable on a chain the rule does not cover, even with no image at all", () => {
-      expect(projectTokenLogo({ chainId: "eip155:97", address: null })).toEqual(
-        {
-          status: "unavailable",
-          reasonCode: tokenLogoReasonCodes.chainUnsupported,
-        },
+    it("names trustwallet with observedAt null without a Provider image, and native.png for the coin", () => {
+      expect(logos.project({ chainId: "eip155:56", address: wbnb })).toEqual({
+        status: "available",
+        url: `${base}/v2/market/logos/eip155:56/${wbnb}.png`,
+        source: "trustwallet",
+        observedAt: null,
+      });
+      expect(logos.project({ chainId: "eip155:56", address: null })).toEqual({
+        status: "available",
+        url: `${base}/v2/market/logos/eip155:56/native.png`,
+        source: "trustwallet",
+        observedAt: null,
+      });
+      expect(logos.projectForAssetId("eip155:56:native")).toMatchObject({
+        url: `${base}/v2/market/logos/eip155:56/native.png`,
+      });
+    });
+
+    it("keeps the URL the same whichever origin is chosen, and never leaks an upstream", () => {
+      const withImage = logos.project({
+        chainId: "eip155:56",
+        address: wbnb,
+        providerImage: { url: dexscreenerImage, observedAt },
+      });
+      const withEvil = logos.project({
+        chainId: "eip155:56",
+        address: wbnb,
+        providerImage: { url: "https://evil.example/logo.png", observedAt },
+      });
+      expect(withImage).toMatchObject({ status: "available" });
+      expect(withEvil).toMatchObject({
+        status: "available",
+        source: "trustwallet",
+      });
+      expect((withImage as { url: string }).url).toBe(
+        (withEvil as { url: string }).url,
       );
-      expect(projectTokenLogoForAssetId("eip155:97:native")).toEqual({
+      expect(JSON.stringify([withImage, withEvil])).not.toContain(
+        "githubusercontent",
+      );
+      expect(JSON.stringify([withImage, withEvil])).not.toContain(
+        "dexscreener.com",
+      );
+    });
+
+    it("is unavailable on a chain the proxy does not serve, even with a Provider image", () => {
+      expect(logos.project({ chainId: "eip155:97", address: null })).toEqual({
+        status: "unavailable",
+        reasonCode: tokenLogoReasonCodes.chainUnsupported,
+      });
+      expect(logos.projectForAssetId("eip155:97:native")).toEqual({
+        status: "unavailable",
+        reasonCode: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
+      });
+      expect(
+        logos.project({
+          chainId: "eip155:97",
+          address: wbnb,
+          providerImage: { url: dexscreenerImage, observedAt },
+        }),
+      ).toEqual({
         status: "unavailable",
         reasonCode: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
       });
     });
 
-    it("still publishes a Provider image on another chain when it passes the gate", () => {
-      expect(
-        projectTokenLogo({
-          chainId: "eip155:97",
-          address: wbnb,
-          providerImage: { url: dexscreenerImage, observedAt },
-        }),
-      ).toMatchObject({ status: "available", source: "dexscreener" });
+    it("is unavailable when the proxy route is not served (market module off)", () => {
+      const off = createTokenLogoProjector({ publicBaseUrl: null });
+      expect(off.project({ chainId: "eip155:56", address: wbnb })).toEqual({
+        status: "unavailable",
+        reasonCode: "TOKEN_LOGO_PROXY_UNAVAILABLE",
+      });
     });
 
     it("is unavailable for a pool row without a base token address", () => {
-      expect(projectTokenLogoForAddress("eip155:56", null)).toEqual({
+      expect(logos.projectForAddress("eip155:56", null)).toEqual({
         status: "unavailable",
         reasonCode: tokenLogoReasonCodes.addressUnknown,
       });
-      expect(projectTokenLogoForAddress("eip155:56", wbnb)).toMatchObject({
+      expect(logos.projectForAddress("eip155:56", wbnb)).toMatchObject({
         status: "available",
         source: "trustwallet",
       });
@@ -236,9 +306,9 @@ describe("token logo (Decision 0072)", () => {
 
     it("refuses a non-canonical address rather than guessing a URL", () => {
       expect(() =>
-        projectTokenLogo({ chainId: "eip155:56", address: wbnbChecksum }),
+        logos.project({ chainId: "eip155:56", address: wbnbChecksum }),
       ).toThrow(InvalidChainIdentityError);
-      expect(() => projectTokenLogoForAssetId("eip155:56:WBNB")).toThrow(
+      expect(() => logos.projectForAssetId("eip155:56:WBNB")).toThrow(
         InvalidChainIdentityError,
       );
     });

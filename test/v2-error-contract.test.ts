@@ -163,6 +163,13 @@ describe("V2 error code catalog", () => {
       "errors.provider.disconnected",
       false,
     ],
+    PROVIDER_UNREACHABLE: [
+      502,
+      "availability",
+      true,
+      "errors.provider.unreachable",
+      false,
+    ],
     QUOTE_EXPIRED: [409, "stale", false, "errors.quote.expired", false],
     RATE_LIMITED: [429, "rateLimit", true, "errors.rateLimit.exceeded", false],
     REGION_BLOCKED: [
@@ -239,7 +246,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(30);
+    expect(v2ErrorCodes).toHaveLength(31);
   });
 
   it("keeps the category enum at exactly eight values", () => {

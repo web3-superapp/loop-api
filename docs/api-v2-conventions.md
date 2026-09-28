@@ -153,6 +153,7 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `POLICY_BLOCKED`              | 403    | `authorization`  | no        | `errors.policy.blocked`             |
 | `PROFILE_ACTIVATION_REQUIRED` | 409    | `conflict`       | no        | `errors.profile.activationRequired` |
 | `PROVIDER_DISCONNECTED`       | 503    | `availability`   | yes       | `errors.provider.disconnected`      |
+| `PROVIDER_UNREACHABLE`        | 502    | `availability`   | yes       | `errors.provider.unreachable`       |
 | `QUOTE_EXPIRED`               | 409    | `stale`          | no        | `errors.quote.expired`              |
 | `RATE_LIMITED`                | 429    | `rateLimit`      | yes       | `errors.rateLimit.exceeded`         |
 | `REGION_BLOCKED`              | 403    | `authorization`  | no        | `errors.region.blocked`             |

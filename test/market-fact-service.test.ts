@@ -495,8 +495,16 @@ describe("market fact service", () => {
       });
       await service.readTokenPairsBatch([wbnb, usdt, weth]);
       expect(cache.getMany).toHaveBeenCalledTimes(1);
+      // Both namespaces in the same query (S93b): per-token and batch rows.
       expect(cache.getMany).toHaveBeenCalledWith(
-        [`token:${wbnb}`, `token:${usdt}`, `token:${weth}`],
+        [
+          `token:${wbnb}`,
+          `tokenbatch:${wbnb}`,
+          `token:${usdt}`,
+          `tokenbatch:${usdt}`,
+          `token:${weth}`,
+          `tokenbatch:${weth}`,
+        ],
         "token_pairs",
         "dexscreener",
       );
@@ -609,6 +617,128 @@ describe("market fact service", () => {
         "MARKET_FACT_CACHE_UNAVAILABLE",
       ]);
       expect(provider.calls()).toBe(0);
+    });
+  });
+
+  describe("batch snapshots never replace a per-token row (S93b, Decision 0088 ruling 4)", () => {
+    function row(
+      subjectKey: string,
+      fetchedAt: string,
+      rawDigest: string,
+      tokenAddress = wbnb,
+    ): MarketFactCacheRecord {
+      return {
+        subjectKey,
+        factKind: "token_pairs",
+        source: "dexscreener",
+        value: {
+          ...(tokenAddress === wbnb
+            ? snapshot("700")
+            : { tokenAddress, pairs: [] }),
+        },
+        rawDigest,
+        fetchedAt,
+        ttlSeconds: 30,
+      };
+    }
+
+    it("writes a batch observation only under tokenbatch:, never over token:, and a per-token reader ignores it", async () => {
+      const cache = cacheFake();
+      const provider = providerFake(() => snapshot("747.39"));
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:00:05.000Z"),
+      });
+      await service.readTokenPairsBatch([wbnb]);
+      const pairsWrites = cache.put.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.factKind === "token_pairs");
+      expect(pairsWrites.map((input) => input.subjectKey)).toEqual([
+        `tokenbatch:${wbnb}`,
+      ]);
+      expect(cache.current()).toBeNull();
+      // The per-token reader does not take the batch row for its own fact.
+      const single = await service.readTokenPairs(wbnb);
+      expect(single.rawDigest).toBe("a".repeat(64));
+      expect(provider.calls()).toBe(2);
+      expect(cache.current()?.rawDigest).toBe("a".repeat(64));
+    });
+
+    it("serves a fresh per-token row before a fresh batch row, and a fresh batch row without asking the Provider", async () => {
+      const cache = cacheFake(
+        row(`token:${wbnb}`, "2026-09-08T00:00:00.000Z", "d".repeat(64)),
+      );
+      await cache.repository.put(
+        row(`tokenbatch:${wbnb}`, "2026-09-08T00:00:02.000Z", "e".repeat(64)),
+      );
+      await cache.repository.put(
+        row(
+          `tokenbatch:${usdt}`,
+          "2026-09-08T00:00:02.000Z",
+          "f".repeat(64),
+          usdt,
+        ),
+      );
+      cache.put.mockClear();
+      const provider = providerFake(() => snapshot("747.39"));
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+      });
+      const facts = await service.readTokenPairsBatch([wbnb, usdt]);
+      expect(facts.get(wbnb)).toMatchObject({
+        quality: "fresh",
+        rawDigest: "d".repeat(64),
+      });
+      expect(facts.get(usdt)).toMatchObject({
+        quality: "fresh",
+        rawDigest: "f".repeat(64),
+      });
+      expect(provider.calls()).toBe(0);
+      expect(cache.put).not.toHaveBeenCalled();
+    });
+
+    it("past both TTLs asks the batch endpoint, and on failure serves the newer of the two rows as stale", async () => {
+      const cache = cacheFake(
+        row(`token:${wbnb}`, "2026-09-08T00:00:00.000Z", "d".repeat(64)),
+      );
+      await cache.repository.put(
+        row(`tokenbatch:${wbnb}`, "2026-09-08T00:00:20.000Z", "e".repeat(64)),
+      );
+      const provider: MarketPairsProvider = {
+        ...providerFake(() => snapshot("747.39")),
+        readTokenPairsBatch: () =>
+          Promise.reject(
+            new MarketProviderError(
+              "market_provider_unreachable",
+              "MARKET_PROVIDER_UNREACHABLE",
+            ),
+          ),
+      };
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: provider,
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:02:00.000Z"),
+      });
+      const facts = await service.readTokenPairsBatch([wbnb]);
+      expect(facts.get(wbnb)).toMatchObject({
+        quality: "stale",
+        rawDigest: "e".repeat(64),
+        reasonCode: "MARKET_PROVIDER_UNREACHABLE",
+      });
+      // The per-token row is untouched.
+      expect(cache.current()?.rawDigest).toBe("d".repeat(64));
     });
   });
 

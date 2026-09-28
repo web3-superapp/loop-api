@@ -329,6 +329,8 @@ import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registeredV2ModuleIds, registerV2Routes } from "./routes/v2/index.js";
+import { createTokenLogoProjector } from "./features/market/token-logo.js";
+import { createTokenLogoProxyService } from "./features/market/token-logo-proxy.js";
 import {
   createLaunchService,
   createUnavailableLaunchService,
@@ -452,6 +454,10 @@ export interface BuildAppOptions {
   readonly spotWalletBindingService?: SpotWalletBindingService;
   readonly spotAgentAuthorizationService?: SpotAgentAuthorizationService;
   readonly v2SessionService?: V2SessionService;
+  /** Test seam: the fetch the token logo proxy sends upstream (Decision 0089). */
+  readonly tokenLogoFetch?: typeof fetch;
+  /** Test seam: the token logo proxy's upstream timeout (Decision 0089). */
+  readonly tokenLogoUpstreamTimeoutMs?: number;
   readonly bscReadClient?: BscReadClient | BscChainCallClient;
   /**
    * Test seam for the launch chain slot's client (Decision 0038). Ignored
@@ -907,6 +913,13 @@ export async function buildApp(
   );
   const bootstrapService = createBootstrapService(database.internalUsers);
   const registeredModuleIds = registeredV2ModuleIds(config);
+  // Decision 0089: every published logo URL is this API's own proxy route,
+  // which the `market` module registers. Without it nothing is published.
+  const tokenLogos = createTokenLogoProjector({
+    publicBaseUrl: registeredModuleIds.includes("market")
+      ? config.publicBaseUrl
+      : null,
+  });
   const v2SessionRuntimeAvailable =
     config.v2SessionEnabled && config.privy !== null;
   const streamTokenIssuer =
@@ -1119,6 +1132,7 @@ export async function buildApp(
     options.communityService ??
     createCommunityService({
       repository: database.community ?? createUnavailableCommunityRepository(),
+      tokenLogos,
       communicationRepository: database.communication ?? null,
       // Decision 0071: `search?domain=assets` reads the composed Asset
       // Registry; without one the domain stays unavailable.
@@ -1344,6 +1358,7 @@ export async function buildApp(
         database.watchlistsV2 ?? createUnavailableWatchlistV2Repository(),
       registry: chainRegistryRepository,
       chainId: bscChainId,
+      tokenLogos,
     });
   const bscRpcConfigured = bscReadClient.endpointRefs.length > 0;
   const chainRuntimeAvailable =
@@ -1441,6 +1456,7 @@ export async function buildApp(
               spender: config.launchContract.address,
             }),
       logger: app.log,
+      tokenLogos,
     });
   const marketReadService =
     options.marketReadService ??
@@ -1456,7 +1472,19 @@ export async function buildApp(
       lookupQuota: unlistedTokenLookupQuota,
       chainId: bscChainId,
       staleGraceSeconds: config.market.staleGraceSeconds,
+      tokenLogos,
     });
+  const tokenLogoProxyService = createTokenLogoProxyService({
+    cache: database.tokenLogoCache ?? null,
+    facts: database.marketFacts ?? null,
+    ...(options.tokenLogoFetch === undefined
+      ? {}
+      : { fetch: options.tokenLogoFetch }),
+    ...(options.tokenLogoUpstreamTimeoutMs === undefined
+      ? {}
+      : { upstreamTimeoutMs: options.tokenLogoUpstreamTimeoutMs }),
+    logger: app.log,
+  });
   const alertV2Service =
     options.alertV2Service ??
     createAlertV2Service({
@@ -1621,6 +1649,7 @@ export async function buildApp(
       ? createMiningService({
           repository: database.mining ?? createUnavailableMiningRepository(),
           registry: chainRegistryRepository,
+          tokenLogos,
         })
       : createUnavailableMiningService());
   // Decision 0043: the `communityMining` capability reads the formula fact
@@ -1956,6 +1985,7 @@ export async function buildApp(
       walletReadService,
       watchlistV2Service,
       marketReadService,
+      tokenLogoProxyService,
       alertV2Service,
       notificationService,
       chatService,
