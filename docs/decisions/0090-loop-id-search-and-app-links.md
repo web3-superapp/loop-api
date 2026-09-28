@@ -1,6 +1,6 @@
 # Decision 0090: LOOP ID exact match in user search, and App Links / Universal Links for `/u/{loopId}`
 
-- Status: Proposed (S98; main-agent task sheet 2026-09-28, following mobile Decision 0104)
+- Status: Accepted (S98; main-agent task sheet 2026-09-28, following mobile Decision 0104)
 - Date: 2026-09-28
 - Scope: `GET /v2/search?domain=users` matching rule; `GET /.well-known/apple-app-site-association` and `GET /.well-known/assetlinks.json` content (amends Decision 0063); new `GET /u/{loopId}` landing page; two optional environment keys. No migration, no new entity, no state machine, no new error code, no response-shape change.
 
@@ -18,7 +18,7 @@ Users exchange their LOOP ID (`LOOP-FE3EMCPE`), and mobile Decision 0104 lets th
 | Comparison          | Upper-cased query equals `loop_users.loop_id` (stored upper-case, unique, check-constrained) — an index-backed equality, never a prefix or substring match on the LOOP ID, so the ID space stays non-enumerable.                                                                                                                                                                                              |
 | Ordering            | The exact account is the first row of the **first page** (no cursor). It is excluded from the alias-prefix rows on every page, so it never appears twice. It counts against the page `limit`.                                                                                                                                                                                                                 |
 | Cursor              | Unchanged binding (owner, route, canonical filter). The continuation keeps the last **alias** row's `searchKey`/`stableId`; when a page held only the pinned account, the continuation carries only `limit`, and the next page starts the alias rows from the top without re-pinning.                                                                                                                         |
-| Privacy             | **Same admission as the alias branch, per Decision 0031 ruling 2**: target profile `active`, `privacy_preferences_v2.discoverable = true`, not the viewer, and no `user` block in either direction. A non-discoverable account is **not** found even by its exact LOOP ID. No existing decision grants an "exact ID bypasses `discoverable`" exception, so none is introduced here.                           |
+| Privacy             | **Revised by the main-agent ruling below.** Both branches require an active profile, exclude the viewer, and exclude a `user` block in either direction. The alias-prefix branch additionally requires `privacy_preferences_v2.discoverable = true`; the exact LOOP ID branch does **not** read `discoverable` (a missing privacy row does not hide the account either).                                      |
 | Self                | Excluded, as before: searching your own LOOP ID returns no row for you.                                                                                                                                                                                                                                                                                                                                       |
 | Alias requirement   | The exact branch does not require a non-null alias (the display title already falls back to the LOOP ID); the alias branch still does.                                                                                                                                                                                                                                                                        |
 | Non-LOOP-ID queries | Byte-identical SQL predicates and ordering to before; the repository receives no `exactLoopId`.                                                                                                                                                                                                                                                                                                               |
@@ -53,16 +53,24 @@ None new. Search stays governed by the `search` capability. The association file
 
 ## Consequences
 
-- A pasted or linked LOOP ID now finds the account **only if that account turned on "可被发现"**. `discoverable` defaults to `false` (Decision 0030), and Decision 0070 observed only 2 of 352 Development accounts had it on, so most IDs will still return nothing until either users opt in or the main agent rules otherwise (see open question).
+- A pasted or linked LOOP ID finds any active, unblocked account other than the viewer, whatever its `discoverable` value. Alias-prefix browsing still shows only discoverable accounts.
+- **Follow (`POST /v2/connections/follow/{id}`) and message requests (`POST /v2/message-requests`) still require `discoverable = true`** (Decisions 0031, 0070); this change does not touch them. An account found by exact LOOP ID but not discoverable therefore still answers `404 NOT_FOUND` to "add friend" — see the open question below.
 - Platform verification (Apple CDN fetch, Android `autoVerify`) and the TF build 8 Associated Domains entitlement are unverified until tested on devices against api-dev / api-staging.
 
 ## Open questions for the main agent
 
-1. Should an **exact** LOOP ID match bypass `discoverable` (i.e. `discoverable` only hides from alias/prefix browsing)? The privacy-center copy "别人可以通过 LOOP ID 搜到你" reads as if the toggle governs exactly this, so the current behaviour is consistent with it; but with the default `false` the add-friend flow still fails for most accounts. Alternatives: flip the default for new accounts, or prompt in the client.
-2. `PASSKEY_IOS_TEAM_ID=867CN6U7W9` should be set in `ops/api-dev.env` / staging if the task sheet's `webcredentials` is wanted on those hosts (a sub-agent must not edit ops).
+1. ~~Should an exact LOOP ID match bypass `discoverable`?~~ Ruled below.
+2. ~~`PASSKEY_IOS_TEAM_ID` on api-dev / staging~~ — the main agent sets it in ops.
+3. **Open:** follow and message-request admission still require `discoverable = true`. With this ruling a non-discoverable account can be found by LOOP ID but cannot be sent a friend request (`404 NOT_FOUND`), so the add-friend complaint persists for the default (`false`) account. Should `POST /v2/message-requests` (and follow) admit a target the caller reached by exact LOOP ID — e.g. drop `discoverable` from those gates, leaving `friendRequests` (Decision 0070) as the recipient's opt-out?
+
+## Main-agent ruling (2026-09-28)
+
+1. **Exact LOOP ID match bypasses `discoverable`.** Handing someone your LOOP ID is an explicit act; `discoverable` governs only passive alias/prefix discovery. Blocks (both directions) and self-exclusion still apply. The privacy-center copy "别人可以通过 LOOP ID 搜到你" therefore holds. **This revises Decision 0031 implementation ruling 2** for `GET /v2/search?domain=users`: `discoverable = true` is now required only for the alias-prefix rows; follow admission under ruling 2 is not changed by this ruling.
+2. `PASSKEY_IOS_TEAM_ID=867CN6U7W9` is set in ops by the main agent (no code change).
+3. `Cache-Control: public, max-age=3600` for the passkey files as well: accepted.
 
 ## Evidence
 
 - `test/v2-community-routes.test.ts` — LOOP ID case/whitespace variants pin the exact row first; non-LOOP-ID shapes pass no `exactLoopId`; cursor pages never re-pin; a page holding only the pinned row restarts the alias rows.
-- `test/community-repository.integration.test.ts` — exact row first then alias rows, no duplicates, limit 1, unknown ID, non-discoverable, self, blocked in both directions, plain alias search unchanged.
+- `test/community-repository.integration.test.ts` — exact row first then alias rows, no duplicates, limit 1, unknown ID, non-discoverable and privacy-row-less accounts found by exact ID but not by alias prefix, self, blocked in both directions, plain alias search unchanged.
 - `test/well-known-app-links-routes.test.ts`, `test/well-known-passkey-routes.test.ts` — status, content type, cache header, exact bodies, release fingerprint, config validation, landing page with/without download link, malformed IDs, OpenAPI exclusion.

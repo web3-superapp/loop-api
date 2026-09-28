@@ -72,7 +72,9 @@ it yet". This decision is the consumer.
    `errors.conflict.resource`), bringing it to 30 codes. The client
    routes the user to `loop-id-setup` and retries; Decision 0029's table and
    `docs/api-v2-conventions.md` are updated.
-2. **Follow and user search require `discoverable = true`.** The ruled
+2. **Follow and user search require `discoverable = true`.** (Revised
+   2026-09-28 by Decision 0090: for user search this now applies only to
+   alias-prefix rows; an exact LOOP ID match ignores `discoverable`.) The ruled
    "blocked or undiscoverable targets are uniformly unavailable" is
    implemented as `privacy_preferences_v2.discoverable = true` on the target
    for `POST /v2/connections/follow/{id}` and `GET /v2/search?domain=users`.

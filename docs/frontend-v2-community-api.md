@@ -68,7 +68,8 @@ Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
 前端应把用户送到 `loop-id-setup` 完成激活后重试，不要当成服务不可用。
 
 另外，`privacy_preferences_v2.discoverable` 默认 `false`（决策 0030 fail-closed）。
-**未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 搜索结果里**
+**未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 的别名前缀搜索结果里**
+（按精确 LOOP ID 仍可搜到，决策 0090）
 （统一返回 `404 NOT_FOUND`，不可枚举）。`connections` 与 `blocklist` 页面要在文案里
 提示用户：想被别人找到需要在隐私设置里打开"可被发现"。
 成员目录、取关、屏蔽不受此限制。
@@ -867,9 +868,13 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   后端先按转大写后的 LOOP ID 精确查找账号，命中时它是**第一页的第一条**，
   其后照常是别名前缀结果（同一账号不会出现两次；它占第一页 `limit` 的一个名额，
   后续页不再出现）。响应形状不变，没有新字段，客户端不需要区分“精确命中”。
-  - 精确命中同样只包括已激活、`discoverable = true`、非本人、未双向屏蔽的账号；
+  - 精确命中**不看 `discoverable`**（主代理裁决 2026-09-28）：只要对方资料已激活、
+    不是本人、双方均未屏蔽，按 LOOP ID 就能搜到；「可被发现」只管别名前缀搜索。
     查不到时就是空 `results`（与“账号不存在”无法区分，这是有意的防枚举）。
-    **对方关掉「可被发现」时按 LOOP ID 也搜不到**；本人的 LOOP ID 搜不到自己。
+    本人的 LOOP ID 搜不到自己。
+  - **注意**：关注与发好友请求（`POST /v2/message-requests`）的准入**仍要求**对方
+    `discoverable=true`（见 4.11 节）；对未开启「可被发现」的账号，按 LOOP ID 搜到后
+    发请求仍会得到 `404 NOT_FOUND`，待主代理另行裁决。
   - 其它形状（`LOOP-ABCDE` 5 位邀请码、`LOOP FE3EMCPE`、9 位等）行为与以前一样，
     只做别名前缀匹配。
   - 请求示例：`GET /v2/search?domain=users&q=LOOP-FE3EMCPE`（headers 同本节其它

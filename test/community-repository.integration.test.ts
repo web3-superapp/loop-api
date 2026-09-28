@@ -1128,9 +1128,9 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       ).resolves.toEqual([]);
     });
 
-    it("applies the discoverable rule to an exact match", async () => {
+    it("finds a non-discoverable account by its exact LOOP ID but not by alias prefix", async () => {
       const viewer = await createAccount("loopid-hidden-viewer");
-      const hidden = await createAccount("loopid-hidden");
+      const hidden = await createAccount("loopid-hidden", "qq_hidden_s98");
       const loopId = await loopIdOf(hidden.userId);
       await pool.query({
         text: `
@@ -1141,7 +1141,45 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         values: [hidden.userId],
       });
 
-      await expect(searchByLoopId(viewer.userId, loopId)).resolves.toEqual([]);
+      const exact = await searchByLoopId(viewer.userId, loopId);
+      expect(
+        exact.map((item) => [
+          item.profile.publicProfileId,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([[hidden.publicProfileId, true]]);
+
+      await expect(
+        repository.searchUsers({
+          viewerUserId: viewer.userId,
+          prefix: "qq_hidden",
+          limit: 20,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("finds an account with no privacy row by its exact LOOP ID", async () => {
+      const viewer = await createAccount("loopid-norow-viewer");
+      const target = await createAccount("loopid-norow", "qq_norow_s98");
+      await pool.query({
+        text: `delete from public.privacy_preferences_v2 where owner_user_id = $1`,
+        values: [target.userId],
+      });
+
+      const exact = await searchByLoopId(
+        viewer.userId,
+        await loopIdOf(target.userId),
+      );
+      expect(exact.map((item) => item.profile.publicProfileId)).toEqual([
+        target.publicProfileId,
+      ]);
+      await expect(
+        repository.searchUsers({
+          viewerUserId: viewer.userId,
+          prefix: "qq_norow",
+          limit: 20,
+        }),
+      ).resolves.toEqual([]);
     });
 
     it("excludes the viewer and blocked accounts from an exact match", async () => {

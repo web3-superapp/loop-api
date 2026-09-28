@@ -33,7 +33,7 @@ export function registerV2SearchRoutes(
         operationId: "searchV2",
         summary: "Search users and communities",
         description:
-          "The `users` domain reuses the public alias prefix normalization and the shared public search quota; a query shaped like a LOOP ID (`LOOP-` plus eight letters or digits, case-insensitive, surrounding whitespace ignored) additionally returns the discoverable account holding exactly that LOOP ID as the first result of the first page (Decision 0090); the `communities` domain matches a name or slug prefix and only returns verified communities unless the caller already joined. Results carry a result type, opaque stable ID, display snapshot, and canonical destination.",
+          "The `users` domain reuses the public alias prefix normalization and the shared public search quota; a query shaped like a LOOP ID (`LOOP-` plus eight letters or digits, case-insensitive, surrounding whitespace ignored) additionally returns the account holding exactly that LOOP ID as the first result of the first page, regardless of `discoverable` (which governs only alias-prefix rows) but never the caller or a blocked account (Decision 0090); the `communities` domain matches a name or slug prefix and only returns verified communities unless the caller already joined. Results carry a result type, opaque stable ID, display snapshot, and canonical destination.",
         tags: ["search"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

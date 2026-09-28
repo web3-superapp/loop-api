@@ -3112,13 +3112,15 @@ export function createPostgresCommunityRepository(
           `;
         }
         // Decision 0090: an exact LOOP ID match is pinned in front of the
-        // alias-prefix rows. Both branches share the admission rules of
-        // Decision 0031 (active profile, discoverable, not the viewer, no
-        // block in either direction); the pinned account is excluded from the
-        // prefix branch on every page so it never appears twice.
+        // alias-prefix rows. Both branches require an active profile, exclude
+        // the viewer, and exclude a block in either direction. Per the
+        // main-agent ruling in Decision 0090 (revising Decision 0031 ruling 2)
+        // `discoverable` governs only passive alias-prefix discovery, so only
+        // the prefix branch reads it: handing someone your LOOP ID is an
+        // explicit act. The pinned account is excluded from the prefix branch
+        // on every page so it never appears twice.
         const admission = `
               profile.owner_user_id <> $1
-              and privacy.discoverable = true
               and profile.profile_status = 'active'
               and not exists (
                 select 1
@@ -3146,8 +3148,6 @@ export function createPostgresCommunityRepository(
               from public.user_profiles as profile
               join public.loop_users as account
                 on account.id = profile.owner_user_id
-              join public.privacy_preferences_v2 as privacy
-                on privacy.owner_user_id = profile.owner_user_id
               where $5::boolean
                 and account.loop_id = $4::text
                 and ${admission}
@@ -3164,6 +3164,7 @@ export function createPostgresCommunityRepository(
                 on privacy.owner_user_id = profile.owner_user_id
               cross join search_input
               where ${admission}
+                and privacy.discoverable = true
                 and profile.alias is not null
                 and ($4::text is null or account.loop_id <> $4::text)
                 and profile.alias_search_key collate "C" like
