@@ -221,3 +221,12 @@ by it.
 6. The client (loop-mobile) needs no change: it already loads `logo.url`
    and falls back to the monogram. Its host allow-list for images, if any,
    must admit the API origin.
+
+## 主代理裁决（2026-09-28）
+
+状态：Accepted，随 `integration/v2` 合并。
+1. `PROVIDER_UNREACHABLE`（502）进错误目录：接受。
+2. `native.png`：接受。
+3. 超大图 24 h 标记 + 302：接受。
+4. 无鉴权路由的限流：先靠 8 并发上限、24 h 未命中缓存与 Cloudflare 缓存；若出现滥用再加按 IP 限流。
+5. 客户端：`loop_v2_chain_codec.dart` 的 `logoHosts` 只认三个外部主机，会把我们自己的 URL 当「无图」——S96b 前端同步放开后端 origin（0093 同类教训）。
