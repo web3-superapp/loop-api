@@ -34,10 +34,25 @@ export const PIN_STREAM_ACTIONS = Object.freeze([
   "UnpinMessage",
 ] as const);
 
-/** The only roles that keep pin and unpin after the grants script. */
-export const PIN_ALLOWED_ROLES = Object.freeze([
+/**
+ * Roles that must hold pin/unpin after the grants script (main-agent ruling
+ * 2026-09-28): the channel moderator (community owner/admin, friend-group
+ * creator) and the Stream app `admin`.
+ */
+export const PIN_REQUIRED_ROLES = Object.freeze([
   "admin",
   STREAM_CHANNEL_MODERATOR_ROLE,
+] as const);
+
+/**
+ * Roles that lose every pin/unpin variant: the channel member and the app
+ * role every LOOP user carries (`user` held `pin-message-owner`). Every
+ * other role — `moderator`, `global_admin`, `global_moderator`, … — keeps its
+ * pin grants unchanged for a future operator console.
+ */
+export const PIN_REVOKED_ROLES = Object.freeze([
+  STREAM_CHANNEL_MEMBER_ROLE,
+  "user",
 ] as const);
 
 export interface StreamPermissionDescriptor {
@@ -284,13 +299,14 @@ export interface RoleGrantChange {
 }
 
 /**
- * Pin/unpin grants after Decision 0091: every variant (owner, any message,
- * any team) of `PinMessage`/`UnpinMessage` is removed from every role outside
- * `PIN_ALLOWED_ROLES`; each allowed role keeps (or, when it has none, gets)
- * a non-owner pin permission. Stream publishes no separate `UnpinMessage`
- * permission today — unpinning is governed by the same `pin-message` grant —
- * but one that appears later is covered by the same rule. Every other
- * permission of every role is left exactly as it was.
+ * Pin/unpin grants after Decision 0091 (ruling 2026-09-28): every variant
+ * (owner, any message, any team) of `PinMessage`/`UnpinMessage` is removed
+ * from `PIN_REVOKED_ROLES`; each of `PIN_REQUIRED_ROLES` keeps (or, when it
+ * has none, gets) a non-owner pin permission. Every other role, and every
+ * other permission of every role, is left exactly as it was. Stream
+ * publishes no separate `UnpinMessage` permission today — unpinning is
+ * governed by the same `pin-message` grant — but one that appears later is
+ * covered by the same rule.
  *
  * Only roles that change are returned; `updateChannelType` receives exactly
  * those roles with their complete next list, so untouched roles are never
@@ -300,14 +316,8 @@ export function computePinGrantChanges(
   snapshot: StreamChannelTypeSnapshot,
   permissions: readonly StreamPermissionDescriptor[],
 ): readonly RoleGrantChange[] {
-  const pinIds = new Set(
-    permissions
-      .filter((permission) =>
-        (PIN_STREAM_ACTIONS as readonly string[]).includes(permission.action),
-      )
-      .map((permission) => permission.id),
-  );
-  // The allowed roles need one non-owner ("any message") pin permission.
+  const pinIds = pinPermissionIds(permissions);
+  // A required role needs one non-owner ("any message") pin permission.
   // Stream also publishes `*-any-team` variants for multi-tenant apps; LOOP
   // uses no teams, so the plain one is preferred and added only when the
   // role holds no non-owner pin permission at all.
@@ -329,15 +339,14 @@ export function computePinGrantChanges(
   if (preferredPinId === undefined) {
     throw new StreamChannelTypeResponseError();
   }
-  const allowed = new Set<string>(PIN_ALLOWED_ROLES);
-  const roles = [
-    ...new Set([...Object.keys(snapshot.grants), ...PIN_ALLOWED_ROLES]),
-  ].sort();
+  const required = new Set<string>(PIN_REQUIRED_ROLES);
+  const revoked = new Set<string>(PIN_REVOKED_ROLES);
+  const roles = [...new Set([...required, ...revoked])].sort();
   const changes: RoleGrantChange[] = [];
   for (const role of roles) {
     const current = snapshot.grants[role] ?? [];
     let next: string[];
-    if (allowed.has(role)) {
+    if (required.has(role)) {
       next = current.some((id) => anyMessagePinIds.has(id))
         ? [...current]
         : [...current, preferredPinId];
@@ -358,6 +367,18 @@ export function computePinGrantChanges(
     }
   }
   return Object.freeze(changes);
+}
+
+function pinPermissionIds(
+  permissions: readonly StreamPermissionDescriptor[],
+): ReadonlySet<string> {
+  return new Set(
+    permissions
+      .filter((permission) =>
+        (PIN_STREAM_ACTIONS as readonly string[]).includes(permission.action),
+      )
+      .map((permission) => permission.id),
+  );
 }
 
 export function formatPinGrantChanges(
@@ -381,33 +402,31 @@ export function formatPinGrantChanges(
 }
 
 /**
- * Roles whose grants other than pin/unpin differ between two snapshots. The
- * grants script uses it after `--apply` to prove the write touched nothing
- * but pinning (Stream replaces the whole list of every role it is sent).
+ * Roles whose grants after `--apply` differ from what the write intended:
+ * `before` with exactly `changes` applied. Any other difference — a non-pin
+ * grant of any role, or the pin grant of a role the rule leaves alone
+ * (`moderator`, `global_*`) — is collateral (Stream replaces the whole list
+ * of every role it is sent, so this proves nothing else moved).
  */
 export function rolesWithCollateralGrantChanges(
   before: StreamChannelTypeSnapshot,
   after: StreamChannelTypeSnapshot,
-  permissions: readonly StreamPermissionDescriptor[],
+  changes: readonly RoleGrantChange[],
 ): readonly string[] {
-  const pinIds = new Set(
-    permissions
-      .filter((permission) =>
-        (PIN_STREAM_ACTIONS as readonly string[]).includes(permission.action),
-      )
-      .map((permission) => permission.id),
+  const intended = new Map<string, readonly string[]>(
+    Object.entries(before.grants),
   );
+  for (const change of changes) {
+    intended.set(change.role, change.next);
+  }
   const normalized = (ids: readonly string[] | undefined): string =>
-    [...new Set((ids ?? []).filter((id) => !pinIds.has(id)))].sort().join(",");
-  const roles = new Set([
-    ...Object.keys(before.grants),
-    ...Object.keys(after.grants),
-  ]);
+    [...new Set(ids ?? [])].sort().join(",");
+  const roles = new Set([...intended.keys(), ...Object.keys(after.grants)]);
   return Object.freeze(
     [...roles]
       .filter(
         (role) =>
-          normalized(before.grants[role]) !== normalized(after.grants[role]),
+          normalized(intended.get(role)) !== normalized(after.grants[role]),
       )
       .sort(),
   );

@@ -119,7 +119,7 @@ describe("community role → Stream channel role (Decision 0091)", () => {
 });
 
 describe("pin grant diff", () => {
-  it("removes every pin variant from non-moderator roles and keeps admin and channel_moderator", () => {
+  it("removes pinning only from channel_member and user, leaving moderator and global roles alone", () => {
     const changes = computePinGrantChanges(messagingSnapshot(), permissions);
 
     expect(changes).toEqual([
@@ -130,22 +130,38 @@ describe("pin grant diff", () => {
         next: ["send-message", "update-message-owner"],
       },
       {
-        role: "global_admin",
-        added: [],
-        removed: ["pin-message-any-team"],
-        next: [],
-      },
-      {
-        role: "moderator",
-        added: [],
-        removed: ["pin-message"],
-        next: ["delete-message"],
-      },
-      {
         role: "user",
         added: [],
         removed: ["pin-message-owner"],
         next: ["send-message"],
+      },
+    ]);
+  });
+
+  it("removes every pin variant a revoked role holds", () => {
+    expect(
+      computePinGrantChanges(
+        messagingSnapshot({
+          admin: ["pin-message"],
+          channel_moderator: ["pin-message"],
+          channel_member: ["pin-message-any-team", "pin-message-owner", "x"],
+          user: ["pin-message-owner-any-team"],
+          moderator: ["pin-message"],
+        }),
+        permissions,
+      ),
+    ).toEqual([
+      {
+        role: "channel_member",
+        added: [],
+        removed: ["pin-message-any-team", "pin-message-owner"],
+        next: ["x"],
+      },
+      {
+        role: "user",
+        added: [],
+        removed: ["pin-message-owner-any-team"],
+        next: [],
       },
     ]);
   });
@@ -219,10 +235,6 @@ describe("pnpm stream:channel-type-grants", () => {
         "Stream channel type messaging: pin/unpin grant diff",
         "  channel_member",
         "    - pin-message",
-        "  global_admin",
-        "    - pin-message-any-team",
-        "  moderator",
-        "    - pin-message",
         "  user",
         "    - pin-message-owner",
         "Dry run: nothing written; rerun with --apply",
@@ -238,8 +250,8 @@ describe("pnpm stream:channel-type-grants", () => {
       admin: ["pin-message", "delete-message", "update-message"],
       channel_member: ["send-message", "update-message-owner"],
       channel_moderator: ["pin-message", "delete-message", "update-message"],
-      global_admin: [],
-      moderator: ["delete-message"],
+      global_admin: ["pin-message-any-team"],
+      moderator: ["pin-message", "delete-message"],
       user: ["send-message"],
       guest: ["send-message"],
     });
@@ -261,23 +273,33 @@ describe("pnpm stream:channel-type-grants", () => {
       messagingSnapshot(),
       {
         channel_member: ["send-message", "update-message-owner"],
-        global_admin: [],
-        moderator: ["delete-message"],
         user: ["send-message"],
       },
     );
-    expect(stdout.contents()).toContain("Applied: 4 role(s) updated");
+    expect(stdout.contents()).toContain("Applied: 2 role(s) updated");
   });
 
-  it("fails when the write changed grants other than pinning", async () => {
+  it.each([
+    [
+      "a non-pin grant of a changed role",
+      { channel_member: [] as readonly string[] },
+      "channel_member",
+    ],
+    [
+      "the pin grant of a role the rule leaves alone",
+      { moderator: ["delete-message"] as readonly string[] },
+      "moderator",
+    ],
+  ])("fails when the write changed %s", async (_label, drift, role) => {
     const collateral = messagingSnapshot({
       admin: ["pin-message", "delete-message", "update-message"],
-      channel_member: [],
+      channel_member: ["send-message", "update-message-owner"],
       channel_moderator: ["pin-message", "delete-message", "update-message"],
-      global_admin: [],
-      moderator: ["delete-message"],
+      global_admin: ["pin-message-any-team"],
+      moderator: ["pin-message", "delete-message"],
       user: ["send-message"],
       guest: ["send-message"],
+      ...drift,
     });
     const client = fakeClient([messagingSnapshot(), collateral]);
     const stderr = writer();
@@ -291,7 +313,7 @@ describe("pnpm stream:channel-type-grants", () => {
       }),
     ).resolves.toBe(1);
     expect(stderr.contents()).toContain(
-      "Grants outside pin/unpin changed for: channel_member",
+      `Grants changed beyond the intended pin/unpin diff for: ${role}\n`,
     );
     expect(stderr.contents()).toContain(
       "stream_channel_type_grants_collateral_change",
@@ -413,6 +435,10 @@ describe("pnpm community:stream-roles-backfill", () => {
   const adminStream = "loop_f7bf09f6017146b99acd5ad494f211bd";
   const memberStream = "loop_00000000000040008000000000000000";
   const goneStream = "loop_44444444444444448444444444444444";
+  const groupA = "0f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f";
+  const groupB = "1f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f";
+  const groupChannel = (groupId: string): string =>
+    `loop_group_${groupId.replaceAll("-", "")}`;
 
   function row(
     memberStreamUserId: string,
@@ -440,16 +466,29 @@ describe("pnpm community:stream-roles-backfill", () => {
       row(memberStream, "channel_member"),
       row(goneStream, "channel_member"),
     ];
-    const readMemberChannelRoles = vi.fn(() =>
-      Promise.resolve([
-        { streamUserId: ownerStream, channelRole: "channel_member" },
-        { streamUserId: adminStream, channelRole: "channel_moderator" },
-        { streamUserId: memberStream, channelRole: null },
-      ]),
+    const readMemberChannelRoles = vi.fn(
+      (input: { readonly channelId: string }) =>
+        Promise.resolve(
+          input.channelId === channelId
+            ? [
+                { streamUserId: ownerStream, channelRole: "channel_member" },
+                { streamUserId: adminStream, channelRole: "channel_moderator" },
+                { streamUserId: memberStream, channelRole: null },
+              ]
+            : input.channelId === groupChannel(groupA)
+              ? [{ streamUserId: adminStream, channelRole: "channel_member" }]
+              : [
+                  {
+                    streamUserId: memberStream,
+                    channelRole: "channel_moderator",
+                  },
+                ],
+        ),
     );
     const assignMemberChannelRoles = vi.fn(() => Promise.resolve());
     const close = vi.fn(() => Promise.resolve());
     let served = false;
+    let groupsServed = false;
     return {
       create: () => ({
         members: {
@@ -459,6 +498,26 @@ describe("pnpm community:stream-roles-backfill", () => {
             }
             served = true;
             return Promise.resolve(rows);
+          }),
+          listGroupCreators: vi.fn(() => {
+            if (groupsServed) {
+              return Promise.resolve([]);
+            }
+            groupsServed = true;
+            return Promise.resolve([
+              {
+                groupId: groupA,
+                streamChannelId: groupChannel(groupA),
+                creatorStreamUserId: adminStream,
+                desiredChannelRole: "channel_moderator" as const,
+              },
+              {
+                groupId: groupB,
+                streamChannelId: groupChannel(groupB),
+                creatorStreamUserId: memberStream,
+                desiredChannelRole: "channel_moderator" as const,
+              },
+            ]);
           }),
         },
         gateway: { readMemberChannelRoles, assignMemberChannelRoles },
@@ -491,13 +550,20 @@ describe("pnpm community:stream-roles-backfill", () => {
         streamUserIds: [ownerStream, adminStream, memberStream, goneStream],
       }),
     );
+    expect(deps.readMemberChannelRoles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: groupChannel(groupA),
+        streamUserIds: [adminStream],
+      }),
+    );
     expect(deps.assignMemberChannelRoles).not.toHaveBeenCalled();
     expect(deps.close).toHaveBeenCalledOnce();
     expect(stdout.contents()).toBe(
       [
         `would assign community=${communityId} member=${ownerStream} channel_member -> channel_moderator`,
         `would assign community=${communityId} member=${memberStream} (none) -> channel_member`,
-        "Dry run: examined 4 synced members, 1 already match, 2 differ, 1 not in the Stream channel (left to the sync lane), 0 written",
+        `would assign group=${groupA} member=${adminStream} channel_member -> channel_moderator`,
+        "Dry run: examined 6 (community members + group creators), 2 already match, 3 differ, 1 not in the Stream channel (left to the owning lane), 0 written",
         "Nothing written; rerun with --apply",
         "",
       ].join("\n"),
@@ -516,8 +582,18 @@ describe("pnpm community:stream-roles-backfill", () => {
       deps.create,
     );
 
-    expect(result.applied).toBe(2);
-    expect(deps.assignMemberChannelRoles).toHaveBeenCalledTimes(1);
+    expect(result.applied).toBe(3);
+    expect(deps.assignMemberChannelRoles).toHaveBeenCalledTimes(2);
+    // The group creator is promoted in its own channel, acting as itself.
+    expect(deps.assignMemberChannelRoles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: groupChannel(groupA),
+        actingStreamUserId: adminStream,
+        assignments: [
+          { streamUserId: adminStream, channelRole: "channel_moderator" },
+        ],
+      }),
+    );
     expect(deps.assignMemberChannelRoles).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId,

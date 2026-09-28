@@ -448,9 +448,14 @@ export function createStreamChannelGateway(
             state: true,
             data: {
               created_by_id: input.createdByStreamUserId,
-              members: input.memberStreamUserIds.map((userId) => ({
-                user_id: userId,
-              })),
+              // Decision 0091: the creator of a friend group moderates it
+              // (the role the `messaging` grants let pin); every other
+              // member, and both sides of a direct chat, stay plain members.
+              members: input.memberStreamUserIds.map((userId) =>
+                input.kind === "group" && userId === input.createdByStreamUserId
+                  ? { user_id: userId, channel_role: "channel_moderator" }
+                  : { user_id: userId },
+              ),
               custom: expectedCustom(input),
             },
             members: { limit: input.memberStreamUserIds.length + 1 },
@@ -714,8 +719,9 @@ export interface StreamCommunityChannelGateway {
     input: ProjectStreamCommunityMemberPersonaInput,
   ): Promise<void>;
   /**
-   * Decision 0091: sets the channel role of members that are already in the
-   * official channel with one `assign_roles` update. A member Stream echoes
+   * Decision 0091: sets the channel role of members that are already in an
+   * official community channel or a friend-group channel with one
+   * `assign_roles` update. A member Stream echoes
    * with a different role is `unavailable`; a member not in the channel is
    * a deterministic rejection.
    */
@@ -724,7 +730,7 @@ export interface StreamCommunityChannelGateway {
   ): Promise<void>;
   /**
    * Decision 0091, read-only: the Stream channel role of up to one page of
-   * members of an official channel.
+   * members of an official community or friend-group channel.
    */
   readMemberChannelRoles(
     input: ReadStreamCommunityMemberRolesInput,
@@ -1020,7 +1026,7 @@ function parseAssignRolesInput(
       "assignments",
       "signal",
     ]) ||
-    !isCommunityChannelId(value["channelId"]) ||
+    !isMembershipChannelId(value["channelId"]) ||
     !isStreamUserId(value["actingStreamUserId"]) ||
     !Array.isArray(value["assignments"]) ||
     value["assignments"].length < 1 ||
@@ -1059,7 +1065,7 @@ function parseReadMemberRolesInput(
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["channelId", "streamUserIds", "signal"]) ||
-    !isCommunityChannelId(value["channelId"]) ||
+    !isMembershipChannelId(value["channelId"]) ||
     !Array.isArray(value["streamUserIds"]) ||
     value["streamUserIds"].length < 1 ||
     value["streamUserIds"].length > maximumCommunityChannelMemberBatch ||

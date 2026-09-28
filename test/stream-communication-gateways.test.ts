@@ -709,6 +709,36 @@ describe("Stream community channel gateway", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it("promotes a friend-group creator in its own group channel", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(groupChannelId, "group", 3)),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await gateway.assignMemberChannelRoles({
+        channelId: groupChannelId,
+        actingStreamUserId: hostUserId,
+        assignments: [
+          { streamUserId: hostUserId, channelRole: "channel_moderator" },
+        ],
+        signal: signal(),
+      });
+      expect(requestedUrl(fetchMock, 0).pathname).toBe(
+        `/api/v2/chat/channels/messaging/${groupChannelId}`,
+      );
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: hostUserId, channel_role: "channel_moderator" },
+        ],
+      });
+    });
+
     it("assigns roles to existing members in one update", async () => {
       const fetchMock = vi
         .fn()

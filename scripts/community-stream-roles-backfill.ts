@@ -7,6 +7,7 @@ import pg from "pg";
 import {
   createPostgresCommunityChannelRoleRepository,
   type CommunityChannelRoleRepository,
+  type FriendGroupCreatorRole,
   type SyncedCommunityChannelMemberRole,
 } from "../src/database/community-channel-role-repository.js";
 import {
@@ -17,10 +18,12 @@ import {
 /**
  * Operator backfill (Decision 0091): bring the Stream channel role of every
  * existing official-channel member in line with its community role — owner
- * and admin `channel_moderator`, member `channel_member`.
+ * and admin `channel_moderator`, member `channel_member` — and make every
+ * active friend-group creator `channel_moderator` of its group channel
+ * (ruling 2026-09-28; other group members and direct chats are untouched).
  *
- * - default / `--dry-run`: reads the `synced` members from PostgreSQL and
- *   their current roles from Stream (read-only `queryMembers`), and prints
+ * - default / `--dry-run`: reads the `synced` members and the group
+ *   creators from PostgreSQL and their current roles from Stream (read-only `queryMembers`), and prints
  *   one line per difference plus a summary. Nothing is written.
  * - `--apply`: additionally sends one `assign_roles` update per channel
  *   batch for the differing members.
@@ -143,33 +146,68 @@ function defaultCreateDependencies(
 }
 
 export interface CommunityStreamRoleDifference {
-  readonly communityId: string;
+  /** `community` official channel member, or `group` friend-group creator. */
+  readonly scope: "community" | "group";
+  /** The community ID or the group ID. */
+  readonly scopeId: string;
   readonly memberStreamUserId: string;
   readonly currentChannelRole: string | null;
-  readonly desiredChannelRole: SyncedCommunityChannelMemberRole["desiredChannelRole"];
+  readonly desiredChannelRole: "channel_moderator" | "channel_member";
 }
 
 export interface CommunityStreamRolesBackfillResult {
+  /** Community channel members plus friend-group creators examined. */
   readonly examined: number;
   readonly matching: number;
   readonly differing: readonly CommunityStreamRoleDifference[];
-  /** `synced` in LOOP but not reported by Stream; left to the sync lane. */
+  /** In LOOP but not reported by Stream; left to the owning lane. */
   readonly missing: number;
   /** Differences written in `--apply`; always 0 in a dry run. */
   readonly applied: number;
   readonly truncated: boolean;
 }
 
+interface RoleTarget {
+  readonly scope: "community" | "group";
+  readonly scopeId: string;
+  readonly streamChannelId: string;
+  readonly actingStreamUserId: string;
+  readonly memberStreamUserId: string;
+  readonly desiredChannelRole: "channel_moderator" | "channel_member";
+}
+
 function groupByChannel(
-  rows: readonly SyncedCommunityChannelMemberRole[],
-): readonly (readonly SyncedCommunityChannelMemberRole[])[] {
-  const groups = new Map<string, SyncedCommunityChannelMemberRole[]>();
+  rows: readonly RoleTarget[],
+): readonly (readonly RoleTarget[])[] {
+  const groups = new Map<string, RoleTarget[]>();
   for (const row of rows) {
     const group = groups.get(row.streamChannelId) ?? [];
     group.push(row);
     groups.set(row.streamChannelId, group);
   }
   return [...groups.values()];
+}
+
+function communityTarget(row: SyncedCommunityChannelMemberRole): RoleTarget {
+  return {
+    scope: "community",
+    scopeId: row.communityId,
+    streamChannelId: row.streamChannelId,
+    actingStreamUserId: row.channelCreatedByStreamUserId,
+    memberStreamUserId: row.memberStreamUserId,
+    desiredChannelRole: row.desiredChannelRole,
+  };
+}
+
+function groupTarget(row: FriendGroupCreatorRole): RoleTarget {
+  return {
+    scope: "group",
+    scopeId: row.groupId,
+    streamChannelId: row.streamChannelId,
+    actingStreamUserId: row.creatorStreamUserId,
+    memberStreamUserId: row.creatorStreamUserId,
+    desiredChannelRole: row.desiredChannelRole,
+  };
 }
 
 export async function backfillCommunityStreamRoles(
@@ -182,20 +220,77 @@ export async function backfillCommunityStreamRoles(
   const pause =
     dependencies.pause ??
     (() => sleep(COMMUNITY_STREAM_ROLES_BACKFILL_BATCH_PAUSE_MS));
-  try {
-    let examined = 0;
-    let matching = 0;
-    let missing = 0;
-    let applied = 0;
-    let truncated = false;
-    const differing: CommunityStreamRoleDifference[] = [];
-    let after: SyncedCommunityChannelMemberRole | null = null;
-    while (examined < request.maximum) {
+  let examined = 0;
+  let matching = 0;
+  let missing = 0;
+  let applied = 0;
+  const differing: CommunityStreamRoleDifference[] = [];
+
+  async function reconcile(page: readonly RoleTarget[]): Promise<void> {
+    for (const channel of groupByChannel(page)) {
       signal.throwIfAborted();
-      const limit = Math.min(
-        COMMUNITY_STREAM_ROLES_BACKFILL_BATCH_SIZE,
-        request.maximum - examined,
+      const first = channel[0];
+      if (first === undefined) {
+        continue;
+      }
+      const observed = await gateway.readMemberChannelRoles({
+        channelId: first.streamChannelId,
+        streamUserIds: channel.map((row) => row.memberStreamUserId),
+        signal,
+      });
+      const roles = new Map(
+        observed.map((entry) => [entry.streamUserId, entry.channelRole]),
       );
+      const toAssign: RoleTarget[] = [];
+      for (const row of channel) {
+        examined += 1;
+        if (!roles.has(row.memberStreamUserId)) {
+          missing += 1;
+          continue;
+        }
+        const current = roles.get(row.memberStreamUserId) ?? null;
+        if (current === row.desiredChannelRole) {
+          matching += 1;
+          continue;
+        }
+        differing.push(
+          Object.freeze({
+            scope: row.scope,
+            scopeId: row.scopeId,
+            memberStreamUserId: row.memberStreamUserId,
+            currentChannelRole: current,
+            desiredChannelRole: row.desiredChannelRole,
+          }),
+        );
+        toAssign.push(row);
+      }
+      if (request.mode === "apply" && toAssign.length > 0) {
+        await gateway.assignMemberChannelRoles({
+          channelId: first.streamChannelId,
+          actingStreamUserId: first.actingStreamUserId,
+          assignments: toAssign.map((row) => ({
+            streamUserId: row.memberStreamUserId,
+            channelRole: row.desiredChannelRole,
+          })),
+          signal,
+        });
+        applied += toAssign.length;
+      }
+    }
+  }
+
+  const remaining = (): number => request.maximum - examined;
+  const nextLimit = (): number =>
+    Math.min(COMMUNITY_STREAM_ROLES_BACKFILL_BATCH_SIZE, remaining());
+
+  try {
+    let truncated = false;
+    // Phase 1: official community channel members.
+    let after: SyncedCommunityChannelMemberRole | null = null;
+    let communitiesDone = false;
+    while (remaining() > 0) {
+      signal.throwIfAborted();
+      const limit = nextLimit();
       const page: readonly SyncedCommunityChannelMemberRole[] =
         await members.listSyncedMemberRoles({
           limit,
@@ -207,66 +302,33 @@ export async function backfillCommunityStreamRoles(
                   ownerUserId: after.ownerUserId,
                 },
         });
-      for (const group of groupByChannel(page)) {
-        signal.throwIfAborted();
-        const first = group[0];
-        if (first === undefined) {
-          continue;
-        }
-        const observed = await gateway.readMemberChannelRoles({
-          channelId: first.streamChannelId,
-          streamUserIds: group.map((row) => row.memberStreamUserId),
-          signal,
-        });
-        const roles = new Map(
-          observed.map((entry) => [entry.streamUserId, entry.channelRole]),
-        );
-        const toAssign: SyncedCommunityChannelMemberRole[] = [];
-        for (const row of group) {
-          examined += 1;
-          if (!roles.has(row.memberStreamUserId)) {
-            missing += 1;
-            continue;
-          }
-          const current = roles.get(row.memberStreamUserId) ?? null;
-          if (current === row.desiredChannelRole) {
-            matching += 1;
-            continue;
-          }
-          differing.push(
-            Object.freeze({
-              communityId: row.communityId,
-              memberStreamUserId: row.memberStreamUserId,
-              currentChannelRole: current,
-              desiredChannelRole: row.desiredChannelRole,
-            }),
-          );
-          toAssign.push(row);
-        }
-        if (request.mode === "apply" && toAssign.length > 0) {
-          await gateway.assignMemberChannelRoles({
-            channelId: first.streamChannelId,
-            actingStreamUserId: first.channelCreatedByStreamUserId,
-            assignments: toAssign.map((row) => ({
-              streamUserId: row.memberStreamUserId,
-              channelRole: row.desiredChannelRole,
-            })),
-            signal,
-          });
-          applied += toAssign.length;
-        }
-      }
+      await reconcile(page.map(communityTarget));
       const last = page.at(-1);
       if (last === undefined || page.length < limit) {
-        break;
-      }
-      if (examined >= request.maximum) {
-        truncated = true;
+        communitiesDone = true;
         break;
       }
       after = last;
       await pause();
     }
+    // Phase 2: friend-group creators (ruling 2026-09-28).
+    let afterGroupId: string | null = null;
+    let groupsDone = false;
+    while (communitiesDone && remaining() > 0) {
+      signal.throwIfAborted();
+      const limit = nextLimit();
+      const page: readonly FriendGroupCreatorRole[] =
+        await members.listGroupCreators({ limit, afterGroupId });
+      await reconcile(page.map(groupTarget));
+      const last = page.at(-1);
+      if (last === undefined || page.length < limit) {
+        groupsDone = true;
+        break;
+      }
+      afterGroupId = last.groupId;
+      await pause();
+    }
+    truncated = !(communitiesDone && groupsDone);
     return Object.freeze({
       examined,
       matching,
@@ -286,12 +348,12 @@ export function formatCommunityStreamRolesBackfill(
 ): string {
   const lines = result.differing.map(
     (difference) =>
-      `${mode === "apply" ? "assigned" : "would assign"} community=${difference.communityId} member=${difference.memberStreamUserId} ${difference.currentChannelRole ?? "(none)"} -> ${difference.desiredChannelRole}`,
+      `${mode === "apply" ? "assigned" : "would assign"} ${difference.scope}=${difference.scopeId} member=${difference.memberStreamUserId} ${difference.currentChannelRole ?? "(none)"} -> ${difference.desiredChannelRole}`,
   );
   lines.push(
-    `${mode === "apply" ? "Applied" : "Dry run"}: examined ${String(result.examined)} synced members, ` +
+    `${mode === "apply" ? "Applied" : "Dry run"}: examined ${String(result.examined)} (community members + group creators), ` +
       `${String(result.matching)} already match, ${String(result.differing.length)} differ, ` +
-      `${String(result.missing)} not in the Stream channel (left to the sync lane), ` +
+      `${String(result.missing)} not in the Stream channel (left to the owning lane), ` +
       `${String(result.applied)} written` +
       (result.truncated ? " (stopped at --max)" : ""),
   );

@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createPostgresChatChannelRepository } from "../src/database/chat-channel-repository.js";
+import { createPostgresCommunityChannelRoleRepository } from "../src/database/community-channel-role-repository.js";
 import {
   ChatChannelIdempotencyConflictRepositoryError,
   ChatChannelTargetUnavailableRepositoryError,
@@ -297,6 +298,21 @@ describe("PostgreSQL Chat channel repository", () => {
       channel_state: "active",
       event_count: "4",
     });
+
+    // Decision 0091 backfill source: the active group's creator moderates.
+    const creators = await createPostgresCommunityChannelRoleRepository(
+      pool,
+    ).listGroupCreators({ limit: 100, afterGroupId: null });
+    expect(creators.filter((row) => row.groupId === succeeded.groupId)).toEqual(
+      [
+        {
+          groupId: succeeded.groupId,
+          streamChannelId: prepared.channelId,
+          creatorStreamUserId: `loop_${owner.ownerUserId.replaceAll("-", "")}`,
+          desiredChannelRole: "channel_moderator",
+        },
+      ],
+    );
   });
 
   it("admits a friend with no social privacy row and refuses an explicit disabled (Decision 0070)", async () => {

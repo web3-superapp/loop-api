@@ -1,8 +1,8 @@
 # Decision 0091: Community pin permission through Stream channel roles, and `/c/{communityId}/room` links
 
-- Status: Accepted (S99b; main-agent task sheet 2026-09-28). The Stream grants change itself is **not applied**; see "Operator actions".
+- Status: Accepted (S99b; main-agent task sheet and ruling 2026-09-28). The Stream grants change itself is **not applied**; see "Operator actions".
 - Date: 2026-09-28
-- Scope: the Stream channel role of official community channel members (Decisions 0032, 0055); the `community-channel-sync` lane and `governMember`; three operator scripts; `GET /.well-known/apple-app-site-association` components (amends Decision 0090); new `GET /c/{communityId}/room` landing page. No migration, no new table, no new `/v2` route, no new API error code, no response-shape change.
+- Scope: the Stream channel role of official community channel members (Decisions 0032, 0055) and of friend-group creators (Decision 0025); the `community-channel-sync` lane, `governMember`, and group channel creation; three operator scripts; `GET /.well-known/apple-app-site-association` components (amends Decision 0090); new `GET /c/{communityId}/room` landing page. No migration, no new table, no new `/v2` route, no new API error code, no response-shape change.
 
 ## Context
 
@@ -40,40 +40,55 @@ So the reported bug has two independent causes: `channel_member` holds `pin-mess
 
 Mute does not change the channel role (mute is enforced by LOOP, Decision 0031).
 
+Friend groups and direct chats (main-agent ruling 2026-09-28):
+
+| Channel                    | Stream channel role                                       |
+| -------------------------- | --------------------------------------------------------- |
+| friend group, creator      | `channel_moderator`                                       |
+| friend group, other member | `channel_member`                                          |
+| direct chat, both sides    | `channel_member` (nobody pins in a direct chat; accepted) |
+
 ### 2. Sync points (all through the existing outbox, Decision 0032)
 
 - **Join / verification / unban** — the existing `add` job. `claimDueJobs` now also returns `memberChannelRole`, derived **at claim time** from the current `community_memberships` row, so a job enqueued before a later role change applies the latest role. The worker passes it to `addMembers({..., channelRole})`; the gateway sends `channel_role` on `add_members` and then one `assign_roles` update, because Stream keeps the role of a member that is already in the channel. An `assign_roles` echo that contradicts the requested role is `unavailable` (retried); a member not echoed is accepted.
 - **Role change** — `governMember` (`POST /v2/communities/{id}/members/{publicProfileId}/role` and transfer) enqueues an `add` for the target whenever the mapped channel role changes (`assignAdmin`, `revokeAdmin`, `transferOwnership` of a member). `add` is idempotent, so it only (re)assigns the role and re-attaches the persona. A transfer between two moderators (admin → owner, and the outgoing owner → admin) enqueues nothing. Mute/unmute enqueue nothing.
 - **Leave / ban** — the existing `remove` job; the role disappears with the membership, no role call is made.
 
-A `channelRole` is only accepted for a `loop_community_*` channel; group and direct channels are unchanged.
+- **Friend-group creation** — `upsertFixedMessagingChannel` (kind `group`) creates the channel with the creator's member entry carrying `channel_role: "channel_moderator"`; the other members and both members of a direct channel carry none (Stream default `channel_member`). Group membership is fixed at creation and a creator can never leave (Decisions 0025, 0032), so there is no later group sync point. Existing groups are covered by the backfill.
+
+`addMembers({channelRole})` is only accepted for a `loop_community_*` channel. `assignMemberChannelRoles` / `readMemberChannelRoles` accept a community or a friend-group channel.
 
 ### 3. Grants (operator script, not applied here)
 
-`pnpm stream:channel-type-grants` computes, for type `messaging`:
+`pnpm stream:channel-type-grants` computes, for type `messaging` (main-agent ruling 2026-09-28):
 
-- every `PinMessage` / `UnpinMessage` permission (all four variants) is removed from every role other than `admin` and `channel_moderator`;
-- `admin` and `channel_moderator` keep (or, if they had none, get `pin-message`);
-- every other grant of every role is left exactly as it was; only the changed roles are sent, each with its complete next list.
+- `channel_member` and the app role `user` lose every `PinMessage` / `UnpinMessage` variant (plain, owner, any-team, owner-any-team);
+- `admin` and `channel_moderator` keep (or, if they had none, get) `pin-message`;
+- every other role — `moderator`, `global_admin`, `global_moderator`, … — is not touched (kept for a future operator console), and every non-pin grant of every role is left exactly as it was; only the changed roles are sent, each with its complete next list.
 
-Dry-run on 2026-09-28 (the diff `--apply` would write):
+Dry-run on 2026-09-28 against the local `.env.local` Stream app (the diff `--apply` would write):
 
 ```
 Stream channel type messaging: pin/unpin grant diff
-  channel_member      - pin-message
-  global_admin        - pin-message-any-team
-  global_moderator    - pin-message-any-team
-  moderator           - pin-message
-  user                - pin-message-owner
+  channel_member
+    - pin-message
+  user
+    - pin-message-owner
+Dry run: nothing written; rerun with --apply
 ```
 
-After `--apply` the script re-reads the type and exits `1` if the pin diff is not empty (`stream_channel_type_grants_not_converged`) or if any non-pin grant of any role changed (`stream_channel_type_grants_collateral_change`).
+After `--apply` the script re-reads the type and exits `1` if the pin diff is not empty (`stream_channel_type_grants_not_converged`) or if any role's grants differ from the intended result — the snapshot before the write with exactly the diff applied — for example a non-pin grant, or the pin grant of `moderator` / `global_*` (`stream_channel_type_grants_collateral_change`).
 
 `DeleteAnyMessage` / `UpdateAnyMessage` are already moderator-only; with the role mapping above, community owners/admins gain them in their own community channel (Stream delete/edit of others' messages). That is consistent with governance (Decision 0031) and is reported, not changed.
 
 ### 4. Backfill of existing members
 
-`pnpm community:stream-roles-backfill` reads every `synced` member of a provisioned official channel (non-banned) with its mapped role, reads Stream's current `channel_role` with a read-only `queryMembers` (≤100 per call, filter `id $in`), and prints each difference. `--apply` sends one `assign_roles` per channel batch, acting as the channel creator. A member Stream does not report is counted as "not in the Stream channel" and left to the sync lane. `--max N`, 200 ms pacing. Re-running is safe; a role change that races the backfill is corrected by its own `add` job or by the next run.
+`pnpm community:stream-roles-backfill` has two phases under one `--max N` budget:
+
+1. every `synced` member of a provisioned official channel (non-banned), with its mapped role;
+2. the creator of every active friend group (`communication_groups.channel_kind = 'group'`, `channel_state = 'active'`, `member_role = 'creator'`), desired `channel_moderator`.
+
+For each channel batch it reads Stream's current `channel_role` with a read-only `queryMembers` (≤100 per call, filter `id $in`) and prints each difference as `would assign community=<id>|group=<id> member=<streamUserId> <current> -> <desired>`. `--apply` sends one `assign_roles` per channel batch, acting as the community channel creator or the group creator. A member Stream does not report is counted as "not in the Stream channel" and left to its owning lane. 200 ms pacing; re-running is safe; a community role change that races the backfill is corrected by its own `add` job or by the next run.
 
 ### 5. `/c/{communityId}/room` links (amends Decision 0090)
 
@@ -89,25 +104,29 @@ After `--apply` the script re-reads the type and exits `1` if the pin diff is no
 ## Consequences
 
 - Until the grants script is applied, the mapping changes nothing visible: `channel_member` can still pin. The role sync can ship first; the grants change is the switch.
-- **The `messaging` grants are shared with friend groups and direct chats.** After `--apply`, nobody pins in a group or a direct chat (all their members are `channel_member`), and nobody pins their own message anywhere (`user` loses `pin-message-owner`).
+- **The `messaging` grants are shared with friend groups and direct chats.** After `--apply`: a friend group's creator pins (as `channel_moderator`), other group members do not, nobody pins in a direct chat, and nobody pins their own message as a plain member (`user` loses `pin-message-owner`). App roles `moderator` / `global_*` keep their pin grants; LOOP assigns none of them today.
+- A group creator, as `channel_moderator`, also gains Stream delete/edit of other members' messages in that group (same grants as community owners/admins).
 - An add job now makes three Stream calls (`upsertUsers`, `add_members`, `assign_roles`) instead of two.
 - A role change briefly moves the member projection back to `pending` until the lane re-confirms it.
 
 ## Operator actions (main agent)
 
 1. Merge; let the worker pick up the new `add` jobs (no restart needed beyond the normal deploy).
-2. `pnpm community:stream-roles-backfill` (dry run), then `--apply`, per environment (api-dev, staging) with that environment's database and Stream app.
+2. `pnpm community:stream-roles-backfill` (dry run), then `--apply`, per environment (api-dev, staging) with that environment's database and Stream app. It covers community members and friend-group creators.
 3. `pnpm stream:channel-type-grants` (dry run), review, then `--apply` per Stream app. Rollback: re-add the removed IDs to the listed roles with the same script shape or the Stream Dashboard (the dry-run output is the exact inverse).
 
-## Open questions for the main agent
+## Main-agent ruling (2026-09-28)
 
-1. Group/direct chats: accept "no pinning" there, or should group creators become `channel_moderator`, or should community channels move to a dedicated channel type (`loop_community`, requires re-creating channels — Stream channel type is immutable per channel)?
-2. Removing `pin-message` from the app-level `moderator` / `global_*` roles follows the "only `channel_moderator` and `admin`" rule literally; LOOP assigns none of these roles today. Keep them if an operator console will use them.
+1. Friend-group creators become `channel_moderator` on creation; other group members stay `channel_member`; direct chats have no pinning (accepted). The backfill covers existing group creators.
+2. The grants script only removes `pin-message` from `channel_member` and `pin-message-owner` from `user`; `moderator`, `global_admin`, `global_moderator` keep their pin grants. The convergence and collateral checks target exactly this result.
+3. Community owners/admins gaining delete/edit of others' messages: acknowledged.
 
 ## Tests
 
 - `test/community-channel-sync-worker.test.ts` — join as `channel_member`, owner/promotion as `channel_moderator`, leave/ban remove without a role.
-- `test/stream-communication-gateways.test.ts` — `add_members` carries `channel_role` and is followed by `assign_roles`; contradicting echo → unavailable; role on a group channel or unknown role refused before the provider; `assignMemberChannelRoles` body; `readMemberChannelRoles` read-only query; fail-closed gateway.
+- `test/stream-communication-gateways.test.ts` — `add_members` carries `channel_role` and is followed by `assign_roles`; contradicting echo → unavailable; `addMembers` role on a group channel or unknown role refused before the provider; `assignMemberChannelRoles` body for a community and a friend-group channel; `readMemberChannelRoles` read-only query; fail-closed gateway.
 - `test/community-repository.integration.test.ts` — verification enqueues owner `channel_moderator` / member `channel_member`; `assignAdmin` / `revokeAdmin` re-enqueue with the new role; mute enqueues nothing; leave → `remove`; moderator-to-moderator transfer enqueues nothing; backfill source query.
-- `test/stream-pin-permission-scripts.test.ts` — mapping; grant diff (fake client) incl. add-when-missing and no-op; dry run writes nothing; apply sends only changed roles and re-reads; not-converged and collateral-change failures; audit output; backfill dry-run output and apply calls; argument/config refusals.
+- `test/stream-channel-gateway.test.ts` — the group creator is created as `channel_moderator`, other members and direct members without a role.
+- `test/chat-channel-repository.integration.test.ts` — an active created group lists its creator as the backfill target.
+- `test/stream-pin-permission-scripts.test.ts` — mapping; grant diff (fake client): only `channel_member` and `user` lose pinning, every revoked variant, add-when-missing, no-op; dry run writes nothing; apply sends only the two changed roles and re-reads; not-converged failure; collateral failure for a non-pin grant and for a `moderator` pin grant; audit output; backfill dry-run output with community members and group creators, apply calls per channel; argument/config refusals.
 - `test/well-known-app-links-routes.test.ts`, `test/well-known-passkey-routes.test.ts` — AASA exact bodies with `/c/*`; landing page 200/404, headers, no DB read, no ID echo, OpenAPI exclusion.

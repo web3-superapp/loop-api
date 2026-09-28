@@ -1133,7 +1133,8 @@ CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机�
 
 - 社区官方频道里，owner / admin 的 Stream 频道角色为 `channel_moderator`，member 为 `channel_member`；
   由后端同步（加入/审核通过、设为/撤销管理员、转让、封禁/解封、退出），客户端不写角色。
-- 频道类型 grants 由运维脚本收紧后（主代理决定何时执行），只有 `channel_moderator` 与 Stream `admin`
-  持有 `pin-message`。客户端**不要自己按社区角色判断**是否显示「置顶」，只看 Stream 频道的
+- 频道类型 grants 由运维脚本收紧后（主代理决定何时执行），`channel_member` 与应用角色 `user` 不再有任何置顶权限，
+  `channel_moderator` 与 Stream `admin` 持有 `pin-message`。客户端**不要自己按社区角色判断**是否显示「置顶」，只看 Stream 频道的
   `ownCapabilities` 是否含 `pin-message`（stream_chat_flutter 默认即如此）。
-- 注意：好友群聊与私聊用同一个 `messaging` 类型，grants 收紧后这两处所有人都不再有「置顶」（见决策 0091 待决项）。
+- 好友群聊与私聊用同一个 `messaging` 类型（主代理 2026-09-28 裁决）：好友群**创建者**为 `channel_moderator`，
+  可置顶；其他群成员不能置顶；私聊里双方都不能置顶。客户端同样只看 `ownCapabilities`。

@@ -12,20 +12,23 @@ import {
 import { readStreamCredentials } from "./stream-channel-type-audit.js";
 
 /**
- * Operator script (Decision 0091): restrict message pinning in the LOOP chat
- * channel type (`messaging`) to the `channel_moderator` and `admin` roles.
+ * Operator script (Decision 0091, ruling 2026-09-28): in the LOOP chat
+ * channel type (`messaging`) remove every pin variant from `channel_member`
+ * and from the app role `user`, and make sure `channel_moderator` and
+ * `admin` hold `pin-message`. `moderator` and `global_*` are left alone.
  *
  * - default / `--dry-run`: reads the channel type and the permission catalog
  *   and prints the per-role diff. Nothing is written.
  * - `--apply`: sends exactly the changed roles (each with its complete next
  *   grant list) in one `updateChannelType`, then re-reads the channel type
- *   and fails unless the diff is empty and no grant other than pin/unpin
- *   of any role changed.
+ *   and fails unless the diff is empty and every role's grants equal the
+ *   intended result exactly (nothing else moved).
  *
  * `--channel-type <name>` targets another type (default `messaging`).
  *
  * The `messaging` type also carries LOOP friend-group and direct channels
- * (Decision 0025); `--apply` removes pinning from their members too.
+ * (Decision 0025): after `--apply` only a group's creator (a
+ * `channel_moderator`) pins there, and nobody pins in a direct chat.
  */
 
 export type StreamChannelTypeGrantsErrorCode =
@@ -141,12 +144,12 @@ export async function runStreamChannelTypeGrants(
     const collateral = rolesWithCollateralGrantChanges(
       snapshot,
       after,
-      permissions,
+      changes,
     );
     if (collateral.length > 0) {
       options.stderr.write(
-        `Grants outside pin/unpin changed for: ${collateral.join(", ")}\n` +
-          "Stream channel type grants changed more than pinning (stream_channel_type_grants_collateral_change)\n",
+        `Grants changed beyond the intended pin/unpin diff for: ${collateral.join(", ")}\n` +
+          "Stream channel type grants changed more than intended (stream_channel_type_grants_collateral_change)\n",
       );
       return 1;
     }
