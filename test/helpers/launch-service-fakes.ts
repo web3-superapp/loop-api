@@ -191,6 +191,7 @@ export function chainRepositoryFake(
               stateTupleDigest: `0x${"cd".repeat(32)}`,
               snapshotBlockNumber: "950",
               snapshotBlockHash: fixtureBlockHash(950n),
+              lpLockedBlockNumber: null,
             },
           ],
         ]),

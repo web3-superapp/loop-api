@@ -701,8 +701,66 @@ Base URL：`https://api-dev.<域名>`（与其它 V2 模块相同）。Headers�
 - `scheduleStatus` 字段**不改**：一个 `scheduleStatus: "unscheduled"` 的项可以出现在 `live` 分段里（用 `register-sale` 登记、没走 LOOP 排期的 sale 就是这样）。客户端**不要**再用 `scheduleStatus` 重新分段，直接用服务端给的四个数组。
 - 有投影的 sale 永远不会出现在 `awaitingSchedule`。
 - 响应形状不变、无新错误码、无新 reasonCode；四个 `LAUNCH_*` 键为空时字节与 S83a 基线相同。
-- `graduated` 本单**不变**：OpenAPI 中它只有 `unavailable` 分支（`LAUNCH_CONTRACT_BASELINE_PENDING`），没有冻结的 `available` 形状，待主代理定形状后另开单。
+- `graduated` 本单**不变**；S83b7b 起增加 `available` 分支，见下节。
 - 列表页 hero 的「链上状态、价格与毕业进度暂时读不到」与 `OFF-CHAIN` 是客户端常量，服务端没有对应字段；如需随链上状态变化，请按 `segments.*[].onChainState.source` 在客户端推导。
+
+#### S83b7b 补充：`graduated` 的 `available` 分支（决策 0077 修订 S83b7b）
+
+**形状变更**：`graduated` 从单一 `unavailable` 对象变为按 `status` 区分的联合（OpenAPI `oneOf`）。严格解码的客户端必须同批改。
+
+**灰度开关**：服务端 `LAUNCH_GRADUATED_LIST=off|on`，缺省 `off`。`off` 时 `graduated` 与改动前逐字节相同（恒为 `LAUNCH_CONTRACT_BASELINE_PENDING`，即使合约已配置）；只有所有在用客户端都能解码 `available` 分支后才会切 `on`。新客户端两种情况都要能处理。
+
+`available`：
+
+```json
+{
+  "status": "available",
+  "launches": [
+    {
+      "launchId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e05",
+      "projectId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "MoonCat",
+      "ticker": "MCAT",
+      "chainId": "eip155:97",
+      "contractAddress": "0x1111111111111111111111111111111111111111",
+      "configDigest": null,
+      "scheduleStatus": "unscheduled",
+      "onChainState": {
+        "saleState": "SUCCEEDED",
+        "entitlementState": "VESTING",
+        "liquidityState": "LP_LOCKED",
+        "operationalState": "ACTIVE",
+        "stateTupleDigest": "0xcdcd…cd",
+        "snapshotBlockNumber": "950",
+        "snapshotBlockHash": "0xbbbb…3b6",
+        "configVersion": "0xabab…ab",
+        "source": "chain",
+        "reasonCode": null
+      },
+      "configVersion": "launchMoonCatV1",
+      "createdAt": "2026-09-08T01:00:00.000Z"
+    }
+  ],
+  "indexedBlockNumber": "950"
+}
+```
+
+- `launches[]` 的每一项与 `segments` 里的 `LaunchSummary` **同一形状、同一对象**（毕业项同时仍出现在它的分段里，一般是 `ended`）。解码直接复用 `LaunchSummary`。
+- 入选条件：`onChainState.source == "chain"` 且 `liquidityState ∈ {LP_LOCKED, COMPLETED}`。`V3_LIVE` / `PREPARING` / `RETRY_SCHEDULED` **不算毕业**（03 §8.3：只有 LP 锁定/完成证据成立才展示）。
+- 排序：最近一条有效 `LPNFTLocked` 事件的区块倒序；该事件尚未索引到的项排最后；同区块按 `launchId` 升序。最多 50 条。
+- `indexedBlockNumber`：索引 lane 检查点区块（十进制字符串）。
+- `launches: []` 表示「已读到链上投影，目前没有已毕业项目」，是真实空态，不是读不到。
+
+`unavailable`（形状不变，`reasonCode` 按任意字符串解码）：
+
+| 条件                                 | `reasonCode`                                                                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| 四个 `LAUNCH_*` 键为空（未配置合约） | `LAUNCH_CONTRACT_BASELINE_PENDING`（字节与 S83a 基线相同）                                                               |
+| 已配置，但适配器不可用               | 适配器原因码，如 `LAUNCH_CONTRACT_VERIFICATION_PENDING` / `LAUNCH_CONTRACT_CODE_MISSING` / `LAUNCH_CHAIN_ID_MISMATCH` 等 |
+| 已配置，lane 尚无检查点              | `LAUNCH_ONCHAIN_STATE_NOT_INDEXED`                                                                                       |
+| 已配置，投影行读取失败（数据库）     | `LAUNCH_ONCHAIN_STATE_READ_FAILED`（新）                                                                                 |
+
+客户端文案建议：`available` 且空数组 →「还没有已毕业的项目」；`unavailable` →「已毕业名单暂时读不到」。无新 HTTP 错误码，路由错误集合不变。
 
 ### S83b.3 `GET /v2/launch/{launchId}/holders`
 

@@ -491,7 +491,33 @@ export const overviewResourceSchema = {
         },
       },
     },
-    graduated: unavailableSchema,
+    graduated: {
+      oneOf: [
+        unavailableSchema,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "launches", "indexedBlockNumber"],
+          properties: {
+            status: { type: "string", const: "available" },
+            launches: {
+              type: "array",
+              maxItems: 50,
+              items: launchSummarySchema,
+              description:
+                "Registered sales whose projected onChainState.liquidityState is LP_LOCKED or COMPLETED (03 §8.3; V3_LIVE is not graduated), latest LPNFTLocked block first (a sale without an indexed LPNFTLocked log last, then by launchId), at most 50. Every item is the same summary as in segments and also appears in its segment.",
+            },
+            indexedBlockNumber: {
+              ...blockNumberStringSchema,
+              description:
+                "The launch_event lane checkpoint the projections were read against.",
+            },
+          },
+        },
+      ],
+      description:
+        "Decision 0077 S83b7b. unavailable with LAUNCH_CONTRACT_BASELINE_PENDING while no Launch contract is configured (bytes unchanged since Decision 0036); with a contract configured, unavailable names the real reason (the adapter's reason, LAUNCH_ONCHAIN_STATE_NOT_INDEXED without a lane checkpoint, LAUNCH_ONCHAIN_STATE_READ_FAILED when the projections could not be read), otherwise available. Decode reasonCode as any string.",
+    },
     myEligibility: unavailableSchema,
     staking: unavailableSchema,
     catalog: {

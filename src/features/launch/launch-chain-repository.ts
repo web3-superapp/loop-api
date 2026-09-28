@@ -87,6 +87,12 @@ export interface LaunchStateProjectionRecord {
   readonly stateTupleDigest: string;
   readonly snapshotBlockNumber: string;
   readonly snapshotBlockHash: string;
+  /**
+   * Block of the latest surviving `LPNFTLocked` event of this sale, or null
+   * when none is indexed (Decision 0077, S83b7b): the graduation block that
+   * orders the overview's `graduated` list. Never a state source.
+   */
+  readonly lpLockedBlockNumber: string | null;
 }
 
 export interface LaunchPurchaseRecord {

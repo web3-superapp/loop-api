@@ -454,6 +454,10 @@ const environmentSchema = z
     // Decision 0085: in-memory reuse of one Launch sale snapshot (ms); 0
     // disables it. Default 1500, about half a BSC block interval.
     LAUNCH_SNAPSHOT_CACHE_TTL_MS: positiveIntegerString(0, 10_000),
+    // Decision 0077 S83b7b: publish the overview `graduated` available
+    // branch. `off` (default) keeps the pre-S83b7b bytes for clients that
+    // only decode the unavailable branch. Anything but off/on refuses boot.
+    LAUNCH_GRADUATED_LIST: z.enum(["off", "on"]),
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
@@ -1120,6 +1124,12 @@ export interface AppConfig {
    * the Launch detail/eligibility reads. 0 disables the cache.
    */
   readonly launchSnapshotCacheTtlMs: number;
+  /**
+   * Decision 0077 S83b7b: whether `GET /v2/launch/overview` may publish the
+   * `graduated` available branch. False keeps it byte-identical to before
+   * (`LAUNCH_CONTRACT_BASELINE_PENDING`) even with a configured contract.
+   */
+  readonly launchGraduatedListEnabled: boolean;
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
    * Development seed's `mock_seed` balances. Default false; the schema
@@ -2083,6 +2093,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["DATABASE_STATEMENT_TIMEOUT_MS"] ?? "5000",
     LAUNCH_SNAPSHOT_CACHE_TTL_MS:
       environment["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] ?? "1500",
+    LAUNCH_GRADUATED_LIST: environment["LAUNCH_GRADUATED_LIST"] ?? "off",
   });
 
   if (!parsed.success) {
@@ -2211,6 +2222,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
+    launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),

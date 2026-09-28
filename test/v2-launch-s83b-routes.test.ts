@@ -2,9 +2,16 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
-import type { LaunchChainRepository } from "../src/features/launch/launch-chain-repository.js";
+import type {
+  LaunchChainRepository,
+  LaunchStateProjectionRecord,
+} from "../src/features/launch/launch-chain-repository.js";
 import { buildLaunchMerkleTree } from "../src/features/launch/launch-merkle.js";
-import type { LaunchDetailRecord } from "../src/features/launch/launch-repository.js";
+import type { LaunchContractAdapter } from "../src/integrations/launch/launch-contract-adapter.js";
+import type {
+  LaunchDetailRecord,
+  LaunchRepository,
+} from "../src/features/launch/launch-repository.js";
 import {
   createFakeLaunchAdapter,
   createFakeLaunchChainState,
@@ -65,6 +72,8 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       readonly state?: FakeLaunchChainState;
       readonly chain?: LaunchChainRepository;
       readonly detail?: LaunchDetailRecord;
+      readonly launch?: LaunchRepository;
+      readonly adapter?: LaunchContractAdapter;
     } = {},
   ) {
     const state = options.state ?? createFakeLaunchChainState();
@@ -73,13 +82,15 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       contractSurface: "v2",
       database: {
         ...s7Database({
-          launch: launchRepositoryFor(options.detail ?? registeredDetail()),
+          launch:
+            options.launch ??
+            launchRepositoryFor(options.detail ?? registeredDetail()),
         }),
         launchChain: options.chain ?? chainRepositoryFake(),
         accountWallets: walletsFake(),
       },
       privyAccessTokenVerifier: s7PrivyVerifier(),
-      launchContractAdapter: createFakeLaunchAdapter(state),
+      launchContractAdapter: options.adapter ?? createFakeLaunchAdapter(state),
       launchChainReadClient: createFakeLaunchSlotClient({
         usd1Balance: 1_000n * oneUsd1,
         allowance: 1_000n * oneUsd1,
@@ -223,18 +234,306 @@ describe("V2 launch routes with the launch_event lane and Intent (Decision 0077)
       });
       expect(await segmentsOf(app)).toEqual(only("awaitingSchedule"));
     });
+  });
 
-    it("graduated keeps its frozen unavailable branch (no available branch in the OpenAPI)", async () => {
-      const app = await createApp({
-        detail: unscheduled(),
-        chain: projectedAs("SUCCEEDED"),
+  describe("overview graduated follows the projected liquidity axis (S83b7b)", () => {
+    const idFor = (n: number) =>
+      `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${n.toString(16).padStart(2, "0")}`;
+    interface Row {
+      readonly n: number;
+      readonly saleState: string;
+      readonly liquidityState: string;
+      readonly lpLockedBlockNumber: string | null;
+      readonly projected?: boolean;
+    }
+    const scenario = (rows: readonly Row[]) => {
+      const base = registeredDetail();
+      const records = rows.map((row) => ({
+        launch: {
+          ...base.launch,
+          launchId: idFor(row.n),
+          saleId: String(row.n),
+          scheduleStatus: "ended" as const,
+        },
+        projectName: `Sale ${row.n}`,
+        projectTicker: `S${row.n}`,
+        confirmedConfigVersion: "launchMoonCatV1",
+      }));
+      const launch: LaunchRepository = {
+        ...launchRepositoryFor(base),
+        listLaunches: () => Promise.resolve(records),
+      };
+      const fake = chainRepositoryFake();
+      const chain: LaunchChainRepository = {
+        ...fake,
+        listStateProjections: () =>
+          Promise.resolve(
+            new Map(
+              rows
+                .filter((row) => row.projected !== false)
+                .map((row) => [
+                  idFor(row.n),
+                  {
+                    launchId: idFor(row.n),
+                    saleState: row.saleState,
+                    entitlementState: "VESTING",
+                    liquidityState: row.liquidityState,
+                    operationalState: "ACTIVE",
+                    configVersion: `0x${"ab".repeat(32)}`,
+                    stateTupleDigest: `0x${"cd".repeat(32)}`,
+                    snapshotBlockNumber: "950",
+                    snapshotBlockHash: fixtureBlockHash(950n),
+                    lpLockedBlockNumber: row.lpLockedBlockNumber,
+                  } as LaunchStateProjectionRecord,
+                ]),
+            ),
+          ),
+      };
+      return { launch, chain };
+    };
+    // LAUNCH_GRADUATED_LIST=on unless a test says otherwise.
+    const createOn = (options: Parameters<typeof createApp>[0] = {}) =>
+      createApp({
+        ...options,
+        env: { LAUNCH_GRADUATED_LIST: "on", ...options.env },
       });
-      expect((await get(app, "/v2/launch/overview")).json()).toMatchObject({
+    const graduatedOf = async (app: FastifyInstance) => {
+      const response = await get(app, "/v2/launch/overview");
+      expect(response.statusCode).toBe(200);
+      return response.json<{
+        segments: Record<string, { launchId: string }[]>;
         graduated: {
-          status: "unavailable",
-          reasonCode: "LAUNCH_CONTRACT_BASELINE_PENDING",
+          status: string;
+          reasonCode?: string;
+          indexedBlockNumber?: string;
+          launches?: {
+            launchId: string;
+            onChainState: { liquidityState: string; source: string };
+          }[];
+        };
+      }>();
+    };
+
+    it("is available with an empty list when no projected sale has LP-lock evidence", async () => {
+      const app = await createOn({
+        ...scenario([
+          {
+            n: 1,
+            saleState: "LIVE",
+            liquidityState: "NOT_STARTED",
+            lpLockedBlockNumber: null,
+          },
+          {
+            n: 2,
+            saleState: "SUCCEEDED",
+            liquidityState: "PREPARING",
+            lpLockedBlockNumber: null,
+          },
+          {
+            n: 3,
+            saleState: "SUCCEEDED",
+            liquidityState: "V3_LIVE",
+            lpLockedBlockNumber: null,
+          },
+          {
+            n: 4,
+            saleState: "SUCCEEDED",
+            liquidityState: "RETRY_SCHEDULED",
+            lpLockedBlockNumber: null,
+          },
+        ]),
+      });
+      const body = await graduatedOf(app);
+      expect(body.graduated).toEqual({
+        status: "available",
+        launches: [],
+        indexedBlockNumber: "950",
+      });
+    });
+
+    it("lists LP_LOCKED and COMPLETED sales, latest LPNFTLocked block first, in the segment summary shape", async () => {
+      const app = await createOn({
+        ...scenario([
+          {
+            n: 1,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: "900",
+          },
+          {
+            n: 2,
+            saleState: "SUCCEEDED",
+            liquidityState: "COMPLETED",
+            lpLockedBlockNumber: "940",
+          },
+          {
+            n: 3,
+            saleState: "SUCCEEDED",
+            liquidityState: "V3_LIVE",
+            lpLockedBlockNumber: null,
+          },
+          {
+            n: 4,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: null,
+          },
+          {
+            n: 5,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: "1000",
+          },
+          {
+            n: 6,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: "900",
+          },
+          {
+            n: 7,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: "950",
+            projected: false,
+          },
+        ]),
+      });
+      const body = await graduatedOf(app);
+      expect(body.graduated.status).toBe("available");
+      expect(body.graduated.indexedBlockNumber).toBe("950");
+      expect(body.graduated.launches?.map((item) => item.launchId)).toEqual([
+        idFor(5),
+        idFor(2),
+        idFor(1),
+        idFor(6),
+        idFor(4),
+      ]);
+      // Same object as the one in its segment (ended: saleState SUCCEEDED).
+      const ended = new Map(
+        body.segments["ended"]!.map((item) => [item.launchId, item]),
+      );
+      for (const item of body.graduated.launches ?? []) {
+        expect(item).toEqual(ended.get(item.launchId));
+        expect(item.onChainState.source).toBe("chain");
+      }
+    });
+
+    it("keeps at most 50 graduated sales", async () => {
+      const rows = Array.from({ length: 55 }, (_, index) => ({
+        n: index + 1,
+        saleState: "SUCCEEDED",
+        liquidityState: "LP_LOCKED",
+        lpLockedBlockNumber: String(100 + index),
+      }));
+      const app = await createOn({ ...scenario(rows) });
+      const body = await graduatedOf(app);
+      expect(body.graduated.launches).toHaveLength(50);
+      expect(body.graduated.launches?.[0]?.launchId).toBe(idFor(55));
+      expect(body.graduated.launches?.[49]?.launchId).toBe(idFor(6));
+    });
+
+    it("says LAUNCH_ONCHAIN_STATE_NOT_INDEXED without a lane checkpoint", async () => {
+      const app = await createOn({
+        chain: chainRepositoryFake({ checkpoint: null }),
+      });
+      expect((await graduatedOf(app)).graduated).toEqual({
+        status: "unavailable",
+        reasonCode: "LAUNCH_ONCHAIN_STATE_NOT_INDEXED",
+      });
+    });
+
+    it("says LAUNCH_ONCHAIN_STATE_READ_FAILED when the projections cannot be read; segments keep their fallback", async () => {
+      const app = await createOn({
+        chain: {
+          ...chainRepositoryFake(),
+          listStateProjections: () =>
+            Promise.reject(new Error("connection terminated")),
         },
       });
+      const body = await graduatedOf(app);
+      expect(body.graduated).toEqual({
+        status: "unavailable",
+        reasonCode: "LAUNCH_ONCHAIN_STATE_READ_FAILED",
+      });
+      expect(body.segments).toMatchObject({
+        live: [
+          {
+            launchId,
+            onChainState: {
+              source: "unavailable",
+              reasonCode: "LAUNCH_ONCHAIN_STATE_NOT_PROJECTED",
+            },
+          },
+        ],
+      });
+    });
+
+    it("names the adapter's reason when the configured contract is unavailable", async () => {
+      const missing = {
+        status: "unavailable",
+        reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
+      } as const;
+      const app = await createOn({
+        adapter: {
+          ...createFakeLaunchAdapter(createFakeLaunchChainState()),
+          currentAvailability: () => missing,
+          availability: () => Promise.resolve(missing),
+          verifyAtStartup: () => Promise.resolve(missing),
+        },
+      });
+      expect((await graduatedOf(app)).graduated).toEqual({
+        status: "unavailable",
+        reasonCode: "LAUNCH_CONTRACT_CODE_MISSING",
+      });
+    });
+
+    it("LAUNCH_GRADUATED_LIST=off (default) keeps the pre-S83b7b bytes with a configured, indexed contract", async () => {
+      const graduatedRows = scenario([
+        {
+          n: 1,
+          saleState: "SUCCEEDED",
+          liquidityState: "LP_LOCKED",
+          lpLockedBlockNumber: "900",
+        },
+      ]);
+      for (const env of [{}, { LAUNCH_GRADUATED_LIST: "off" }]) {
+        const app = await createApp({ env, ...graduatedRows });
+        const response = await get(app, "/v2/launch/overview");
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toContain(
+          '"graduated":{"status":"unavailable","reasonCode":"LAUNCH_CONTRACT_BASELINE_PENDING"},"myEligibility":',
+        );
+        // The segments still follow the projection (S83b7 is not gated).
+        expect(
+          response.json<{ segments: { ended: unknown[] } }>().segments.ended,
+        ).toHaveLength(1);
+      }
+    });
+
+    it("keeps the Decision 0036 bytes without a configured contract", async () => {
+      const app = await createOn({
+        env: {
+          LAUNCH_CONTRACT_ADDRESS: "",
+          LAUNCH_CONTRACT_VERSION: "",
+          LAUNCH_CONTRACT_START_BLOCK: "",
+          LAUNCH_USD1_ADDRESS: "",
+        },
+        adapter: createFakeLaunchAdapter(createFakeLaunchChainState(), null),
+        ...scenario([
+          {
+            n: 1,
+            saleState: "SUCCEEDED",
+            liquidityState: "LP_LOCKED",
+            lpLockedBlockNumber: "900",
+          },
+        ]),
+      });
+      const response = await get(app, "/v2/launch/overview");
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain(
+        '"graduated":{"status":"unavailable","reasonCode":"LAUNCH_CONTRACT_BASELINE_PENDING"},"myEligibility":',
+      );
     });
   });
 
