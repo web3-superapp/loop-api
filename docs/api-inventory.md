@@ -157,9 +157,9 @@ never travels further. Announcements are **not** a source while
 
 ### V2 search module (Decision 0031, `V2_MODULES_ENABLED=search`)
 
-| Method and path  | Request                                                              | Success projection                                                                | Interface     | Capability                                                                                                                                                                                                                                                            |
-| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v2/search` | `domain=users\|communities\|assets\|launch\|dapps`, `q`, cursor page | `{resultType, stableId, displaySnapshot, destination}` or `status: "unavailable"` | `implemented` | `implemented` for `users`/`communities`/`assets` (Decision 0071: registry prefix match on symbol, name, address; `stableId` = CAIP-19 assetId, `destination.assetDetail`); `launch` is `LAUNCH_PROJECT_DIRECTORY_PENDING`, `dapps` is `DAPP_DIRECTORY_NOT_INTEGRATED` |
+| Method and path  | Request                                                              | Success projection                                                                | Interface     | Capability                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v2/search` | `domain=users\|communities\|assets\|launch\|dapps`, `q`, cursor page | `{resultType, stableId, displaySnapshot, destination}` or `status: "unavailable"` | `implemented` | `implemented` for `users`/`communities`/`assets` (Decision 0090: a LOOP ID shaped `users` query pins the exact account first, regardless of `discoverable`; blocks and self still excluded); (Decision 0071: registry prefix match on symbol, name, address; `stableId` = CAIP-19 assetId, `destination.assetDetail`); `launch` is `LAUNCH_PROJECT_DIRECTORY_PENDING`, `dapps` is `DAPP_DIRECTORY_NOT_INTEGRATED` |
 
 `users` and `communities` reuse the `public_alias_search` quota bucket and the
 alias prefix normalization of `GET /v1/discovery/users`. Chat content is never
@@ -768,20 +768,23 @@ claims a connected Stream client.
 `GET /openapi.json` is a conditional Development documentation endpoint when
 `API_DOCS_ENABLED=true`; it is not a mobile business route.
 
-## Passkey relying-party discovery (Decision 0063)
+## Passkey relying-party discovery (Decision 0063) and App Links (Decision 0090)
 
-The API origin is the relying party for LOOP passkeys, so it publishes the two
-static association files the platform credential managers fetch. Both are
-unauthenticated, carry no user or session fact, are excluded from the OpenAPI
-artifacts (`hide: true`), and are the only LOOP responses that are not
-`Cache-Control: no-store`. An unconfigured file is absent (`404`), never an
-empty document: an empty statement list would make a broken association look
-configured.
+The API origin is the relying party for LOOP passkeys and the host of shared
+LOOP ID links (`/u/{loopId}`), so it publishes the two static association files
+the platform fetchers read plus a static landing page. All three are
+unauthenticated, carry no user or session fact, are **excluded from the OpenAPI
+artifacts** (`hide: true`; asserted by `test/well-known-app-links-routes.test.ts`),
+and are the only LOOP responses that are not `Cache-Control: no-store`. Since
+Decision 0090 both files are always published (the `/u/*` association uses the
+fixed app identity); the passkey half is still fail-closed: without its
+configuration the `webcredentials` key / `get_login_creds` statement is absent.
 
-| Method and path                               | Request  | Success projection                                                                                                                                     | Interface     | Capability                                                                                                                    |
-| --------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `GET /.well-known/assetlinks.json`            | No input | One `android_app` statement with `package_name` and `sha256_cert_fingerprints`; `Content-Type: application/json`, `Cache-Control: public, max-age=300` | `implemented` | published only when `PASSKEY_ANDROID_CERT_SHA256` is set, otherwise `404`; platform acceptance on a real device is unverified |
-| `GET /.well-known/apple-app-site-association` | No input | `{webcredentials:{apps:["<TEAMID>.<BUNDLEID>"]}}`; same headers                                                                                        | `implemented` | `404` today: LOOP has no `PASSKEY_IOS_TEAM_ID`                                                                                |
+| Method and path                               | Request                     | Success projection                                                                                                                                                                                                                                                                 | Interface     | Capability                                                                    |
+| --------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------- |
+| `GET /.well-known/assetlinks.json`            | No input                    | Statement 1: `handle_all_urls` for `com.cywd.loop`, debug keystore fingerprint + `ANDROID_RELEASE_CERT_SHA256`; statement 2 (only with `PASSKEY_ANDROID_CERT_SHA256`): passkey statement of Decision 0063; `Content-Type: application/json`, `Cache-Control: public, max-age=3600` | `implemented` | always published; platform verification on a real device is unverified        |
+| `GET /.well-known/apple-app-site-association` | No input                    | `{applinks:{details:[{appIDs:["867CN6U7W9.com.cywd.loop"],components:[{"/":"/u/*"}]}]}}` plus `webcredentials.apps` only with `PASSKEY_IOS_TEAM_ID`; same headers                                                                                                                  | `implemented` | always published; Apple CDN fetch and TF build 8 entitlement check unverified |
+| `GET /u/{loopId}`                             | `LOOP-` + 8 alnum, any case | Static HTML landing page (`text/html; charset=utf-8`, `public, max-age=3600`); malformed ID → `404` HTML, `no-store`; no database read                                                                                                                                             | `implemented` | download link only with `APP_DOWNLOAD_URL`                                    |
 
 ## Personalization and inactive alert routes
 

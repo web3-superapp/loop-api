@@ -442,6 +442,8 @@ const environmentSchema = z
     PASSKEY_ANDROID_CERT_SHA256: optionalCredential(4_096),
     PASSKEY_IOS_TEAM_ID: optionalCredential(32),
     PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
+    ANDROID_RELEASE_CERT_SHA256: optionalCredential(1_024),
+    APP_DOWNLOAD_URL: optionalCredential(2_048),
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     ...communityAiEnvironmentShape,
@@ -927,6 +929,23 @@ export interface PasskeyIosConfig {
   readonly appId: string;
 }
 
+/**
+ * Universal Links / App Links for shared LOOP ID links (Decision 0090). The
+ * iOS application identifier, Android package, and the Development debug
+ * keystore fingerprint are fixed public facts of the LOOP app build; only the
+ * release signing fingerprint(s) and the optional download link for the
+ * `/u/{loopId}` landing page come from the environment.
+ */
+export interface AppLinksConfig {
+  /** `<TEAMID>.<BUNDLEID>` identifiers claimed for `/u/*`. */
+  readonly iosAppIds: readonly string[];
+  readonly androidPackage: string;
+  /** Debug keystore first, then `ANDROID_RELEASE_CERT_SHA256` entries. */
+  readonly androidCertificateFingerprints: readonly string[];
+  /** `APP_DOWNLOAD_URL`; `null` hides the download link on the landing page. */
+  readonly downloadUrl: string | null;
+}
+
 export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
   /**
@@ -1111,6 +1130,8 @@ export interface AppConfig {
   readonly walletGasReserve: WalletGasReserveConfig;
   /** Passkey association files published at `/.well-known` (Decision 0063). */
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
+  /** Universal Links / App Links for `/u/{loopId}` (Decision 0090). */
+  readonly appLinks: AppLinksConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
   readonly market: MarketConfig;
@@ -1649,6 +1670,80 @@ const passkeySha256FingerprintPattern = /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/;
 const maximumPasskeyFingerprints = 10;
 
 /**
+ * Comma-separated signing-certificate SHA-256 fingerprints: 32 colon-separated
+ * hex byte pairs each, upper-cased, unique, at most ten.
+ */
+function parseCertificateFingerprints(
+  fieldName: string,
+  raw: string | undefined,
+  existing: readonly string[] = [],
+): string[] {
+  const fingerprints: string[] = [];
+  for (const rawEntry of (raw ?? "").split(",")) {
+    const entry = rawEntry.trim().toUpperCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!passkeySha256FingerprintPattern.test(entry)) {
+      throw new ConfigurationError([
+        `${fieldName}: every entry must be 32 colon-separated uppercase hex byte pairs`,
+      ]);
+    }
+    if (fingerprints.includes(entry) || existing.includes(entry)) {
+      throw new ConfigurationError([`${fieldName}: entries must be unique`]);
+    }
+    fingerprints.push(entry);
+  }
+  if (fingerprints.length > maximumPasskeyFingerprints) {
+    throw new ConfigurationError([
+      `${fieldName}: at most ${maximumPasskeyFingerprints.toString(10)} fingerprints are accepted`,
+    ]);
+  }
+  return fingerprints;
+}
+
+/** Decision 0090: the LOOP iOS app (Team ID + bundle ID) claiming `/u/*`. */
+export const appLinksIosAppId = "867CN6U7W9.com.cywd.loop";
+export const appLinksAndroidPackage = "com.cywd.loop";
+/** Development debug keystore of the LOOP Android build (Decision 0090). */
+export const appLinksAndroidDebugFingerprint =
+  "AE:60:82:E6:21:F5:9D:3E:63:96:F8:CB:4B:8D:86:28:7C:F6:2B:29:06:D5:2C:2E:5D:8E:A7:D4:DB:5E:3E:FA";
+
+function parseAppLinksConfig(data: {
+  readonly ANDROID_RELEASE_CERT_SHA256?: string | undefined;
+  readonly APP_DOWNLOAD_URL?: string | undefined;
+}): AppLinksConfig {
+  const release = parseCertificateFingerprints(
+    "ANDROID_RELEASE_CERT_SHA256",
+    data.ANDROID_RELEASE_CERT_SHA256,
+    [appLinksAndroidDebugFingerprint],
+  );
+  let downloadUrl: string | null = null;
+  if (data.APP_DOWNLOAD_URL !== undefined) {
+    const url = parseUrl("APP_DOWNLOAD_URL", data.APP_DOWNLOAD_URL);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      throw new ConfigurationError([
+        "APP_DOWNLOAD_URL: must be an https URL without credentials",
+      ]);
+    }
+    downloadUrl = url.toString();
+  }
+  return Object.freeze({
+    iosAppIds: Object.freeze([appLinksIosAppId]),
+    androidPackage: appLinksAndroidPackage,
+    androidCertificateFingerprints: Object.freeze([
+      appLinksAndroidDebugFingerprint,
+      ...release,
+    ]),
+    downloadUrl,
+  });
+}
+
+/**
  * Both association files are published only from values an operator typed in
  * full. Nothing here is derived, normalized upward, or defaulted into
  * existence: a malformed fingerprint or Team ID stops the process instead of
@@ -1667,29 +1762,10 @@ function parsePasskeyRelyingPartyConfig(data: {
       "PASSKEY_ANDROID_PACKAGE: must be a dotted Android package name",
     ]);
   }
-  const fingerprints: string[] = [];
-  for (const rawEntry of (data.PASSKEY_ANDROID_CERT_SHA256 ?? "").split(",")) {
-    const entry = rawEntry.trim().toUpperCase();
-    if (entry.length === 0) {
-      continue;
-    }
-    if (!passkeySha256FingerprintPattern.test(entry)) {
-      throw new ConfigurationError([
-        "PASSKEY_ANDROID_CERT_SHA256: every entry must be 32 colon-separated uppercase hex byte pairs",
-      ]);
-    }
-    if (fingerprints.includes(entry)) {
-      throw new ConfigurationError([
-        "PASSKEY_ANDROID_CERT_SHA256: entries must be unique",
-      ]);
-    }
-    fingerprints.push(entry);
-  }
-  if (fingerprints.length > maximumPasskeyFingerprints) {
-    throw new ConfigurationError([
-      `PASSKEY_ANDROID_CERT_SHA256: at most ${maximumPasskeyFingerprints.toString(10)} fingerprints are accepted`,
-    ]);
-  }
+  const fingerprints = parseCertificateFingerprints(
+    "PASSKEY_ANDROID_CERT_SHA256",
+    data.PASSKEY_ANDROID_CERT_SHA256,
+  );
 
   const bundleId = data.PASSKEY_IOS_BUNDLE_ID ?? defaultPasskeyIosBundleId;
   if (!passkeyIosBundleIdPattern.test(bundleId)) {
@@ -1994,6 +2070,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     PASSKEY_IOS_TEAM_ID: environment["PASSKEY_IOS_TEAM_ID"],
     PASSKEY_IOS_BUNDLE_ID:
       environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
+    ANDROID_RELEASE_CERT_SHA256: environment["ANDROID_RELEASE_CERT_SHA256"],
+    APP_DOWNLOAD_URL: environment["APP_DOWNLOAD_URL"],
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     ...communityAiEnvironmentDefaults(environment),
@@ -2136,6 +2214,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
+    appLinks: parseAppLinksConfig(parsed.data),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),

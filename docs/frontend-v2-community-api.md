@@ -68,7 +68,8 @@ Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
 前端应把用户送到 `loop-id-setup` 完成激活后重试，不要当成服务不可用。
 
 另外，`privacy_preferences_v2.discoverable` 默认 `false`（决策 0030 fail-closed）。
-**未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 搜索结果里**
+**未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 的别名前缀搜索结果里**
+（按精确 LOOP ID 仍可搜到、仍可收到好友申请，决策 0090）
 （统一返回 `404 NOT_FOUND`，不可枚举）。`connections` 与 `blocklist` 页面要在文案里
 提示用户：想被别人找到需要在隐私设置里打开"可被发现"。
 成员目录、取关、屏蔽不受此限制。
@@ -811,12 +812,12 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 
 - `profile` 是**对方（收件人）**的身份投影；列表接口里的 `profile` 是发起人，
   因为那是收件人视角。两者字段完全一致。
-- 准入与「关注」完全一致：对方资料已激活、`discoverable=true`、双方均未屏蔽、
-  不能是自己；另外（决策 0070，2026-09-23）对方隐私中心的 `friendRequests` 不能是
-  `disabled`——该开关**默认开启**，缺行即开启，只有对方主动关闭才拦。
+- 准入（决策 0090，2026-09-28 起）：对方资料已激活、双方均未屏蔽、不能是自己，
+  且对方隐私中心的 `friendRequests` 不是 `disabled`（决策 0070，**默认开启**，缺行即开启）。
+  **不再要求对方 `discoverable=true`**——这与「关注」不同，关注仍要求。
   **任何不可达都返回同一个 `404 NOT_FOUND`**（不可枚举），前端不要
-  据此推断对方是否存在。`discoverable` 默认仍是 `false`，所以想收到陌生人请求的
-  账号必须先在隐私中心打开"可被发现"；这一点不变。
+  据此推断对方是否存在。`discoverable` 默认仍是 `false`，但它只影响别名搜索与关注；
+  想拒绝陌生人好友申请的用户应关闭「允许陌生人发好友申请」。
 - 已是好友、任一方向已有 pending 请求、处于 24 小时拒绝冷却 → `409 DATA_STALE`，
   提示刷新后再试。
 - 同一个 `Idempotency-Key` 重放返回**首次创建的那条**请求（即使对方已处理）。
@@ -862,6 +863,51 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   `displaySnapshot.title` 是 alias（无 alias 时是 loopId），`subtitle` 是 loopId，
   `memberCount`/`verificationStatus` 为 `null`。只返回已激活且 `discoverable`
   的账号，排除双向屏蔽。
+- **`users` 域的 LOOP ID 精确匹配（决策 0090，S98）**：`q` 去掉首尾空白后若形如
+  `LOOP-` + 8 位字母或数字（大小写不敏感，例如 `loop-fe3emcpe`、` LOOP-FE3EMCPE`），
+  后端先按转大写后的 LOOP ID 精确查找账号，命中时它是**第一页的第一条**，
+  其后照常是别名前缀结果（同一账号不会出现两次；它占第一页 `limit` 的一个名额，
+  后续页不再出现）。响应形状不变，没有新字段，客户端不需要区分“精确命中”。
+  - 精确命中**不看 `discoverable`**（主代理裁决 2026-09-28）：只要对方资料已激活、
+    不是本人、双方均未屏蔽，按 LOOP ID 就能搜到；「可被发现」只管别名前缀搜索。
+    查不到时就是空 `results`（与“账号不存在”无法区分，这是有意的防枚举）。
+    本人的 LOOP ID 搜不到自己。
+  - 搜到后发好友申请（`POST /v2/message-requests`，见 4.11 节）**不看 `discoverable`**
+    （主代理裁决 2026-09-28）：只要对方没关「允许陌生人发好友申请」、双方未屏蔽即可。
+    **关注**（4.8 节）仍要求对方 `discoverable=true`，对未开启的账号返回 `404 NOT_FOUND`。
+  - 其它形状（`LOOP-ABCDE` 5 位邀请码、`LOOP FE3EMCPE`、9 位等）行为与以前一样，
+    只做别名前缀匹配。
+  - 请求示例：`GET /v2/search?domain=users&q=LOOP-FE3EMCPE`（headers 同本节其它
+    请求：`Authorization: Bearer <Privy token>`、`X-Loop-Contract-Version: 2.0`、
+    `X-Loop-Client-Version`）。命中时：
+
+    ```json
+    {
+      "domain": "users",
+      "status": "available",
+      "reasonCode": null,
+      "results": [
+        {
+          "resultType": "user",
+          "stableId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e99",
+          "displaySnapshot": {
+            "title": "pinned_friend",
+            "subtitle": "LOOP-FE3EMCPE",
+            "avatarRef": "avatar:preset/people-03",
+            "logo": null,
+            "memberCount": null,
+            "verificationStatus": null
+          },
+          "destination": { "kind": "publicProfile" }
+        }
+      ],
+      "nextCursor": null,
+      "contractVersion": "2.0"
+    }
+    ```
+
+  - 错误码与其它 `users` 查询完全相同（`INVALID_REQUEST`、`RATE_LIMITED`、
+    `UNAUTHENTICATED`、`CAPABILITY_UNAVAILABLE` 等，见第 3 节）；消耗同一个公共搜索配额。
 - `communities`：只返回 `verified`；`verification=all` 只对当前账号已加入的社区
   额外放行。匹配 name 前缀或 slug 前缀。
 - **`assets`（决策 0071，2026-09-23 起可用）**：搜的是资产注册表（`pnpm asset:register`
@@ -1045,3 +1091,22 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
   rejected →「你创建的社区未通过审核」/「{communityName}：{reason}」（feed 行内用
   payload 渲染；推送本地化文案不含变量）。
 - 同一社区被驳回、重新提交、再驳回会产生两条 feed 行（按审计事件去重），不是覆盖。
+
+## App Links / Universal Links 与 `/u/{loopId}`（决策 0090，S98）
+
+这三条路径**不在 `/v2` 下、不进 OpenAPI**，无需任何 header 或鉴权，由系统（Apple
+CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机本身，例如
+`https://api-dev.quant-dinger.cc`、`https://api-staging.quant-dinger.cc`。
+
+| 路径                                          | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                                                                                             |
+| --------------------------------------------- | ---- | -------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/apple-app-site-association` | 200  | `application/json`         | `public, max-age=3600` | `applinks.details[0] = {appIDs:["867CN6U7W9.com.cywd.loop"], components:[{"/":"/u/*"}]}`；配置了 `PASSKEY_IOS_TEAM_ID` 时另有 `webcredentials.apps`（决策 0063）                 |
+| `GET /.well-known/assetlinks.json`            | 200  | `application/json`         | `public, max-age=3600` | 第一条：`handle_all_urls`、`com.cywd.loop`、debug keystore 指纹 + `ANDROID_RELEASE_CERT_SHA256`；配置了 `PASSKEY_ANDROID_CERT_SHA256` 时第二条是 passkey 声明（决策 0063，不变） |
+| `GET /u/{loopId}`                             | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：大写 LOOP ID +「在 LOOP 里添加好友」；`APP_DOWNLOAD_URL` 配置时多一个「下载 LOOP」链接                                                                      |
+| `GET /u/<格式不对>`                           | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                                                                                   |
+
+- `/u/{loopId}` 接受 `LOOP-` + 8 位字母数字，大小写不敏感；**不查库**，页面只回显 URL
+  里的 ID，不说明账号是否存在，不含任何用户资料、脚本或第三方资源（CSP `default-src 'none'`）。
+- 装了 App 时系统直接把 `https://<host>/u/LOOP-XXXXXXXX` 交给 App（客户端决策 0104），
+  这个页面不会出现。
+- 无 unavailable 状态：两份关联文件总是发布；passkey 部分缺配置时只是不出现对应字段/声明。

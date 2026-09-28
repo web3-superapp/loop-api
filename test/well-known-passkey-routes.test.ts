@@ -84,6 +84,14 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
       {
+        relation: ["delegate_permission/common.handle_all_urls"],
+        target: {
+          namespace: "android_app",
+          package_name: "com.cywd.loop",
+          sha256_cert_fingerprints: [debugKeystoreFingerprint],
+        },
+      },
+      {
         relation: [
           "delegate_permission/common.handle_all_urls",
           "delegate_permission/common.get_login_creds",
@@ -113,7 +121,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
 
     expect(response.statusCode).toBe(200);
     expect(
-      response.json<readonly { target: { package_name: string } }[]>()[0]
+      response.json<readonly { target: { package_name: string } }[]>()[1]
         ?.target.package_name,
     ).toBe("com.cywd.loop.dev");
   });
@@ -130,7 +138,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("application/json");
-    expect(response.headers["cache-control"]).toBe("public, max-age=300");
+    expect(response.headers["cache-control"]).toBe("public, max-age=3600");
     expect(response.headers["www-authenticate"]).toBeUndefined();
   });
 
@@ -157,7 +165,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
     expect(decorated.body).toBe(anonymous.body);
   });
 
-  it("does not publish an Android file when no signing fingerprint is configured", async () => {
+  it("publishes no passkey statement when no signing fingerprint is configured", async () => {
     const app = await buildTestApp();
 
     const response = await app.inject({
@@ -165,9 +173,8 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
       url: "/.well-known/assetlinks.json",
     });
 
-    expect(response.statusCode).toBe(404);
-    expect(response.json<{ code: string }>().code).toBe("not_found");
-    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.statusCode).toBe(200);
+    expect(JSON.stringify(response.json())).not.toContain("get_login_creds");
   });
 
   it("publishes the Apple application identifier from the Team ID and bundle ID", async () => {
@@ -183,10 +190,18 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
+      applinks: {
+        details: [
+          {
+            appIDs: ["867CN6U7W9.com.cywd.loop"],
+            components: [{ "/": "/u/*" }],
+          },
+        ],
+      },
       webcredentials: { apps: ["ABCDE12345.com.cywd.loop"] },
     });
     expect(response.headers["content-type"]).toBe("application/json");
-    expect(response.headers["cache-control"]).toBe("public, max-age=300");
+    expect(response.headers["cache-control"]).toBe("public, max-age=3600");
   });
 
   it("defaults the Apple bundle ID and needs no token", async () => {
@@ -205,7 +220,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
     expect(response.headers["www-authenticate"]).toBeUndefined();
   });
 
-  it("does not publish an Apple file without a Team ID", async () => {
+  it("publishes no webcredentials without a passkey Team ID", async () => {
     const app = await buildTestApp({
       PASSKEY_ANDROID_CERT_SHA256: debugKeystoreFingerprint,
     });
@@ -215,9 +230,8 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
       url: "/.well-known/apple-app-site-association",
     });
 
-    expect(response.statusCode).toBe(404);
-    expect(response.json<{ code: string }>().code).toBe("not_found");
-    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty("webcredentials");
   });
 
   it("keeps both files out of the generated OpenAPI documents", async () => {

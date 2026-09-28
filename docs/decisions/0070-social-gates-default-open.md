@@ -17,13 +17,13 @@ Migration 000013 created `social_privacy_preferences` with `friend_requests`,
 table comment "Missing rows mean every social capability is disabled". Every
 reader honoured that literally with an inner join:
 
-| Reader                                                          | Rule before this decision                                       |
-| --------------------------------------------------------------- | --------------------------------------------------------------- |
-| `chat-channel-repository.resolveDirectTarget` (V2 + V1 direct)  | friendship **and** a row with `direct_messages = 'friends'`     |
-| `chat-channel-repository.eligibleGroupTargets` (V2 + V1 groups) | friendship **and** a row with `group_invites = 'friends'`       |
-| `chat-channel-repository` pre-submission recheck                | same, re-evaluated under lock before the Stream write           |
-| `social-repository.sendFriendRequest` / `searchFriends` (V1)    | discoverable **and** a row with `friend_requests = 'enabled'`   |
-| `community-repository.sendMessageRequest` (V2)                  | active profile, `privacy_preferences_v2.discoverable`, no block |
+| Reader                                                          | Rule before this decision                                                                                            |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `chat-channel-repository.resolveDirectTarget` (V2 + V1 direct)  | friendship **and** a row with `direct_messages = 'friends'`                                                          |
+| `chat-channel-repository.eligibleGroupTargets` (V2 + V1 groups) | friendship **and** a row with `group_invites = 'friends'`                                                            |
+| `chat-channel-repository` pre-submission recheck                | same, re-evaluated under lock before the Stream write                                                                |
+| `social-repository.sendFriendRequest` / `searchFriends` (V1)    | discoverable **and** a row with `friend_requests = 'enabled'`                                                        |
+| `community-repository.sendMessageRequest` (V2)                  | active profile, `privacy_preferences_v2.discoverable`, no block (before Decision 0090; `discoverable` dropped since) |
 
 A row is only ever written by an explicit replacement (`PUT
 /v1/profile/social-privacy`), and the client page that wrote it was retired
@@ -55,7 +55,7 @@ to change that. "Fail closed" was protecting a preference nobody could set.
    friendship-scoped already, and the ruling asked for the DM path to work
    end to end, which includes small groups made of accepted friends. No
    reason to keep it closed was found.
-4. **`discoverable` is unchanged and still required for message requests.**
+4. **`discoverable` is unchanged and still required for message requests.** (Revised 2026-09-28 by Decision 0090: message requests no longer consult `discoverable`; `friendRequests` and blocks are the only recipient gates. Follow still requires `discoverable`.)
    `POST /v2/message-requests` keeps its admission rule (active profile,
    `privacy_preferences_v2.discoverable = true`, no block in either
    direction) and now additionally refuses a target whose stored
@@ -104,11 +104,11 @@ to change that. "Fail closed" was protecting a preference nobody could set.
 }
 ```
 
-| Field            | Values                | Default   | Read by                                                                                 |
-| ---------------- | --------------------- | --------- | --------------------------------------------------------------------------------------- |
-| `friendRequests` | `enabled \| disabled` | `enabled` | `POST /v2/message-requests` (target side, together with `discoverable`), V1 send        |
-| `groupInvites`   | `friends \| disabled` | `friends` | `POST /v2/chat/groups` (each invited friend), V1 group create, pre-submission recheck   |
-| `directMessages` | `friends \| disabled` | `friends` | `POST /v2/chat/direct-channels` (target side), V1 direct create, pre-submission recheck |
+| Field            | Values                | Default   | Read by                                                                                          |
+| ---------------- | --------------------- | --------- | ------------------------------------------------------------------------------------------------ |
+| `friendRequests` | `enabled \| disabled` | `enabled` | `POST /v2/message-requests` (target side; `discoverable` no longer read, Decision 0090), V1 send |
+| `groupInvites`   | `friends \| disabled` | `friends` | `POST /v2/chat/groups` (each invited friend), V1 group create, pre-submission recheck            |
+| `directMessages` | `friends \| disabled` | `friends` | `POST /v2/chat/direct-channels` (target side), V1 direct create, pre-submission recheck          |
 
 Errors on the admission side are unchanged: every ineligible target is
 `404 NOT_FOUND` on the V2 routes (`target_unavailable` in the V1 operation

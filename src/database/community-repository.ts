@@ -17,6 +17,7 @@ import {
   deriveCommunityChannelId,
 } from "../features/communication/communication-contract.js";
 import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
+import { loopIdSearchPatternSource } from "../features/identity/loop-id.js";
 import {
   canPerformSelfAction,
   canPerformTargetAction,
@@ -99,6 +100,9 @@ const opaqueIdSchema = z.string().regex(canonicalUuidPattern);
 const uuidV4Schema = z.string().regex(canonicalUuidV4Pattern);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const limitSchema = z.number().int().min(1).max(101);
+const loopIdSearchSchema = z
+  .string()
+  .regex(new RegExp(loopIdSearchPatternSource));
 const dateSchema = z.date().refine((value) => !Number.isNaN(value.getTime()));
 const reasonCodeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 /**
@@ -2746,9 +2750,13 @@ export function createPostgresCommunityRepository(
      * Send a stranger message request (Decision 0031 revision, 2026-09-08).
      * It writes the frozen V1 `friend_requests` storage and obeys the V1 state
      * machine (one pending row per pair, the seven-day lifetime, the rejection
-     * cooldown), but admission is the V2 rule set: an active profile,
-     * `privacy_preferences_v2.discoverable`, and no block in either direction.
-     * Every ineligible target answers the same non-enumerating NOT_FOUND.
+     * cooldown), but admission is the V2 rule set: an active profile other
+     * than the sender, no block in either direction, and the recipient's
+     * `friendRequests` gate (Decision 0070). Since Decision 0090 (main-agent
+     * ruling, 2026-09-28) `discoverable` is not consulted: a stranger reaches
+     * this command through an exact LOOP ID the recipient handed out, and the
+     * recipient's opt-out is `friendRequests`. Every ineligible target answers
+     * the same non-enumerating NOT_FOUND.
      */
     async sendMessageRequest(
       rawInput: SendMessageRequestInput,
@@ -2777,7 +2785,7 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId,
-            requireDiscoverable: true,
+            requireDiscoverable: false,
             requireUnblocked: true,
           });
           // The same pair lock the V1 sender takes, so two concurrent sends
@@ -3082,46 +3090,42 @@ export function createPostgresCommunityRepository(
       try {
         const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
         const limit = limitSchema.parse(rawInput.limit);
-        const values: unknown[] = [viewerUserId, rawInput.prefix, limit];
+        const exactLoopId =
+          rawInput.exactLoopId === undefined
+            ? null
+            : loopIdSearchSchema.parse(rawInput.exactLoopId);
+        const includeExactMatch =
+          exactLoopId !== null && rawInput.includeExactMatch === true;
+        const values: unknown[] = [
+          viewerUserId,
+          rawInput.prefix,
+          limit,
+          exactLoopId,
+          includeExactMatch,
+        ];
         let keyset = "";
         const after = rawInput.after;
         if (after !== undefined) {
           values.push(after.lastSearchKey, after.lastPublicProfileId);
           keyset = `
             and (
-              profile.alias_search_key collate "C" > $4::text
-              or (profile.alias_search_key collate "C" = $4::text
-                and profile.public_profile_id > $5::uuid)
+              profile.alias_search_key collate "C" > $6::text
+              or (profile.alias_search_key collate "C" = $6::text
+                and profile.public_profile_id > $7::uuid)
             )
           `;
         }
-        const result = await pool.query<Record<string, unknown>>({
-          text: `
-            with search_input as (
-              select public.loop_alias_search_key_unicode17_v1($2::text)
-                collate "C" as prefix
-            )
-            select
-              ${identityColumns},
-              profile.alias_search_key
-            from public.user_profiles as profile
-            join public.loop_users as account
-              on account.id = profile.owner_user_id
-            join public.privacy_preferences_v2 as privacy
-              on privacy.owner_user_id = profile.owner_user_id
-            cross join search_input
-            where profile.owner_user_id <> $1
-              and privacy.discoverable = true
+        // Decision 0090: an exact LOOP ID match is pinned in front of the
+        // alias-prefix rows. Both branches require an active profile, exclude
+        // the viewer, and exclude a block in either direction. Per the
+        // main-agent ruling in Decision 0090 (revising Decision 0031 ruling 2)
+        // `discoverable` governs only passive alias-prefix discovery, so only
+        // the prefix branch reads it: handing someone your LOOP ID is an
+        // explicit act. The pinned account is excluded from the prefix branch
+        // on every page so it never appears twice.
+        const admission = `
+              profile.owner_user_id <> $1
               and profile.profile_status = 'active'
-              and profile.alias is not null
-              and profile.alias_search_key collate "C" like
-                replace(
-                  replace(
-                    replace(search_input.prefix, '\\', '\\\\'),
-                    '%', '\\%'
-                  ),
-                  '_', '\\_'
-                ) || '%' escape '\\'
               and not exists (
                 select 1
                 from public.user_blocks as blocks
@@ -3133,26 +3137,86 @@ export function createPostgresCommunityRepository(
                       and blocks.target_user_id = $1)
                   )
               )
-              ${keyset}
+        `;
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            with search_input as (
+              select public.loop_alias_search_key_unicode17_v1($2::text)
+                collate "C" as prefix
+            ),
+            exact_match as (
+              select
+                ${identityColumns},
+                profile.alias_search_key,
+                true as exact_loop_id_match
+              from public.user_profiles as profile
+              join public.loop_users as account
+                on account.id = profile.owner_user_id
+              where $5::boolean
+                and account.loop_id = $4::text
+                and ${admission}
+            ),
+            prefix_match as (
+              select
+                ${identityColumns},
+                profile.alias_search_key,
+                false as exact_loop_id_match
+              from public.user_profiles as profile
+              join public.loop_users as account
+                on account.id = profile.owner_user_id
+              join public.privacy_preferences_v2 as privacy
+                on privacy.owner_user_id = profile.owner_user_id
+              cross join search_input
+              where ${admission}
+                and privacy.discoverable = true
+                and profile.alias is not null
+                and ($4::text is null or account.loop_id <> $4::text)
+                and profile.alias_search_key collate "C" like
+                  replace(
+                    replace(
+                      replace(search_input.prefix, '\\', '\\\\'),
+                      '%', '\\%'
+                    ),
+                    '_', '\\_'
+                  ) || '%' escape '\\'
+                ${keyset}
+              order by
+                profile.alias_search_key collate "C" asc,
+                profile.public_profile_id asc
+              limit $3
+            )
+            select * from (
+              select * from exact_match
+              union all
+              select * from prefix_match
+            ) as matches
             order by
-              profile.alias_search_key collate "C" asc,
-              profile.public_profile_id asc
+              matches.exact_loop_id_match desc,
+              matches.alias_search_key collate "C" asc,
+              matches.public_profile_id asc
             limit $3
           `,
           values,
         });
         return Object.freeze(
-          result.rows.map((row) =>
-            Object.freeze({
+          result.rows.map((row) => {
+            const exactLoopIdMatch = row["exact_loop_id_match"] === true;
+            return Object.freeze({
               profile: toIdentity({
                 public_profile_id: row["public_profile_id"],
                 loop_id: row["loop_id"],
                 alias: row["alias"],
                 avatar_ref: row["avatar_ref"],
               }),
-              searchKey: z.string().min(1).parse(row["alias_search_key"]),
-            }),
-          ),
+              searchKey: exactLoopIdMatch
+                ? z
+                    .string()
+                    .nullable()
+                    .parse(row["alias_search_key"] ?? null)
+                : z.string().min(1).parse(row["alias_search_key"]),
+              exactLoopIdMatch,
+            });
+          }),
         );
       } catch (error) {
         return translateRepositoryError(error);

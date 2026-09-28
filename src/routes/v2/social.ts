@@ -306,7 +306,7 @@ export function registerV2SocialRoutes(
         operationId: "sendV2MessageRequest",
         summary: "Send a stranger message request",
         description:
-          "Writes the frozen V1 friend_requests storage through the V2 admission rules: an activated, discoverable target with no block in either direction. A nonexistent, unactivated, non-discoverable, self, or blocked target all return the same non-enumerating NOT_FOUND. An existing friendship, a pending request in either direction, and an active rejection cooldown are DATA_STALE. Replaying the same Idempotency-Key returns the original request.",
+          "Writes the frozen V1 friend_requests storage through the V2 admission rules: an activated target other than the caller, no block in either direction, and the target's friendRequests gate enabled (Decision 0070). The target's discoverable flag is not consulted (Decision 0090). A nonexistent, unactivated, self, blocked, or friendRequests-disabled target all return the same non-enumerating NOT_FOUND. An existing friendship, a pending request in either direction, and an active rejection cooldown are DATA_STALE. Replaying the same Idempotency-Key returns the original request.",
         tags: ["social"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

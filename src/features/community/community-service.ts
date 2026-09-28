@@ -14,6 +14,7 @@ import {
   parseMemberSearchPrefix,
 } from "../identity/alias-contract.js";
 import { deriveStreamUserId } from "../identity/loop-identifiers.js";
+import { loopIdSearchQuery } from "../identity/loop-id.js";
 import {
   AliasSearchQuotaUnavailableError,
   AliasSearchRateLimitedError,
@@ -2295,10 +2296,19 @@ export function createCommunityService(
         const lastStableId = readString(request.continuation, "stableId");
 
         if (domain === "users") {
+          // Decision 0090: a LOOP ID shaped query pins the exact account in
+          // front of the first page; later pages carry only alias rows.
+          const exactLoopId = loopIdSearchQuery(query);
           const records = await options.repository.searchUsers({
             viewerUserId: owner.userId,
             prefix: query,
             limit: request.limit + 1,
+            ...(exactLoopId === null
+              ? {}
+              : {
+                  exactLoopId,
+                  includeExactMatch: request.continuation === null,
+                }),
             ...(lastSearchKey === undefined || lastStableId === undefined
               ? {}
               : {
@@ -2310,7 +2320,9 @@ export function createCommunityService(
           });
           const hasMore = records.length > request.limit;
           const items = records.slice(0, request.limit);
-          const last = items.at(-1);
+          const lastPrefix = items
+            .filter((item) => !item.exactLoopIdMatch)
+            .at(-1);
           return Object.freeze({
             domain,
             status: "available" as const,
@@ -2335,20 +2347,21 @@ export function createCommunityService(
                 });
               }),
             ),
-            nextCursor:
-              last === undefined
-                ? null
-                : nextCursor(
-                    hasMore,
-                    owner.userId,
-                    route,
-                    filter,
-                    Object.freeze({
-                      limit: request.limit,
-                      searchKey: last.searchKey,
-                      stableId: last.profile.publicProfileId,
-                    }),
-                  ),
+            nextCursor: nextCursor(
+              hasMore,
+              owner.userId,
+              route,
+              filter,
+              lastPrefix === undefined || lastPrefix.searchKey === null
+                ? // Only the pinned exact match was served: the next page
+                  // starts the alias rows from the beginning.
+                  Object.freeze({ limit: request.limit })
+                : Object.freeze({
+                    limit: request.limit,
+                    searchKey: lastPrefix.searchKey,
+                    stableId: lastPrefix.profile.publicProfileId,
+                  }),
+            ),
             contractVersion: v2ContractVersion,
           });
         }

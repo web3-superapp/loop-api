@@ -46,6 +46,21 @@ export function parseLoopId(value: unknown): string {
   return value;
 }
 
+/**
+ * Search-box form of a LOOP ID (Decision 0090): `LOOP-` plus eight ASCII
+ * letters or digits, case-insensitive, surrounding whitespace allowed. The
+ * shape is deliberately looser than the Crockford alphabet so a mistyped
+ * `I`/`L`/`O`/`U` still takes the exact-match path (and simply matches
+ * nobody). Returns the upper-cased ID, or `null` for any other query.
+ */
+export const loopIdSearchPatternSource = "^LOOP-[0-9A-Z]{8}$";
+const loopIdSearchInputPattern = /^LOOP-[0-9A-Z]{8}$/i;
+
+export function loopIdSearchQuery(value: string): string | null {
+  const trimmed = value.trim();
+  return loopIdSearchInputPattern.test(trimmed) ? trimmed.toUpperCase() : null;
+}
+
 export function generateLoopId(): string {
   const bytes = randomBytes(randomByteCount);
   let value = 0n;
