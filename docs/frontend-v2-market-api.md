@@ -108,6 +108,9 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 { "status": "unavailable", "reasonCode": "TOKEN_LOGO_ADDRESS_UNKNOWN" }
 ```
 
+- **灰度开关（决策 0089 §8）**：服务端 `TOKEN_LOGO_URL_MODE=upstream` 时，`url` 仍是 0072 的外部 URL
+  （DexScreener 图或 Trust Wallet 规则 URL，主机只会是三个白名单主机之一），`source`/`observedAt` 不变，
+  代理路由照常可用；缺省 `proxy` 即下述代理 URL。客户端必须**两种形式都接受**（OpenAPI `pattern` 已是两者之并）。
 - **`url`** = `<PUBLIC_BASE_URL>/v2/market/logos/eip155:56/<小写地址>.png`，原生 BNB 是
   `…/native.png`。同一资产在所有接口里是**同一个 URL**（不随来源变化），CDN / 客户端图片缓存
   按 URL 命中即可。OpenAPI `pattern` 锚定为 `^https?://…/v2/market/logos/eip155:56/(0x[0-9a-f]{40}|native)\.png$`

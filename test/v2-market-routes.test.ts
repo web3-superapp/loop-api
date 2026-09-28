@@ -1117,6 +1117,47 @@ describe("LOOP API V2 market module", () => {
       expect(upstream).toEqual([dexscreenerImage]);
     });
 
+    it("TOKEN_LOGO_URL_MODE=proxy (default) publishes the proxy URL; upstream publishes the 0072 origin and keeps the proxy route (Decision 0089 §8)", async () => {
+      const asset = async (overrides: Readonly<Record<string, string>>) => {
+        const { app } = await createApp(
+          {
+            ...fakes(),
+            pairsProvider: pairsProviderWithImage(dexscreenerImage),
+          },
+          overrides,
+          () => Promise.resolve(new Response(null, { status: 404 })),
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/market/assets/${wbnbAssetId}`,
+          headers: commonHeaders(),
+        });
+        const proxied = await app.inject({
+          method: "GET",
+          url: new URL(wbnbLogo).pathname,
+        });
+        return { logo: response.json<{ logo: unknown }>().logo, proxied };
+      };
+      const proxy = await asset({ TOKEN_LOGO_URL_MODE: "proxy" });
+      expect(proxy.logo).toEqual({
+        status: "available",
+        url: wbnbLogo,
+        source: "dexscreener",
+        observedAt: fetchedAt,
+      });
+      const upstream = await asset({ TOKEN_LOGO_URL_MODE: "upstream" });
+      expect(upstream.logo).toEqual({
+        status: "available",
+        url: dexscreenerImage,
+        source: "dexscreener",
+        observedAt: fetchedAt,
+      });
+      // The proxy route is served in both modes (404 here: no picture upstream).
+      expect(proxy.proxied.statusCode).toBe(404);
+      expect(upstream.proxied.statusCode).toBe(404);
+      expect(upstream.proxied.json()).toMatchObject({ code: "NOT_FOUND" });
+    });
+
     it("drops a Provider image off the host allow-list and names the rule origin", async () => {
       const { app } = await createApp({
         ...fakes(),

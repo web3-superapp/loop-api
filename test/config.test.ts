@@ -360,6 +360,22 @@ describe("loadConfig", () => {
     }
   });
 
+  it("parses TOKEN_LOGO_URL_MODE fail-closed, defaulting to proxy (Decision 0089 §8)", () => {
+    expect(loadConfig(validEnvironment()).tokenLogoUrlMode).toBe("proxy");
+    for (const mode of ["proxy", "upstream"] as const) {
+      const environment = validEnvironment();
+      environment["TOKEN_LOGO_URL_MODE"] = mode;
+      expect(loadConfig(environment).tokenLogoUrlMode).toBe(mode);
+    }
+    for (const invalid of ["", "Proxy", "direct", "upstream "]) {
+      const environment = validEnvironment();
+      environment["TOKEN_LOGO_URL_MODE"] = invalid;
+      expect(() => loadConfig(environment), invalid).toThrowError(
+        /TOKEN_LOGO_URL_MODE/,
+      );
+    }
+  });
+
   it("requires HTTPS for a production public base URL", () => {
     const environment = validEnvironment();
     environment["NODE_ENV"] = "production";
