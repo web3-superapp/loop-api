@@ -160,6 +160,10 @@ function priceFact(priceUsd: string): AssetPriceFact {
 interface Harness {
   readonly service: ReturnType<typeof createWalletReadService>;
   readonly started: string[];
+  readonly launchChainReadClient: BscReadClient;
+  readonly launchGetHead: Mock<BscReadClient["getHead"]>;
+  readonly launchReadBalances: Mock<BscReadClient["readBalances"]>;
+  readonly launchReadAllowances: Mock<(...args: unknown[]) => Promise<unknown>>;
   readonly logger: { debug: ReturnType<typeof vi.fn> };
   readonly listEthereumWallets: Mock<PrivyWalletReader["listEthereumWallets"]>;
   readonly recordBalanceSnapshot: ReturnType<typeof vi.fn>;
@@ -176,6 +180,11 @@ function harness(
     readonly walletInventoryTtlMs?: number;
     readonly primaryReadHedgeDelayMs?: number;
     readonly now?: () => Date;
+    readonly launchUsd1?: {
+      readonly usd1Address: string;
+      readonly spender: string;
+    };
+    readonly launchAllowances?: () => Promise<unknown>;
   } = {},
 ): Harness {
   const started: string[] = [];
@@ -227,6 +236,45 @@ function harness(
       )();
     }),
   } as unknown as BscReadClient;
+  // Decision 0088: the slot reads its head once, then its balances and the
+  // pinned allowance at it.
+  const launchGetHead = vi.fn<BscReadClient["getHead"]>(() =>
+    Promise.resolve({
+      blockNumber: 52_000_000n,
+      blockHash: launchHeadHash,
+      observedAt,
+    }),
+  );
+  const launchReadBalances = vi.fn<BscReadClient["readBalances"]>(() => {
+    started.push("launchChain");
+    return (
+      options.launchBalances ??
+      ((): Promise<BscBalanceReadResult> =>
+        Promise.resolve({
+          head: {
+            blockNumber: 52_000_000n,
+            blockHash: launchHeadHash,
+            observedAt,
+          },
+          balances: [
+            {
+              assetId: "eip155:97:native",
+              rawValue: 5_000_000_000_000_000_000n,
+              reasonCode: null,
+            },
+          ],
+        }))
+    )();
+  });
+  const launchReadAllowances = vi.fn<(...args: unknown[]) => Promise<unknown>>(
+    () => {
+      started.push("launchAllowance");
+      return (
+        options.launchAllowances ??
+        (() => Promise.reject(new Error("not used")))
+      )();
+    },
+  );
   const launchChainReadClient = {
     chainId: "eip155:97",
     chainReference: 97,
@@ -235,27 +283,9 @@ function harness(
     endpointRefs: ["rpc-fedcbafedcba"],
     verifyChain: () => Promise.resolve("verified" as const),
     currentVerification: () => "verified" as const,
-    readBalances: vi.fn(() => {
-      started.push("launchChain");
-      return (
-        options.launchBalances ??
-        ((): Promise<BscBalanceReadResult> =>
-          Promise.resolve({
-            head: {
-              blockNumber: 52_000_000n,
-              blockHash: launchHeadHash,
-              observedAt,
-            },
-            balances: [
-              {
-                assetId: "eip155:97:native",
-                rawValue: 5_000_000_000_000_000_000n,
-                reasonCode: null,
-              },
-            ],
-          }))
-      )();
-    }),
+    getHead: launchGetHead,
+    readBalances: launchReadBalances,
+    readAllowances: launchReadAllowances,
   } as unknown as BscReadClient;
   const listEthereumWallets = vi.fn<PrivyWalletReader["listEthereumWallets"]>(
     () =>
@@ -304,6 +334,9 @@ function harness(
     chainName: "BNB Smart Chain",
     chainReference: 56,
     launchChainReadClient,
+    ...(options.launchUsd1 === undefined
+      ? {}
+      : { launchUsd1: options.launchUsd1 }),
     logger,
     ...(options.walletInventoryTtlMs === undefined
       ? {}
@@ -316,6 +349,10 @@ function harness(
   return {
     service,
     started,
+    launchChainReadClient,
+    launchGetHead,
+    launchReadBalances,
+    launchReadAllowances,
     logger,
     listEthereumWallets,
     recordBalanceSnapshot,
@@ -434,6 +471,105 @@ describe("wallet balances read", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads the launch slot head once and asks its native balance, USD1 balance and allowance together at that block (Decision 0088)", async () => {
+    const usd1 = "0x2222222222222222222222222222222222222222";
+    const spender = "0x1111111111111111111111111111111111111111";
+    const launchHead = {
+      blockNumber: 52_000_000n,
+      blockHash: launchHeadHash,
+      observedAt,
+    };
+    const allowance = deferred<unknown>();
+    const nativeRead = deferred<BscBalanceReadResult>();
+    let usd1Read: Promise<BscBalanceReadResult> | null = null;
+    const subject = harness({
+      launchUsd1: { usd1Address: usd1, spender },
+      launchAllowances: () => allowance.promise,
+    });
+    const readBalances = subject.launchReadBalances;
+    readBalances.mockImplementation((_owner, items) => {
+      subject.started.push("launchChain");
+      if (items[0]?.address === usd1) {
+        usd1Read = Promise.resolve({
+          head: launchHead,
+          balances: [
+            {
+              assetId: items[0].assetId,
+              rawValue: 9_000_000n,
+              reasonCode: null,
+            },
+          ],
+        });
+        return usd1Read;
+      }
+      return nativeRead.promise;
+    });
+
+    const pending = getBalances(subject);
+    await vi.waitFor(() => {
+      expect(
+        subject.started.filter((entry) => entry === "launchChain"),
+      ).toHaveLength(2);
+      expect(subject.started).toContain("launchAllowance");
+    });
+    // All three were issued before any of them answered.
+    expect(usd1Read).not.toBeNull();
+    nativeRead.resolve({
+      head: launchHead,
+      balances: [
+        {
+          assetId: "eip155:97:native",
+          rawValue: 5_000_000_000_000_000_000n,
+          reasonCode: null,
+        },
+      ],
+    });
+    allowance.resolve({
+      head: launchHead,
+      allowances: [
+        {
+          assetId: `eip155:97:${usd1}`,
+          spender,
+          rawValue: 4_000_000n,
+          reasonCode: null,
+        },
+      ],
+    });
+    const resource = await pending;
+
+    expect(subject.launchGetHead).toHaveBeenCalledTimes(1);
+    for (const call of readBalances.mock.calls) {
+      expect(call[2]).toEqual({ atHead: launchHead });
+    }
+    expect(subject.launchReadAllowances.mock.calls[0]?.[2]).toEqual({
+      atBlock: launchHead.blockNumber,
+    });
+    expect(resource.launchChain).toMatchObject({
+      availability: "available",
+      usd1: { balance: "9000000", allowance: "4000000" },
+      nativeBalance: { rawValue: "5000000000000000000" },
+    });
+  });
+
+  it("keeps the native balance and drops only the USD1 pair when the allowance read fails", async () => {
+    const subject = harness({
+      launchUsd1: {
+        usd1Address: "0x2222222222222222222222222222222222222222",
+        spender: "0x1111111111111111111111111111111111111111",
+      },
+      launchAllowances: () =>
+        Promise.reject(
+          new TimeoutError({ body: {}, url: "https://rpc.example" }),
+        ),
+    });
+    const resource = await getBalances(subject);
+    expect(resource.launchChain).toMatchObject({
+      availability: "available",
+      reasonCode: null,
+    });
+    expect(resource.launchChain).not.toHaveProperty("usd1");
   });
 
   it("reports a Provider balance view that failed as an unavailable cross-check, never as a balance", async () => {

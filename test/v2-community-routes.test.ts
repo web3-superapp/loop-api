@@ -2745,6 +2745,105 @@ describe("LOOP API V2 community, social, and search modules", () => {
       }
     });
 
+    it("starts the record, channel and presence reads together and reuses one Stream observation (Decision 0088)", async () => {
+      const order: string[] = [];
+      let releaseRecord: (() => void) | undefined;
+      const read = vi.fn<
+        StreamCommunityChannelGateway["readCommunityChannelPresence"]
+      >(() => {
+        order.push("presence");
+        return Promise.resolve({
+          status: "observed" as const,
+          channelId: streamChannelId,
+          onlineMemberCount: 5,
+          memberCount: 9,
+        });
+      });
+      const dependencies = fakes();
+      const storedGetCommunity =
+        dependencies.communityRepository.getCommunity.bind(
+          dependencies.communityRepository,
+        );
+      const communication = communicationFake({
+        provisioned: true,
+        state: "created",
+      });
+      const readChannel = communication.readCommunityChannel;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            community: {
+              ...dependencies.communityRepository,
+              getCommunity: (input) => {
+                order.push("record:start");
+                return new Promise((resolve, reject) => {
+                  releaseRecord = () => {
+                    order.push("record:end");
+                    storedGetCommunity(input).then(resolve, reject);
+                  };
+                });
+              },
+            },
+            communication: {
+              ...communication,
+              readCommunityChannel: vi.fn(() => {
+                order.push("channel");
+                return readChannel();
+              }),
+            },
+          },
+          streamCommunityChannelGateway: presenceGateway(read),
+        },
+        { V2_MODULES_ENABLED: "community,search,communication" },
+      );
+      const pending = app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      for (let turn = 0; turn < 50 && !order.includes("presence"); turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      // Stream was asked while the record read was still open.
+      expect([...order].sort()).toEqual([
+        "channel",
+        "presence",
+        "record:start",
+      ]);
+      expect(order.at(-1)).toBe("presence");
+      releaseRecord?.();
+      const detail = await pending;
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<{ onlineCount: unknown }>().onlineCount).toMatchObject(
+        { status: "available", count: 5 },
+      );
+
+      // A second detail read inside the window reuses the observation.
+      const again = app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      for (let turn = 0; turn < 50 && releaseRecord === undefined; turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      for (let turn = 0; turn < 50; turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        if (order.filter((entry) => entry === "record:start").length === 2) {
+          break;
+        }
+      }
+      releaseRecord?.();
+      const second = await again;
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ onlineCount: unknown }>().onlineCount).toEqual(
+        detail.json<{ onlineCount: unknown }>().onlineCount,
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
     it("publishes the observed count with its timestamp and source on the detail read only", async () => {
       const read = vi.fn<
         StreamCommunityChannelGateway["readCommunityChannelPresence"]

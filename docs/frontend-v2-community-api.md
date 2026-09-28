@@ -453,7 +453,12 @@ admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，�
 }
 ```
 
-同一频道无人连接时返回的是真实的 `count: 0`（`observedAt` 同样是新的）。`count` 只在
+同一频道无人连接时返回的是真实的 `count: 0`（`observedAt` 同样是新的）。
+
+**复用窗口（决策 0088）**：同一频道的一次 Stream 观测在后端进程内复用 **最多 30 s**
+（过半后命中时在后台再读一次，下一次请求拿到新值）；`observedAt` 永远是 Stream 真正被
+读取的时刻，所以它可能比响应时间早至多 30 s。形状、枚举与原因码不变；前端若要显示
+"x 秒前"，以 `observedAt` 为准。失败 / 超时不复用，下一次请求会重新问 Stream。`count` 只在
 Stream 报告 0 时才为 0；Stream 未配置、没有频道、查询失败、超时（3 s）、成员超过 500
 的分页上限，全部是 `{"status":"unavailable","reasonCode":...}`，见上表；不要用 0 或
 fixture 顶替。写接口（create / patch / join / leave）返回的同一字段固定为

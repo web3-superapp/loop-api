@@ -191,4 +191,157 @@ describe("community presence reader (Decision 0047)", () => {
       reasonCode: "STREAM_PRESENCE_NOT_OBSERVED",
     });
   });
+
+  describe("observation reuse (Decision 0088)", () => {
+    function counting(counts: number[]) {
+      let call = 0;
+      return vi.fn(() => {
+        const count = counts[Math.min(call, counts.length - 1)] ?? 0;
+        call += 1;
+        return Promise.resolve({
+          status: "observed" as const,
+          channelId: streamChannelId,
+          onlineMemberCount: count,
+          memberCount: 50,
+        });
+      });
+    }
+    function timedReader(
+      read: StreamCommunityChannelGateway["readCommunityChannelPresence"],
+      clockMs: { value: number },
+      cacheTtlMilliseconds?: number,
+    ) {
+      return createCommunityPresenceReader({
+        gateway: gateway(read),
+        clock: () => new Date(clockMs.value),
+        ...(cacheTtlMilliseconds === undefined ? {} : { cacheTtlMilliseconds }),
+      });
+    }
+    const start = Date.parse(observedAt);
+
+    it("serves one Stream observation for 30 s, refreshing beside it past 15 s", async () => {
+      const read = counting([3, 4, 5]);
+      const clockMs = { value: start };
+      const subject = timedReader(read, clockMs);
+
+      const first = await subject.readCommunityPresence(channel());
+      expect(first).toMatchObject({ count: 3, observedAt });
+      clockMs.value = start + 14_999;
+      await expect(subject.readCommunityPresence(channel())).resolves.toBe(
+        first,
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+
+      // Past half the window: still the first observation, and one read beside.
+      clockMs.value = start + 15_000;
+      await expect(subject.readCommunityPresence(channel())).resolves.toBe(
+        first,
+      );
+      await Promise.resolve();
+      expect(read).toHaveBeenCalledTimes(2);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The refreshed observation carries the time Stream was read.
+      await expect(
+        subject.readCommunityPresence(channel()),
+      ).resolves.toMatchObject({
+        count: 4,
+        observedAt: new Date(start + 15_000).toISOString(),
+      });
+    });
+
+    it("never serves an observation at or past the window", async () => {
+      const read = counting([3, 9]);
+      const clockMs = { value: start };
+      const subject = timedReader(read, clockMs);
+      await subject.readCommunityPresence(channel());
+      clockMs.value = start + 30_000;
+      await expect(
+        subject.readCommunityPresence(channel()),
+      ).resolves.toMatchObject({
+        count: 9,
+        observedAt: new Date(start + 30_000).toISOString(),
+      });
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one Stream read between concurrent readers", async () => {
+      let resolveRead: (() => void) | undefined;
+      const read = vi.fn(
+        () =>
+          new Promise<{
+            readonly status: "observed";
+            readonly channelId: string;
+            readonly onlineMemberCount: number;
+            readonly memberCount: number;
+          }>((resolve) => {
+            resolveRead = () => {
+              resolve({
+                status: "observed",
+                channelId: streamChannelId,
+                onlineMemberCount: 6,
+                memberCount: 8,
+              });
+            };
+          }),
+      );
+      const subject = timedReader(read, { value: start });
+      const both = Promise.all([
+        subject.readCommunityPresence(channel()),
+        subject.readCommunityPresence(channel()),
+      ]);
+      resolveRead?.();
+      const [left, right] = await both;
+      expect(left).toBe(right);
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("never remembers a failure or a timeout", async () => {
+      const read = vi
+        .fn<StreamCommunityChannelGateway["readCommunityChannelPresence"]>()
+        .mockRejectedValueOnce(new StreamChannelGatewayUnavailableError())
+        .mockResolvedValueOnce({
+          status: "observed",
+          channelId: streamChannelId,
+          onlineMemberCount: 2,
+          memberCount: 3,
+        });
+      const subject = timedReader(read, { value: start });
+      await expect(subject.readCommunityPresence(channel())).resolves.toEqual({
+        status: "unavailable",
+        reasonCode: "STREAM_PRESENCE_READ_FAILED",
+      });
+      await expect(
+        subject.readCommunityPresence(channel()),
+      ).resolves.toMatchObject({ status: "available", count: 2 });
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+
+    it("remembers the member bound as the observation it is", async () => {
+      const read = vi.fn(() =>
+        Promise.resolve({
+          status: "bound_exceeded" as const,
+          channelId: streamChannelId,
+          memberBound: 500,
+        }),
+      );
+      const subject = timedReader(read, { value: start });
+      await subject.readCommunityPresence(channel());
+      await expect(subject.readCommunityPresence(channel())).resolves.toEqual({
+        status: "unavailable",
+        reasonCode: "STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED",
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads Stream every time with a zero TTL and refuses a negative one", async () => {
+      const read = counting([1, 2]);
+      const subject = timedReader(read, { value: start }, 0);
+      await subject.readCommunityPresence(channel());
+      await expect(
+        subject.readCommunityPresence(channel()),
+      ).resolves.toMatchObject({ count: 2 });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(() => timedReader(read, { value: start }, -1)).toThrow(RangeError);
+    });
+  });
 });

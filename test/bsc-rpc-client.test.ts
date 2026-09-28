@@ -362,6 +362,66 @@ describe("BSC read client", () => {
     ).toHaveLength(1);
   });
 
+  it("reads balances at a head the caller already observed without reading the head again (Decision 0088)", async () => {
+    const requests: RpcRequest[] = [];
+    const pinned = headNumber - 3n;
+    const client = createBscReadClient({
+      config: chainConfig(),
+      transportFactory: () =>
+        custom({
+          request: (request: RpcRequest): Promise<unknown> => {
+            requests.push(request);
+            switch (request.method) {
+              case "eth_chainId": {
+                return Promise.resolve("0x38");
+              }
+              case "eth_getBalance": {
+                return Promise.resolve(numberToHex(7_000_000_000_000_000_000n));
+              }
+              case "eth_call": {
+                const params = request.params as readonly [
+                  { readonly data: `0x${string}` },
+                ];
+                return Promise.resolve(answerMulticall(params[0].data));
+              }
+              default: {
+                return Promise.reject(new Error(`unmocked ${request.method}`));
+              }
+            }
+          },
+        }),
+    });
+    const atHead = {
+      blockNumber: pinned,
+      blockHash: headHash,
+      observedAt: "2026-09-28T00:00:00.000Z",
+    };
+
+    const result = await client.readBalances(
+      owner,
+      [
+        { assetId: `eip155:56:${wbnb}`, address: wbnb },
+        { assetId: "eip155:56:native", address: null },
+      ],
+      { atHead },
+    );
+
+    expect(result.head).toBe(atHead);
+    expect(result.balances.map((balance) => balance.rawValue)).toEqual([
+      123_456_789_000_000_000n,
+      7_000_000_000_000_000_000n,
+    ]);
+    expect(
+      requests.filter((request) => request.method === "eth_getBlockByNumber"),
+    ).toHaveLength(0);
+    const call = requests.find((request) => request.method === "eth_call");
+    expect((call?.params as readonly unknown[])[1]).toBe(numberToHex(pinned));
+    const native = requests.find(
+      (request) => request.method === "eth_getBalance",
+    );
+    expect((native?.params as readonly unknown[])[1]).toBe(numberToHex(pinned));
+  });
+
   describe("allowance reads pinned to an observed block (Decision 0082, S86b)", () => {
     const usd1 = "0x2222222222222222222222222222222222222222";
     const spender = "0x1111111111111111111111111111111111111111";

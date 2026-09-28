@@ -98,7 +98,19 @@ export interface ChainStatusService {
   getStatus(): Promise<ChainStatusResource>;
 }
 
+/**
+ * How long one chain verification and one endpoint probe are reused by this
+ * route (Decision 0088). Past half of it the probe is still served and run
+ * again beside the call. The per-endpoint `observedAt` stays the time the
+ * probe ran; the head is never reused.
+ */
+export const chainStatusObservationTtlMs = 60_000;
+
 export interface CreateChainStatusServiceInput {
+  /** Overrides `chainStatusObservationTtlMs`; zero disables the reuse. */
+  readonly observationTtlMs?: number;
+  /** Clock for the reuse window; defaults to `Date.now`. */
+  readonly nowMs?: () => number;
   readonly repository: ChainRegistryRepository;
   readonly indexerRepository: BscIndexerRepository;
   readonly readClient: BscReadClient;
@@ -131,6 +143,7 @@ function launchChainReasonCode(
 
 async function projectLaunchChain(
   client: BscReadClient | null,
+  verify: (client: BscReadClient) => Promise<ChainVerificationState>,
 ): Promise<LaunchChainStatusProjection | null> {
   if (client === null) {
     return null;
@@ -149,22 +162,82 @@ async function projectLaunchChain(
       reasonCode: launchChainReasonCodes.notConfigured,
     });
   }
-  const verification = await client.verifyChain();
+  const verification = await verify(client);
   const reasonCode = launchChainReasonCode(verification);
-  let head: ChainHeadProjection | null = null;
-  if (reasonCode === null) {
-    try {
-      const observed = await client.getHead();
-      head = Object.freeze({
-        blockNumber: observed.blockNumber.toString(10),
-        blockHash: observed.blockHash,
-        observedAt: observed.observedAt,
-      });
-    } catch {
-      head = null;
-    }
-  }
+  const head = reasonCode === null ? await readHeadProjection(client) : null;
   return Object.freeze({ ...identity, verification, head, reasonCode });
+}
+
+/** The live head, or `null` when the read fails; never a cached value. */
+async function readHeadProjection(
+  client: BscReadClient,
+): Promise<ChainHeadProjection | null> {
+  try {
+    const observed = await client.getHead();
+    return Object.freeze({
+      blockNumber: observed.blockNumber.toString(10),
+      blockHash: observed.blockHash,
+      observedAt: observed.observedAt,
+    });
+  } catch {
+    return null;
+  }
+}
+
+interface TimedObservation<T> {
+  readonly value: T;
+  /** When the read was started; the reuse window counts from here. */
+  readonly startedAtMs: number;
+}
+
+/**
+ * One reusable observation (Decision 0088): concurrent callers share the
+ * read in flight; a completed read is served for `ttlMs` from when it
+ * started, and past half of it a fresh read is started beside the caller.
+ * A read that rejects is never remembered.
+ */
+function reusableObservation<T>(
+  read: () => Promise<T>,
+  ttlMs: number,
+  nowMs: () => number,
+  refreshBeside: boolean,
+): () => Promise<T> {
+  let remembered: TimedObservation<T> | null = null;
+  let inFlight: Promise<T> | null = null;
+  const start = (): Promise<T> => {
+    if (inFlight !== null) {
+      return inFlight;
+    }
+    const startedAtMs = nowMs();
+    const pending = read()
+      .then((value) => {
+        if (ttlMs > 0) {
+          remembered = { value, startedAtMs };
+        }
+        return value;
+      })
+      .finally(() => {
+        if (inFlight === pending) {
+          inFlight = null;
+        }
+      });
+    inFlight = pending;
+    return pending;
+  };
+  return (): Promise<T> => {
+    const current = remembered;
+    if (current !== null) {
+      const ageMs = nowMs() - current.startedAtMs;
+      if (ageMs >= 0 && ageMs < ttlMs) {
+        if (refreshBeside && ageMs >= ttlMs / 2) {
+          start().catch(() => undefined);
+        }
+        return Promise.resolve(current.value);
+      }
+      remembered = null;
+    }
+    return start();
+  };
 }
 
 function rpcReasonCode(verification: ChainVerificationState): string | null {
@@ -187,6 +260,44 @@ function rpcReasonCode(verification: ChainVerificationState): string | null {
 export function createChainStatusService(
   input: CreateChainStatusServiceInput,
 ): ChainStatusService {
+  const ttlMs = input.observationTtlMs ?? chainStatusObservationTtlMs;
+  const nowMs = input.nowMs ?? ((): number => Date.now());
+  const verifications = new Map<
+    BscReadClient,
+    () => Promise<ChainVerificationState>
+  >();
+  /**
+   * The client already caches a verified or mismatched state for good; an
+   * unreachable or pending one is asked again at most once per window by
+   * this route, and a recovery observed by any other read is reported at
+   * once through `currentVerification()`.
+   */
+  const verificationOf = (
+    client: BscReadClient,
+  ): Promise<ChainVerificationState> => {
+    const current = client.currentVerification();
+    if (current === "verified" || current === "mismatched") {
+      return Promise.resolve(current);
+    }
+    let observe = verifications.get(client);
+    if (observe === undefined) {
+      observe = reusableObservation(
+        () => client.verifyChain(),
+        ttlMs,
+        nowMs,
+        false,
+      );
+      verifications.set(client, observe);
+    }
+    return observe();
+  };
+  const probeEndpoints = reusableObservation(
+    () => input.readClient.probeEndpoints(),
+    ttlMs,
+    nowMs,
+    true,
+  );
+
   return Object.freeze({
     async getStatus(): Promise<ChainStatusResource> {
       // Without a configured endpoint there is no chain to report on. The
@@ -194,32 +305,43 @@ export function createChainStatusService(
       if (input.readClient.endpointRefs.length === 0) {
         throw V2ApiError.capabilityUnavailable();
       }
-      const verification = await input.readClient.verifyChain();
+      // Decision 0088: every leg below is independent except the head, which
+      // waits only for the verification. They run together; the page costs
+      // one head round trip (plus one probe when the window has lapsed)
+      // instead of five sequential RPC stages.
+      const verificationPending = verificationOf(input.readClient);
+      const headPending = verificationPending.then((verification) =>
+        rpcReasonCode(verification) === null
+          ? readHeadProjection(input.readClient)
+          : null,
+      );
+      const [
+        verification,
+        endpoints,
+        head,
+        checkpoints,
+        assets,
+        pools,
+        launchChain,
+      ] = await Promise.all([
+        verificationPending,
+        probeEndpoints(),
+        headPending,
+        Promise.all(
+          indexerLanes.map((laneName) =>
+            input.indexerRepository.getCheckpoint(laneName, input.chainId),
+          ),
+        ),
+        input.repository.listReadableAssets(input.chainId),
+        input.repository.listPools(input.chainId),
+        projectLaunchChain(input.launchReadClient, verificationOf),
+      ]);
       const reasonCode = rpcReasonCode(verification);
-      const endpoints = await input.readClient.probeEndpoints();
 
-      let head: ChainHeadProjection | null = null;
-      if (reasonCode === null) {
-        try {
-          const observed = await input.readClient.getHead();
-          head = Object.freeze({
-            blockNumber: observed.blockNumber.toString(10),
-            blockHash: observed.blockHash,
-            observedAt: observed.observedAt,
-          });
-        } catch {
-          head = null;
-        }
-      }
-
-      const lanes: IndexerLaneProjection[] = [];
-      for (const laneName of indexerLanes) {
-        const checkpoint = await input.indexerRepository.getCheckpoint(
-          laneName,
-          input.chainId,
-        );
-        lanes.push(
-          checkpoint === null
+      const lanes: IndexerLaneProjection[] = indexerLanes.map(
+        (laneName, index) => {
+          const checkpoint = checkpoints[index] ?? null;
+          return checkpoint === null
             ? Object.freeze({
                 lane: laneName,
                 status: "unavailable" as const,
@@ -245,15 +367,9 @@ export function createChainStatusService(
                       ),
                 reorgCount: checkpoint.reorgCount,
                 updatedAt: checkpoint.updatedAt,
-              }),
-        );
-      }
-
-      const [assets, pools] = await Promise.all([
-        input.repository.listReadableAssets(input.chainId),
-        input.repository.listPools(input.chainId),
-      ]);
-      const launchChain = await projectLaunchChain(input.launchReadClient);
+              });
+        },
+      );
 
       return Object.freeze({
         chain: Object.freeze({

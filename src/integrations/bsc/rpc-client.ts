@@ -208,6 +208,15 @@ export interface BscAllowanceReadOptions {
   readonly atBlock?: bigint;
 }
 
+/**
+ * Decision 0088: a balance read at a head the caller already observed on
+ * this client's interactive lane. The head read is skipped and every call is
+ * pinned to `atHead.blockNumber`; the returned head is `atHead` itself.
+ */
+export interface BscBalanceReadOptions {
+  readonly atHead?: BscChainHead;
+}
+
 /** Exact call shape LOOP pre-executes and estimates: from is always the wallet. */
 export interface BscCallRequest {
   readonly from: string;
@@ -293,6 +302,7 @@ export interface BscReadClient {
   readBalances(
     owner: string,
     items: readonly BscBalanceRequestItem[],
+    options?: BscBalanceReadOptions,
   ): Promise<BscBalanceReadResult>;
   readTransferLogs(
     query: BscTransferLogQuery,
@@ -1629,9 +1639,14 @@ export function createBscReadClient(
     async readBalances(
       owner: string,
       items: readonly BscBalanceRequestItem[],
+      options: BscBalanceReadOptions = {},
     ): Promise<BscBalanceReadResult> {
       await requireVerifiedChain();
-      const head = await readHead(pointReadAggregate);
+      // Decision 0088: a caller that already read the head on this lane
+      // (the launch slot reads its native balance, its USD1 balance and the
+      // USD1 allowance at one head) saves the round trip; the calls are
+      // pinned to that block exactly as they are to a head read here.
+      const head = options.atHead ?? (await readHead(pointReadAggregate));
       const ownerAddress = asAddress(owner);
       const tokenItems = items.filter((item) => item.address !== null);
       const nativeItems = items.filter((item) => item.address === null);

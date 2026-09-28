@@ -55,6 +55,10 @@ RPC URL 永远不会出现在任何响应里。
 - `verification` 与主链同枚举：`verified | mismatched | unreachable | unknown`。
   `head` 只在 `verified` 时非空。
 - **没有** `endpoints[]`：测试网端点健康不单列，也不下发 `endpointRef`。
+- **复用窗口（决策 0088）**：`rpc.endpoints[]` 的探测结果与未通过的链验证结果在后端
+  进程内复用最多 60 s（过半后在后台重测），每个端点的 `observedAt` / `latencyMs` 仍是
+  那次探测的真实时刻与耗时；`rpc.head` 与 `launchChain.head` **每次请求实时读取**，
+  从不复用。形状不变。
 - 路由的 503 门槛仍然只看主链：主链未配置 RPC → 整个 `GET /v2/chain/status`
   `503 CAPABILITY_UNAVAILABLE`，无论 launch 槽位如何；launch 槽位失败**只**体现在
   `launchChain.reasonCode`，主链部分照常 200。

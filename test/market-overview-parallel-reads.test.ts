@@ -493,3 +493,94 @@ describe("market overview reads (Decision 0086)", () => {
     expect(overview.trending.status).toBe("available");
   });
 });
+
+describe("market asset detail reads (Decision 0088)", () => {
+  it("asks the pair facts, the security facts, the bound community and the 24h range together", async () => {
+    const started: string[] = [];
+    const gates: (() => void)[] = [];
+    const held = <T>(name: string, value: () => T): Promise<T> => {
+      started.push(name);
+      return new Promise<T>((resolve) => {
+        gates.push(() => {
+          resolve(value());
+        });
+      });
+    };
+    const cache = cacheFake();
+    const facts = createMarketFactService({
+      config,
+      cache: cache.repository,
+      pairsProvider: null,
+      securityProvider: null,
+      candlesProvider: null,
+    });
+    const token = tokenAsset(usdt, "USDT");
+    const service = createMarketReadService({
+      registry: {
+        getAsset: vi.fn(() => Promise.resolve(token)),
+      } as unknown as ChainRegistryRepository,
+      facts: {
+        ...facts,
+        candlesProviderEnabled: true,
+        readTokenPairs: (address: string) =>
+          held("pairs", () => ({
+            value: snapshotFor(address, "0.5"),
+            source: "dexscreener" as const,
+            fetchedAt: observedAt,
+            ttlSeconds: 30,
+            quality: "fresh" as const,
+            reasonCode: null,
+            rawDigest: null,
+          })),
+        readTokenSecurity: () =>
+          held("security", () => ({
+            value: null,
+            source: "goplus" as const,
+            fetchedAt: null,
+            ttlSeconds: 600,
+            quality: "unavailable" as const,
+            reasonCode: "GOPLUS_NOT_CONFIGURED",
+            rawDigest: null,
+          })),
+      },
+      cache: {
+        ...cache.repository,
+        findVerifiedCommunityByAssetId: () => held("community", () => null),
+        get: () => held("range", () => null),
+      },
+      indexerRepository: {} as BscIndexerRepository,
+      watchlist: watchlist([]).repository,
+      wallets: null,
+      readClient: {
+        verifyChain: () => Promise.resolve("verified"),
+      } as unknown as BscReadClient,
+      cursorCodec: null,
+      lookupQuota: null,
+      chainId: bscChainId,
+      staleGraceSeconds: config.staleGraceSeconds,
+    });
+    const pending = service.getAsset({
+      assetId: token.assetId,
+      caller: { principal, canonicalClientIp: "203.0.113.7" },
+    });
+    await vi.waitFor(() => {
+      expect([...started].sort()).toEqual([
+        "community",
+        "pairs",
+        "range",
+        "security",
+      ]);
+    });
+    // None of the four has answered: none waited for another.
+    for (const open of gates.splice(0, gates.length)) {
+      open();
+    }
+    const resource = await pending;
+    expect(resource.price.value).toBe("1.25");
+    expect(resource.security).toMatchObject({
+      status: "unavailable",
+      reasonCode: "GOPLUS_NOT_CONFIGURED",
+    });
+    expect(resource.community).toMatchObject({ status: "unavailable" });
+  });
+});

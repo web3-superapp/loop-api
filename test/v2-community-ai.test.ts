@@ -624,6 +624,119 @@ describe("Community AI knowledge assembly (Decision 0066)", () => {
   });
 });
 
+describe("Community AI knowledge legs run together (Decision 0088)", () => {
+  function gate<T>(): { promise: Promise<T>; open(value: T): void } {
+    let open: (value: T) => void = () => undefined;
+    const promise = new Promise<T>((resolve) => {
+      open = resolve;
+    });
+    return { promise, open };
+  }
+  const settle = async (): Promise<void> => {
+    for (let turn = 0; turn < 5; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  it("starts mining and voice with the community read, chat once membership is known, and numbers sources in a fixed order", async () => {
+    const started: string[] = [];
+    const community = gate<CommunityResource>();
+    const mining = gate<unknown>();
+    const voice = gate<unknown>();
+    const messages = gate<
+      readonly {
+        readonly authorUserId: string | null;
+        readonly text: string;
+        readonly createdAt: string;
+      }[]
+    >();
+    const readers = readersFor(communityResource(activeMembership), {
+      communityService: {
+        getCommunity: () => {
+          started.push("community");
+          return community.promise;
+        },
+      } as unknown as CommunityService,
+      miningService: {
+        getCommunity: () => {
+          started.push("mining");
+          return mining.promise;
+        },
+      } as unknown as CommunityAiKnowledgeReaders["miningService"],
+      voiceRoomService: {
+        getCurrentRoom: () => {
+          started.push("voice");
+          return voice.promise;
+        },
+      } as unknown as CommunityAiKnowledgeReaders["voiceRoomService"],
+      channelGateway: {
+        readCommunityChannelMessages: () => {
+          started.push("chat");
+          return messages.promise;
+        },
+      } as unknown as StreamCommunityChannelGateway,
+    });
+    const pending = assembleCommunityAiKnowledge(readers, {
+      ...readContext,
+      chatWindowHours: 24,
+      now,
+    });
+    await settle();
+    expect([...started].sort()).toEqual(["community", "mining", "voice"]);
+    community.open(communityResource(activeMembership));
+    await settle();
+    // The chat read did not wait for mining or voice.
+    expect(started).toContain("chat");
+    // Answer in reverse order; the numbering must not follow timing.
+    messages.open([
+      {
+        authorUserId: otherAccountId,
+        text: "hello",
+        createdAt: "2026-09-22T02:00:00.000Z",
+      },
+    ]);
+    voice.open({ current: null });
+    mining.open({
+      weight: { status: "approved", value: "1.5", configVersion: "w1" },
+      communityPower: { status: "available", value: "10" },
+      participants: { status: "available", count: 3 },
+      myContribution: { status: "unavailable" },
+      snapshot: { computedAt: "2026-09-22T00:00:00.000Z" },
+    });
+    const knowledge = await pending;
+    expect(
+      knowledge.sources.map((source) => [source.sourceId, source.kind]),
+    ).toEqual([
+      ["s1", "communityProfile"],
+      ["s2", "communityMining"],
+      ["s3", "voiceRoom"],
+      ["s4", "communityChat"],
+    ]);
+    expect(knowledge.omitted.map((entry) => entry.kind)).toEqual([
+      "announcements",
+      "assetFacts",
+    ]);
+  });
+
+  it("still fails the assembly when the community read fails", async () => {
+    const readers = readersFor(communityResource(activeMembership), {
+      communityService: {
+        getCommunity: () => Promise.reject(V2ApiError.notFound()),
+      } as unknown as CommunityService,
+      miningService: {
+        getCommunity: () => Promise.reject(new Error("mining down")),
+      } as unknown as CommunityAiKnowledgeReaders["miningService"],
+    });
+    await expect(
+      assembleCommunityAiKnowledge(readers, {
+        ...readContext,
+        chatWindowHours: 24,
+        now,
+      }),
+    ).rejects.toBeInstanceOf(V2ApiError);
+  });
+});
+
 describe("Community AI service (Decision 0066)", () => {
   function service(
     options: {

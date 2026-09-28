@@ -1466,27 +1466,48 @@ export function createStreamCommunityChannelGateway(
       rawInput: ReadStreamCommunityChannelPresenceInput,
     ): Promise<StreamCommunityChannelPresenceResult> {
       const input = parsePresenceInput(rawInput);
+      // Read-only: the member query neither creates the channel nor touches
+      // its membership. Stream ignores an `online` filter, so every member
+      // is paged and counted here. The sort makes offset paging
+      // deterministic across pages.
+      const readPage = async (
+        page: number,
+      ): Promise<{ readonly pageSize: number; readonly online: number }> => {
+        input.signal.throwIfAborted();
+        const response = await client.chat
+          .channel(streamChannelType, input.channelId)
+          .queryMembers({
+            payload: {
+              filter_conditions: {},
+              sort: [{ field: "created_at", direction: 1 }],
+              limit: communityPresencePageSize,
+              offset: page * communityPresencePageSize,
+            },
+          });
+        input.signal.throwIfAborted();
+        return reduceMemberPage(response);
+      };
       try {
+        // Decision 0088: the first page decides whether there is more to
+        // read. When it comes back full, the remaining pages of the budget
+        // are asked together instead of one after another (four Stream round
+        // trips became one). The count is still the ordered sum up to the
+        // first short page; pages past it are ignored.
+        const first = await readPage(0);
+        const pages = [first];
+        if (first.pageSize >= communityPresencePageSize) {
+          pages.push(
+            ...(await Promise.all(
+              Array.from(
+                { length: communityPresenceMaximumPages - 1 },
+                (_unused, index) => readPage(index + 1),
+              ),
+            )),
+          );
+        }
         let memberCount = 0;
         let onlineMemberCount = 0;
-        for (let page = 0; page < communityPresenceMaximumPages; page += 1) {
-          input.signal.throwIfAborted();
-          // Read-only: the member query neither creates the channel nor
-          // touches its membership. Stream ignores an `online` filter, so
-          // every member is paged and counted here. The sort makes offset
-          // paging deterministic across pages.
-          const response = await client.chat
-            .channel(streamChannelType, input.channelId)
-            .queryMembers({
-              payload: {
-                filter_conditions: {},
-                sort: [{ field: "created_at", direction: 1 }],
-                limit: communityPresencePageSize,
-                offset: page * communityPresencePageSize,
-              },
-            });
-          input.signal.throwIfAborted();
-          const reduced = reduceMemberPage(response);
+        for (const reduced of pages) {
           memberCount += reduced.pageSize;
           onlineMemberCount += reduced.online;
           if (reduced.pageSize < communityPresencePageSize) {
