@@ -503,6 +503,9 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
     expect(projections.get(s)).toMatchObject({
       stateTupleDigest: digest,
       configVersion,
+      liquidityState: "LP_LOCKED",
+      // S83b7b: the graduation block is the surviving LPNFTLocked log's.
+      lpLockedBlockNumber: "112",
     });
     expect(projections.has(f)).toBe(false);
 
@@ -637,6 +640,10 @@ describe("PostgreSQL Launch chain repository (Decision 0077)", () => {
       values: [s],
     });
     expect(pool2.rows[0]).toEqual({ pool_address: null, lp_token_id: null });
+    // The reorged-out LPNFTLocked log no longer dates the graduation.
+    expect(
+      (await chain.listStateProjections([s])).get(s)?.lpLockedBlockNumber,
+    ).toBeNull();
     const checkpoint = await chain.getCheckpoint(chainId);
     expect(checkpoint).toMatchObject({
       lastBlockNumber: "125",

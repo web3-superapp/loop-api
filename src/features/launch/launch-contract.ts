@@ -32,6 +32,12 @@ export const launchReasonCodes = Object.freeze({
   attachmentStorageNotSelected: "ATTACHMENT_STORAGE_NOT_SELECTED",
   poolEvidenceUnavailable: "LAUNCH_POOL_EVIDENCE_UNAVAILABLE",
   economyUnavailable: "LAUNCH_ECONOMY_CONTRACT_PENDING",
+  /**
+   * The lane's projection rows could not be read from PostgreSQL (overview
+   * `graduated`, Decision 0077 S83b7b). Not a contract-read reason, so it is
+   * not part of the `onChainState.reasonCode` enum.
+   */
+  onChainStateReadFailed: "LAUNCH_ONCHAIN_STATE_READ_FAILED",
 } as const);
 
 /**

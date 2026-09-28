@@ -138,7 +138,7 @@ export interface LaunchOverviewResource {
     readonly awaitingSchedule: readonly LaunchSummaryProjection[];
     readonly ended: readonly LaunchSummaryProjection[];
   };
-  readonly graduated: UnavailableProjection;
+  readonly graduated: UnavailableProjection | LaunchGraduatedAvailable;
   readonly myEligibility: UnavailableProjection;
   readonly staking: UnavailableProjection;
   readonly catalog: {
@@ -149,6 +149,25 @@ export interface LaunchOverviewResource {
   };
   readonly contractVersion: typeof v2ContractVersion;
 }
+
+/**
+ * The overview's `graduated` list (Decision 0077, S83b7b): registered sales
+ * whose projected `liquidityState` is `LP_LOCKED` or `COMPLETED` (03 §8.3:
+ * only LP-lock evidence is "graduated"; `V3_LIVE` is not), latest
+ * `LPNFTLocked` block first, at most 50.
+ */
+export interface LaunchGraduatedAvailable {
+  readonly status: "available";
+  readonly launches: readonly LaunchSummaryProjection[];
+  /** The `launch_event` checkpoint block the projections were read against. */
+  readonly indexedBlockNumber: string;
+}
+
+export const launchGraduatedLimit = 50;
+const graduatedLiquidityStates: ReadonlySet<string> = new Set([
+  "LP_LOCKED",
+  "COMPLETED",
+]);
 
 export interface LaunchConfigProjection {
   readonly configVersion: string;
@@ -996,6 +1015,66 @@ export function createLaunchService(
     }
   }
 
+  /**
+   * The overview's `graduated` slot (Decision 0077, S83b7b). A projection of
+   * the liquidity axis only, never of `scheduleStatus`. Without a configured
+   * contract it keeps the Decision 0036 bytes; with one, it names the real
+   * reason or lists the projected sales with LP-lock evidence.
+   */
+  function graduatedProjection(
+    summaries: readonly LaunchSummaryProjection[],
+    checkpoint: LaunchCheckpointRecord | null,
+    projections: ReadonlyMap<string, LaunchStateProjectionRecord>,
+    projectionsReadFailed: boolean,
+  ): UnavailableProjection | LaunchGraduatedAvailable {
+    if (contract === null || contract.contract === null) {
+      return unavailable(launchReasonCodes.contractBaselinePending);
+    }
+    const state = contract.currentAvailability();
+    if (state.status === "unavailable") {
+      return unavailable(state.reasonCode);
+    }
+    if (checkpoint === null || chain === null) {
+      return unavailable(launchContractReasonCodes.onChainStateNotIndexed);
+    }
+    if (projectionsReadFailed) {
+      return unavailable(launchReasonCodes.onChainStateReadFailed);
+    }
+    const graduated = summaries
+      .filter(
+        (summary) =>
+          summary.onChainState.source === "chain" &&
+          graduatedLiquidityStates.has(summary.onChainState.liquidityState),
+      )
+      .map((summary) => ({
+        summary,
+        lockedAt:
+          projections.get(summary.launchId)?.lpLockedBlockNumber ?? null,
+      }))
+      .sort((left, right) => {
+        // Latest graduation block first; a sale whose LPNFTLocked log is not
+        // indexed (yet) sorts last; ties by launchId for a stable order.
+        if (left.lockedAt !== right.lockedAt) {
+          if (left.lockedAt === null) return 1;
+          if (right.lockedAt === null) return -1;
+          const difference = BigInt(right.lockedAt) - BigInt(left.lockedAt);
+          if (difference !== 0n) return difference > 0n ? 1 : -1;
+        }
+        return left.summary.launchId < right.summary.launchId
+          ? -1
+          : left.summary.launchId > right.summary.launchId
+            ? 1
+            : 0;
+      })
+      .slice(0, launchGraduatedLimit)
+      .map((entry) => entry.summary);
+    return Object.freeze({
+      status: "available" as const,
+      launches: Object.freeze(graduated),
+      indexedBlockNumber: checkpoint.lastBlockNumber,
+    });
+  }
+
   async function economyOnChain(): Promise<NonNullable<
     LaunchEconomyResource["onChain"]
   > | null> {
@@ -1258,6 +1337,7 @@ export function createLaunchService(
         ]);
         let projections: ReadonlyMap<string, LaunchStateProjectionRecord> =
           new Map();
+        let projectionsReadFailed = false;
         if (checkpoint !== null && chain !== null) {
           try {
             projections = await chain.listStateProjections(
@@ -1265,6 +1345,7 @@ export function createLaunchService(
             );
           } catch {
             projections = new Map();
+            projectionsReadFailed = true;
           }
         }
         const summaries = launches.map((record) =>
@@ -1288,9 +1369,12 @@ export function createLaunchService(
             awaitingSchedule: inSegment("awaitingSchedule"),
             ended: inSegment("ended"),
           }),
-          // "Graduated" is a projection of the liquidity axis, which has no
-          // contract baseline; it is never derived from scheduleStatus.
-          graduated: unavailable(launchReasonCodes.contractBaselinePending),
+          graduated: graduatedProjection(
+            summaries,
+            checkpoint,
+            projections,
+            projectionsReadFailed,
+          ),
           myEligibility: unavailable(launchReasonCodes.tierModePending),
           staking: unavailable(launchReasonCodes.stakingContractPending),
           catalog: Object.freeze({

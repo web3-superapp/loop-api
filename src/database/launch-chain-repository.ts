@@ -103,6 +103,7 @@ const projectionRowSchema = z.object({
   state_config_version: sha256Schema,
   snapshot_block_number: blockSchema,
   snapshot_block_hash: hashSchema,
+  lp_locked_block_number: blockSchema.nullable(),
 });
 
 const rootRowSchema = z.object({
@@ -845,8 +846,17 @@ export function createPostgresLaunchChainRepository(
             select
               launch_id, sale_state, entitlement_state, liquidity_state, operational_state,
               state_tuple_digest, state_config_version,
-              snapshot_block_number::text as snapshot_block_number, snapshot_block_hash
-            from public.launches
+              snapshot_block_number::text as snapshot_block_number, snapshot_block_hash,
+              (
+                select max(e.block_number)::text
+                from public.launch_indexed_events e
+                where e.launch_id = l.launch_id
+                  and e.event_name = 'LPNFTLocked'
+                  and not e.removed
+                  and e.contract_address = l.contract_address
+                  and e.sale_id = l.sale_id
+              ) as lp_locked_block_number
+            from public.launches l
             where launch_id = any($1::uuid[])
               and sale_state <> 'unavailable'
               and state_config_version is not null
@@ -868,6 +878,7 @@ export function createPostgresLaunchChainRepository(
               stateTupleDigest: columnToBytes32(row.state_tuple_digest),
               snapshotBlockNumber: row.snapshot_block_number,
               snapshotBlockHash: row.snapshot_block_hash,
+              lpLockedBlockNumber: row.lp_locked_block_number,
             }),
           );
         }
