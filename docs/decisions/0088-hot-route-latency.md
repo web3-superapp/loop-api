@@ -308,3 +308,15 @@ Every ruling is local to its file. Reverting this commit restores the
 previous behaviour; there is no migration and no stored state. The
 presence and chain-status windows can be disabled in code (`0`) without other
 change.
+
+## 主代理裁决（2026-09-28）
+
+状态：Accepted，随 `integration/v2` 合并。
+
+1. `undici` 60 s 出站 keep-alive：接受；worker 进程也接上（S93b 一并做）。
+2. 在场读数最长 30 s 旧、第 2–5 页投机预取：接受，`observedAt` 保持真值。
+3. DexScreener 价格并发 4→12：接受，视为对 0063 上限的修订。
+4. `token_pairs` 缓存被 overview 的批量快照（每币 1 对）与单币读（每币 30 对）交替覆盖：裁决——单币读为权威；批量快照只在该币没有更新的单币行时写入，或写入独立命名空间。开 S93b。
+5. dev 的 publicnode 变慢：dev 是本机，不单独处理；用户环境（香港）API 已 dataseed 优先。
+6. 余额下限 = Privy 交叉核对 0.4–0.6 s：接受。
+7. 编号：loop-api 0088 与 loop-mobile 0088 是两份文档。
