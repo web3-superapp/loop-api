@@ -603,14 +603,23 @@ describe("Stream community channel gateway", () => {
       ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
     });
 
+    /** Answers each member page by its offset, as Stream does. */
+    function pagedFetch(pages: readonly Record<string, unknown>[]) {
+      return vi.fn((url: string) => {
+        const payload = JSON.parse(
+          new URL(url).searchParams.get("payload") ?? "null",
+        ) as { readonly offset: number };
+        return Promise.resolve(
+          jsonResponse(pages[payload.offset / 100] ?? memberPage([])),
+        );
+      });
+    }
+
     it("counts the members whose Stream user is online across pages, read-only", async () => {
       const fullPage = memberPage(
         Array.from({ length: 100 }, (_, index) => index % 10 === 0),
       );
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValueOnce(jsonResponse(fullPage))
-        .mockResolvedValueOnce(jsonResponse(memberPage([true, false, true])));
+      const fetchMock = pagedFetch([fullPage, memberPage([true, false, true])]);
       vi.stubGlobal("fetch", fetchMock);
       const gateway = createStreamCommunityChannelGateway({
         apiKey,
@@ -628,8 +637,10 @@ describe("Stream community channel gateway", () => {
         onlineMemberCount: 12,
         memberCount: 103,
       });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      for (const index of [0, 1]) {
+      // A full first page asks the rest of the budget together (Decision
+      // 0088); pages after the first short one are not counted.
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      for (const index of [0, 1, 2, 3, 4]) {
         const url = requestedUrl(fetchMock, index);
         expect(url.pathname).toBe("/api/v2/chat/members");
         expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
@@ -641,6 +652,70 @@ describe("Stream community channel gateway", () => {
           offset: index * 100,
         });
       }
+    });
+
+    it("asks only one page when the first page is short", async () => {
+      const fetchMock = pagedFetch([memberPage([true, false, true])]);
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: communityChannelId,
+          signal: signal(),
+        }),
+      ).resolves.toMatchObject({ onlineMemberCount: 2, memberCount: 3 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks the remaining pages together, not one after another", async () => {
+      const fullPage = memberPage(Array.from({ length: 100 }, () => false));
+      let inFlight = 0;
+      let peak = 0;
+      const release: (() => void)[] = [];
+      const fetchMock = vi.fn((url: string) => {
+        const payload = JSON.parse(
+          new URL(url).searchParams.get("payload") ?? "null",
+        ) as { readonly offset: number };
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise<Response>((resolve) => {
+          release.push(() => {
+            inFlight -= 1;
+            resolve(
+              jsonResponse(
+                payload.offset < 300 ? fullPage : memberPage([true]),
+              ),
+            );
+          });
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      const pending = gateway.readCommunityChannelPresence({
+        channelId: communityChannelId,
+        signal: signal(),
+      });
+      for (let turn = 0; turn < 20 && fetchMock.mock.calls.length < 5; turn++) {
+        for (const next of release.splice(0, release.length)) {
+          next();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      for (const next of release.splice(0, release.length)) {
+        next();
+      }
+      await expect(pending).resolves.toMatchObject({
+        status: "observed",
+        onlineMemberCount: 1,
+        memberCount: 301,
+      });
+      expect(peak).toBe(4);
     });
 
     it("reports a channel with more members than the paging budget instead of a partial total", async () => {

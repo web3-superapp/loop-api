@@ -21,8 +21,8 @@ import {
   BscReadUnavailableError,
   isBscRpcTransportError,
   summarizeRpcError,
-  type BscAllowanceReadResult,
   type BscBalanceReadResult,
+  type BscChainHead,
   type BscChainCallClient,
   type BscReadClient,
 } from "../../integrations/bsc/rpc-client.js";
@@ -681,10 +681,31 @@ function unavailableLaunchChain(
  */
 export const launchChainReadDeadlineMs = 3_000;
 
+/** Why a launch-slot read produced no value; mapped per projection below. */
+type LaunchSlotReadFailure = Readonly<{ failure: unknown }>;
+
+type LaunchSlotRead<T> = Readonly<{ value: T }> | LaunchSlotReadFailure;
+
+function settleLaunchSlotRead<T>(
+  pending: Promise<T>,
+): Promise<LaunchSlotRead<T>> {
+  return pending.then(
+    (value) => Object.freeze({ value }),
+    (failure: unknown) => Object.freeze({ failure }),
+  );
+}
+
 /**
  * Reads the native balance on the launch slot. A failure here is reported
  * inside the projection and never fails the primary balances: the launch
  * chain is a secondary fact of the wallet page, not its gate.
+ *
+ * Decision 0088: the slot reads its head once and then asks the native
+ * balance, the USD1 balance and the USD1 allowance at that block together
+ * (two round trips; it was five: two for the native read, two for the USD1
+ * balance and one for the pinned allowance, one after another). Every value
+ * is still read at one block, one deadline still bounds the whole leg, and
+ * each projection keeps its own failure rules.
  */
 async function projectLaunchChainBalance(
   client: BscReadClient | null,
@@ -696,33 +717,139 @@ async function projectLaunchChainBalance(
   if (client === null) {
     return null;
   }
-  const native = await projectLaunchChainNative(
-    client,
-    address,
-    gasReserveRawWei,
-    deadlineMs,
-  );
-  if (usd1Target === null) {
-    return native;
+  const chainId = client.chainId;
+  if (client.endpointRefs.length === 0) {
+    return unavailableLaunchChain(
+      chainId,
+      launchChainReasonCodes.notConfigured,
+    );
   }
-  const usd1 = await readLaunchChainUsd1(
-    client,
-    address,
-    usd1Target,
+  const assetId = nativeAssetId(chainId);
+  const legs = withDeadline(
+    (async (): Promise<
+      readonly [
+        LaunchSlotRead<BscBalanceReadResult>,
+        LaunchSlotRead<LaunchChainUsd1Balance | null>,
+      ]
+    > => {
+      const head = await client.getHead();
+      return Promise.all([
+        settleLaunchSlotRead(
+          client.readBalances(address, [{ assetId, address: null }], {
+            atHead: head,
+          }),
+        ),
+        settleLaunchSlotRead(
+          usd1Target === null
+            ? Promise.resolve(null)
+            : readUsd1AtHead(client, address, usd1Target, head),
+        ),
+      ]);
+    })(),
     deadlineMs,
   );
+  let native: LaunchSlotRead<BscBalanceReadResult>;
+  let usd1Read: LaunchSlotRead<LaunchChainUsd1Balance | null>;
+  try {
+    [native, usd1Read] = await legs;
+  } catch (error) {
+    // The head read (or the deadline) failed: neither leg has a block.
+    native = Object.freeze({ failure: error });
+    usd1Read = Object.freeze({ failure: error });
+  }
+  const nativeProjection = projectLaunchChainNative(
+    client,
+    assetId,
+    native,
+    gasReserveRawWei,
+  );
+  const usd1 = usd1FromRead(usd1Read);
   if (usd1 === null) {
-    return native;
+    return nativeProjection;
   }
   return Object.freeze({
-    chainId: native.chainId,
-    availability: native.availability,
-    reasonCode: native.reasonCode,
+    chainId: nativeProjection.chainId,
+    availability: nativeProjection.availability,
+    reasonCode: nativeProjection.reasonCode,
     usd1,
-    nativeBalance: native.nativeBalance,
+    nativeBalance: nativeProjection.nativeBalance,
   });
 }
 
+/**
+ * The USD1 pair is published only as a value both reads observed at one
+ * block; any failure the Decision 0082 rules classify leaves it absent, and
+ * anything unclassified is rethrown to the leg's own catch (logged there).
+ */
+function usd1FromRead(
+  read: LaunchSlotRead<LaunchChainUsd1Balance | null>,
+): LaunchChainUsd1Balance | null {
+  if ("value" in read) {
+    return read.value;
+  }
+  const error = read.failure;
+  if (
+    error instanceof ReadDeadlineExceededError ||
+    error instanceof BscChainMismatchError ||
+    error instanceof BscReadUnavailableError ||
+    isBscRpcTransportError(error)
+  ) {
+    return null;
+  }
+  throw error as Error;
+}
+
+function allowanceClientOf(client: BscReadClient): BscChainCallClient {
+  // Only the allowance read is needed beyond the read surface; a client
+  // without it yields no block rather than a guessed value.
+  return "readAllowances" in client &&
+    typeof (client as Partial<BscChainCallClient>).readAllowances === "function"
+    ? (client as BscChainCallClient)
+    : asChainCallClient(client);
+}
+
+/**
+ * The USD1 balance and allowance at one head the caller already read. The
+ * allowance is pinned to that block (Decision 0082, S86b) and the balance is
+ * read at it, so the two reads run together; the Decision 0077 same-block
+ * rule stays as the guard.
+ */
+async function readUsd1AtHead(
+  client: BscReadClient,
+  address: string,
+  target: LaunchChainUsd1Target,
+  head: BscChainHead,
+): Promise<LaunchChainUsd1Balance | null> {
+  const assetId = `${client.chainId}:${target.usd1Address}`;
+  const [balances, allowances] = await Promise.all([
+    client.readBalances(address, [{ assetId, address: target.usd1Address }], {
+      atHead: head,
+    }),
+    allowanceClientOf(client).readAllowances(
+      address,
+      [{ assetId, token: target.usd1Address, spender: target.spender }],
+      { atBlock: head.blockNumber },
+    ),
+  ]);
+  const balance = balances.balances[0]?.rawValue ?? null;
+  const allowance = allowances.allowances[0]?.rawValue ?? null;
+  if (
+    balance === null ||
+    allowance === null ||
+    balances.head.blockNumber !== allowances.head.blockNumber
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    balance: balance.toString(10),
+    allowance: allowance.toString(10),
+  });
+}
+
+/**
+ * The shared-slot USD1 pair (Decision 0081) on the primary client: one head,
+ * then the balance and the pinned allowance together, under one deadline.
+ */
 async function readLaunchChainUsd1(
   client: BscReadClient,
   address: string,
@@ -732,82 +859,30 @@ async function readLaunchChainUsd1(
   if (client.endpointRefs.length === 0) {
     return null;
   }
-  const assetId = `${client.chainId}:${target.usd1Address}`;
-  // Only the allowance read is needed beyond the read surface; a client
-  // without it yields no block rather than a guessed value.
-  const allowanceClient =
-    "readAllowances" in client &&
-    typeof (client as Partial<BscChainCallClient>).readAllowances === "function"
-      ? (client as BscChainCallClient)
-      : asChainCallClient(client);
+  let read: LaunchSlotRead<LaunchChainUsd1Balance | null>;
   try {
-    // The allowance read is pinned to the block the balance read observed
-    // (Decision 0082, S86b): two independent `latest` reads straddled a block
-    // boundary in about 3% of reads and the same-block rule (Decision 0077)
-    // then withheld the pair. One deadline still bounds both reads.
-    const [balances, allowances] = await withDeadline(
-      (async (): Promise<
-        readonly [BscBalanceReadResult, BscAllowanceReadResult]
-      > => {
-        const balanceRead = await client.readBalances(address, [
-          { assetId, address: target.usd1Address },
-        ]);
-        const allowanceRead = await allowanceClient.readAllowances(
-          address,
-          [{ assetId, token: target.usd1Address, spender: target.spender }],
-          { atBlock: balanceRead.head.blockNumber },
-        );
-        return [balanceRead, allowanceRead] as const;
-      })(),
-      deadlineMs,
-    );
-    const balance = balances.balances[0]?.rawValue ?? null;
-    const allowance = allowances.allowances[0]?.rawValue ?? null;
-    if (
-      balance === null ||
-      allowance === null ||
-      balances.head.blockNumber !== allowances.head.blockNumber
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      balance: balance.toString(10),
-      allowance: allowance.toString(10),
+    read = Object.freeze({
+      value: await withDeadline(
+        (async (): Promise<LaunchChainUsd1Balance | null> =>
+          readUsd1AtHead(client, address, target, await client.getHead()))(),
+        deadlineMs,
+      ),
     });
   } catch (error) {
-    if (
-      error instanceof ReadDeadlineExceededError ||
-      error instanceof BscChainMismatchError ||
-      error instanceof BscReadUnavailableError ||
-      isBscRpcTransportError(error)
-    ) {
-      return null;
-    }
-    throw error as Error;
+    read = Object.freeze({ failure: error });
   }
+  return usd1FromRead(read);
 }
 
-async function projectLaunchChainNative(
+function projectLaunchChainNative(
   client: BscReadClient,
-  address: string,
+  assetId: string,
+  settled: LaunchSlotRead<BscBalanceReadResult>,
   gasReserveRawWei: bigint,
-  deadlineMs: number,
-): Promise<LaunchChainBalanceProjection> {
+): LaunchChainBalanceProjection {
   const chainId = client.chainId;
-  if (client.endpointRefs.length === 0) {
-    return unavailableLaunchChain(
-      chainId,
-      launchChainReasonCodes.notConfigured,
-    );
-  }
-  const assetId = nativeAssetId(chainId);
-  let read: BscBalanceReadResult;
-  try {
-    read = await withDeadline(
-      client.readBalances(address, [{ assetId, address: null }]),
-      deadlineMs,
-    );
-  } catch (error) {
+  if (!("value" in settled)) {
+    const error = settled.failure;
     if (
       error instanceof ReadDeadlineExceededError ||
       isBscRpcTransportError(error)
@@ -832,6 +907,7 @@ async function projectLaunchChainNative(
     }
     throw error as Error;
   }
+  const read = settled.value;
   const observed = read.balances.find((balance) => balance.assetId === assetId);
   const rawValue = observed?.rawValue ?? null;
   if (rawValue === null) {
@@ -1670,6 +1746,19 @@ export function createWalletReadService(
       if (cursor !== undefined && limit !== undefined) {
         throw V2ApiError.invalidRequest();
       }
+      // Decision 0088: the chain head is only used for the confirmation
+      // count and the lag, and needs nothing the database reads return, so
+      // it is asked once the wallet is known to be the caller's and runs
+      // beside them. A failed head read is `null` as before; a request that
+      // fails later simply drops it.
+      const headPending: Promise<bigint | null> = input.readClient
+        .getHead()
+        .then(
+          (head) => head.blockNumber,
+          () => null,
+        );
+      const assetsPending = input.assetRegistry.listReadableAssets();
+      assetsPending.catch(() => undefined);
       const checkpoint = await input.indexerRepository.getCheckpoint(
         "erc20_transfer",
         input.chainId,
@@ -1721,7 +1810,7 @@ export function createWalletReadService(
         pageSize = limit;
       }
 
-      const assets = await input.assetRegistry.listReadableAssets();
+      const assets = await assetsPending;
       const page = await input.indexerRepository.listWalletTransfers({
         chainId: input.chainId,
         address: wallet.address,
@@ -1731,12 +1820,7 @@ export function createWalletReadService(
         ...(beforeLogIndex === undefined ? {} : { beforeLogIndex }),
       });
 
-      let headBlockNumber: bigint | null = null;
-      try {
-        headBlockNumber = (await input.readClient.getHead()).blockNumber;
-      } catch {
-        headBlockNumber = null;
-      }
+      const headBlockNumber = await headPending;
       const indexerBlock = BigInt(checkpoint.lastBlockNumber);
       const confirmations = input.readClient.confirmations;
 

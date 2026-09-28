@@ -1,5 +1,6 @@
 import { buildApp } from "./app.js";
 import { ConfigurationError, loadConfig } from "./config.js";
+import { configureOutboundKeepAlive } from "./core/http/outbound-keep-alive.js";
 
 function safeErrorCode(error: unknown): string {
   if (
@@ -16,6 +17,8 @@ function safeErrorCode(error: unknown): string {
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
+  // Decision 0088: keep Provider connections warm between page loads.
+  configureOutboundKeepAlive();
   const app = await buildApp({ config });
   let shutdownStarted = false;
 

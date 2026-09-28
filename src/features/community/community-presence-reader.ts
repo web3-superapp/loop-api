@@ -24,6 +24,17 @@ export const communityPresenceSource = "stream_member_presence" as const;
 /** The default budget matches the Stream provider timeout used elsewhere. */
 export const communityPresenceTimeoutMilliseconds = 3_000;
 
+/**
+ * How long one Stream observation of a channel is reused (Decision 0088).
+ * Past half of it a read is still answered from the observation and Stream is
+ * asked again beside it; nothing older than the window is ever served, and
+ * `observedAt` stays the time Stream was actually read.
+ */
+export const communityPresenceCacheTtlMilliseconds = 30_000;
+
+/** Bound on remembered channels; going over it drops expired entries first. */
+const presenceCacheMaxEntries = 2_000;
+
 export interface AvailableCommunityPresenceProjection {
   readonly status: "available";
   readonly count: number;
@@ -51,6 +62,8 @@ export interface CommunityPresenceReaderOptions {
   readonly gateway: StreamCommunityChannelGateway;
   readonly clock?: () => Date;
   readonly timeoutMilliseconds?: number;
+  /** Overrides `communityPresenceCacheTtlMilliseconds`; zero disables reuse. */
+  readonly cacheTtlMilliseconds?: number;
 }
 
 const presenceNotConnected = unavailable(
@@ -105,6 +118,12 @@ function resolveChannel(
   });
 }
 
+interface PresenceObservation {
+  readonly projection: CommunityPresenceProjection;
+  /** When the Stream read was started; the reuse window counts from here. */
+  readonly requestedAtMs: number;
+}
+
 export function createCommunityPresenceReader(
   options: CommunityPresenceReaderOptions,
 ): CommunityPresenceReader {
@@ -113,6 +132,115 @@ export function createCommunityPresenceReader(
     options.timeoutMilliseconds ?? communityPresenceTimeoutMilliseconds;
   if (!Number.isSafeInteger(budget) || budget <= 0) {
     throw new RangeError("Presence read budget must be a positive integer");
+  }
+  const cacheTtl =
+    options.cacheTtlMilliseconds ?? communityPresenceCacheTtlMilliseconds;
+  if (!Number.isSafeInteger(cacheTtl) || cacheTtl < 0) {
+    throw new RangeError("Presence cache TTL must be a non-negative integer");
+  }
+  const observations = new Map<string, PresenceObservation>();
+  /** One Stream read per channel at a time; concurrent readers share it. */
+  const inFlight = new Map<string, Promise<CommunityPresenceProjection>>();
+
+  function remember(
+    streamChannelId: string,
+    observation: PresenceObservation,
+  ): void {
+    if (cacheTtl === 0) {
+      return;
+    }
+    observations.set(streamChannelId, observation);
+    if (observations.size <= presenceCacheMaxEntries) {
+      return;
+    }
+    const nowMs = clock().getTime();
+    for (const [key, entry] of observations) {
+      if (nowMs - entry.requestedAtMs >= cacheTtl) {
+        observations.delete(key);
+      }
+    }
+    if (observations.size > presenceCacheMaxEntries) {
+      observations.clear();
+    }
+  }
+
+  /**
+   * One bounded Stream read. Only an observation (a count, or the member
+   * bound) is remembered; a timeout or a failure is returned to the callers
+   * that shared it and the next read asks Stream again.
+   */
+  function observe(
+    streamChannelId: string,
+  ): Promise<CommunityPresenceProjection> {
+    const pending = inFlight.get(streamChannelId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const tracked = (async (): Promise<CommunityPresenceProjection> => {
+      const requestedAtMs = clock().getTime();
+      const projection = await readOnce(streamChannelId);
+      if (
+        projection.status === "available" ||
+        projection.reasonCode ===
+          communityUnavailableReasonCodes.presenceMemberBound
+      ) {
+        remember(streamChannelId, { projection, requestedAtMs });
+      }
+      return projection;
+    })().finally(() => {
+      if (inFlight.get(streamChannelId) === tracked) {
+        inFlight.delete(streamChannelId);
+      }
+    });
+    inFlight.set(streamChannelId, tracked);
+    return tracked;
+  }
+
+  async function readOnce(
+    streamChannelId: string,
+  ): Promise<CommunityPresenceProjection> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new PresenceReadTimeoutError());
+      }, budget);
+    });
+    try {
+      const result = await Promise.race([
+        options.gateway.readCommunityChannelPresence({
+          channelId: streamChannelId,
+          signal: controller.signal,
+        }),
+        deadline,
+      ]);
+      if (result.status === "bound_exceeded") {
+        return unavailable(communityUnavailableReasonCodes.presenceMemberBound);
+      }
+      return Object.freeze({
+        status: "available" as const,
+        count: result.onlineMemberCount,
+        observedAt: clock().toISOString(),
+        source: communityPresenceSource,
+      });
+    } catch (error) {
+      if (error instanceof PresenceReadTimeoutError) {
+        return unavailable(communityUnavailableReasonCodes.presenceReadTimeout);
+      }
+      if (
+        error instanceof StreamChannelGatewayUnavailableError ||
+        error instanceof StreamChannelRequestRejectedError ||
+        error instanceof StreamChannelProjectionMismatchError
+      ) {
+        return unavailable(communityUnavailableReasonCodes.presenceReadFailed);
+      }
+      // An abort raised by our own controller after the race settled, or
+      // anything the gateway did not classify: still not a number.
+      return unavailable(communityUnavailableReasonCodes.presenceReadFailed);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   return Object.freeze({
@@ -123,54 +251,21 @@ export function createCommunityPresenceReader(
       if (resolved.status === "unavailable") {
         return resolved;
       }
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          reject(new PresenceReadTimeoutError());
-        }, budget);
-      });
-      try {
-        const result = await Promise.race([
-          options.gateway.readCommunityChannelPresence({
-            channelId: resolved.streamChannelId,
-            signal: controller.signal,
-          }),
-          deadline,
-        ]);
-        if (result.status === "bound_exceeded") {
-          return unavailable(
-            communityUnavailableReasonCodes.presenceMemberBound,
-          );
+      const cached = observations.get(resolved.streamChannelId);
+      if (cached !== undefined) {
+        const ageMs = clock().getTime() - cached.requestedAtMs;
+        if (ageMs >= 0 && ageMs < cacheTtl) {
+          // Past half the window the observation is still served and Stream
+          // is read again beside this call, so a busy community page never
+          // waits for Stream while every answer stays inside the window.
+          if (ageMs >= cacheTtl / 2) {
+            observe(resolved.streamChannelId).catch(() => undefined);
+          }
+          return cached.projection;
         }
-        return Object.freeze({
-          status: "available" as const,
-          count: result.onlineMemberCount,
-          observedAt: clock().toISOString(),
-          source: communityPresenceSource,
-        });
-      } catch (error) {
-        if (error instanceof PresenceReadTimeoutError) {
-          return unavailable(
-            communityUnavailableReasonCodes.presenceReadTimeout,
-          );
-        }
-        if (
-          error instanceof StreamChannelGatewayUnavailableError ||
-          error instanceof StreamChannelRequestRejectedError ||
-          error instanceof StreamChannelProjectionMismatchError
-        ) {
-          return unavailable(
-            communityUnavailableReasonCodes.presenceReadFailed,
-          );
-        }
-        // An abort raised by our own controller after the race settled, or
-        // anything the gateway did not classify: still not a number.
-        return unavailable(communityUnavailableReasonCodes.presenceReadFailed);
-      } finally {
-        clearTimeout(timer);
+        observations.delete(resolved.streamChannelId);
       }
+      return observe(resolved.streamChannelId);
     },
   });
 }

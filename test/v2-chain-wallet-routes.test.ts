@@ -1765,6 +1765,56 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     });
   });
 
+  it("reads the activity head beside the database reads, not after them (Decision 0088)", async () => {
+    const dependencies = fakes();
+    const base = readClientFake();
+    let releaseHead: (() => void) | undefined;
+    const headAsked = vi.fn();
+    const client: BscReadClient = {
+      ...base,
+      getHead: () => {
+        headAsked();
+        return new Promise((resolve) => {
+          releaseHead = () => {
+            resolve({
+              blockNumber: headNumber,
+              blockHash: headHash,
+              observedAt,
+            });
+          };
+        });
+      },
+    };
+    const listWalletTransfers = vi.fn<
+      BscIndexerRepository["listWalletTransfers"]
+    >(() => Promise.resolve({ items: [transferRecord], hasMore: false }));
+    const { app } = await createApp({
+      ...dependencies,
+      database: {
+        ...dependencies.database,
+        bscIndexer: {
+          ...dependencies.database.bscIndexer,
+          listWalletTransfers,
+        },
+      },
+      bscReadClient: client,
+    });
+    const pending = app.inject({
+      method: "GET",
+      url: `/v2/wallets/${walletId}/activity`,
+      headers: commonHeaders(),
+    });
+    await vi.waitFor(() => {
+      expect(listWalletTransfers).toHaveBeenCalledTimes(1);
+    });
+    // The head was asked before the transfer page was, and has not answered.
+    expect(headAsked).toHaveBeenCalledTimes(1);
+    releaseHead?.();
+    const response = await pending;
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ freshness: { lagBlocks: 5 } });
+  });
+
   it("reports INDEXING_DELAYED instead of an empty activity page", async () => {
     const { app } = await createApp(fakes({ checkpoint: false }));
     const response = await app.inject({

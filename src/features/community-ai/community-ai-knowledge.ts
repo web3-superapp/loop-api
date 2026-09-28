@@ -88,29 +88,71 @@ export function isCommunityAdmin(resource: CommunityResource): boolean {
   );
 }
 
+type DraftSource = Omit<CommunityAiSource, "sourceId">;
+
+/** What one independent source leg produced: a source, or a reason. */
+type SourceLeg =
+  | Readonly<{
+      kind: "source";
+      source: DraftSource;
+      chat?: CommunityAiChatObservation;
+    }>
+  | Readonly<{ kind: "omitted"; omitted: CommunityAiOmittedSource }>;
+
+function omittedLeg(
+  kind: CommunityAiOmittedSource["kind"],
+  reasonCode: CommunityAiOmittedSource["reasonCode"],
+): SourceLeg {
+  return Object.freeze({
+    kind: "omitted" as const,
+    omitted: Object.freeze({ kind, reasonCode }),
+  });
+}
+
 export async function assembleCommunityAiKnowledge(
   readers: CommunityAiKnowledgeReaders,
   input: AssembleCommunityAiKnowledgeInput,
 ): Promise<CommunityAiKnowledge> {
+  const nowIso = input.now.toISOString();
+  // Decision 0088: the source legs are independent reads, so they run
+  // together instead of one after another. The mining and voice legs need
+  // nothing from the community read and start with it; the asset leg needs
+  // its bound asset and the chat leg its membership, so they start once it
+  // has answered. Every leg settles to a source or an omitted reason (none
+  // rejects), and the sources are numbered in the same fixed order as
+  // before, so `sourceId`s and the omitted list do not depend on timing.
+  const miningPending = miningLeg(readers, input, nowIso);
+  const voicePending = voiceLeg(readers, input, nowIso);
   // The community read is the only mandatory one: it also decides, through
   // the viewer's membership, whether the chat source may be assembled.
-  const community = await readers.communityService.getCommunity({
-    principal: input.principal,
-    communityId: input.communityId,
-  });
+  let community: CommunityResource;
+  try {
+    community = await readers.communityService.getCommunity({
+      principal: input.principal,
+      communityId: input.communityId,
+    });
+  } catch (error) {
+    void miningPending.catch(() => undefined);
+    void voicePending.catch(() => undefined);
+    throw error;
+  }
+  const [asset, mining, voice, chatLegResult] = await Promise.all([
+    assetLeg(readers, input, community),
+    miningPending,
+    voicePending,
+    chatLeg(readers, input, community, nowIso),
+  ]);
+
   const sources: CommunityAiSource[] = [];
   const omitted: CommunityAiOmittedSource[] = [];
-  const nowIso = input.now.toISOString();
-
-  const push = (
-    source: Omit<CommunityAiSource, "sourceId">,
-  ): CommunityAiSource => {
-    const built = Object.freeze({
-      ...source,
-      sourceId: communityAiSourceId(sources.length),
-    });
-    sources.push(built);
-    return built;
+  let chat: CommunityAiChatObservation | null = null;
+  const push = (source: DraftSource): void => {
+    sources.push(
+      Object.freeze({
+        ...source,
+        sourceId: communityAiSourceId(sources.length),
+      }),
+    );
   };
 
   push({
@@ -138,169 +180,189 @@ export async function assembleCommunityAiKnowledge(
     }),
   );
 
+  for (const leg of [asset, mining, voice, chatLegResult]) {
+    if (leg.kind === "omitted") {
+      omitted.push(leg.omitted);
+      continue;
+    }
+    push(leg.source);
+    if (leg.chat !== undefined) {
+      chat = leg.chat;
+    }
+  }
+
+  return Object.freeze({
+    community,
+    sources: Object.freeze([...sources]),
+    omitted: Object.freeze([...omitted]),
+    chat,
+  });
+}
+
+async function assetLeg(
+  readers: CommunityAiKnowledgeReaders,
+  input: AssembleCommunityAiKnowledgeInput,
+  community: CommunityResource,
+): Promise<SourceLeg> {
   const boundAssetKey = community.community.boundAssetKey;
   if (boundAssetKey === null) {
-    omitted.push(
-      Object.freeze({
-        kind: "assetFacts" as const,
-        reasonCode: communityAiReasonCodes.assetNotBound,
-      }),
+    return omittedLeg("assetFacts", communityAiReasonCodes.assetNotBound);
+  }
+  if (readers.marketReadService === null) {
+    return omittedLeg(
+      "assetFacts",
+      communityAiReasonCodes.assetFactsUnavailable,
     );
-  } else if (readers.marketReadService === null) {
-    omitted.push(
-      Object.freeze({
-        kind: "assetFacts" as const,
-        reasonCode: communityAiReasonCodes.assetFactsUnavailable,
-      }),
-    );
-  } else {
-    try {
-      const asset = await readers.marketReadService.getAsset({
-        assetId: boundAssetKey,
-        caller: {
-          principal: input.principal,
-          canonicalClientIp: input.canonicalClientIp,
-        },
-        signal: input.signal,
-      });
-      const facts: CommunityAiSourceFact[] = [];
-      const symbol =
-        "symbol" in asset.asset && typeof asset.asset.symbol === "string"
-          ? asset.asset.symbol
-          : null;
-      facts.push(fact("资产标识", boundAssetKey));
-      if (symbol !== null) {
-        facts.push(fact("代币符号", symbol));
+  }
+  const nowIso = input.now.toISOString();
+  try {
+    const asset = await readers.marketReadService.getAsset({
+      assetId: boundAssetKey,
+      caller: {
+        principal: input.principal,
+        canonicalClientIp: input.canonicalClientIp,
+      },
+      signal: input.signal,
+    });
+    const facts: CommunityAiSourceFact[] = [];
+    const symbol =
+      "symbol" in asset.asset && typeof asset.asset.symbol === "string"
+        ? asset.asset.symbol
+        : null;
+    facts.push(fact("资产标识", boundAssetKey));
+    if (symbol !== null) {
+      facts.push(fact("代币符号", symbol));
+    }
+    const rows: readonly [string, string | null, string | null][] = [
+      ["价格（USD）", factValue(asset.price), asset.price.fetchedAt],
+      [
+        "24 小时涨跌幅",
+        factValue(asset.priceChange24h),
+        asset.priceChange24h.fetchedAt,
+      ],
+      ["市值（USD）", factValue(asset.marketCap), asset.marketCap.fetchedAt],
+      [
+        "流动性（USD）",
+        factValue(asset.liquidityUsd),
+        asset.liquidityUsd.fetchedAt,
+      ],
+      ["持有人数", factValue(asset.holderCount), asset.holderCount.fetchedAt],
+    ];
+    let newestObservation: string | null = null;
+    for (const [label, value, fetchedAt] of rows) {
+      if (value === null) {
+        continue;
       }
-      const rows: readonly [string, string | null, string | null][] = [
-        ["价格（USD）", factValue(asset.price), asset.price.fetchedAt],
-        [
-          "24 小时涨跌幅",
-          factValue(asset.priceChange24h),
-          asset.priceChange24h.fetchedAt,
-        ],
-        ["市值（USD）", factValue(asset.marketCap), asset.marketCap.fetchedAt],
-        [
-          "流动性（USD）",
-          factValue(asset.liquidityUsd),
-          asset.liquidityUsd.fetchedAt,
-        ],
-        ["持有人数", factValue(asset.holderCount), asset.holderCount.fetchedAt],
-      ];
-      let newestObservation: string | null = null;
-      for (const [label, value, fetchedAt] of rows) {
-        if (value === null) {
-          continue;
-        }
-        facts.push(
-          fact(label, fetchedAt === null ? value : `${value}（${fetchedAt}）`),
-        );
-        if (
-          fetchedAt !== null &&
-          (newestObservation === null || fetchedAt > newestObservation)
-        ) {
-          newestObservation = fetchedAt;
-        }
+      facts.push(
+        fact(label, fetchedAt === null ? value : `${value}（${fetchedAt}）`),
+      );
+      if (
+        fetchedAt !== null &&
+        (newestObservation === null || fetchedAt > newestObservation)
+      ) {
+        newestObservation = fetchedAt;
       }
-      if (facts.length <= 2) {
-        omitted.push(
-          Object.freeze({
-            kind: "assetFacts" as const,
-            reasonCode: communityAiReasonCodes.assetFactsUnavailable,
-          }),
-        );
-      } else {
-        push({
-          kind: "assetFacts",
-          label: `绑定资产行情${symbol === null ? "" : `：${symbol}`}`,
-          observedAt: newestObservation ?? nowIso,
-          facts: Object.freeze(facts),
-          untrustedLines: Object.freeze([]),
-        });
-      }
-    } catch {
-      omitted.push(
-        Object.freeze({
-          kind: "assetFacts" as const,
-          reasonCode: communityAiReasonCodes.assetFactsUnavailable,
-        }),
+    }
+    if (facts.length <= 2) {
+      return omittedLeg(
+        "assetFacts",
+        communityAiReasonCodes.assetFactsUnavailable,
       );
     }
+    return Object.freeze({
+      kind: "source" as const,
+      source: {
+        kind: "assetFacts" as const,
+        label: `绑定资产行情${symbol === null ? "" : `：${symbol}`}`,
+        observedAt: newestObservation ?? nowIso,
+        facts: Object.freeze(facts),
+        untrustedLines: Object.freeze([]),
+      },
+    });
+  } catch {
+    return omittedLeg(
+      "assetFacts",
+      communityAiReasonCodes.assetFactsUnavailable,
+    );
   }
+}
 
+async function miningLeg(
+  readers: CommunityAiKnowledgeReaders,
+  input: AssembleCommunityAiKnowledgeInput,
+  nowIso: string,
+): Promise<SourceLeg> {
   if (readers.miningService === null) {
-    omitted.push(
-      Object.freeze({
-        kind: "communityMining" as const,
-        reasonCode: communityAiReasonCodes.miningUnavailable,
-      }),
+    return omittedLeg(
+      "communityMining",
+      communityAiReasonCodes.miningUnavailable,
     );
-  } else {
-    try {
-      const mining = await readers.miningService.getCommunity({
-        principal: input.principal,
-        communityId: input.communityId,
-      });
-      const facts: CommunityAiSourceFact[] = [];
-      if (mining.weight.status === "approved") {
-        facts.push(fact("社区权重", mining.weight.value));
-        facts.push(fact("权重版本", mining.weight.configVersion));
-      }
-      if (mining.communityPower.status === "available") {
-        facts.push(fact("社区总算力", mining.communityPower.value));
-      }
-      if (mining.participants.status === "available") {
-        facts.push(fact("参与挖矿人数", String(mining.participants.count)));
-      }
-      if (mining.myContribution.status === "available") {
-        facts.push(fact("提问者的贡献算力", mining.myContribution.value));
-      }
-      const observedAt =
-        "computedAt" in mining.snapshot ? mining.snapshot.computedAt : nowIso;
-      if (facts.length === 0) {
-        omitted.push(
-          Object.freeze({
-            kind: "communityMining" as const,
-            reasonCode: communityAiReasonCodes.miningUnavailable,
-          }),
-        );
-      } else {
-        push({
-          kind: "communityMining",
-          label: "社区挖矿",
-          observedAt,
-          facts: Object.freeze(facts),
-          untrustedLines: Object.freeze([]),
-        });
-      }
-    } catch {
-      omitted.push(
-        Object.freeze({
-          kind: "communityMining" as const,
-          reasonCode: communityAiReasonCodes.miningUnavailable,
-        }),
+  }
+  try {
+    const mining = await readers.miningService.getCommunity({
+      principal: input.principal,
+      communityId: input.communityId,
+    });
+    const facts: CommunityAiSourceFact[] = [];
+    if (mining.weight.status === "approved") {
+      facts.push(fact("社区权重", mining.weight.value));
+      facts.push(fact("权重版本", mining.weight.configVersion));
+    }
+    if (mining.communityPower.status === "available") {
+      facts.push(fact("社区总算力", mining.communityPower.value));
+    }
+    if (mining.participants.status === "available") {
+      facts.push(fact("参与挖矿人数", String(mining.participants.count)));
+    }
+    if (mining.myContribution.status === "available") {
+      facts.push(fact("提问者的贡献算力", mining.myContribution.value));
+    }
+    const observedAt =
+      "computedAt" in mining.snapshot ? mining.snapshot.computedAt : nowIso;
+    if (facts.length === 0) {
+      return omittedLeg(
+        "communityMining",
+        communityAiReasonCodes.miningUnavailable,
       );
     }
-  }
-
-  if (readers.voiceRoomService === null) {
-    omitted.push(
-      Object.freeze({
-        kind: "voiceRoom" as const,
-        reasonCode: communityAiReasonCodes.voiceUnavailable,
-      }),
+    return Object.freeze({
+      kind: "source" as const,
+      source: {
+        kind: "communityMining" as const,
+        label: "社区挖矿",
+        observedAt,
+        facts: Object.freeze(facts),
+        untrustedLines: Object.freeze([]),
+      },
+    });
+  } catch {
+    return omittedLeg(
+      "communityMining",
+      communityAiReasonCodes.miningUnavailable,
     );
-  } else {
-    try {
-      const voice = await readers.voiceRoomService.getCurrentRoom({
-        principal: input.principal,
-        communityId: input.communityId,
-        requestId: input.requestId,
-        signal: input.signal,
-      });
-      const current = voice.current;
-      push({
-        kind: "voiceRoom",
+  }
+}
+
+async function voiceLeg(
+  readers: CommunityAiKnowledgeReaders,
+  input: AssembleCommunityAiKnowledgeInput,
+  nowIso: string,
+): Promise<SourceLeg> {
+  if (readers.voiceRoomService === null) {
+    return omittedLeg("voiceRoom", communityAiReasonCodes.voiceUnavailable);
+  }
+  try {
+    const voice = await readers.voiceRoomService.getCurrentRoom({
+      principal: input.principal,
+      communityId: input.communityId,
+      requestId: input.requestId,
+      signal: input.signal,
+    });
+    const current = voice.current;
+    return Object.freeze({
+      kind: "source" as const,
+      source: {
+        kind: "voiceRoom" as const,
         label: "语音房状态",
         observedAt: nowIso,
         facts: Object.freeze(
@@ -315,125 +377,102 @@ export async function assembleCommunityAiKnowledge(
               ],
         ),
         untrustedLines: Object.freeze([]),
-      });
-    } catch {
-      omitted.push(
-        Object.freeze({
-          kind: "voiceRoom" as const,
-          reasonCode: communityAiReasonCodes.voiceUnavailable,
-        }),
-      );
-    }
+      },
+    });
+  } catch {
+    return omittedLeg("voiceRoom", communityAiReasonCodes.voiceUnavailable);
   }
+}
 
-  let chat: CommunityAiChatObservation | null = null;
+async function chatLeg(
+  readers: CommunityAiKnowledgeReaders,
+  input: AssembleCommunityAiKnowledgeInput,
+  community: CommunityResource,
+  nowIso: string,
+): Promise<SourceLeg> {
   if (!isActiveMember(community)) {
     // A non-member never sees a community's messages, not even aggregated.
-    omitted.push(
-      Object.freeze({
-        kind: "communityChat" as const,
-        reasonCode: communityAiReasonCodes.notAMember,
-      }),
-    );
-  } else if (
+    return omittedLeg("communityChat", communityAiReasonCodes.notAMember);
+  }
+  if (
     readers.communicationRepository === null ||
     readers.channelGateway === null
   ) {
-    omitted.push(
-      Object.freeze({
-        kind: "communityChat" as const,
-        reasonCode: communityAiReasonCodes.chatNotConnected,
-      }),
-    );
-  } else {
-    try {
-      const channel =
-        await readers.communicationRepository.readCommunityChannel({
-          communityId: input.communityId,
-          viewerUserId: input.principal.userId,
-        });
-      const record = channel.channel;
-      if (
-        record === null ||
-        !record.provisioned ||
-        !channel.viewerIsCommunityMember
-      ) {
-        omitted.push(
-          Object.freeze({
-            kind: "communityChat" as const,
-            reasonCode: communityAiReasonCodes.chatNotConnected,
-          }),
-        );
-      } else {
-        const since = new Date(
-          input.now.getTime() - input.chatWindowHours * 3_600_000,
-        );
-        const messages =
-          await readers.channelGateway.readCommunityChannelMessages({
-            channelId: record.streamChannelId,
-            since,
-            limit: communityAiChatMessageLimit,
-            signal: input.signal,
-          });
-        const authorIds = [
-          ...new Set(
-            messages.flatMap((message) =>
-              message.authorUserId === null ? [] : [message.authorUserId],
-            ),
-          ),
-        ];
-        const personas = await readers.repository.readPersonaAliases({
-          communityId: input.communityId,
-          ownerUserIds: authorIds,
-        });
-        const lines = messages.map((message) => {
-          const persona =
-            message.authorUserId === null
-              ? null
-              : (personas.get(message.authorUserId) ?? null);
-          return `${message.createdAt} ${persona ?? unknownAuthorLabel}: ${message.text}`;
-        });
-        const newest = messages.reduce<string | null>(
-          (latest, message) =>
-            latest === null || message.createdAt > latest
-              ? message.createdAt
-              : latest,
-          null,
-        );
-        chat = Object.freeze({
-          messageCount: messages.length,
-          bounded: messages.length >= communityAiChatMessageLimit,
-          windowHours: input.chatWindowHours,
-          observedAt: newest ?? nowIso,
-        });
-        push({
-          kind: "communityChat",
-          label: `官方群最近 ${String(input.chatWindowHours)} 小时的讨论（最多 ${String(communityAiChatMessageLimit)} 条）`,
-          observedAt: newest ?? nowIso,
-          facts: Object.freeze([
-            fact("观察到的消息数", String(messages.length)),
-            fact(
-              "是否为下限",
-              messages.length >= communityAiChatMessageLimit ? "是" : "否",
-            ),
-          ]),
-          untrustedLines: Object.freeze(lines),
-        });
-      }
-    } catch {
-      omitted.push(
-        Object.freeze({
-          kind: "communityChat" as const,
-          reasonCode: communityAiReasonCodes.chatNotObserved,
-        }),
+    return omittedLeg("communityChat", communityAiReasonCodes.chatNotConnected);
+  }
+  try {
+    const channel = await readers.communicationRepository.readCommunityChannel({
+      communityId: input.communityId,
+      viewerUserId: input.principal.userId,
+    });
+    const record = channel.channel;
+    if (
+      record === null ||
+      !record.provisioned ||
+      !channel.viewerIsCommunityMember
+    ) {
+      return omittedLeg(
+        "communityChat",
+        communityAiReasonCodes.chatNotConnected,
       );
     }
+    const since = new Date(
+      input.now.getTime() - input.chatWindowHours * 3_600_000,
+    );
+    const messages = await readers.channelGateway.readCommunityChannelMessages({
+      channelId: record.streamChannelId,
+      since,
+      limit: communityAiChatMessageLimit,
+      signal: input.signal,
+    });
+    const authorIds = [
+      ...new Set(
+        messages.flatMap((message) =>
+          message.authorUserId === null ? [] : [message.authorUserId],
+        ),
+      ),
+    ];
+    const personas = await readers.repository.readPersonaAliases({
+      communityId: input.communityId,
+      ownerUserIds: authorIds,
+    });
+    const lines = messages.map((message) => {
+      const persona =
+        message.authorUserId === null
+          ? null
+          : (personas.get(message.authorUserId) ?? null);
+      return `${message.createdAt} ${persona ?? unknownAuthorLabel}: ${message.text}`;
+    });
+    const newest = messages.reduce<string | null>(
+      (latest, message) =>
+        latest === null || message.createdAt > latest
+          ? message.createdAt
+          : latest,
+      null,
+    );
+    return Object.freeze({
+      kind: "source" as const,
+      chat: Object.freeze({
+        messageCount: messages.length,
+        bounded: messages.length >= communityAiChatMessageLimit,
+        windowHours: input.chatWindowHours,
+        observedAt: newest ?? nowIso,
+      }),
+      source: {
+        kind: "communityChat" as const,
+        label: `官方群最近 ${String(input.chatWindowHours)} 小时的讨论（最多 ${String(communityAiChatMessageLimit)} 条）`,
+        observedAt: newest ?? nowIso,
+        facts: Object.freeze([
+          fact("观察到的消息数", String(messages.length)),
+          fact(
+            "是否为下限",
+            messages.length >= communityAiChatMessageLimit ? "是" : "否",
+          ),
+        ]),
+        untrustedLines: Object.freeze(lines),
+      },
+    });
+  } catch {
+    return omittedLeg("communityChat", communityAiReasonCodes.chatNotObserved);
   }
-
-  return Object.freeze({
-    community,
-    sources: Object.freeze([...sources]),
-    omitted: Object.freeze([...omitted]),
-    chat,
-  });
 }

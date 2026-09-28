@@ -1691,17 +1691,22 @@ export function createCommunityService(
       const owner = assertPrincipal(input.principal);
       try {
         const communityId = parseOpaqueUuid(input.communityId);
-        const record = await options.repository.getCommunity({
-          viewerUserId: owner.userId,
-          communityId,
-        });
-        const channel = await channelProjection(owner.userId, communityId);
-        return communityResource(
-          record,
-          channel,
-          await communityMiningPower(communityId),
-          await communityPresence(channel),
-        );
+        // Decision 0088: the four reads share nothing but the ID, so they
+        // run together; presence waits only for the channel record it
+        // needs. The channel, Mining Power and presence legs never reject
+        // (each settles to an `unavailable` projection), so the record read
+        // alone still decides whether the page exists for this viewer.
+        const channelPending = channelProjection(owner.userId, communityId);
+        const [record, channel, miningPower, presence] = await Promise.all([
+          options.repository.getCommunity({
+            viewerUserId: owner.userId,
+            communityId,
+          }),
+          channelPending,
+          communityMiningPower(communityId),
+          channelPending.then(communityPresence),
+        ]);
+        return communityResource(record, channel, miningPower, presence);
       } catch (error) {
         return mapFailure(error);
       }

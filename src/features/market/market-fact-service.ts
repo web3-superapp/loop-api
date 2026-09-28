@@ -224,8 +224,15 @@ export interface CreateMarketFactServiceInput {
  * another makes a wallet screen wait for a round trip per asset, and reading
  * all of them at once makes the Provider itself slow down and start failing,
  * which turns fresh prices into stale ones.
+ *
+ * Decision 0088 raised it from 4 to 12, the size of today's registry: the
+ * wallet page read its 11 prices in three waves (about 1 s on a cache miss,
+ * the slowest leg of the page). Three rounds of 11 concurrent
+ * `/token-pairs/v1` requests on 2026-09-28 all answered 200 in 0.18–0.46 s
+ * (0.5 s wall), so one wave no longer trips the Provider. The adapter's
+ * per-minute throttle is unchanged and still bounds the request count.
  */
-const assetPriceConcurrency = 4;
+const assetPriceConcurrency = 12;
 
 /**
  * How many cache rows one batch read writes at once (Decision 0086). The

@@ -1008,6 +1008,124 @@ export function createMarketReadService(
    * disabled OHLCV Provider, a blocked asset, or an unreadable cache close
    * the block with the same codes the overview rows use.
    */
+  /**
+   * The registered asset's pair facts. When the pairs Provider reported no
+   * usable pair for a registered token, fall back to the same Provider
+   * top-pool lookup an unregistered address uses (Decision 0064), so a token
+   * LOOP registered is never read worse than one it does not know. The
+   * fallback is taken whole — every fact then comes from that one snapshot
+   * with its own source, never one field from each Provider. The native
+   * asset is excluded: its facts must stay labelled `proxied` through WBNB
+   * (Decision 0050).
+   */
+  async function readRegisteredPairFacts(
+    asset: AssetRecord,
+    signal: AbortSignal | undefined,
+  ): Promise<Awaited<ReturnType<typeof pairFactsFor>>> {
+    const facts = await pairFactsFor(asset, signal);
+    if (
+      facts.primaryPair === null &&
+      asset.address !== null &&
+      asset.status !== "blocked"
+    ) {
+      const fallback = unregisteredPairFacts(
+        await input.facts.readUnlistedToken(
+          asset.address,
+          signal === undefined ? {} : { signal },
+        ),
+      );
+      if (fallback.primaryPair !== null) {
+        return fallback;
+      }
+    }
+    return facts;
+  }
+
+  async function boundCommunityFor(
+    asset: AssetRecord,
+  ): Promise<MarketAssetResource["community"]> {
+    try {
+      const bound = await input.cache.findVerifiedCommunityByAssetId(
+        asset.assetId,
+      );
+      return bound === null
+        ? unavailableBlock(marketReasonCodes.communityNotBound)
+        : Object.freeze({
+            status: "available",
+            communityId: bound.communityId,
+            name: bound.name,
+            slug: bound.slug,
+            memberCount: bound.memberCount,
+          });
+    } catch (error) {
+      if (!(error instanceof MarketFactCacheUnavailableError)) {
+        throw error;
+      }
+      return unavailableBlock(marketReasonCodes.cacheUnavailable);
+    }
+  }
+
+  async function securityFactsFor(
+    asset: AssetRecord,
+    signal: AbortSignal | undefined,
+  ): Promise<{
+    readonly security: MarketAssetResource["security"];
+    readonly holderCount: MarketFactProjection;
+  }> {
+    if (asset.address === null || asset.status === "blocked") {
+      const reasonCode =
+        asset.status === "blocked"
+          ? "ASSET_BLOCKED"
+          : marketReasonCodes.nativeAssetUnsupported;
+      return {
+        security: unavailableBlock(reasonCode),
+        holderCount: unavailableFact(reasonCode),
+      };
+    }
+    const fact = await input.facts.readTokenSecurity(
+      asset.address,
+      signal === undefined ? {} : { signal },
+    );
+    if (fact.value === null || fact.fetchedAt === null) {
+      const reasonCode =
+        fact.reasonCode ?? marketReasonCodes.providerUnreachable;
+      return {
+        security: unavailableBlock(reasonCode),
+        holderCount: unavailableFact(reasonCode),
+      };
+    }
+    const fetchedAt = fact.fetchedAt;
+    const quality = fact.quality === "stale" ? "stale" : "fresh";
+    return {
+      security: Object.freeze({
+        status: "available",
+        source: fact.source,
+        fetchedAt,
+        ttlSeconds: fact.ttlSeconds,
+        quality,
+        reasonCode: fact.reasonCode,
+        facts: Object.freeze(
+          fact.value.facts.map((row) =>
+            Object.freeze({
+              fact: row.fact,
+              value: row.value,
+              source: fact.source,
+              observedAt: fetchedAt,
+            }),
+          ),
+        ),
+      }),
+      holderCount: holderCountFact({
+        reported: fact.value.holderCount,
+        source: fact.source,
+        fetchedAt,
+        ttlSeconds: fact.ttlSeconds,
+        quality,
+        reasonCode: fact.reasonCode,
+      }),
+    };
+  }
+
   async function range24hFor(subject: {
     readonly address: string | null;
     readonly blocked: boolean;
@@ -1405,104 +1523,25 @@ export function createMarketReadService(
         });
       }
       const asset = resolved.record;
-      const chainReadable =
-        (await input.readClient.verifyChain()) === "verified";
-      let facts = await pairFactsFor(asset, signal);
-      // The pairs Provider reported no usable pair for a registered token:
-      // fall back to the same Provider top-pool lookup an unregistered
-      // address uses (Decision 0064), so a token LOOP registered is never
-      // read worse than one it does not know. The fallback is taken whole —
-      // every fact then comes from that one snapshot with its own source,
-      // never one field from each Provider. The native asset is excluded:
-      // its facts must stay labelled `proxied` through WBNB (Decision 0050).
-      if (
-        facts.primaryPair === null &&
-        asset.address !== null &&
-        asset.status !== "blocked"
-      ) {
-        const fallback = unregisteredPairFacts(
-          await input.facts.readUnlistedToken(
-            asset.address,
-            signal === undefined ? {} : { signal },
-          ),
-        );
-        if (fallback.primaryPair !== null) {
-          facts = fallback;
-        }
-      }
-
-      let community: MarketAssetResource["community"];
-      try {
-        const bound = await input.cache.findVerifiedCommunityByAssetId(
-          asset.assetId,
-        );
-        community =
-          bound === null
-            ? unavailableBlock(marketReasonCodes.communityNotBound)
-            : Object.freeze({
-                status: "available",
-                communityId: bound.communityId,
-                name: bound.name,
-                slug: bound.slug,
-                memberCount: bound.memberCount,
-              });
-      } catch (error) {
-        if (!(error instanceof MarketFactCacheUnavailableError)) {
-          throw error;
-        }
-        community = unavailableBlock(marketReasonCodes.cacheUnavailable);
-      }
-
-      let security: MarketAssetResource["security"];
-      let holderCount: MarketFactProjection;
-      if (asset.address === null || asset.status === "blocked") {
-        const reasonCode =
-          asset.status === "blocked"
-            ? "ASSET_BLOCKED"
-            : marketReasonCodes.nativeAssetUnsupported;
-        security = unavailableBlock(reasonCode);
-        holderCount = unavailableFact(reasonCode);
-      } else {
-        const fact = await input.facts.readTokenSecurity(
-          asset.address,
-          signal === undefined ? {} : { signal },
-        );
-        if (fact.value === null || fact.fetchedAt === null) {
-          const reasonCode =
-            fact.reasonCode ?? marketReasonCodes.providerUnreachable;
-          security = unavailableBlock(reasonCode);
-          holderCount = unavailableFact(reasonCode);
-        } else {
-          const fetchedAt = fact.fetchedAt;
-          const quality = fact.quality === "stale" ? "stale" : "fresh";
-          security = Object.freeze({
-            status: "available",
-            source: fact.source,
-            fetchedAt,
-            ttlSeconds: fact.ttlSeconds,
-            quality,
-            reasonCode: fact.reasonCode,
-            facts: Object.freeze(
-              fact.value.facts.map((row) =>
-                Object.freeze({
-                  fact: row.fact,
-                  value: row.value,
-                  source: fact.source,
-                  observedAt: fetchedAt,
-                }),
-              ),
-            ),
-          });
-          holderCount = holderCountFact({
-            reported: fact.value.holderCount,
-            source: fact.source,
-            fetchedAt,
-            ttlSeconds: fact.ttlSeconds,
-            quality,
-            reasonCode: fact.reasonCode,
-          });
-        }
-      }
+      // Decision 0088: the pair facts, the bound community, the security
+      // facts and the 24h range are independent reads of the same asset, so
+      // they run together; only the Decision 0064 fallback still waits for
+      // the pair facts it replaces. Each leg keeps its own failure rules.
+      const [chainReadable, pairFacts, community, securityFacts, range24h] =
+        await Promise.all([
+          input.readClient
+            .verifyChain()
+            .then((verification) => verification === "verified"),
+          readRegisteredPairFacts(asset, signal),
+          boundCommunityFor(asset),
+          securityFactsFor(asset, signal),
+          range24hFor({
+            address: asset.address,
+            blocked: asset.status === "blocked",
+          }),
+        ]);
+      const facts = pairFacts;
+      const { security, holderCount } = securityFacts;
 
       return Object.freeze({
         asset: projectAsset(asset),
@@ -1522,10 +1561,7 @@ export function createMarketReadService(
         community,
         security,
         holderCount,
-        range24h: await range24hFor({
-          address: asset.address,
-          blocked: asset.status === "blocked",
-        }),
+        range24h,
         contractVersion: v2ContractVersion,
       });
     },

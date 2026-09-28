@@ -639,12 +639,12 @@ describe("market fact service", () => {
     expect(blocked.fact.reasonCode).toBe("ASSET_BLOCKED");
   });
 
-  it("reads many asset prices at once, in order, and never more than four at a time (Decision 0063)", async () => {
+  it("reads many asset prices at once, in order, and never more than twelve at a time (Decisions 0063, 0088)", async () => {
     let inFlight = 0;
     let peakInFlight = 0;
     const addresses = Array.from(
-      { length: 9 },
-      (_unused, index) => `0x${String(index).repeat(40)}`,
+      { length: 15 },
+      (_unused, index) => `0x${index.toString(16).repeat(40)}`,
     );
     const release: (() => void)[] = [];
     const provider: MarketPairsProvider = {
@@ -678,9 +678,9 @@ describe("market fact service", () => {
     const pending = service.readAssetPrices(
       addresses.map((address) => ({ address, status: "verified" as const })),
     );
-    // Drain the queue a wave at a time; the bound must hold throughout. Nine
-    // reads four at a time is three waves, and a few spare turns let the last
-    // one settle.
+    // Drain the queue a wave at a time; the bound must hold throughout.
+    // Fifteen reads twelve at a time is two waves, and a few spare turns let
+    // the last one settle.
     for (let turn = 0; turn < 8; turn += 1) {
       for (const next of release.splice(0, release.length)) {
         next();
@@ -689,7 +689,7 @@ describe("market fact service", () => {
     }
     const facts = await pending;
 
-    expect(peakInFlight).toBe(4);
+    expect(peakInFlight).toBe(12);
     expect(facts).toHaveLength(addresses.length);
     expect(facts.map((entry) => entry.fact.value?.tokenAddress)).toEqual(
       addresses,
