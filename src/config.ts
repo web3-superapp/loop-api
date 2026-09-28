@@ -377,6 +377,13 @@ const environmentSchema = z
     HOST: z.string().trim().min(1).max(255),
     PORT: positiveIntegerString(1, 65_535),
     PUBLIC_BASE_URL: z.string().url(),
+    /**
+     * Decision 0089 §8 (S96c): `proxy` publishes every `logo.url` as this
+     * API's logo proxy; `upstream` publishes the Decision 0072 origin URL for
+     * clients (TestFlight build 7) that refuse any other logo host. Anything
+     * else refuses to start.
+     */
+    TOKEN_LOGO_URL_MODE: z.enum(["proxy", "upstream"]),
     API_DOCS_ENABLED: booleanString,
     TRUST_PROXY: booleanString,
     LOG_LEVEL: z.enum([
@@ -1042,6 +1049,8 @@ export interface AppConfig {
   readonly host: string;
   readonly port: number;
   readonly publicBaseUrl: string;
+  /** Which URL `logo.url` carries (Decision 0089 §8). */
+  readonly tokenLogoUrlMode: "proxy" | "upstream";
   readonly apiDocsEnabled: boolean;
   readonly trustProxy: boolean;
   readonly logLevel:
@@ -1908,6 +1917,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     HOST: environment["HOST"] ?? "127.0.0.1",
     PORT: environment["PORT"] ?? "3000",
     PUBLIC_BASE_URL: environment["PUBLIC_BASE_URL"] ?? "http://127.0.0.1:3000",
+    TOKEN_LOGO_URL_MODE: environment["TOKEN_LOGO_URL_MODE"] ?? "proxy",
     API_DOCS_ENABLED:
       environment["API_DOCS_ENABLED"] ??
       (rawNodeEnv === "production" ? "false" : "true"),
@@ -2090,6 +2100,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     host: parsed.data.HOST,
     port: parsed.data.PORT,
     publicBaseUrl: publicBaseUrl.toString(),
+    tokenLogoUrlMode: parsed.data.TOKEN_LOGO_URL_MODE,
     apiDocsEnabled: parsed.data.API_DOCS_ENABLED,
     trustProxy: parsed.data.TRUST_PROXY,
     logLevel: parsed.data.LOG_LEVEL,

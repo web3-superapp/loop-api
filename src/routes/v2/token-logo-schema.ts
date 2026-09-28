@@ -1,5 +1,6 @@
 import { reasonCodePatternSource } from "../../features/chain/chain-contract.js";
 import {
+  tokenLogoAllowedHosts,
   tokenLogoMaximumUrlLength,
   tokenLogoProxyChainIds,
   tokenLogoProxyPathPrefix,
@@ -7,14 +8,23 @@ import {
 } from "../../features/market/token-logo.js";
 
 /**
- * The logo proxy route of this API (Decision 0089): any `http(s)` origin
- * (`PUBLIC_BASE_URL`, which production requires to be https), then
- * `/v2/market/logos/<chainId>/<lowercase 0x address | native>.png`. The
- * server builds the URL; the pattern is the published contract.
+ * `logo.url` is one of two forms (Decision 0089 §8, `TOKEN_LOGO_URL_MODE`):
+ *
+ * - `proxy` (default): this API's logo proxy — any `http(s)` origin
+ *   (`PUBLIC_BASE_URL`, which production requires to be https), then
+ *   `/v2/market/logos/<chainId>/<lowercase 0x address | native>.png`;
+ * - `upstream`: the Decision 0072 origin URL, https on one of the three
+ *   allow-listed hosts.
+ *
+ * The server builds the URL; the pattern is the published contract.
  */
-export const tokenLogoUrlPatternSource = `^https?://[^\\s/?#]+(/[^\\s?#]*)?${tokenLogoProxyPathPrefix}/(${tokenLogoProxyChainIds
+const proxyUrlPatternSource = `https?://[^\\s/?#]+(/[^\\s?#]*)?${tokenLogoProxyPathPrefix}/(${tokenLogoProxyChainIds
   .map((chainId) => chainId.replace(/\./g, "\\."))
-  .join("|")})/(0x[0-9a-f]{40}|native)\\.png$`;
+  .join("|")})/(0x[0-9a-f]{40}|native)\\.png`;
+const upstreamUrlPatternSource = `https://(${tokenLogoAllowedHosts
+  .map((host) => host.replace(/\./g, "\\."))
+  .join("|")})/[^\\s]+`;
+export const tokenLogoUrlPatternSource = `^(${proxyUrlPatternSource}|${upstreamUrlPatternSource})$`;
 
 /**
  * One asset's logo, or why none is published. Shared by every surface that
@@ -23,7 +33,7 @@ export const tokenLogoUrlPatternSource = `^https?://[^\\s/?#]+(/[^\\s?#]*)?${tok
  */
 export const tokenLogoSchema = {
   description:
-    "The asset's logo (Decisions 0072, 0089). `available`: `url` is always this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
+    "The asset's logo (Decisions 0072, 0089). `available`: `url` is this API's own logo proxy, `<PUBLIC_BASE_URL>/v2/market/logos/<chainId>/<lowercase address | native>.png` (no auth, no LOOP headers, CDN-cacheable), which fetches and caches the picture server-side — or, while the server runs `TOKEN_LOGO_URL_MODE=upstream` (Decision 0089 §8, rollout for clients that only admit the upstream hosts), the Decision 0072 origin URL itself, https on cdn.dexscreener.com, dd.dexscreener.com, or raw.githubusercontent.com. Accept both forms. `source` names the origin the projection chose: `dexscreener` is the image DexScreener reported on the asset's own base pair, observed at `observedAt`; `trustwallet` is the Trust Wallet assets-repository rule for the address (`observedAt` is null). The proxy may still answer 404 (no picture exists) or 502 (upstream unreachable): on any load failure fall back to the client monogram and do not retry in a loop. `unavailable`: no rule URL could be formed (no base token address, or a chain the rule does not cover), or the logo proxy is not served (`TOKEN_LOGO_PROXY_UNAVAILABLE`).",
   anyOf: [
     {
       type: "object",

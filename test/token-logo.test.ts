@@ -120,7 +120,7 @@ describe("token logo (Decision 0072)", () => {
       }
     });
 
-    it("publishes a URL pattern that admits only this API's proxy route (Decision 0089)", () => {
+    it("publishes a URL pattern that admits this API's proxy route or an allow-listed upstream (Decision 0089 §8)", () => {
       const pattern = new RegExp(tokenLogoUrlPatternSource);
       expect(
         pattern.test(`${base}/v2/market/logos/eip155:56/${wbnb}.png`),
@@ -138,11 +138,16 @@ describe("token logo (Decision 0072)", () => {
           `https://api.loop.test/prefix/v2/market/logos/eip155:56/${wbnb}.png`,
         ),
       ).toBe(true);
-      // The upstream origins are never published any more.
-      expect(pattern.test(dexscreenerImage)).toBe(false);
+      // `TOKEN_LOGO_URL_MODE=upstream`: the 0072 origins, allow-list only.
+      expect(pattern.test(dexscreenerImage)).toBe(true);
       expect(
         pattern.test(`${trustWallet}/assets/${wbnbChecksum}/logo.png`),
-      ).toBe(false);
+      ).toBe(true);
+      expect(pattern.test("https://evil.example/logo.png")).toBe(false);
+      expect(pattern.test("http://dd.dexscreener.com/logo.png")).toBe(false);
+      expect(pattern.test("https://dd.dexscreener.com.evil.example/x")).toBe(
+        false,
+      );
       expect(
         pattern.test(`${base}/v2/market/logos/eip155:56/${wbnbChecksum}.png`),
       ).toBe(false);
@@ -283,6 +288,46 @@ describe("token logo (Decision 0072)", () => {
         status: "unavailable",
         reasonCode: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
       });
+    });
+
+    it("publishes the 0072 origin URL itself in upstream mode, whether or not the proxy is served (Decision 0089 §8)", () => {
+      for (const publicBaseUrl of [base, null]) {
+        const upstream = createTokenLogoProjector({
+          publicBaseUrl,
+          urlMode: "upstream",
+        });
+        expect(
+          upstream.project({
+            chainId: "eip155:56",
+            address: wbnb,
+            providerImage: { url: dexscreenerImage, observedAt },
+          }),
+        ).toEqual({
+          status: "available",
+          url: dexscreenerImage,
+          source: "dexscreener",
+          observedAt,
+        });
+        expect(
+          upstream.project({ chainId: "eip155:56", address: null }),
+        ).toEqual({
+          status: "available",
+          url: `${trustWallet}/info/logo.png`,
+          source: "trustwallet",
+          observedAt: null,
+        });
+        expect(upstream.projectForAssetId("eip155:97:native")).toEqual({
+          status: "unavailable",
+          reasonCode: "TOKEN_LOGO_CHAIN_UNSUPPORTED",
+        });
+      }
+      // Proxy mode (explicit or default) keeps publishing the proxy URL.
+      expect(
+        createTokenLogoProjector({
+          publicBaseUrl: base,
+          urlMode: "proxy",
+        }).project({ chainId: "eip155:56", address: wbnb }),
+      ).toMatchObject({ url: `${base}/v2/market/logos/eip155:56/${wbnb}.png` });
     });
 
     it("is unavailable when the proxy route is not served (market module off)", () => {

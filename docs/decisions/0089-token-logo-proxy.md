@@ -225,8 +225,35 @@ by it.
 ## 主代理裁决（2026-09-28）
 
 状态：Accepted，随 `integration/v2` 合并。
+
 1. `PROVIDER_UNREACHABLE`（502）进错误目录：接受。
 2. `native.png`：接受。
 3. 超大图 24 h 标记 + 302：接受。
 4. 无鉴权路由的限流：先靠 8 并发上限、24 h 未命中缓存与 Cloudflare 缓存；若出现滥用再加按 IP 限流。
 5. 客户端：`loop_v2_chain_codec.dart` 的 `logoHosts` 只认三个外部主机，会把我们自己的 URL 当「无图」——S96b 前端同步放开后端 origin（0093 同类教训）。
+
+## 8. Rollout flag `TOKEN_LOGO_URL_MODE` (S96c, 2026-09-28)
+
+TestFlight build 7 rejects a whole response when a `logo.url` names a host
+outside its three-host list (`loop_v2_chain_codec.dart` `logoHosts`), so the
+Hong Kong stack cannot switch to the proxy URL until build 8 is widespread.
+
+- `TOKEN_LOGO_URL_MODE=proxy|upstream`, default `proxy`, parsed fail-closed
+  in `src/config.ts` (any other value, including empty, refuses to start);
+  documented in `.env.example`.
+- `proxy`: unchanged (§4).
+- `upstream`: the projector publishes the Decision 0072 origin URL itself —
+  the admissible DexScreener base-pair image, else the Trust Wallet rule URL
+  — with the same `source` / `observedAt`. The only unavailable reasons are
+  `TOKEN_LOGO_ADDRESS_UNKNOWN` and `TOKEN_LOGO_CHAIN_UNSUPPORTED` (whether
+  the proxy is served does not matter in this mode).
+- `GET /v2/market/logos/...` stays registered and served in both modes, so
+  build 8 clients and CDN warm-up can use it before the switch.
+- The shared `logo.url` schema pattern is the union of the proxy form and
+  `https://(cdn.dexscreener.com|dd.dexscreener.com|raw.githubusercontent.com)/…`.
+  Clients must accept both.
+- Tests: `test/config.test.ts` (default, both values, invalid values),
+  `test/token-logo.test.ts` (projector in upstream mode with and without the
+  proxy, explicit proxy mode, pattern admits both forms and nothing else),
+  `test/v2-market-routes.test.ts` (asset page in each mode; proxy route
+  served in both).

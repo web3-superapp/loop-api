@@ -919,6 +919,7 @@ export async function buildApp(
     publicBaseUrl: registeredModuleIds.includes("market")
       ? config.publicBaseUrl
       : null,
+    urlMode: config.tokenLogoUrlMode,
   });
   const v2SessionRuntimeAvailable =
     config.v2SessionEnabled && config.privy !== null;

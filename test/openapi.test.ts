@@ -1141,8 +1141,8 @@ describe("committed OpenAPI artifact", () => {
       "image/gif",
       "image/webp",
     ]);
-    // No logo URL pattern names an upstream host any more.
-    expect(committed).not.toContain("githubusercontent");
+    // Both forms are published (Decision 0089 §8): proxy and 0072 upstream.
+    expect(committed).toContain("raw\\\\.githubusercontent\\\\.com");
     expect(committed).toContain("/v2/market/logos/(eip155:56)/");
   });
 

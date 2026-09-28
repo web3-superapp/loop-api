@@ -257,6 +257,12 @@ export interface CreateTokenLogoProjectorInput {
    * proxy nothing is published: the client draws its monogram.
    */
   readonly publicBaseUrl: string | null;
+  /**
+   * Decision 0089 §8: `upstream` publishes the 0072 origin URL itself (for
+   * clients that only admit the three upstream hosts); the proxy route stays
+   * served either way. Defaults to `proxy`.
+   */
+  readonly urlMode?: "proxy" | "upstream";
 }
 
 /**
@@ -278,6 +284,14 @@ export function createTokenLogoProjector(
     const origin = resolveTokenLogoOrigin(projectInput);
     if (origin.status === "unavailable") {
       return origin;
+    }
+    if (input.urlMode === "upstream") {
+      return Object.freeze({
+        status: "available",
+        url: origin.upstreamUrl,
+        source: origin.source,
+        observedAt: origin.observedAt,
+      });
     }
     if (base === null) {
       return Object.freeze({
