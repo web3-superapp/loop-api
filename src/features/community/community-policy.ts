@@ -307,3 +307,24 @@ export function targetStateAllowsAction(
       return current.status === "banned";
   }
 }
+
+/**
+ * Decision 0091: the Stream channel role a community membership holds in the
+ * official channel. Owner and admin moderate the channel (they may pin);
+ * every other membership is a plain channel member. A banned membership is
+ * removed from the channel, so its role is never assigned; it maps to the
+ * least privilege for completeness. Mute does not change the channel role.
+ */
+export type CommunityStreamChannelRole = "channel_moderator" | "channel_member";
+
+export function communityStreamChannelRole(
+  role: CommunityRole,
+  status: CommunityMembershipStatus,
+): CommunityStreamChannelRole {
+  if (status === "banned") {
+    return "channel_member";
+  }
+  return role === "owner" || role === "admin"
+    ? "channel_moderator"
+    : "channel_member";
+}

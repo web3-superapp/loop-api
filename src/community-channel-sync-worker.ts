@@ -273,6 +273,9 @@ export function createCommunityChannelSyncWorker(
             alias: lease.persona.alias,
           },
         ],
+        // Decision 0091: owner/admin moderate the channel, members do not.
+        // The same add carries a promotion or a demotion.
+        channelRole: job.memberChannelRole,
         signal,
       });
       await options.repository.completeJob({

@@ -89,7 +89,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     expect(response.headers["cache-control"]).toBe("public, max-age=3600");
     expect(response.headers.location).toBeUndefined();
     expect(response.body).toBe(
-      '{"applinks":{"details":[{"appIDs":["867CN6U7W9.com.cywd.loop"],"components":[{"/":"/u/*"}]}]},"webcredentials":{"apps":["867CN6U7W9.com.cywd.loop"]}}',
+      '{"applinks":{"details":[{"appIDs":["867CN6U7W9.com.cywd.loop"],"components":[{"/":"/u/*"},{"/":"/c/*"}]}]},"webcredentials":{"apps":["867CN6U7W9.com.cywd.loop"]}}',
     );
   });
 
@@ -107,7 +107,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
         details: [
           {
             appIDs: ["867CN6U7W9.com.cywd.loop"],
-            components: [{ "/": "/u/*" }],
+            components: [{ "/": "/u/*" }, { "/": "/c/*" }],
           },
         ],
       },
@@ -219,6 +219,62 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     }
   });
 
+  it("serves a static voice-room landing page that neither reads the database nor echoes the community (Decision 0091)", async () => {
+    const { app, database } = await buildTestApp({
+      APP_DOWNLOAD_URL: "https://testflight.apple.com/join/example",
+    });
+    const communityId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/c/${communityId}/room`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers["cache-control"]).toBe("public, max-age=3600");
+    expect(response.headers["content-security-policy"]).toContain(
+      "default-src 'none'",
+    );
+    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers["x-robots-tag"]).toBe("noindex");
+    expect(response.body).toContain("语音房邀请");
+    expect(response.body).toContain(
+      'href="https://testflight.apple.com/join/example"',
+    );
+    expect(response.body).not.toContain(communityId);
+    expect(response.body).not.toContain("<script");
+    expect(database.lookups).not.toHaveBeenCalled();
+  });
+
+  it("omits the download link on the voice-room page without APP_DOWNLOAD_URL", async () => {
+    const { app } = await buildTestApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/c/3fa85f64-5717-4562-b3fc-2c963f66afa6/room",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain("<a ");
+  });
+
+  it("answers a malformed voice-room link with an uncached 404 page", async () => {
+    const { app } = await buildTestApp();
+
+    for (const url of [
+      "/c/not-a-community/room",
+      "/c/3FA85F64-5717-4562-B3FC-2C963F66AFA6/room",
+      "/c/3fa85f64-5717-1562-b3fc-2c963f66afa6/room",
+      "/c/%3Cscript%3E/room",
+    ]) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(404);
+      expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).toContain("链接无效");
+      expect(response.body).not.toContain("<script>");
+    }
+  });
+
   it("keeps the landing page and both association files out of OpenAPI", async () => {
     const { app } = await buildTestApp();
     await app.ready();
@@ -228,6 +284,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     );
 
     expect(paths).not.toContain("/u/{loopId}");
+    expect(paths).not.toContain("/c/{communityId}/room");
     expect(paths).not.toContain("/.well-known/assetlinks.json");
     expect(paths).not.toContain("/.well-known/apple-app-site-association");
   });

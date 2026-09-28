@@ -581,6 +581,221 @@ describe("Stream community channel gateway", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  describe("community channel roles (Decision 0091)", () => {
+    function usersOk(): Response {
+      return jsonResponse({
+        duration: "1ms",
+        users: { [memberUserId]: { id: memberUserId } },
+      });
+    }
+
+    it("sends the channel role on add_members and confirms it with assign_roles", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(usersOk())
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members: [
+              {
+                user_id: memberUserId,
+                channel_role: "channel_moderator",
+              },
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        channelRole: "channel_moderator",
+        signal: signal(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(requestBody(fetchMock, 1)).toEqual({
+        user_id: hostUserId,
+        add_members: [
+          { user_id: memberUserId, channel_role: "channel_moderator" },
+        ],
+      });
+      expect(requestedUrl(fetchMock, 2).pathname).toBe(
+        `/api/v2/chat/channels/messaging/${communityChannelId}`,
+      );
+      expect(requestBody(fetchMock, 2)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: memberUserId, channel_role: "channel_moderator" },
+        ],
+      });
+    });
+
+    it("demotes with the same add and treats a contradicting echo as unavailable", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(usersOk())
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members: [
+              { user_id: memberUserId, channel_role: "channel_moderator" },
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.addMembers({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          channelRole: "channel_member",
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      expect(requestBody(fetchMock, 2)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: memberUserId, channel_role: "channel_member" },
+        ],
+      });
+    });
+
+    it("refuses a channel role on a group channel or an unknown role before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.addMembers({
+          channelId: groupChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          channelRole: "channel_moderator",
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      await expect(
+        gateway.assignMemberChannelRoles({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          assignments: [
+            {
+              streamUserId: memberUserId,
+              channelRole: "admin" as "channel_member",
+            },
+          ],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("assigns roles to existing members in one update", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await gateway.assignMemberChannelRoles({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        assignments: [
+          { streamUserId: hostUserId, channelRole: "channel_moderator" },
+          { streamUserId: memberUserId, channelRole: "channel_member" },
+        ],
+        signal: signal(),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: hostUserId, channel_role: "channel_moderator" },
+          { user_id: memberUserId, channel_role: "channel_member" },
+        ],
+      });
+    });
+
+    it("reads member roles read-only and drops members that were not asked for", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          members: [
+            { user_id: hostUserId, channel_role: "channel_member" },
+            { user_id: memberUserId, channel_role: "channel_moderator" },
+          ],
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.readMemberChannelRoles({
+          channelId: communityChannelId,
+          streamUserIds: [hostUserId],
+          signal: signal(),
+        }),
+      ).resolves.toEqual([
+        { streamUserId: hostUserId, channelRole: "channel_member" },
+      ]);
+      const url = requestedUrl(fetchMock, 0);
+      expect(url.pathname).toBe("/api/v2/chat/members");
+      expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
+        type: "messaging",
+        id: communityChannelId,
+        filter_conditions: { id: { $in: [hostUserId] } },
+        sort: [{ field: "created_at", direction: 1 }],
+        limit: 1,
+      });
+    });
+
+    it("fails closed without credentials", async () => {
+      const gateway = createUnavailableStreamCommunityChannelGateway();
+      await expect(
+        gateway.readMemberChannelRoles({
+          channelId: communityChannelId,
+          streamUserIds: [hostUserId],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      await expect(
+        gateway.assignMemberChannelRoles({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          assignments: [
+            { streamUserId: hostUserId, channelRole: "channel_moderator" },
+          ],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    });
+  });
+
   describe("community channel presence (Decision 0047)", () => {
     function memberPage(online: readonly boolean[]): Record<string, unknown> {
       return {

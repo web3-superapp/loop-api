@@ -32,6 +32,7 @@ function job(
     channelCreatedByStreamUserId: creatorStreamUserId,
     memberStreamUserId: creatorStreamUserId,
     kind: "add" as const,
+    memberChannelRole: "channel_member" as const,
     attempts: 1,
     channelProvisioned: true,
     channelName: "Frog Holders",
@@ -847,5 +848,62 @@ describe("community channel sync worker lane", () => {
     expect(recordChannelActivity).toHaveBeenCalledWith(
       expect.objectContaining({ communityId, messageCount: 0 }),
     );
+  });
+
+  describe("Stream channel role (Decision 0091)", () => {
+    async function runAdd(
+      overrides: Partial<CommunityChannelSyncJobRecord>,
+    ): Promise<ReturnType<typeof vi.fn>> {
+      const { repository } = repositoryFake([job(overrides)]);
+      const { gateway, addMembers, removeMembers } = gatewayMocks();
+      await createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+      }).runOnce();
+      expect(removeMembers).not.toHaveBeenCalled();
+      return addMembers;
+    }
+
+    it("joins a plain member as channel_member", async () => {
+      const addMembers = await runAdd({ memberChannelRole: "channel_member" });
+      expect(addMembers).toHaveBeenCalledTimes(1);
+      expect(addMembers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: streamChannelId,
+          memberStreamUserIds: [creatorStreamUserId],
+          channelRole: "channel_member",
+        }),
+      );
+    });
+
+    it("adds an owner or a promoted admin as channel_moderator through the same add", async () => {
+      const addMembers = await runAdd({
+        memberChannelRole: "channel_moderator",
+      });
+      expect(addMembers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memberStreamUserIds: [creatorStreamUserId],
+          channelRole: "channel_moderator",
+        }),
+      );
+    });
+
+    it("removes a leaving or banned member without assigning any role", async () => {
+      const { repository } = repositoryFake([
+        job({ kind: "remove", memberChannelRole: "channel_moderator" }),
+      ]);
+      const { gateway, addMembers, removeMembers } = gatewayMocks();
+      await createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+      }).runOnce();
+      expect(addMembers).not.toHaveBeenCalled();
+      expect(removeMembers).toHaveBeenCalledTimes(1);
+      expect(removeMembers.mock.calls[0]?.[0]).not.toHaveProperty(
+        "channelRole",
+      );
+    });
   });
 });

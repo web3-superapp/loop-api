@@ -534,6 +534,16 @@ export interface StreamCommunityMemberPersona {
   readonly alias: string;
 }
 
+/**
+ * Decision 0091: the Stream channel role a LOOP community member holds in
+ * the official channel. Owner and admin are `channel_moderator` (the role
+ * the `messaging` grants let pin); every other member is `channel_member`.
+ */
+export type StreamCommunityChannelRole = "channel_moderator" | "channel_member";
+
+export const streamCommunityChannelRoles: readonly StreamCommunityChannelRole[] =
+  Object.freeze(["channel_moderator", "channel_member"]);
+
 export interface StreamCommunityChannelMemberInput {
   readonly channelId: string;
   readonly actingStreamUserId: string;
@@ -543,7 +553,42 @@ export interface StreamCommunityChannelMemberInput {
    * `memberStreamUserIds`; ignored on remove.
    */
   readonly memberPersonas?: readonly StreamCommunityMemberPersona[];
+  /**
+   * Decision 0091: the channel role every member of this add must hold.
+   * It is sent on `add_members` and then confirmed with one `assign_roles`,
+   * because Stream keeps the role of a member that is already in the
+   * channel. Only valid on an official community channel; ignored on remove.
+   */
+  readonly channelRole?: StreamCommunityChannelRole;
   readonly signal: AbortSignal;
+}
+
+export interface StreamCommunityChannelRoleAssignment {
+  readonly streamUserId: string;
+  readonly channelRole: StreamCommunityChannelRole;
+}
+
+export interface AssignStreamCommunityChannelRolesInput {
+  readonly channelId: string;
+  readonly actingStreamUserId: string;
+  readonly assignments: readonly StreamCommunityChannelRoleAssignment[];
+  readonly signal: AbortSignal;
+}
+
+export interface ReadStreamCommunityMemberRolesInput {
+  readonly channelId: string;
+  readonly streamUserIds: readonly string[];
+  readonly signal: AbortSignal;
+}
+
+/**
+ * One member as Stream reports it. `channelRole` is whatever Stream
+ * returned (it may be a role LOOP never assigns); a requested user that is
+ * not a member of the channel is absent from the result.
+ */
+export interface StreamCommunityMemberRole {
+  readonly streamUserId: string;
+  readonly channelRole: string | null;
 }
 
 export interface StreamCommunityChannelProjection {
@@ -668,6 +713,22 @@ export interface StreamCommunityChannelGateway {
   projectMemberPersona(
     input: ProjectStreamCommunityMemberPersonaInput,
   ): Promise<void>;
+  /**
+   * Decision 0091: sets the channel role of members that are already in the
+   * official channel with one `assign_roles` update. A member Stream echoes
+   * with a different role is `unavailable`; a member not in the channel is
+   * a deterministic rejection.
+   */
+  assignMemberChannelRoles(
+    input: AssignStreamCommunityChannelRolesInput,
+  ): Promise<void>;
+  /**
+   * Decision 0091, read-only: the Stream channel role of up to one page of
+   * members of an official channel.
+   */
+  readMemberChannelRoles(
+    input: ReadStreamCommunityMemberRolesInput,
+  ): Promise<readonly StreamCommunityMemberRole[]>;
   readCommunityChannelPresence(
     input: ReadStreamCommunityChannelPresenceInput,
   ): Promise<StreamCommunityChannelPresenceResult>;
@@ -886,9 +947,13 @@ function parseCommunityMemberInput(
       "actingStreamUserId",
       "memberStreamUserIds",
       "memberPersonas",
+      "channelRole",
       "signal",
     ]) ||
     !isMembershipChannelId(value["channelId"]) ||
+    (value["channelRole"] !== undefined &&
+      (!isCommunityChannelRole(value["channelRole"]) ||
+        !isCommunityChannelId(value["channelId"]))) ||
     !isStreamUserId(value["actingStreamUserId"]) ||
     !Array.isArray(value["memberStreamUserIds"]) ||
     value["memberStreamUserIds"].length < 1 ||
@@ -900,12 +965,14 @@ function parseCommunityMemberInput(
     return unavailable();
   }
   const memberStreamUserIds = Object.freeze([...value["memberStreamUserIds"]]);
+  const channelRole = value["channelRole"];
   const rawPersonas = value["memberPersonas"];
   if (rawPersonas === undefined) {
     return Object.freeze({
       channelId: value["channelId"],
       actingStreamUserId: value["actingStreamUserId"],
       memberStreamUserIds,
+      ...(channelRole === undefined ? {} : { channelRole }),
       signal: parseSignal(value["signal"]),
     });
   }
@@ -928,8 +995,148 @@ function parseCommunityMemberInput(
     actingStreamUserId: value["actingStreamUserId"],
     memberStreamUserIds,
     memberPersonas,
+    ...(channelRole === undefined ? {} : { channelRole }),
     signal: parseSignal(value["signal"]),
   });
+}
+
+function isCommunityChannelRole(
+  value: unknown,
+): value is StreamCommunityChannelRole {
+  return (
+    typeof value === "string" &&
+    (streamCommunityChannelRoles as readonly string[]).includes(value)
+  );
+}
+
+function parseAssignRolesInput(
+  value: unknown,
+): AssignStreamCommunityChannelRolesInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "channelId",
+      "actingStreamUserId",
+      "assignments",
+      "signal",
+    ]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !isStreamUserId(value["actingStreamUserId"]) ||
+    !Array.isArray(value["assignments"]) ||
+    value["assignments"].length < 1 ||
+    value["assignments"].length > maximumCommunityChannelMemberBatch
+  ) {
+    return unavailable();
+  }
+  const seen = new Set<string>();
+  const assignments = (value["assignments"] as unknown[]).map((entry) => {
+    if (
+      !isRecord(entry) ||
+      !hasExactKeys(entry, ["streamUserId", "channelRole"]) ||
+      !isStreamUserId(entry["streamUserId"]) ||
+      !isCommunityChannelRole(entry["channelRole"]) ||
+      seen.has(entry["streamUserId"])
+    ) {
+      return unavailable();
+    }
+    seen.add(entry["streamUserId"]);
+    return Object.freeze({
+      streamUserId: entry["streamUserId"],
+      channelRole: entry["channelRole"],
+    });
+  });
+  return Object.freeze({
+    channelId: value["channelId"],
+    actingStreamUserId: value["actingStreamUserId"],
+    assignments: Object.freeze(assignments),
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+function parseReadMemberRolesInput(
+  value: unknown,
+): ReadStreamCommunityMemberRolesInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["channelId", "streamUserIds", "signal"]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !Array.isArray(value["streamUserIds"]) ||
+    value["streamUserIds"].length < 1 ||
+    value["streamUserIds"].length > maximumCommunityChannelMemberBatch ||
+    !value["streamUserIds"].every(isStreamUserId) ||
+    new Set(value["streamUserIds"]).size !== value["streamUserIds"].length
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    streamUserIds: Object.freeze([...value["streamUserIds"]]),
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+/**
+ * The `assign_roles` echo: every echoed member that was assigned must carry
+ * the requested role. A member Stream does not echo is not contradicted, so
+ * it is accepted; an echo with another role is `unavailable` (retried).
+ */
+function validateAssignedRoles(
+  response: unknown,
+  assignments: readonly StreamCommunityChannelRoleAssignment[],
+): void {
+  if (!isRecord(response)) {
+    return unavailable();
+  }
+  const members = response["members"];
+  if (members === undefined) {
+    return;
+  }
+  if (!Array.isArray(members)) {
+    return unavailable();
+  }
+  const wanted = new Map(
+    assignments.map((entry) => [entry.streamUserId, entry.channelRole]),
+  );
+  for (const member of members as unknown[]) {
+    const userId = readEchoedMemberUserId(member);
+    const role = isRecord(member) ? member["channel_role"] : undefined;
+    const expected = userId === undefined ? undefined : wanted.get(userId);
+    if (
+      expected !== undefined &&
+      typeof role === "string" &&
+      role !== expected
+    ) {
+      return unavailable();
+    }
+  }
+}
+
+function reduceMemberRoles(
+  value: unknown,
+  requested: readonly string[],
+): readonly StreamCommunityMemberRole[] {
+  if (!isRecord(value) || !Array.isArray(value["members"])) {
+    return projectionMismatch();
+  }
+  const allowed = new Set(requested);
+  const result: StreamCommunityMemberRole[] = [];
+  for (const member of value["members"] as unknown[]) {
+    const userId = readEchoedMemberUserId(member);
+    if (userId === undefined || !isRecord(member)) {
+      return projectionMismatch();
+    }
+    if (!allowed.has(userId)) {
+      continue;
+    }
+    const role = member["channel_role"];
+    result.push(
+      Object.freeze({
+        streamUserId: userId,
+        channelRole: typeof role === "string" && role !== "" ? role : null,
+      }),
+    );
+  }
+  return Object.freeze(result);
 }
 
 function parseProjectPersonaInput(
@@ -1300,6 +1507,8 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     addMembers: unavailablePromise,
     removeMembers: unavailablePromise,
     projectMemberPersona: unavailablePromise,
+    assignMemberChannelRoles: unavailablePromise,
+    readMemberChannelRoles: unavailablePromise,
     readCommunityChannelPresence: unavailablePromise,
     readCommunityChannelActivity: unavailablePromise,
     readCommunityChannelMessages: unavailablePromise,
@@ -1315,6 +1524,24 @@ export function createStreamCommunityChannelGateway(
   const client = new StreamClient(config.apiKey, config.apiSecret, {
     timeout: streamProviderTimeoutMilliseconds,
   });
+
+  async function assignRoles(
+    input: AssignStreamCommunityChannelRolesInput,
+  ): Promise<void> {
+    input.signal.throwIfAborted();
+    const response = await client.chat
+      .channel(streamChannelType, input.channelId)
+      .update({
+        user_id: input.actingStreamUserId,
+        assign_roles: input.assignments.map((entry) => ({
+          user_id: entry.streamUserId,
+          channel_role: entry.channelRole,
+        })),
+      });
+    input.signal.throwIfAborted();
+    validateMembershipChannelResponse(response, input.channelId);
+    validateAssignedRoles(response, input.assignments);
+  }
 
   async function mutateMembers(
     rawInput: StreamCommunityChannelMemberInput,
@@ -1349,9 +1576,15 @@ export function createStreamCommunityChannelGateway(
                 user_id: input.actingStreamUserId,
                 add_members: input.memberStreamUserIds.map((userId) => {
                   const persona = personas.get(userId);
-                  return persona === undefined
-                    ? { user_id: userId }
-                    : { user_id: userId, custom: personaCustom(persona) };
+                  return {
+                    user_id: userId,
+                    ...(input.channelRole === undefined
+                      ? {}
+                      : { channel_role: input.channelRole }),
+                    ...(persona === undefined
+                      ? {}
+                      : { custom: personaCustom(persona) }),
+                  };
                 }),
               }
             : {
@@ -1364,6 +1597,20 @@ export function createStreamCommunityChannelGateway(
         response,
         input.channelId,
       );
+      const channelRole = input.channelRole;
+      if (direction === "add" && channelRole !== undefined) {
+        // Stream leaves the role of an existing member untouched on
+        // `add_members`, so a promotion or demotion is made explicit here.
+        await assignRoles({
+          channelId: input.channelId,
+          actingStreamUserId: input.actingStreamUserId,
+          assignments: input.memberStreamUserIds.map((streamUserId) => ({
+            streamUserId,
+            channelRole,
+          })),
+          signal: input.signal,
+        });
+      }
       return Object.freeze({
         ...projection,
         confirmedPersonaStreamUserIds: confirmedPersonas(response, [
@@ -1454,6 +1701,47 @@ export function createStreamCommunityChannelGateway(
           });
         input.signal.throwIfAborted();
         validatePersonaProjectionResponse(response, input);
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async assignMemberChannelRoles(
+      rawInput: AssignStreamCommunityChannelRolesInput,
+    ): Promise<void> {
+      const input = parseAssignRolesInput(rawInput);
+      try {
+        await assignRoles(input);
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async readMemberChannelRoles(
+      rawInput: ReadStreamCommunityMemberRolesInput,
+    ): Promise<readonly StreamCommunityMemberRole[]> {
+      const input = parseReadMemberRolesInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        // Read-only: a member query neither creates the channel nor changes
+        // its membership.
+        const response = await client.chat
+          .channel(streamChannelType, input.channelId)
+          .queryMembers({
+            payload: {
+              filter_conditions: { id: { $in: [...input.streamUserIds] } },
+              sort: [{ field: "created_at", direction: 1 }],
+              limit: input.streamUserIds.length,
+            },
+          });
+        input.signal.throwIfAborted();
+        return reduceMemberRoles(response, input.streamUserIds);
       } catch (error) {
         if (error instanceof StreamChannelProjectionMismatchError) {
           throw error;
