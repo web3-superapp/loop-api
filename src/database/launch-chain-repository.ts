@@ -74,7 +74,31 @@ function unavailable(): LaunchChainRepositoryUnavailableError {
   return new LaunchChainRepositoryUnavailableError();
 }
 
+/**
+ * Carries an error thrown by a caller-supplied callback (the `build` of
+ * `createIntent`) through the repository's own `try`, so `translate()` never
+ * rewrites a caller refusal (a 409/503 `V2ApiError`, a contract read error)
+ * into a repository outage (S104).
+ */
+class CallerCallbackError extends Error {
+  constructor(readonly callerError: unknown) {
+    super("Caller callback failed");
+    this.name = "CallerCallbackError";
+  }
+}
+
+async function runCallerCallback<T>(callback: () => Promise<T>): Promise<T> {
+  try {
+    return await callback();
+  } catch (error) {
+    throw new CallerCallbackError(error);
+  }
+}
+
 function translate(error: unknown): never {
+  if (error instanceof CallerCallbackError) {
+    throw error.callerError;
+  }
   if (
     error instanceof LaunchChainRepositoryUnavailableError ||
     error instanceof LaunchIntentIdempotencyConflictError ||
@@ -83,7 +107,7 @@ function translate(error: unknown): never {
   ) {
     throw error;
   }
-  throw unavailable();
+  throw new LaunchChainRepositoryUnavailableError({ cause: error });
 }
 
 const checkpointRowSchema = z.object({
@@ -1300,7 +1324,9 @@ export function createPostgresLaunchChainRepository(
         }
         // Chain reads happen outside any transaction; a concurrent replay
         // of the same key loses the unique idempotency_record_id race.
-        const built = await input.build();
+        // Refusals thrown by `build` are the caller's, not a repository
+        // failure: they pass through `translate()` unchanged.
+        const built = await runCallerCallback(input.build);
         const inserted = await pool.query({
           text: `
             insert into public.launch_intents (
