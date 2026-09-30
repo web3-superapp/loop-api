@@ -13,7 +13,20 @@ export interface ErrorLogSummary {
   readonly errorName: string;
   readonly errorMessage: string;
   readonly errorStack: readonly string[];
+  /**
+   * The `cause` chain (outermost first), name and redacted message only; no
+   * stack, no driver fields such as a PostgreSQL `detail` or SQL parameters.
+   * Absent when the error has no `cause`.
+   */
+  readonly errorCause?: readonly ErrorCauseSummary[];
 }
+
+export interface ErrorCauseSummary {
+  readonly errorName: string;
+  readonly errorMessage: string;
+}
+
+export const errorLogCauseDepthLimit = 4;
 
 export const errorLogStackFrameLimit = 10;
 const errorLogMessageLimit = 600;
@@ -55,9 +68,40 @@ export function summarizeErrorForLog(error: unknown): ErrorLogSummary {
     .filter((line) => line.startsWith("at "))
     .slice(0, errorLogStackFrameLimit)
     .map((line) => redactErrorText(line));
+  const causes = summarizeCauseChain(error);
   return Object.freeze({
     errorName: error.name,
     errorMessage: redactErrorText(error.message),
     errorStack: Object.freeze(frames),
+    ...(causes.length === 0 ? {} : { errorCause: Object.freeze(causes) }),
   });
+}
+
+function summarizeCauseChain(error: Error): ErrorCauseSummary[] {
+  const causes: ErrorCauseSummary[] = [];
+  const seen = new Set<unknown>([error]);
+  let current: unknown = error.cause;
+  while (
+    current !== undefined &&
+    current !== null &&
+    !seen.has(current) &&
+    causes.length < errorLogCauseDepthLimit
+  ) {
+    seen.add(current);
+    if (current instanceof Error) {
+      causes.push(
+        Object.freeze({
+          errorName: current.name,
+          errorMessage: redactErrorText(current.message),
+        }),
+      );
+      current = current.cause;
+    } else {
+      causes.push(
+        Object.freeze({ errorName: typeof current, errorMessage: "" }),
+      );
+      break;
+    }
+  }
+  return causes;
 }

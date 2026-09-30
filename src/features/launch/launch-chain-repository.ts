@@ -412,8 +412,10 @@ export interface LaunchChainRepository {
 export class LaunchChainRepositoryUnavailableError extends Error {
   readonly code = "launch_chain_repository_unavailable";
 
-  constructor() {
-    super("The Launch chain repository is unavailable");
+  constructor(options?: { readonly cause?: unknown }) {
+    // `cause` is for the operator log only (redacted there); it never
+    // reaches a response body.
+    super("The Launch chain repository is unavailable", options);
     this.name = "LaunchChainRepositoryUnavailableError";
   }
 }

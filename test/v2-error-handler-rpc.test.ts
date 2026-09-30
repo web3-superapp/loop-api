@@ -17,6 +17,7 @@ import { createUnavailablePerpIntentRepository } from "../src/database/perp-inte
 import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import { LaunchChainRepositoryUnavailableError } from "../src/features/launch/launch-chain-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import {
   BscReadUnavailableError,
@@ -120,6 +121,13 @@ describe("V2 error handler: chain reads and internal errors (Decision 0082)", ()
       throw new TypeError(
         `boom at https://user:pw@rpc.example.com${rpcKeyPath}?apikey=abc123 for ${address} with Bearer eyJhbGciOi.payload.sig`,
       );
+    });
+    app.get("/v2/test-internal-caused", () => {
+      throw new LaunchChainRepositoryUnavailableError({
+        cause: new RangeError(
+          "relation failed at postgres://loop:pw@db.example.com/loop",
+        ),
+      });
     });
     apps.push(app);
     return app;
@@ -225,6 +233,34 @@ describe("V2 error handler: chain reads and internal errors (Decision 0082)", ()
     expect(serialized).not.toContain("eyJhbGciOi");
   });
 
+  it("logs the cause of a repository-unavailable error without changing the response (S104)", async () => {
+    const logLines: string[] = [];
+    const app = await createApp(logLines);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/test-internal-caused",
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      code: "INTERNAL_ERROR",
+      detailsSafe: null,
+    });
+    expect(response.body).not.toContain("relation failed");
+    const failure = logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry["msg"] === "Unhandled error in V2 request");
+    expect(failure?.["errorName"]).toBe(
+      "LaunchChainRepositoryUnavailableError",
+    );
+    expect(failure?.["errorCause"]).toEqual([
+      {
+        errorName: "RangeError",
+        errorMessage: "relation failed at postgres://db.example.com/[redacted]",
+      },
+    ]);
+    expect(logLines.join("")).not.toContain("loop:pw");
+  });
+
   it("does not log a mapped read failure as an internal error", async () => {
     const logLines: string[] = [];
     const app = await createApp(logLines);
@@ -254,6 +290,37 @@ describe("error log redaction and transport classification", () => {
       errorMessage: "",
       errorStack: [],
     });
+  });
+
+  it("summarizes the cause chain by name and redacted message only (S104)", () => {
+    const root = new TypeError(
+      "connect failed https://db.example.com/secret?password=hunter2",
+    );
+    const middle = new Error("middle", { cause: root });
+    const outer = new Error("The Launch chain repository is unavailable", {
+      cause: middle,
+    });
+    const summary = summarizeErrorForLog(outer);
+    expect(summary.errorCause).toEqual([
+      { errorName: "Error", errorMessage: "middle" },
+      {
+        errorName: "TypeError",
+        errorMessage: "connect failed https://db.example.com/[redacted]",
+      },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain("hunter2");
+    expect(summarizeErrorForLog(new Error("no cause"))).not.toHaveProperty(
+      "errorCause",
+    );
+    const looped = new Error("a");
+    const other = new Error("b", { cause: looped });
+    (looped as { cause?: unknown }).cause = other;
+    expect(summarizeErrorForLog(looped).errorCause).toEqual([
+      { errorName: "Error", errorMessage: "b" },
+    ]);
+    expect(
+      summarizeErrorForLog(new Error("x", { cause: "text" })).errorCause,
+    ).toEqual([{ errorName: "string", errorMessage: "" }]);
   });
 
   it("recognizes viem transport failures anywhere in the cause chain", () => {
