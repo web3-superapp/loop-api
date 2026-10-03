@@ -1,3 +1,5 @@
+import { createPostgresOpsRepository } from "./ops-repository.js";
+import type { OpsRepository } from "../features/ops/ops-contract.js";
 import pg from "pg";
 import { z } from "zod";
 
@@ -135,6 +137,7 @@ const privyUserIdSchema = z.string().min(1).max(255);
 const internalUserRowSchema = z.object({ id: z.string().uuid() }).strict();
 
 export interface Database {
+  readonly ops?: OpsRepository;
   readonly internalUsers: InternalUserRepository;
   readonly deviceSessions: DeviceSessionRepository;
   readonly aliasDirectory?: AliasDirectoryRepository;
@@ -352,6 +355,12 @@ export function createPostgresDatabase(
     createPostgresCommunityChannelPersonaRepository(pool);
 
   return {
+    ops: createPostgresOpsRepository(
+      pool,
+      config.v2CommunityChannelMemberCap === undefined
+        ? {}
+        : { communityMemberCap: config.v2CommunityChannelMemberCap },
+    ),
     internalUsers,
     deviceSessions,
     aliasDirectory,

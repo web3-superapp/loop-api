@@ -10,3 +10,5 @@ server/app-integrations-p0/adapter.mjs
 test/fixtures/s9-baseline/
 # Byte-exact Launch baselines from 1ab26d7 (Decision 0076); never reformat.
 test/fixtures/s83a-baseline/
+
+**/._*

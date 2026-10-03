@@ -46,8 +46,8 @@ describe("000044 Launch claim / refund Intent migration contract (Decision 0087)
     expect(statement).toContain("drop table public.launch_settlement_records");
   });
 
-  it("is followed only by 000045 (Decision 0089) and its table is a required relation", () => {
-    expect(latestMigrationName).toBe("000045_v2_token_logo_cache");
+  it("remains required after later logo and operations migrations", () => {
+    expect(latestMigrationName).toBe("000049_ops_bootstrap_audit");
     expect(requiredDatabaseRelations).toContain(
       "public.launch_settlement_records",
     );

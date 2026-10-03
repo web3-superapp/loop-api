@@ -28,6 +28,11 @@ export const openApiV2ArtifactPath = resolve(
   "openapi/loop-api.v2.json",
 );
 
+export const openApiOpsArtifactPath = resolve(
+  repositoryRoot,
+  "openapi/loop-api.ops.json",
+);
+
 function schemaOnlyDependencyInvoked(): never {
   throw new Error("Schema-only dependency invoked");
 }
@@ -52,7 +57,7 @@ function createSchemaOnlyDatabase(): Database {
 }
 
 async function renderContractSurface(
-  contractSurface: "v1" | "v2",
+  contractSurface: "v1" | "v2" | "ops",
 ): Promise<string> {
   const config = loadConfig({
     NODE_ENV: "production",
@@ -69,7 +74,7 @@ async function renderContractSurface(
   });
   const app = await buildApp({
     config,
-    contractSurface,
+    contractSurface: contractSurface === "ops" ? "runtime" : contractSurface,
     database: createSchemaOnlyDatabase(),
     privyAccessTokenVerifier: createUnavailablePrivyAccessTokenVerifier(),
     logger: false,
@@ -77,7 +82,22 @@ async function renderContractSurface(
 
   try {
     await app.ready();
-    return await format(JSON.stringify(app.swagger()), { parser: "json" });
+    const doc = app.swagger();
+    if (contractSurface === "ops") {
+      doc.paths = Object.fromEntries(
+        Object.entries(doc.paths ?? {}).filter(([path]) =>
+          path.startsWith("/ops/api/"),
+        ),
+      );
+      doc.tags = [
+        {
+          name: "Operations",
+          description: "Development operations with scoped server grants",
+        },
+      ];
+      doc.info = { ...doc.info, title: "LOOP Operations API" };
+    }
+    return await format(JSON.stringify(doc), { parser: "json" });
   } finally {
     await app.close();
   }
@@ -89,6 +109,10 @@ export function renderOpenApiArtifact(): Promise<string> {
 
 export function renderOpenApiV2Artifact(): Promise<string> {
   return renderContractSurface("v2");
+}
+
+export function renderOpenApiOpsArtifact(): Promise<string> {
+  return renderContractSurface("ops");
 }
 
 async function writeArtifact(path: string, contents: string): Promise<void> {
@@ -146,25 +170,26 @@ async function main(): Promise<void> {
     throw new Error("Unexpected OpenAPI generator arguments");
   }
 
-  const [v1Contents, v2Contents] = await Promise.all([
+  const [v1Contents, v2Contents, opsContents] = await Promise.all([
     renderOpenApiArtifact(),
     renderOpenApiV2Artifact(),
+    renderOpenApiOpsArtifact(),
   ]);
 
   if (mode === "--write") {
     await Promise.all([
       writeArtifact(openApiArtifactPath, v1Contents),
       writeArtifact(openApiV2ArtifactPath, v2Contents),
+      writeArtifact(openApiOpsArtifactPath, opsContents),
     ]);
-    process.stdout.write(
-      "Generated openapi/loop-api.v1.json and openapi/loop-api.v2.json\n",
-    );
+    process.stdout.write("Generated V1, V2 and Operations OpenAPI artifacts\n");
     return;
   }
 
   await Promise.all([
     checkArtifact(openApiArtifactPath, v1Contents),
     checkArtifact(openApiV2ArtifactPath, v2Contents),
+    checkArtifact(openApiOpsArtifactPath, opsContents),
   ]);
   process.stdout.write("OpenAPI artifacts are current\n");
 }

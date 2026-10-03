@@ -1,3 +1,7 @@
+import { registerOpsWebRoutes } from "./routes/ops-web.js";
+import { createPostgresMarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
+import { createPostgresChainRegistryRepository } from "./database/chain-registry-repository.js";
+import { registerOpsRoutes } from "./routes/ops.js";
 import { randomUUID } from "node:crypto";
 
 import helmet from "@fastify/helmet";
@@ -2007,6 +2011,34 @@ export async function buildApp(
       cursorCodec: v2CursorCodec,
     });
   }
+
+  if (contractSurface === "runtime")
+    registerOpsRoutes(app, {
+      authenticate: authenticationHooks.authenticateLoopBearer,
+      repository: database.ops,
+      enabled: config.nodeEnv !== "production",
+      ...(database.chainRegistry
+        ? {
+            miningRuntime: {
+              registry: database.chainRegistry,
+              prices: marketFactService,
+              forTransaction: (pool) => ({
+                registry: createPostgresChainRegistryRepository(pool),
+                prices: createMarketFactService({
+                  config: config.market,
+                  cache: createPostgresMarketFactCacheRepository(pool),
+                  pairsProvider: createMarketProviders(config.market, "worker")
+                    .pairs,
+                  securityProvider: null,
+                  candlesProvider: null,
+                }),
+              }),
+            },
+          }
+        : {}),
+    });
+
+  if (contractSurface === "runtime") void app.register(registerOpsWebRoutes);
 
   if (config.apiDocsEnabled) {
     app.get(

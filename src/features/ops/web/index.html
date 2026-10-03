@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>LOOP · 运营工作台</title>
+    <link rel="stylesheet" href="/ops/styles.css" />
+    <script src="/ops/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到工作区</a>
+    <aside class="sidebar">
+      <a class="brand" href="/ops">LOOP<span>OPERATIONS</span></a>
+      <div class="workspace-label">平台工作台 <span>↗</span></div>
+      <nav id="navigation" aria-label="工作台导航"></nav>
+      <div class="sidebar-foot">
+        <span class="status-dot"></span> Development / Testnet
+        <p>配置有版本 · 操作可追溯</p>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <span id="mode">运营控制台 / 开发环境</span>
+        <div id="identity">尚未验证身份</div>
+      </header>
+      <main id="main" tabindex="-1"></main>
+      <footer>LOOP 运营工作台 <span>合约与资金执行仅交接</span></footer>
+    </div>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <dialog id="drawer" aria-labelledby="drawer-title">
+      <div class="drawer-head">
+        <div>
+          <p class="eyebrow">LOOP / 工作详情</p>
+          <h2 id="drawer-title"></h2>
+        </div>
+        <button id="close-drawer" class="icon-button" aria-label="关闭详情">
+          ×
+        </button>
+      </div>
+      <div id="drawer-body"></div>
+    </dialog>
+  </body>
+</html>

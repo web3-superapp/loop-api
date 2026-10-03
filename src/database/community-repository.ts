@@ -1246,11 +1246,11 @@ export function createPostgresCommunityRepository(
             left join public.mining_snapshot_powers as power
               on power.snapshot_id = $7::uuid
               and power.owner_user_id = member.owner_user_id
-              and power.asset_id = community.bound_asset_key
+              and power.asset_id = weight.bound_asset_id
             where weight.community_id = community.community_id
               and weight.status = 'approved'
               and weight.config_version = $8::text
-              and community.bound_asset_key is not null
+              and weight.bound_asset_id is not null
             group by weight.weight, weight.config_version, weight.reviewed_at
           ) as ordering on true`
         : input.sort === "activity"

@@ -70,7 +70,7 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
     const migration = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by id desc limit 1",
     );
-    expect(migration.rows[0]?.name).toBe("000045_v2_token_logo_cache");
+    expect(migration.rows[0]?.name).toBe("000049_ops_bootstrap_audit");
     const key = await pool.query<{ column_name: string }>(`
       select a.attname as column_name
       from pg_index i
