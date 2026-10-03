@@ -362,12 +362,12 @@ const communityStandingsSql = `
     select
       c.community_id,
       c.name as community_name,
-      c.bound_asset_key as bound_asset_id,
+      w.bound_asset_id,
       w.weight
     from public.communities as c
     join public.community_mining_weights as w
       on w.community_id = c.community_id
-    where c.bound_asset_key is not null
+    where w.bound_asset_id is not null
       and w.status = 'approved'
       and w.config_version = $2
   ),
@@ -445,6 +445,11 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const configVersion = configVersionSchema.parse(rawInput.configVersion);
         uuidV4Schema.parse(rawInput.requestId);
         return await withV2Transaction(pool, unavailable, async (client) => {
+          // Serialize global activation before locking any formula row. Ops
+          // publication takes this same lock before expected-version checks.
+          await client.query({
+            text: "select pg_advisory_xact_lock(hashtextextended('loop:mining:formula-publication', 0))",
+          });
           const current = await client.query({
             text: `
               select ${formulaColumns}
@@ -499,7 +504,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             select
               c.community_id,
               c.name as community_name,
-              c.bound_asset_key as bound_asset_id,
+              case when w.weight_id is null then c.bound_asset_key
+                else w.bound_asset_id end as bound_asset_id,
               coalesce(w.status, 'pending_review') as status,
               w.weight,
               w.config_version,
@@ -507,6 +513,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             from public.communities as c
             left join public.community_mining_weights as w
               on w.community_id = c.community_id
+              and w.config_version = (
+                select config_version from public.mining_formula_versions
+                where status = 'approved' and effective_at <= clock_timestamp()
+              )
             where c.community_id = $1
           `,
           values: [communityId],
@@ -539,7 +549,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             select
               c.community_id,
               c.name as community_name,
-              c.bound_asset_key as bound_asset_id,
+              case when w.weight_id is null then c.bound_asset_key
+                else w.bound_asset_id end as bound_asset_id,
               case
                 when w.config_version = $1 then w.status
                 else 'pending_review'
@@ -551,8 +562,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 as reviewed_at
             from public.communities as c
             left join public.community_mining_weights as w
-              on w.community_id = c.community_id
-            where c.bound_asset_key is not null
+              on w.community_id = c.community_id and w.config_version = $1
+            where (w.weight_id is not null and w.bound_asset_id is not null)
+              or (w.weight_id is null and c.bound_asset_key is not null)
             order by c.community_id
           `,
           values: [configVersion],
@@ -871,7 +883,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               select ${formulaColumns}
               from public.mining_formula_versions
               where config_version = $1
-              for share
+              for update
             `,
             values: [configVersion],
           });
@@ -880,7 +892,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             throw new MiningFormulaNotFoundError();
           }
           const formula = mapFormula(versionRaw);
-          if (formula.status === "retired") {
+          if (formula.status !== "pending_approval") {
             throw new MiningFormulaStateError();
           }
           const range = formula.weightRange.community.range;
@@ -912,10 +924,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             text: `
               select 1
               from public.community_mining_weights as w
-              join public.communities as c on c.community_id = w.community_id
               where w.status = 'approved'
                 and w.config_version = $1
-                and c.bound_asset_key = $2
+                and w.bound_asset_id = $2
                 and w.community_id <> $3
               limit 1
             `,
@@ -927,25 +938,31 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
           await client.query({
             text: `
               insert into public.community_mining_weights (
-                community_id, status, weight, config_version, reviewed_at
+                community_id, status, weight, config_version, reviewed_at, bound_asset_id
               )
-              values ($1, 'approved', $2, $3, clock_timestamp())
-              on conflict (community_id) do update
+              values ($1, 'approved', $2, $3, clock_timestamp(), $4)
+              on conflict (config_version, community_id) do update
               set
                 status = 'approved',
                 weight = excluded.weight,
+                bound_asset_id = excluded.bound_asset_id,
                 config_version = excluded.config_version,
                 reviewed_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             `,
-            values: [communityId, weight, configVersion],
+            values: [
+              communityId,
+              weight,
+              configVersion,
+              communityRow.bound_asset_key,
+            ],
           });
           const stored = await client.query({
             text: `
               select
                 c.community_id,
                 c.name as community_name,
-                c.bound_asset_key as bound_asset_id,
+                w.bound_asset_id,
                 w.status,
                 w.weight,
                 w.config_version,
@@ -953,9 +970,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               from public.communities as c
               join public.community_mining_weights as w
                 on w.community_id = c.community_id
-              where c.community_id = $1
+              where c.community_id = $1 and w.config_version = $2
             `,
-            values: [communityId],
+            values: [communityId, configVersion],
           });
           return mapWeight(stored.rows[0]);
         });

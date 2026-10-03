@@ -2392,7 +2392,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
             config_version, formula, weight_range, price_guard_rules, status,
             effective_at, approved_at
           )
-          values ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, 'approved', now(), now())
+          values ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, 'pending_approval', null, null)
           on conflict (config_version) do nothing
         `,
         values: [
@@ -2489,15 +2489,19 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       await pool.query({
         text: `
           insert into public.community_mining_weights (
-            community_id, status, weight, config_version, reviewed_at
+            community_id, status, weight, config_version, reviewed_at, bound_asset_id
           )
-          values ($1, 'approved', '2', $3, now()), ($2, 'approved', '0.5', $3, now())
-          on conflict (community_id) do update set
+          values ($1, 'approved', '2', $3, now(), $4), ($2, 'approved', '0.5', $3, now(), $4)
+          on conflict (config_version, community_id) do update set
             status = excluded.status, weight = excluded.weight,
             config_version = excluded.config_version,
             reviewed_at = excluded.reviewed_at
         `,
-        values: [strong, weak, configVersion],
+        values: [strong, weak, configVersion, boundAsset],
+      });
+      await pool.query({
+        text: `update public.mining_formula_versions set status = 'approved', effective_at = now(), approved_at = now() where config_version = $1`,
+        values: [configVersion],
       });
       // The stronger community keeps both members' power; the weaker one
       // keeps only the member's, so the order is strong, weak, unweighted.

@@ -39,7 +39,10 @@ const suiteFiles =
   explicitFiles.length > 0
     ? explicitFiles
     : readdirSync(path.join(repositoryRoot, "test"))
-        .filter((name) => name.endsWith(".integration.test.ts"))
+        .filter(
+          (name) =>
+            !name.startsWith("._") && name.endsWith(".integration.test.ts"),
+        )
         .sort()
         .map((name) => `test/${name}`);
 

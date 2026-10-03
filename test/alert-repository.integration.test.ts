@@ -27,6 +27,12 @@ const databaseUrl = requireIntegrationDatabaseUrl();
 
 const truncateAll = `
   truncate table
+    public.ops_jobs,
+    public.ops_audit,
+    public.ops_operations,
+    public.ops_mining_drafts,
+    public.ops_grants,
+    public.ops_operators,
     public.community_ai_answer_reports,
     public.community_ai_answers,
     public.community_ai_usage,

@@ -13,6 +13,7 @@ RUN pnpm install --frozen-lockfile
 COPY tsconfig.json tsconfig.build.json ./
 COPY migrations ./migrations
 COPY src ./src
+COPY scripts/copy-ops-web.mjs ./scripts/copy-ops-web.mjs
 RUN pnpm build
 
 FROM build AS migration

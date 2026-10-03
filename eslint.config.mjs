@@ -4,6 +4,7 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
+      "**/._*",
       ".gitnexus/**",
       "coverage/**",
       "dist/**",

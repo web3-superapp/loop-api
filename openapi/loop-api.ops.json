@@ -1,0 +1,1219 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LOOP Operations API",
+    "description": "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
+    "version": "0.1.0"
+  },
+  "components": {
+    "securitySchemes": {
+      "privyBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Current Privy access token"
+      }
+    },
+    "schemas": {}
+  },
+  "paths": {
+    "/ops/api/session": {
+      "get": {
+        "operationId": "opsSession",
+        "tags": ["Operations"],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/catalog": {
+      "get": {
+        "operationId": "opsCatalog",
+        "tags": ["Operations"],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/resources/{resource}": {
+      "get": {
+        "operationId": "opsResources",
+        "tags": ["Operations"],
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 128 },
+            "in": "query",
+            "name": "before",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "in": "query",
+            "name": "configVersion",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "query",
+            "name": "actorId",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "in": "query",
+            "name": "target",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "in": "query",
+            "name": "action",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["succeeded", "rejected", "unknown"]
+            },
+            "in": "query",
+            "name": "outcome",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mining",
+                "drafts",
+                "weights",
+                "snapshots",
+                "communities",
+                "support",
+                "audit"
+              ]
+            },
+            "in": "path",
+            "name": "resource",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/operations/{id}": {
+      "get": {
+        "operationId": "opsOperation",
+        "tags": ["Operations"],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/jobs/{id}": {
+      "get": {
+        "operationId": "opsJob",
+        "tags": ["Operations"],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/jobs/{id}/run": {
+      "post": {
+        "operationId": "opsRunJob",
+        "tags": ["Operations"],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/api/commands": {
+      "post": {
+        "operationId": "opsCommand",
+        "tags": ["Operations"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": { "type": "string", "enum": ["mining.create"] },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "configVersion": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                          },
+                          "formula": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "holding_times_reference_price_times_weight"
+                                ]
+                              },
+                              "expressionKey": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "dailyOutputKey": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "assetWeights": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string",
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                },
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                }
+                              },
+                              "referralBoost": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["pending_approval", "approved"]
+                                  }
+                                },
+                                "required": ["status"],
+                                "additionalProperties": false
+                              },
+                              "scope": {
+                                "type": "string",
+                                "enum": ["development_baseline"]
+                              },
+                              "dailyOutput": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["development_placeholder"]
+                                  },
+                                  "budget": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                  },
+                                  "unitKey": {
+                                    "type": "string",
+                                    "enum": [
+                                      "mining.rules.dailyOutput.unit.loopTokenPending"
+                                    ]
+                                  }
+                                },
+                                "required": ["status", "budget", "unitKey"],
+                                "additionalProperties": false
+                              },
+                              "priceProxies": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string",
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                },
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                }
+                              },
+                              "referencePricing": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string",
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                },
+                                "additionalProperties": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["stable"]
+                                        },
+                                        "pegUsd": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                        },
+                                        "guardBps": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "maximum": 10000
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "pegUsd",
+                                        "guardBps"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["pair"]
+                                        },
+                                        "pairAddress": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "pegUsd": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                        },
+                                        "guardBps": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "maximum": 10000
+                                        }
+                                      },
+                                      "required": ["kind", "pairAddress"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "expressionKey",
+                              "dailyOutputKey",
+                              "assetWeights",
+                              "referralBoost"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "weightRange": {
+                            "type": "object",
+                            "properties": {
+                              "loop": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["pending_approval", "approved"]
+                                  },
+                                  "descriptionKey": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": ["status", "descriptionKey"],
+                                "additionalProperties": false
+                              },
+                              "community": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["pending_approval", "approved"]
+                                  },
+                                  "descriptionKey": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "range": {
+                                    "type": "object",
+                                    "properties": {
+                                      "min": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      },
+                                      "max": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      }
+                                    },
+                                    "required": ["min", "max"],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": ["status", "descriptionKey"],
+                                "additionalProperties": false
+                              },
+                              "reviewFactorKeys": {
+                                "maxItems": 16,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                }
+                              }
+                            },
+                            "required": [
+                              "loop",
+                              "community",
+                              "reviewFactorKeys"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "priceGuardRules": {
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "ruleKey": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["pending_approval", "approved"]
+                                }
+                              },
+                              "required": ["ruleKey", "status"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "communityWeights": {
+                            "maxItems": 1000,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "communityId": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "boundAssetId": {
+                                  "type": "string",
+                                  "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                },
+                                "weight": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9]\\d{0,10})(\\.\\d{1,18})?$"
+                                }
+                              },
+                              "required": [
+                                "communityId",
+                                "boundAssetId",
+                                "weight"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "configVersion",
+                          "formula",
+                          "weightRange",
+                          "priceGuardRules",
+                          "communityWeights"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": { "type": "string", "enum": ["mining.revise"] },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "expectedRevision": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "package": {
+                            "type": "object",
+                            "properties": {
+                              "configVersion": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                              },
+                              "formula": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "holding_times_reference_price_times_weight"
+                                    ]
+                                  },
+                                  "expressionKey": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128
+                                  },
+                                  "dailyOutputKey": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128
+                                  },
+                                  "assetWeights": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    }
+                                  },
+                                  "referralBoost": {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "enum": ["pending_approval", "approved"]
+                                      }
+                                    },
+                                    "required": ["status"],
+                                    "additionalProperties": false
+                                  },
+                                  "scope": {
+                                    "type": "string",
+                                    "enum": ["development_baseline"]
+                                  },
+                                  "dailyOutput": {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "enum": ["development_placeholder"]
+                                      },
+                                      "budget": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      },
+                                      "unitKey": {
+                                        "type": "string",
+                                        "enum": [
+                                          "mining.rules.dailyOutput.unit.loopTokenPending"
+                                        ]
+                                      }
+                                    },
+                                    "required": ["status", "budget", "unitKey"],
+                                    "additionalProperties": false
+                                  },
+                                  "priceProxies": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                    }
+                                  },
+                                  "referencePricing": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                    },
+                                    "additionalProperties": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["stable"]
+                                            },
+                                            "pegUsd": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                            },
+                                            "guardBps": {
+                                              "type": "integer",
+                                              "minimum": 1,
+                                              "maximum": 10000
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "pegUsd",
+                                            "guardBps"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["pair"]
+                                            },
+                                            "pairAddress": {
+                                              "type": "string",
+                                              "pattern": "^0x[0-9a-f]{40}$"
+                                            },
+                                            "pegUsd": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                            },
+                                            "guardBps": {
+                                              "type": "integer",
+                                              "minimum": 1,
+                                              "maximum": 10000
+                                            }
+                                          },
+                                          "required": ["kind", "pairAddress"],
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "expressionKey",
+                                  "dailyOutputKey",
+                                  "assetWeights",
+                                  "referralBoost"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "weightRange": {
+                                "type": "object",
+                                "properties": {
+                                  "loop": {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "enum": ["pending_approval", "approved"]
+                                      },
+                                      "descriptionKey": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["status", "descriptionKey"],
+                                    "additionalProperties": false
+                                  },
+                                  "community": {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "enum": ["pending_approval", "approved"]
+                                      },
+                                      "descriptionKey": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "range": {
+                                        "type": "object",
+                                        "properties": {
+                                          "min": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          },
+                                          "max": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                          }
+                                        },
+                                        "required": ["min", "max"],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["status", "descriptionKey"],
+                                    "additionalProperties": false
+                                  },
+                                  "reviewFactorKeys": {
+                                    "maxItems": 16,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 128
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "loop",
+                                  "community",
+                                  "reviewFactorKeys"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "priceGuardRules": {
+                                "maxItems": 16,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "ruleKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 128
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["pending_approval", "approved"]
+                                    }
+                                  },
+                                  "required": ["ruleKey", "status"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "communityWeights": {
+                                "maxItems": 1000,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "communityId": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "boundAssetId": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$"
+                                    },
+                                    "weight": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9]\\d{0,10})(\\.\\d{1,18})?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "communityId",
+                                    "boundAssetId",
+                                    "weight"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "configVersion",
+                              "formula",
+                              "weightRange",
+                              "priceGuardRules",
+                              "communityWeights"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["expectedRevision", "package"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": { "type": "string", "enum": ["mining.submit"] },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "expectedRevision": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["expectedRevision"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["mining.publish"]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "expectedRevision": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "contentHash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "expectedActiveVersion": {
+                            "anyOf": [{ "type": "string" }, { "type": "null" }]
+                          }
+                        },
+                        "required": [
+                          "expectedRevision",
+                          "contentHash",
+                          "expectedActiveVersion"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["community.review"]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "outcome": {
+                            "type": "string",
+                            "enum": ["verified", "rejected"]
+                          },
+                          "expectedVersion": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["outcome", "expectedVersion"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["support.answer"]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "enum": ["answered", "closed"]
+                          },
+                          "note": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          }
+                        },
+                        "required": ["status", "note"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["mining.snapshot"]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "expectedActiveVersion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128
+                          }
+                        },
+                        "required": ["expectedActiveVersion"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": { "type": "string", "enum": ["mining.trial"] },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "expectedRevision": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "contentHash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        },
+                        "required": ["expectedRevision", "contentHash"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["mining.invalidate"]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "snapshotIds": {
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            }
+                          }
+                        },
+                        "required": ["snapshotIds"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "operationId",
+                      "target",
+                      "reason",
+                      "action",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],
+  "tags": [
+    {
+      "name": "Operations",
+      "description": "Development operations with scoped server grants"
+    }
+  ]
+}

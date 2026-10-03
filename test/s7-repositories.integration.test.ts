@@ -749,58 +749,13 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           holdingsSource: "chain",
         }),
       ).rejects.toThrow();
-      const approved = await mining.approveFormula({
-        configVersion: "miningFormulaTestOnly",
-        requestId: randomUUID(),
-      });
-      expect(approved.status).toBe("approved");
-      expect(approved.effectiveAt).not.toBeNull();
-      expect((await mining.getApprovedFormula())?.configVersion).toBe(
-        "miningFormulaTestOnly",
-      );
-      await expect(
-        mining.approveFormula({
-          configVersion: "miningFormulaTestOnly",
-          requestId: randomUUID(),
-        }),
-      ).rejects.toBeInstanceOf(MiningFormulaStateError);
       const owner = await createUser(true, true);
-      const snapshotId = randomUUID();
-      const written = await mining.writeSnapshot({
-        snapshotId,
-        blockNumber: "120",
-        blockHash: `0x${"c".repeat(64)}`,
-        formulaVersion: "miningFormulaTestOnly",
-        priceVersion: "dexscreener:2026-09-08T00:00:00.000Z",
-        totalPower: "2.5",
-        powers: [
-          {
-            ownerUserId: owner,
-            assetId: "eip155:56:native",
-            holding: "2",
-            referencePriceUsd: "1.25",
-            referencePriceQuality: "fresh",
-            referencePriceProxyAssetId: null,
-            referencePricePairAddress: null,
-            weight: "1",
-            power: "2.5",
-            blockNumber: "120",
-          },
-        ],
-        holdingsSource: "chain",
-      });
-      expect(written).toMatchObject({
-        snapshotId,
-        accountCount: 1,
-        totalPower: "2.5",
-      });
-      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(snapshotId);
       // Community weights are read per formula version: a weight reviewed
       // under a retired version never enters a snapshot of the current one.
       await pool.query({
         text: `
           insert into public.mining_formula_versions (config_version, formula, weight_range, price_guard_rules, status)
-          values ('miningFormulaRetiredTestOnly', $1::jsonb, $2::jsonb, '[]'::jsonb, 'retired')
+          values ('miningFormulaRetiredTestOnly', $1::jsonb, $2::jsonb, '[]'::jsonb, 'pending_approval')
         `,
         values: [
           JSON.stringify({
@@ -831,12 +786,61 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       );
       await pool.query({
         text: `
-          insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at)
-          values ($1, 'approved', '0.5', 'miningFormulaTestOnly', now()),
-                 ($2, 'approved', '0.9', 'miningFormulaRetiredTestOnly', now())
+          insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at, bound_asset_id)
+          values ($1, 'approved', '0.5', 'miningFormulaTestOnly', now(), 'eip155:56:0x00000000000000000000000000000000000000aa'),
+                 ($2, 'approved', '0.9', 'miningFormulaRetiredTestOnly', now(), 'eip155:56:0x00000000000000000000000000000000000000bb')
         `,
         values: [current, retired],
       });
+      await mining.approveFormula({
+        configVersion: "miningFormulaRetiredTestOnly",
+        requestId: randomUUID(),
+      });
+      const approved = await mining.approveFormula({
+        configVersion: "miningFormulaTestOnly",
+        requestId: randomUUID(),
+      });
+      expect(approved.status).toBe("approved");
+      expect(approved.effectiveAt).not.toBeNull();
+      expect((await mining.getApprovedFormula())?.configVersion).toBe(
+        "miningFormulaTestOnly",
+      );
+      await expect(
+        mining.approveFormula({
+          configVersion: "miningFormulaTestOnly",
+          requestId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(MiningFormulaStateError);
+      const snapshotId = randomUUID();
+      const written = await mining.writeSnapshot({
+        snapshotId,
+        blockNumber: "120",
+        blockHash: `0x${"c".repeat(64)}`,
+        formulaVersion: "miningFormulaTestOnly",
+        priceVersion: "dexscreener:2026-09-08T00:00:00.000Z",
+        totalPower: "2.5",
+        powers: [
+          {
+            ownerUserId: owner,
+            assetId: "eip155:56:native",
+            holding: "2",
+            referencePriceUsd: "1.25",
+            referencePriceQuality: "fresh",
+            referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
+            weight: "1",
+            power: "2.5",
+            blockNumber: "120",
+          },
+        ],
+        holdingsSource: "chain",
+      });
+      expect(written).toMatchObject({
+        snapshotId,
+        accountCount: 1,
+        totalPower: "2.5",
+      });
+      expect((await mining.getLatestSnapshot())?.snapshotId).toBe(snapshotId);
       // Decision 0043: every bound community is listed; a weight reviewed
       // under another version reads as pending_review with no value.
       const byCommunity = (
