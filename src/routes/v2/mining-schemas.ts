@@ -8,13 +8,15 @@ import {
   miningFormulaStatuses,
   miningRankAnonymousMemberKey,
   miningRankDisplayRuleKey,
+  miningRankPaging,
   miningRankPowerRuleKey,
   miningRankScopes,
+  miningReferralRankRuleKey,
   miningSnapshotStatuses,
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
 } from "../../features/mining/mining-contract.js";
-import { miningRankLimit } from "../../features/mining/mining-service.js";
+import { storedAvatarRefPatternSource } from "../../features/community/community-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { tokenLogoSchema } from "./token-logo-schema.js";
 import { unavailableSchema } from "./launch-schemas.js";
@@ -426,6 +428,18 @@ export const miningRankQuerySchema = {
   additionalProperties: false,
   properties: {
     scope: { type: "string", enum: [...miningRankScopes] },
+    cursor: {
+      type: "string",
+      minLength: 3,
+      maxLength: 1_536,
+      pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: miningRankPaging.maximumLimit,
+      description: `Default ${String(miningRankPaging.defaultLimit)}. Not allowed together with cursor.`,
+    },
   },
 } as const;
 
@@ -439,7 +453,7 @@ const rankDisplaySchema = {
     {
       type: "object",
       additionalProperties: false,
-      required: ["kind", "alias", "publicProfileId", "audience"],
+      required: ["kind", "alias", "publicProfileId", "audience", "avatarRef"],
       properties: {
         kind: { type: "string", const: "alias" },
         alias: { type: "string", minLength: 1, maxLength: 64 },
@@ -448,6 +462,14 @@ const rankDisplaySchema = {
           ...rankVisibilitySchema,
           description:
             "self only on the viewer's own row while anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (Decision 0049).",
+        },
+        avatarRef: {
+          anyOf: [
+            { type: "string", pattern: storedAvatarRefPatternSource },
+            { type: "null" },
+          ],
+          description:
+            "Decision 0100: the profile's stored avatar ref, resolved like a profile avatarRef; null when it has none.",
         },
       },
     },
@@ -475,7 +497,7 @@ const rankingSchema = {
         scope: { type: "string", const: "users" },
         items: {
           type: "array",
-          maxItems: miningRankLimit,
+          maxItems: miningRankPaging.maximumLimit,
           items: {
             type: "object",
             additionalProperties: false,
@@ -524,7 +546,7 @@ const rankingSchema = {
         scope: { type: "string", const: "communities" },
         items: {
           type: "array",
-          maxItems: miningRankLimit,
+          maxItems: miningRankPaging.maximumLimit,
           items: {
             type: "object",
             additionalProperties: false,
@@ -566,7 +588,73 @@ const rankingSchema = {
         participants: { type: "integer", minimum: 0 },
       },
     },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "scope", "items", "participants", "ruleKey"],
+      properties: {
+        status: { type: "string", const: "available" },
+        scope: { type: "string", const: "referrals" },
+        items: {
+          type: "array",
+          maxItems: miningRankPaging.maximumLimit,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["position", "invitedCount", "display", "isSelf"],
+            properties: {
+              position: {
+                type: "integer",
+                minimum: 1,
+                description: "rank() by direct invitee count; shared on ties.",
+              },
+              invitedCount: {
+                type: "integer",
+                minimum: 1,
+                description:
+                  "Direct invitees in force (referral_edges depth 1, effective_to null), any validation status. Always public.",
+              },
+              display: rankDisplaySchema,
+              isSelf: { type: "boolean" },
+            },
+          },
+        },
+        participants: {
+          type: "integer",
+          minimum: 0,
+          description: "Inviters with at least one direct invitee in force.",
+        },
+        ruleKey: { type: "string", const: miningReferralRankRuleKey },
+      },
+    },
   ],
+} as const;
+
+const rankMeSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["rank", "value"],
+      properties: {
+        rank: { type: "integer", minimum: 1 },
+        value: {
+          ...decimalSchema,
+          description:
+            "Power (users, communities) or the direct invitee count (referrals), as a decimal string.",
+        },
+        communityId: {
+          type: "string",
+          pattern: opaqueIdPatternSource,
+          description:
+            "Only on scope=communities: the caller's best-ranked community.",
+        },
+      },
+    },
+    { type: "null" },
+  ],
+  description:
+    "Decision 0100: the caller's own place on the requested scope; null when unranked (zero power, no ranked community, no invitee) or while the ranking is unavailable.",
 } as const;
 
 export const miningRankResourceSchema = {
@@ -577,6 +665,8 @@ export const miningRankResourceSchema = {
     "scope",
     "ranking",
     "myPosition",
+    "me",
+    "nextCursor",
     "snapshot",
     "display",
     "formula",
@@ -587,9 +677,15 @@ export const miningRankResourceSchema = {
     ranking: {
       ...rankingSchema,
       description:
-        "Every account in the snapshot (users) or every bound community with an approved weight (communities), positive power first by rank, zero power after it with position null; at most 100 rows.",
+        "Every account in the snapshot (users), every bound community with an approved weight (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). One page of at most 50 rows; follow nextCursor.",
     },
     myPosition: positionSchema,
+    me: rankMeSchema,
+    nextCursor: {
+      anyOf: [{ type: "string" }, { type: "null" }],
+      description:
+        "Next page; null on the last page, after 500 rows in total, or when the cursor secret is not configured.",
+    },
     snapshot: snapshotSchema,
     display: {
       type: "object",

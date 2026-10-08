@@ -10,11 +10,15 @@ import {
   v2CommonHeadersSchema,
   validateChainHeaders,
 } from "./chain-schemas.js";
+import { intelPromotionsResource } from "../../features/market/intel-promotions.js";
 import type { V2RouteDependencies } from "./index.js";
 import { registerV2MarketLogoRoute } from "./market-logos.js";
 import {
   candlesQuerySchema,
+  intelPromotionsResourceSchema,
   marketAssetResourceSchema,
+  marketCategoryAssetsQuerySchema,
+  marketCategoryAssetsResourceSchema,
   marketCandlesResourceSchema,
   marketHoldersResourceSchema,
   marketNewPairsResourceSchema,
@@ -84,6 +88,71 @@ export function registerV2MarketRoutes(
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/market/assets",
+    {
+      schema: {
+        operationId: "listV2MarketCategoryAssets",
+        summary: "List one market category (major, meme, community)",
+        description:
+          "Decision 0100. `major` is the static allow-list `marketMajorAssetIds` (configVersion marketCategoriesV1) intersected with non-blocked registry rows; `meme` is the project token of every registered Launch sale (testnet included; such rows carry quote null with MARKET_CHAIN_NOT_PRICED); `community` is every asset a verified community is bound to, with that community. Every candidate (at most 100) is priced in one batched DexScreener read under the overview's 1200 ms deadline, ordered by the sort field descending (rows without that number last, assetId ascending as the tie-breaker), then paged. The cursor is bound to the caller, category and sort, and carries the last row's sort key: the next page is every row strictly after it on fresh prices. `meme`/`community` answer 503 CAPABILITY_UNAVAILABLE when their candidate source is not composed; a missing cursor secret is 503 for every category.",
+        tags: ["market"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: marketCategoryAssetsQuerySchema,
+        response: {
+          200: marketCategoryAssetsResourceSchema,
+          ...marketReadErrors,
+        },
+      },
+      onRequest: validateChainHeaders,
+      preValidation: assertNoBody,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as {
+        readonly category: unknown;
+        readonly sort?: unknown;
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await marketReadService.listCategoryAssets({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        category: query.category,
+        ...(query.sort === undefined ? {} : { sort: query.sort }),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
+        signal: requestSignal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/intel/promotions",
+    {
+      schema: {
+        operationId: "listV2IntelPromotions",
+        summary: "List the intel page promotion cards",
+        description:
+          "Decision 0100. A static, versioned list (configVersion intelPromotionsV1) of the cards in force now, ordered by `order`. `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts. An empty `items` means no card is running: hide the strip.",
+        tags: ["market"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: intelPromotionsResourceSchema, ...marketReadErrors },
+      },
+      onRequest: validateChainHeaders,
+      preValidation: assertNoBodyOrQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(intelPromotionsResource(new Date()));
     },
   );
 

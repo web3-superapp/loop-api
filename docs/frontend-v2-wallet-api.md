@@ -292,7 +292,8 @@ PUT /v2/wallets/active
     "quality": "fresh",
     "priceSource": "dexscreener",
     "asOf": "2026-09-08T07:52:56.738Z",
-    "isSpendable": false
+    "isSpendable": false,
+    "change24h": { "usd": "302.515", "pct": "5" }
   },
   "contractVersion": "2.0"
 }
@@ -317,7 +318,8 @@ PUT /v2/wallets/active
   "reasonCode": null,
   "proxyAsset": null,
   "priceUsd": "747.39",
-  "valueUsd": "1121.085"
+  "valueUsd": "1121.085",
+  "change24hPct": "5"
 }
 ```
 
@@ -354,8 +356,18 @@ spendableBalance, gasReserve}` 或 `{status:"unavailable", reasonCode}`。
 - `netWorth`：全部行都有估值（含 proxied）才是 `available`，否则 `partial` + `unavailableCount`
   （`valueUsd` 只是已估值行合计，**不要**把它当总资产）；`valuationCurrency: USD`，
   `asOf` 是最新的 Provider 抓取时间，`quality` 有任一行 stale 即 stale；
-  **`isSpendable: false`——净值是展示信息，不是余额**。`networth` 页的 24h 涨跌、
-  图表仍无后端，显示 unavailable。
+  **`isSpendable: false`——净值是展示信息，不是余额**。`networth` 页的图表仍无后端，显示 unavailable。
+- **24h 变动（决策 0100）**：
+  - 每行 `valuation.change24hPct`：同一交易对的 DexScreener `priceChange.h24`，**百分点**字符串
+    （`"-2.5"` 即 −2.5 %），Provider 没报 → `null`（资产行的「▲x%」显示「—」）。
+  - `netWorth.change24h: { usd, pct } | null`：用**同一次价格读取**推算——一行现值 `v`、24h 涨跌 `p` %，
+    24h 前值为 `v / (1 + p/100)`，变动 `v·p/(100+p)`；`usd` 为各行之和（6 位小数，四舍五入远离零），
+    `pct` 为 `usd / 24h 前合计 × 100`（4 位小数）。只计入估值 > 0 的行。
+  - 任一计入的行缺 24h 数据（或 `p <= -100`）→ `change24h: null`，并附
+    `change24hUnavailable: { "reasonCode": "PRICE_CHANGE_PARTIAL" }`；后端**不会**发部分合计。
+    前端显示「24h 变动暂不可用」弱化一行，不要显示 0。
+  - `change24h` 有值时**没有** `change24hUnavailable` 字段；`netWorth` 本身 unavailable 时两者都没有。
+  - 涨跌色：`usd`/`pct` 以 `-` 开头为跌（fall），否则为涨（rise）；`"0"` 显示为持平。
 - 链读不可用（未配置 RPC、端点不可达、chainId 不符）→ `503
 CAPABILITY_UNAVAILABLE`。后端**不会**回放历史快照当成当前余额。
 - 决策 0082（2026-09-27）：主链区块读 1.5s 未答、或 RPC 超时/HTTP 失败、或 chainId

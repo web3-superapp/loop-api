@@ -14,6 +14,7 @@ import {
   v2CapabilityIds,
   v2ContractVersion,
   v2PolicyNotYetEffectiveReasonCode,
+  v2PrimaryTabs,
   v2ProductConfigVersion,
   v2ProductEffectiveAt,
   type V2ProductPolicyRuntime,
@@ -179,7 +180,7 @@ const clientPolicyResponseSchema = {
           uniqueItems: true,
           items: {
             type: "string",
-            enum: ["community", "mining", "launch", "market", "wallet"],
+            enum: [...v2PrimaryTabs],
           },
         },
       },

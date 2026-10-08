@@ -426,7 +426,83 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 `claimable`/`accumulated`/`source` 恒 `REWARD_AUTHORITY_PENDING`，`claimExecutable: false`，`ledger: []`；
 `estimatedToday` 与 summary 相同。
 
-### 3.4 `GET /v2/mining/rank?scope=users|communities`（mining-rank）
+### 3.4 `GET /v2/mining/rank?scope=users|communities|referrals[&limit=1..50 | &cursor=…]`（mining-rank / 情报页算力榜）
+
+> **决策 0100（S112）新增**，旧字段全部保留、只加不改：
+>
+> - `scope=referrals`（推广榜）：按**直接邀请人数**排名（`referral_edges` depth=1 且仍生效，任何验证状态都算；
+>   待「有效邀请」口径批准后改为只算有效）。只列出至少邀请了 1 人的账号；`rank()` 并列同名次。
+>   这是 PostgreSQL 实时数据，**不等挖矿快照**：没有快照时 `ranking` 仍可 available，`snapshot`/`formula` 照旧可能 unavailable。
+>   行：`{ position, invitedCount, display, isSelf }`；`invitedCount` 永远公开；`display` 规则与 users 相同（匿名模式只隐藏他人别名）。
+>   `ranking.ruleKey = "mining.rank.referrals.directActiveEdges"`。
+> - 三个 scope 都有顶层 `me: { rank, value, communityId? } | null`：users = 本人名次 + 算力；communities = 本人所在（非封禁）社区里名次最好的一个，
+>   带 `communityId`；referrals = 名次 + 邀请人数。`value` 一律十进制字符串。无名次（算力 0 / 没有上榜社区 / 没邀请过人 / 榜单 unavailable）→ `null`，
+>   前端显示「还没有名次」。`myPosition` 保留给旧客户端，referrals 下为 `MINING_RANK_NOT_APPLICABLE`。
+> - 分页：`limit` 默认 **30**（以前固定 100 行）、最大 50；顶层 `nextCursor`，`null` 表示最后一页；整条 cursor 链最多 500 行。
+>   翻页带同一个 `scope` + `cursor`，**不要带 `limit`**（带了 400）；cursor 绑定账号与 scope，600 秒过期，过期 → 400 后回第一页。
+>   cursor 密钥未配置时第一页照常返回、`nextCursor: null`，传 cursor → 503。
+> - `display` 的 alias 分支新增 `avatarRef`（资料头像引用，可为 `null`；解析方式同个人资料）。anonymous 分支不变、没有头像。
+>
+> 推广榜响应示例：
+>
+> ```json
+> {
+>   "scope": "referrals",
+>   "ranking": {
+>     "status": "available",
+>     "scope": "referrals",
+>     "items": [
+>       {
+>         "position": 1,
+>         "invitedCount": 7,
+>         "display": {
+>           "kind": "anonymous",
+>           "labelKey": "mining.rank.anonymousMember"
+>         },
+>         "isSelf": false
+>       },
+>       {
+>         "position": 2,
+>         "invitedCount": 3,
+>         "display": {
+>           "kind": "alias",
+>           "alias": "me",
+>           "publicProfileId": "…",
+>           "audience": "self",
+>           "avatarRef": "avatar:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e"
+>         },
+>         "isSelf": true
+>       }
+>     ],
+>     "participants": 2,
+>     "ruleKey": "mining.rank.referrals.directActiveEdges"
+>   },
+>   "myPosition": {
+>     "status": "unavailable",
+>     "reasonCode": "MINING_RANK_NOT_APPLICABLE"
+>   },
+>   "me": { "rank": 2, "value": "3" },
+>   "nextCursor": null,
+>   "snapshot": {
+>     "status": "unavailable",
+>     "reasonCode": "MINING_FORMULA_BASELINE_PENDING"
+>   },
+>   "display": {
+>     "anonymousMemberKey": "mining.rank.anonymousMember",
+>     "ruleKey": "mining.rank.display.anonymousModeOnly",
+>     "powerRuleKey": "mining.rank.power.ownerVisibility"
+>   },
+>   "formula": {
+>     "status": "unavailable",
+>     "reasonCode": "MINING_FORMULA_BASELINE_PENDING",
+>     "pendingVersion": null
+>   },
+>   "contractVersion": "2.0"
+> }
+> ```
+>
+> users / communities 的 `me` 示例：`"me": { "rank": 2, "value": "1000" }`、`"me": { "rank": 1, "value": "230", "communityId": "3fa85f64-…" }`。
+> 错误：400（scope/limit/cursor 非法、cursor+limit）、401、409、503（仓储不可用；无密钥时传 cursor）。
 
 ```json
 {
@@ -480,7 +556,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 ```
 
 - 列出快照中的全部账号（或生效版本下全部已绑定且权重已批准的社区），算力 > 0 的按 `rank()` 排在前（并列同名次），
-  算力为 0 的排在后且 `position: null`；最多 100 行；`participants` 只数算力 > 0 的。
+  算力为 0 的排在后且 `position: null`；每页默认 30 行、最多 50（决策 0100 起，见上）；`participants` 只数算力 > 0 的。
 - **显示名与算力数值由两个独立开关决定（S27c / 决策 0049，替代原"可被发现且非匿名"规则）**：
   - `display`：只看隐私中心的**匿名模式**。别人的行：`!anonymousMode` 且有 alias → `alias`，否则
     `anonymous`（不给 ID）。**本人行永远是 `alias`**（自己不可能对自己匿名）；本人开着匿名模式时

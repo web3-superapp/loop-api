@@ -30,6 +30,10 @@ import { createUnavailablePerpWalletBindingRepository } from "../src/database/pe
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
+import {
+  createUnavailableMarketCategoryRepository,
+  type MarketCategoryRepository,
+} from "../src/database/market-category-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import { candleLimits } from "../src/features/market/market-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
@@ -624,6 +628,7 @@ function fakes(
     readonly tokenLookupProvider?: TokenLookupProvider | null;
     readonly controlPlane?: ControlPlaneRepository;
     readonly pairsProvider?: ReturnType<typeof pairsProviderFake>;
+    readonly categories?: MarketCategoryRepository;
   } = {},
 ) {
   const database = {
@@ -639,6 +644,9 @@ function fakes(
     chainRegistry: registryFake(options.assets, options.pools ?? []),
     bscIndexer: options.indexer ?? indexerFake(),
     marketFacts: cacheFake(),
+    ...(options.categories === undefined
+      ? {}
+      : { marketCategories: options.categories }),
     internalUsers: {
       findByPrivyUserId: vi.fn<InternalUserRepository["findByPrivyUserId"]>(
         () => Promise.resolve({ id: accountId }),
@@ -2694,6 +2702,410 @@ describe("LOOP API V2 market module", () => {
         quality: "unavailable",
         reasonCode: "MARKET_PAIR_NOT_FOUND",
       });
+    });
+  });
+
+  describe("categorised asset list and intel promotions (Decision 0100)", () => {
+    const btcb = "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c";
+    const frog = "0x00000000000000000000000000000000000000f1";
+    const memeTestnet = "0x358d40a1a2b02d550c64e7a9b8dc599f8219d976";
+    const communityId = "439cabe6-4c98-4f99-860f-192ad52403a1";
+    const blockedBtcb: AssetRecord = Object.freeze({
+      ...wbnbAsset,
+      assetId: `eip155:56:${btcb}`,
+      address: btcb,
+      symbol: "BTCB",
+      name: "BTCB Token",
+      status: "blocked",
+    });
+    const frogAsset: AssetRecord = Object.freeze({
+      ...wbnbAsset,
+      assetId: `eip155:56:${frog}`,
+      address: frog,
+      symbol: "FROG",
+      name: "Frog",
+    });
+    const memeAsset: AssetRecord = Object.freeze({
+      ...wbnbAsset,
+      assetId: `eip155:97:${memeTestnet}`,
+      chainId: "eip155:97",
+      address: memeTestnet,
+      symbol: "LTPT",
+      name: "Loop Test Project Token",
+    });
+    const registryRows = [
+      nativeAsset,
+      wbnbAsset,
+      usdtAsset,
+      blockedBtcb,
+      frogAsset,
+      memeAsset,
+    ];
+
+    function usdtSnapshot(): TokenPairsSnapshot {
+      return {
+        tokenAddress: usdt,
+        pairs: [
+          {
+            pairAddress: "0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae",
+            dexId: "pancakeswap",
+            labels: ["v2"],
+            baseTokenAddress: usdt,
+            baseTokenSymbol: "USDT",
+            quoteTokenAddress: wbnb,
+            quoteTokenSymbol: "WBNB",
+            priceUsd: "1.0001",
+            priceNative: null,
+            liquidityUsd: "5000000",
+            volumeH24: "5000000000",
+            priceChangeH24: "-1.5",
+            fdv: null,
+            marketCap: "1000",
+            buysH24: 1,
+            sellsH24: 1,
+            pairCreatedAt: null,
+          },
+        ],
+      };
+    }
+
+    /** Batch Provider that knows WBNB and USDT; every other token has no pair. */
+    function categoryPairsProvider(): ReturnType<typeof pairsProviderFake> & {
+      readonly batches: () => readonly (readonly string[])[];
+    } {
+      const base = pairsProviderFake();
+      const batches: string[][] = [];
+      return {
+        ...base,
+        batches: () => batches,
+        readTokenPairsBatch: (addresses: readonly string[]) => {
+          batches.push([...addresses]);
+          return Promise.resolve({
+            value: addresses.map((tokenAddress) =>
+              tokenAddress === wbnb
+                ? pairsSnapshot()
+                : tokenAddress === usdt
+                  ? usdtSnapshot()
+                  : { tokenAddress, pairs: [] },
+            ),
+            source: "dexscreener" as const,
+            fetchedAt,
+            rawDigest: "d".repeat(64),
+          });
+        },
+      };
+    }
+
+    function categoriesFake(
+      overrides: Partial<MarketCategoryRepository> = {},
+    ): MarketCategoryRepository {
+      return {
+        listLaunchProjectAssetIds: vi.fn(() =>
+          Promise.resolve([memeAsset.assetId, frogAsset.assetId]),
+        ),
+        listVerifiedCommunityAssets: vi.fn(() =>
+          Promise.resolve([
+            {
+              assetId: usdtAssetId,
+              communityId,
+              name: "Builders Guild",
+              logoRef: `logo:media/${poolId}`,
+            },
+          ]),
+        ),
+        ...overrides,
+      };
+    }
+
+    async function list(
+      app: FastifyInstance,
+      query: string,
+    ): Promise<{
+      readonly statusCode: number;
+      readonly body: {
+        readonly items: readonly Record<string, unknown>[];
+        readonly nextCursor: string | null;
+      } & Record<string, unknown>;
+    }> {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/market/assets?${query}`,
+        headers: commonHeaders(),
+      });
+      return { statusCode: response.statusCode, body: response.json() };
+    }
+
+    it("lists the major allow-list among readable registry rows from one batched read, ordered by each sort", async () => {
+      const pairsProvider = categoryPairsProvider();
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider,
+          categories: categoriesFake(),
+        }),
+      );
+      const byCap = await list(app, "category=major");
+      expect(byCap.statusCode).toBe(200);
+      expect(byCap.body).toMatchObject({
+        category: "major",
+        sort: "marketCap",
+        nextCursor: null,
+        rules: {
+          configVersion: "marketCategoriesV1",
+          effectiveAt: "2026-10-08T00:00:00.000Z",
+          ordering: "dexscreener_market_cap_desc",
+        },
+        contractVersion: "2.0",
+      });
+      // BTCB is on the allow-list but blocked; FROG is readable but not major.
+      expect(byCap.body.items.map((row) => row["assetId"])).toEqual([
+        wbnbAssetId,
+        "eip155:56:native",
+        usdtAssetId,
+      ]);
+      expect(byCap.body.items[0]).toMatchObject({
+        assetId: wbnbAssetId,
+        symbol: "WBNB",
+        name: "Wrapped BNB",
+        // The deepest base pair (v2) carries the published numbers.
+        quote: {
+          priceUsd: "746.63",
+          change24hPct: "0.27",
+          marketCapUsd: "1222740159",
+          volume24hUsd: "29916520.68",
+          observedAt: fetchedAt,
+          source: "dexscreener",
+          quality: "fresh",
+        },
+        sparkline: {
+          status: "unavailable",
+          reasonCode: "MARKET_PROVIDER_GECKOTERMINAL_DISABLED",
+        },
+      });
+      expect(byCap.body.items[0]).not.toHaveProperty("quoteUnavailable");
+      expect(byCap.body.items[0]).not.toHaveProperty("community");
+      expect(byCap.body.items[1]).toMatchObject({
+        assetId: "eip155:56:native",
+        quote: { quality: "proxied", priceUsd: "746.63" },
+      });
+      // One batch for the page, WBNB read once for WBNB and native BNB.
+      expect(pairsProvider.batches()).toEqual([[wbnb, usdt]]);
+
+      const byChange = await list(app, "category=major&sort=change24h");
+      expect(byChange.body.items.map((row) => row["assetId"])).toEqual([
+        wbnbAssetId,
+        "eip155:56:native",
+        usdtAssetId,
+      ]);
+      expect(byChange.body).toMatchObject({
+        sort: "change24h",
+        rules: { ordering: "dexscreener_price_change_h24_desc" },
+      });
+      const byVolume = await list(app, "category=major&sort=volume24h");
+      expect(byVolume.body.items.map((row) => row["assetId"])).toEqual([
+        usdtAssetId,
+        wbnbAssetId,
+        "eip155:56:native",
+      ]);
+    });
+
+    it("pages by a cursor bound to the caller, category, and sort", async () => {
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake(),
+        }),
+      );
+      const seen: unknown[] = [];
+      let query = "category=major&sort=volume24h&limit=1";
+      let pages = 0;
+      for (;;) {
+        const page = await list(app, query);
+        expect(page.statusCode).toBe(200);
+        expect(page.body.items).toHaveLength(1);
+        seen.push(page.body.items[0]?.["assetId"]);
+        pages += 1;
+        if (page.body.nextCursor === null) {
+          break;
+        }
+        query = `category=major&sort=volume24h&cursor=${encodeURIComponent(page.body.nextCursor)}`;
+      }
+      expect(pages).toBe(3);
+      expect(seen).toEqual([usdtAssetId, wbnbAssetId, "eip155:56:native"]);
+
+      const first = await list(app, "category=major&limit=1");
+      const cursor = encodeURIComponent(first.body.nextCursor ?? "");
+      for (const refused of [
+        // Another sort or category than the cursor was minted for.
+        `category=major&sort=volume24h&cursor=${cursor}`,
+        `category=community&cursor=${cursor}`,
+        // cursor and limit together.
+        `category=major&limit=1&cursor=${cursor}`,
+        "category=major&cursor=abc.def",
+        "category=major&limit=51",
+        "category=major&limit=0",
+        "category=majors",
+        "category=major&sort=price",
+        "sort=marketCap",
+        "category=major&extra=1",
+      ]) {
+        const response = await list(app, refused);
+        expect(response.statusCode, refused).toBe(400);
+        expect(response.body).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
+
+    it("lists Launch project tokens, a testnet one with its quote unavailable", async () => {
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake(),
+        }),
+      );
+      const meme = await list(app, "category=meme");
+      expect(meme.statusCode).toBe(200);
+      // Neither has a market cap: both follow the valued rows, by assetId.
+      expect(meme.body.items).toEqual([
+        expect.objectContaining({
+          assetId: frogAsset.assetId,
+          symbol: "FROG",
+          quote: null,
+          quoteUnavailable: { reasonCode: "MARKET_PAIR_NOT_FOUND" },
+        }),
+        expect.objectContaining({
+          assetId: memeAsset.assetId,
+          symbol: "LTPT",
+          quote: null,
+          quoteUnavailable: { reasonCode: "MARKET_CHAIN_NOT_PRICED" },
+          sparkline: {
+            status: "unavailable",
+            reasonCode: "MARKET_CHAIN_NOT_PRICED",
+          },
+        }),
+      ]);
+    });
+
+    it("lists the assets of verified communities with the community", async () => {
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake(),
+        }),
+      );
+      const community = await list(app, "category=community");
+      expect(community.statusCode).toBe(200);
+      expect(community.body.items).toEqual([
+        expect.objectContaining({
+          assetId: usdtAssetId,
+          quote: expect.objectContaining({
+            priceUsd: "1.0001",
+            change24hPct: "-1.5",
+          }) as unknown,
+          community: {
+            communityId,
+            name: "Builders Guild",
+            logoRef: `logo:media/${poolId}`,
+          },
+        }),
+      ]);
+    });
+
+    it("fails closed without a candidate source or a Provider, and never answers an empty success instead", async () => {
+      const noSource = await createApp(fakes({ assets: registryRows }));
+      for (const category of ["meme", "community"]) {
+        const response = await list(noSource.app, `category=${category}`);
+        expect(response.statusCode, category).toBe(503);
+        expect(response.body).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+      }
+      const brokenSource = await createApp(
+        fakes({
+          assets: registryRows,
+          categories: createUnavailableMarketCategoryRepository(),
+        }),
+      );
+      expect((await list(brokenSource.app, "category=meme")).statusCode).toBe(
+        503,
+      );
+      // `major` needs only the registry.
+      expect((await list(noSource.app, "category=major")).statusCode).toBe(200);
+      const noProvider = await createApp(
+        fakes({ assets: registryRows, providers: false }),
+      );
+      const closed = await list(noProvider.app, "category=major");
+      expect(closed.statusCode).toBe(200);
+      expect(closed.body.items).toHaveLength(3);
+      for (const row of closed.body.items) {
+        expect(row).toMatchObject({
+          quote: null,
+          quoteUnavailable: {
+            reasonCode: "MARKET_PROVIDER_DEXSCREENER_DISABLED",
+          },
+        });
+      }
+      const noCursorSecret = await createApp(fakes({ assets: registryRows }), {
+        V2_CURSOR_HMAC_SECRET: "",
+      });
+      expect(
+        (await list(noCursorSecret.app, "category=major")).statusCode,
+      ).toBe(503);
+      const unauthenticated = await noSource.app.inject({
+        method: "GET",
+        url: "/v2/market/assets?category=major",
+        headers: commonHeaders({ authorization: undefined }),
+      });
+      expect(unauthenticated.statusCode).toBe(401);
+    });
+
+    it("publishes the promotion cards with in-app deep links only", async () => {
+      const { app } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/intel/promotions",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({
+        items: [
+          {
+            id: "5b0f8a2e-6d1c-4e7a-9b3f-2c8d4e6f1a01",
+            title: "LOOP 挖矿算力周榜",
+            subtitle: "看看本周谁的算力最高",
+            imageUrl: null,
+            deeplink: "/intel",
+            startsAt: "2026-10-08T00:00:00.000Z",
+            endsAt: "2027-01-01T00:00:00.000Z",
+            order: 1,
+          },
+          {
+            id: "5b0f8a2e-6d1c-4e7a-9b3f-2c8d4e6f1a02",
+            title: "推荐社区",
+            subtitle: "发现正在活跃的社区",
+            imageUrl: null,
+            deeplink: "/square",
+            startsAt: "2026-10-08T00:00:00.000Z",
+            endsAt: "2027-01-01T00:00:00.000Z",
+            order: 2,
+          },
+        ],
+        configVersion: "intelPromotionsV1",
+        effectiveAt: "2026-10-08T00:00:00.000Z",
+        contractVersion: "2.0",
+      });
+      for (const [url, headers, status] of [
+        ["/v2/intel/promotions?x=1", commonHeaders(), 400],
+        [
+          "/v2/intel/promotions",
+          commonHeaders({ authorization: undefined }),
+          401,
+        ],
+      ] as const) {
+        const refused = await app.inject({ method: "GET", url, headers });
+        expect(refused.statusCode, url).toBe(status);
+      }
     });
   });
 });

@@ -57,11 +57,11 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
 ```json
 {
   "contractVersion": "2.0",
-  "configVersion": "productPolicyV2.2026-09-01",
-  "effectiveAt": "2026-09-01T00:00:00.000Z",
+  "configVersion": "productPolicyV2.2026-10-08",
+  "effectiveAt": "2026-10-08T00:00:00.000Z",
   "defaultRoute": "community",
   "navigation": {
-    "primaryTabs": ["community", "mining", "launch", "market", "wallet"]
+    "primaryTabs": ["chat", "square", "meme", "intel", "wallet"]
   },
   "versionGate": {
     "status": "unavailable",
@@ -82,6 +82,10 @@ SDK 流程决定。后端只认验证后的 Privy subject：相同 subject 恢�
   }
 }
 ```
+
+`navigation.primaryTabs` 自决策 0100（2026-10-08，`productPolicyV2.2026-10-08`）起是 v3 五 Tab：
+`chat`（聊天）、`square`（广场）、`meme`、`intel`（情报）、`wallet`（钱包），顺序即底栏顺序。
+`defaultRoute` 仍是常量 `"community"`（尚未随五 Tab 调整，待主代理裁决），v3 客户端以 `primaryTabs[0]` 为首屏。
 
 配置完整时的 `available` 分支（其余字段不变）：
 

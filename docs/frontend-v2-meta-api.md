@@ -26,7 +26,7 @@
 ## 为什么 `clientPolicy` 之前与 `productPolicy` 值相同
 
 `GET /v2/meta/client-policy` 是从产品策略投影出来的客户端策略；没有运营覆盖时它的
-`configVersion` 就是产品策略的版本（`productPolicyV2.2026-09-01`）。以前 about 页把这个投影
+`configVersion` 就是产品策略的版本（`productPolicyV2.2026-10-08`）。以前 about 页把这个投影
 无条件列了一行，于是两行同值。现在只有版本不同时才单列。
 
 ## 与 `GET /v2/meta/client-policy` 的关系

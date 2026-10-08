@@ -21,6 +21,11 @@ import {
   type MarketFactCacheRepository,
 } from "../../database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../../database/watchlist-v2-repository.js";
+import {
+  MarketCategoryRepositoryUnavailableError,
+  type MarketCategoryCommunityRecord,
+  type MarketCategoryRepository,
+} from "../../database/market-category-repository.js";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import {
   bscWrappedNativeAddress,
@@ -51,6 +56,11 @@ import {
   compareDecimalStrings,
   derivedCandleLabelKey,
   isCandleInterval,
+  marketAssetCategories,
+  marketAssetSorts,
+  marketCategoryReasonCodes,
+  marketCategoryRules,
+  marketMajorAssetIds,
   marketReasonCodes,
   marketTrendingRules,
   providerLookupSourceKind,
@@ -58,9 +68,16 @@ import {
   tradeLimits,
   unavailableFact,
   type CandleInterval,
+  type MarketAssetCategory,
+  type MarketAssetSort,
   type MarketFactProjection,
   type MarketSource,
 } from "./market-contract.js";
+import {
+  marketCategoryOrdering,
+  pageMarketCategoryRows,
+  type MarketCategoryOrderKey,
+} from "./market-category-order.js";
 import {
   selectPrimaryPair,
   type CachedFact,
@@ -161,6 +178,53 @@ export interface MarketOverviewResource {
     | { readonly status: "available"; readonly omittedCount: number }
     | UnavailableBlock;
   readonly smartMoney: UnavailableBlock;
+  readonly observedAt: string;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+/**
+ * One row's quote on the categorised list (Decision 0100): the numbers of
+ * the asset's primary DexScreener pair from one batched read. `null` fields
+ * are numbers the Provider did not report; nothing is filled in.
+ */
+export interface MarketQuoteProjection {
+  readonly priceUsd: string;
+  readonly change24hPct: string | null;
+  readonly marketCapUsd: string | null;
+  readonly volume24hUsd: string | null;
+  readonly observedAt: string;
+  readonly source: MarketSource;
+  readonly quality: "fresh" | "stale" | "proxied";
+}
+
+export interface MarketCategoryAssetRow {
+  readonly assetId: string;
+  readonly symbol: string;
+  readonly name: string;
+  /** Display picture (Decision 0072/0089); `null` lets the client draw a monogram. */
+  readonly logoUrl: string | null;
+  readonly quote: MarketQuoteProjection | null;
+  /** Present exactly when `quote` is null. */
+  readonly quoteUnavailable?: { readonly reasonCode: string };
+  readonly sparkline: SparklineProjection;
+  /** Only on the `community` category: the verified community bound to the asset. */
+  readonly community?: {
+    readonly communityId: string;
+    readonly name: string;
+    readonly logoRef: string | null;
+  };
+}
+
+export interface MarketCategoryAssetsResource {
+  readonly category: MarketAssetCategory;
+  readonly sort: MarketAssetSort;
+  readonly items: readonly MarketCategoryAssetRow[];
+  readonly nextCursor: string | null;
+  readonly rules: {
+    readonly configVersion: string;
+    readonly effectiveAt: string;
+    readonly ordering: string;
+  };
   readonly observedAt: string;
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -435,6 +499,15 @@ export interface MarketReadService {
     readonly signal?: AbortSignal;
   }): Promise<MarketNewPairsResource>;
   getSmartMoney(): MarketSmartMoneyResource;
+  /** Categorised asset list (Decision 0100). */
+  listCategoryAssets(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly category: unknown;
+    readonly sort?: unknown;
+    readonly cursor?: unknown;
+    readonly limit?: unknown;
+    readonly signal?: AbortSignal;
+  }): Promise<MarketCategoryAssetsResource>;
 }
 
 export interface CreateMarketReadServiceInput {
@@ -443,6 +516,12 @@ export interface CreateMarketReadServiceInput {
   readonly cache: MarketFactCacheRepository;
   readonly indexerRepository: BscIndexerRepository;
   readonly watchlist: WatchlistV2Repository | null;
+  /**
+   * Candidate sets of the `meme` and `community` categories (Decision 0100);
+   * `null` when the database does not compose it, which closes those two
+   * categories with `CAPABILITY_UNAVAILABLE`. `major` needs only the registry.
+   */
+  readonly categories?: MarketCategoryRepository | null;
   /** Account wallets for `isOwn` on trades; `null` when the wallet module is not composed. */
   readonly wallets: AccountWalletRepository | null;
   readonly readClient: BscReadClient;
@@ -494,6 +573,7 @@ interface PairFactsMemo {
 }
 
 const tradesCursorRoute = "marketTrades";
+const categoryCursorRoute = "marketCategoryAssets";
 /** Registry assets scanned for the trending block; bounded to stay inside Provider limits. */
 const trendingScanLimit = 50;
 
@@ -2182,6 +2262,312 @@ export function createMarketReadService(
         contractVersion: v2ContractVersion,
       });
     },
+
+    async listCategoryAssets({
+      principal,
+      category,
+      sort,
+      cursor,
+      limit,
+      signal,
+    }) {
+      if (
+        typeof category !== "string" ||
+        !marketAssetCategories.includes(category as MarketAssetCategory)
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      const chosenCategory = category as MarketAssetCategory;
+      const chosenSort: MarketAssetSort =
+        sort === undefined
+          ? marketCategoryRules.defaultSort
+          : typeof sort === "string" &&
+              marketAssetSorts.includes(sort as MarketAssetSort)
+            ? (sort as MarketAssetSort)
+            : (() => {
+                throw V2ApiError.invalidRequest();
+              })();
+      const codec = input.cursorCodec;
+      if (codec === null) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      if (cursor !== undefined && limit !== undefined) {
+        throw V2ApiError.invalidRequest();
+      }
+      // Canonical filter: keys in alphabetical order, normalised values.
+      const filter = `category=${chosenCategory};sort=${chosenSort}`;
+      let pageSize: number = marketCategoryRules.defaultLimit;
+      let after: MarketCategoryOrderKey | null = null;
+      if (cursor !== undefined) {
+        if (typeof cursor !== "string") {
+          throw V2ApiError.invalidRequest();
+        }
+        let continuation;
+        try {
+          continuation = codec.decode({
+            ownerId: principal.userId,
+            route: categoryCursorRoute,
+            filter,
+            cursor,
+          });
+        } catch (error) {
+          if (error instanceof InvalidV2CursorError) {
+            throw V2ApiError.invalidRequest();
+          }
+          throw error;
+        }
+        const value = continuation["value"];
+        const hasValue = continuation["hasValue"];
+        const assetId = continuation["assetId"];
+        const size = continuation["limit"];
+        if (
+          typeof value !== "string" ||
+          typeof hasValue !== "boolean" ||
+          typeof assetId !== "string" ||
+          typeof size !== "number" ||
+          !Number.isInteger(size) ||
+          size < 1 ||
+          size > marketCategoryRules.maximumLimit
+        ) {
+          throw V2ApiError.invalidRequest();
+        }
+        after = { value: hasValue ? value : null, assetId };
+        pageSize = size;
+      } else if (limit !== undefined) {
+        if (
+          typeof limit !== "number" ||
+          !Number.isInteger(limit) ||
+          limit < 1 ||
+          limit > marketCategoryRules.maximumLimit
+        ) {
+          throw V2ApiError.invalidRequest();
+        }
+        pageSize = limit;
+      }
+
+      const observedAt = now().toISOString();
+      const candidates = await categoryCandidates(chosenCategory);
+      // Only assets of the chain the market Provider reads are priced; a
+      // testnet Launch token is listed with its quote unavailable.
+      const priced = candidates.filter(
+        (candidate) => candidate.asset.chainId === input.chainId,
+      );
+      const addresses = [
+        ...new Set(
+          priced.map(
+            (candidate) => candidate.asset.address ?? bscWrappedNativeAddress,
+          ),
+        ),
+      ];
+      // One batched Provider read under the overview's deadline (Decision
+      // 0086): a read cut off is answered as an unreachable Provider.
+      const providerSignal = AbortSignal.any([
+        ...(signal === undefined ? [] : [signal]),
+        AbortSignal.timeout(overviewProviderDeadlineMs),
+      ]);
+      const [prefetched, sparklineRows] = await Promise.all([
+        input.facts.readTokenPairsBatch(addresses, { signal: providerSignal }),
+        input.facts.candlesProviderEnabled
+          ? readSparklineRows(input.cache, addresses)
+          : Promise.resolve(new Map<string, MarketFactCacheRecord>()),
+      ]);
+      const memo: PairFactsMemo = { prefetched, recalled: new Map() };
+      const nowMs = now().getTime();
+      const sortField = (quote: MarketQuoteProjection | null): string | null =>
+        quote === null
+          ? null
+          : chosenSort === "marketCap"
+            ? quote.marketCapUsd
+            : chosenSort === "change24h"
+              ? quote.change24hPct
+              : quote.volume24hUsd;
+
+      const rows = await Promise.all(
+        candidates.map(async (candidate): Promise<MarketCategoryAssetRow> => {
+          const { asset } = candidate;
+          const community =
+            candidate.community === null
+              ? {}
+              : {
+                  community: Object.freeze({
+                    communityId: candidate.community.communityId,
+                    name: candidate.community.name,
+                    logoRef: candidate.community.logoRef,
+                  }),
+                };
+          if (asset.chainId !== input.chainId) {
+            const logo = input.tokenLogos.project({
+              chainId: asset.chainId,
+              address: asset.address,
+              providerImage: null,
+            });
+            return Object.freeze({
+              assetId: asset.assetId,
+              symbol: asset.symbol,
+              name: asset.name,
+              logoUrl: logo.status === "available" ? logo.url : null,
+              quote: null,
+              quoteUnavailable: Object.freeze({
+                reasonCode: marketCategoryReasonCodes.chainNotPriced,
+              }),
+              sparkline: unavailableSparkline(
+                marketCategoryReasonCodes.chainNotPriced,
+              ),
+              ...community,
+            });
+          }
+          const facts = await pairFactsFor(asset, signal, memo);
+          const logo = input.tokenLogos.project({
+            chainId: asset.chainId,
+            address: asset.address,
+            providerImage: facts.logoImage,
+          });
+          const quote = quoteFrom(facts);
+          const sparkline = !input.facts.candlesProviderEnabled
+            ? unavailableSparkline(marketReasonCodes.geckoterminalDisabled)
+            : sparklineRows === null
+              ? unavailableSparkline(marketReasonCodes.cacheUnavailable)
+              : projectSparkline({
+                  record:
+                    sparklineRows.get(
+                      asset.address ?? bscWrappedNativeAddress,
+                    ) ?? null,
+                  nowMs,
+                  staleGraceSeconds: input.staleGraceSeconds,
+                  proxied: asset.address === null,
+                });
+          return Object.freeze({
+            assetId: asset.assetId,
+            symbol: asset.symbol,
+            name: asset.name,
+            logoUrl: logo.status === "available" ? logo.url : null,
+            quote,
+            ...(quote === null
+              ? {
+                  quoteUnavailable: Object.freeze({
+                    reasonCode:
+                      facts.price.reasonCode ??
+                      marketReasonCodes.providerUnreachable,
+                  }),
+                }
+              : {}),
+            sparkline,
+            ...community,
+          });
+        }),
+      );
+
+      const keyOf = (row: MarketCategoryAssetRow): MarketCategoryOrderKey => ({
+        value: sortField(row.quote),
+        assetId: row.assetId,
+      });
+      const page = pageMarketCategoryRows(rows, keyOf, after, pageSize);
+      const last = page.items.at(-1);
+      let nextCursor: string | null = null;
+      if (page.hasMore && last !== undefined) {
+        const key = keyOf(last);
+        nextCursor = codec.encode({
+          ownerId: principal.userId,
+          route: categoryCursorRoute,
+          filter,
+          continuation: {
+            value: key.value ?? "",
+            hasValue: key.value !== null,
+            assetId: key.assetId,
+            limit: pageSize,
+          },
+        });
+      }
+      return Object.freeze({
+        category: chosenCategory,
+        sort: chosenSort,
+        items: page.items,
+        nextCursor,
+        rules: Object.freeze({
+          configVersion: marketCategoryRules.configVersion,
+          effectiveAt: marketCategoryRules.effectiveAt,
+          ordering: marketCategoryOrdering[chosenSort],
+        }),
+        observedAt,
+        contractVersion: v2ContractVersion,
+      });
+    },
   };
   return Object.freeze(service);
+
+  /**
+   * The category's assets: registry rows that are not blocked, at most
+   * `candidateLimit`. A missing candidate source closes the category with
+   * `CAPABILITY_UNAVAILABLE`; it is never answered as an empty list.
+   */
+  async function categoryCandidates(category: MarketAssetCategory): Promise<
+    readonly {
+      readonly asset: AssetRecord;
+      readonly community: MarketCategoryCommunityRecord | null;
+    }[]
+  > {
+    const readable = (records: readonly AssetRecord[]) =>
+      records.filter((record) => record.status !== "blocked");
+    if (category === "major") {
+      const records = readable(
+        await input.registry.listAssets([...marketMajorAssetIds]),
+      );
+      return records
+        .slice(0, marketCategoryRules.candidateLimit)
+        .map((asset) => ({ asset, community: null }));
+    }
+    const repository = input.categories ?? null;
+    if (repository === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    try {
+      if (category === "meme") {
+        const ids = await repository.listLaunchProjectAssetIds(
+          marketCategoryRules.candidateLimit,
+        );
+        const records = readable(await input.registry.listAssets(ids));
+        return records.map((asset) => ({ asset, community: null }));
+      }
+      const bound = await repository.listVerifiedCommunityAssets(
+        marketCategoryRules.candidateLimit,
+      );
+      const records = readable(
+        await input.registry.listAssets(bound.map((row) => row.assetId)),
+      );
+      const byId = new Map(records.map((record) => [record.assetId, record]));
+      return bound.flatMap((row) => {
+        const asset = byId.get(row.assetId);
+        return asset === undefined ? [] : [{ asset, community: row }];
+      });
+    } catch (error) {
+      if (error instanceof MarketCategoryRepositoryUnavailableError) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      throw error;
+    }
+  }
+}
+
+/** The quote of one row, or null when the price itself is unavailable. */
+function quoteFrom(facts: PairFacts): MarketQuoteProjection | null {
+  const price = facts.price;
+  if (
+    price.value === null ||
+    price.fetchedAt === null ||
+    price.source === null ||
+    (price.quality !== "fresh" &&
+      price.quality !== "stale" &&
+      price.quality !== "proxied")
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    priceUsd: price.value,
+    change24hPct: facts.priceChange24h.value,
+    marketCapUsd: facts.marketCap.value,
+    volume24hUsd: facts.volume24h.value,
+    observedAt: price.fetchedAt,
+    source: price.source,
+    quality: price.quality,
+  });
 }

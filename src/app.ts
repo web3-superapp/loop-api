@@ -1588,6 +1588,7 @@ export async function buildApp(
       cache: marketFactCacheRepository,
       indexerRepository: bscIndexerRepository,
       watchlist: database.watchlistsV2 ?? null,
+      categories: database.marketCategories ?? null,
       wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
       cursorCodec: v2CursorCodec,
@@ -1785,6 +1786,7 @@ export async function buildApp(
           repository: database.mining ?? createUnavailableMiningRepository(),
           registry: chainRegistryRepository,
           tokenLogos,
+          cursorCodec: v2CursorCodec,
         })
       : createUnavailableMiningService());
   // Decision 0043: the `communityMining` capability reads the formula fact

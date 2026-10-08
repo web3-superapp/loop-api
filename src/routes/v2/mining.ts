@@ -128,9 +128,9 @@ export function registerV2MiningRoutes(
     {
       schema: {
         operationId: "getV2MiningRank",
-        summary: "Get the user or community power ranking",
+        summary: "Get the user, community, or referral ranking",
         description:
-          "scope=users|communities. Rankings use only complete server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope. formula is the version in force; snapshot is the same block as the summary, with stale and latestAttempt (Decision 0057).",
+          "scope=users|communities|referrals. users and communities use only complete server snapshots under the formula version in force: every account in the snapshot (or every bound community with an approved weight), positive power first by rank() with shared positions on ties, zero power after it with position null. referrals (Decision 0100) is live from PostgreSQL: inviters ranked by direct invitees in force (referral_edges depth 1, effective_to null, any validation status), only inviters with at least one; it does not wait for a snapshot. Pages: limit 1-50 (default 30), nextCursor bound to the caller and scope, at most 500 rows over a cursor chain; cursor and limit together are 400. Display rule (Decision 0049): alias (with avatarRef) unless the row's owner is in anonymous mode and is not the viewer; otherwise the anonymous member label. me is the caller's own {rank, value} on the requested scope (value = power, or the invitee count as a decimal string; communities: the best-ranked community the caller is a non-banned member of, with communityId), null when unranked. myPosition is kept for older clients (MINING_RANK_NOT_APPLICABLE on communities and referrals). formula is the version in force; snapshot is the same block as the summary, with stale and latestAttempt (Decision 0057).",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -142,10 +142,16 @@ export function registerV2MiningRoutes(
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
-      const query = request.query as { readonly scope?: unknown };
+      const query = request.query as {
+        readonly scope?: unknown;
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
       const resource = await service.getRank({
         principal: requireAuthenticatedLoopPrincipal(request),
         ...(query.scope === undefined ? {} : { scope: query.scope }),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

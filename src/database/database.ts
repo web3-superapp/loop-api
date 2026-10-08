@@ -36,6 +36,10 @@ import {
   type MarketFactCacheRepository,
 } from "./market-fact-cache-repository.js";
 import {
+  createPostgresMarketCategoryRepository,
+  type MarketCategoryRepository,
+} from "./market-category-repository.js";
+import {
   createPostgresTokenLogoCacheRepository,
   type TokenLogoCacheRepository,
 } from "./token-logo-cache-repository.js";
@@ -177,6 +181,8 @@ export interface Database {
   readonly alerts: AlertRepository;
   /** Market Provider fact cache (Decision 0034). */
   readonly marketFacts?: MarketFactCacheRepository;
+  /** Candidate sets of the categorised market list (Decision 0100). */
+  readonly marketCategories?: MarketCategoryRepository;
   /** Token logo proxy cache (Decision 0089). */
   readonly tokenLogoCache?: TokenLogoCacheRepository;
   /** Uploaded avatars and community logos (Decision 0095). */
@@ -341,6 +347,7 @@ export function createPostgresDatabase(
   const bscIndexerWallets = createPostgresBscIndexerWalletSetRepository(pool);
   const alerts = createPostgresAlertRepository(pool);
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
+  const marketCategories = createPostgresMarketCategoryRepository(pool);
   const tokenLogoCache = createPostgresTokenLogoCacheRepository(pool);
   const media = createPostgresMediaRepository(pool);
   const publicProfiles = createPostgresPublicProfileRepository(pool);
@@ -407,6 +414,7 @@ export function createPostgresDatabase(
     bscIndexerWallets,
     alerts,
     marketFacts,
+    marketCategories,
     tokenLogoCache,
     media,
     publicProfiles,

@@ -1472,6 +1472,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
 
   function marketFactsFake(
     quality: "fresh" | "stale" | "unavailable",
+    priceChangeH24: string | null = null,
   ): MarketFactService {
     const fact: CachedFact<TokenPairsSnapshot> = {
       value:
@@ -1493,7 +1494,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
                   priceNative: null,
                   liquidityUsd: "1",
                   volumeH24: null,
-                  priceChangeH24: null,
+                  priceChangeH24,
                   fdv: null,
                   marketCap: null,
                   buysH24: null,
@@ -1552,6 +1553,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       proxyAsset: null,
       priceUsd: "747.39",
       valueUsd: "1121.085",
+      change24hPct: null,
     });
     const native = body.balances.find(
       (row) => row.assetId === "eip155:56:native",
@@ -1565,7 +1567,10 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       proxyAsset: wbnbAssetId,
       priceUsd: "747.39",
       valueUsd: "5231.73",
+      change24hPct: null,
     });
+    // Decision 0100: the Provider reported no 24h number for a valued row,
+    // so the net-worth change is unknown rather than a partial sum.
     expect(body.netWorth).toEqual({
       status: "available",
       valuationCurrency: "USD",
@@ -1575,7 +1580,39 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       priceSource: "dexscreener",
       asOf: observedAt,
       isSpendable: false,
+      change24h: null,
+      change24hUnavailable: { reasonCode: "PRICE_CHANGE_PARTIAL" },
     });
+  });
+
+  it("derives the net-worth 24h change from the same price read (Decision 0100)", async () => {
+    for (const [pct, usd] of [
+      // 6352.815 * 5 / 105 and 6352.815 * -20 / 80.
+      ["5", "302.515"],
+      ["-20", "-1588.20375"],
+    ] as const) {
+      const { app } = await createApp(
+        fakes(),
+        {},
+        marketFactsFake("fresh", pct),
+      );
+      const body = (
+        await app.inject({
+          method: "GET",
+          url: `/v2/wallets/${walletId}/balances`,
+          headers: commonHeaders(),
+        })
+      ).json<BalancesBody>();
+      expect(
+        body.balances.find((row) => row.assetId === wbnbAssetId)?.valuation,
+      ).toMatchObject({ change24hPct: pct });
+      expect(body.netWorth).toMatchObject({
+        status: "available",
+        valueUsd: "6352.815",
+        change24h: { usd, pct },
+      });
+      expect(body.netWorth).not.toHaveProperty("change24hUnavailable");
+    }
   });
 
   it("passes a stale price through as stale and closes valuation without a usable price", async () => {

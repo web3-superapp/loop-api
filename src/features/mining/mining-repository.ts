@@ -136,6 +136,8 @@ export interface MiningRankedAccountRecord {
    * `listMemberPowers` applies (Decision 0049).
    */
   readonly powerVisibleToOthers: boolean;
+  /** Stored `user_profiles.avatar_ref` of the active profile (Decision 0100). */
+  readonly avatarRef: string | null;
 }
 
 /**
@@ -152,6 +154,45 @@ export interface MiningCommunityStandingRecord {
   readonly participantCount: number;
   /** `rank()` over communities with positive power; null while zero. */
   readonly position: number | null;
+}
+
+/** One inviter on the referral rank (Decision 0100). */
+export interface MiningReferralRankRecord {
+  readonly ownerUserId: string;
+  readonly invitedCount: number;
+  /** `rank()` over inviters by direct invitee count; never null (only count > 0 is listed). */
+  readonly position: number;
+  readonly publicProfileId: string | null;
+  readonly alias: string | null;
+  readonly anonymousMode: boolean;
+  readonly avatarRef: string | null;
+}
+
+export interface MiningReferralStandingRecord {
+  /** Null (with `position`) when the account has no direct invitee in force. */
+  readonly invitedCount: number | null;
+  readonly position: number | null;
+  /** Inviters with at least one direct invitee. */
+  readonly participantCount: number;
+}
+
+/** Keyset of the account rank: rows after (total desc, owner asc). */
+export interface MiningAccountRankAfter {
+  readonly totalPower: string;
+  readonly ownerUserId: string;
+}
+
+/** Keyset of the community rank: rows after (power desc, name asc, id asc). */
+export interface MiningCommunityRankAfter {
+  readonly power: string;
+  readonly communityName: string;
+  readonly communityId: string;
+}
+
+/** Keyset of the referral rank: rows after (count desc, owner asc). */
+export interface MiningReferralRankAfter {
+  readonly invitedCount: number;
+  readonly ownerUserId: string;
 }
 
 export interface MiningMemberPowerRecord {
@@ -244,12 +285,32 @@ export interface MiningRepository {
   listAccountRanking(input: {
     readonly snapshotId: string;
     readonly limit: number;
+    readonly after?: MiningAccountRankAfter;
   }): Promise<readonly MiningRankedAccountRecord[]>;
   listCommunityRanking(input: {
     readonly snapshotId: string;
     readonly configVersion: string;
     readonly limit: number;
+    readonly after?: MiningCommunityRankAfter;
   }): Promise<readonly MiningCommunityStandingRecord[]>;
+  /**
+   * The best-ranked standing among the communities the account is a
+   * non-banned member of (Decision 0100); null when none is ranked.
+   */
+  getMemberBestCommunityStanding(input: {
+    readonly snapshotId: string;
+    readonly configVersion: string;
+    readonly ownerUserId: string;
+  }): Promise<MiningCommunityStandingRecord | null>;
+  /** Inviters by direct invitee count (Decision 0100); live, not snapshot-bound. */
+  listReferralRanking(input: {
+    readonly limit: number;
+    readonly after?: MiningReferralRankAfter;
+  }): Promise<readonly MiningReferralRankRecord[]>;
+  /** The account's place (null fields when unranked) and the participant count. */
+  getReferralStanding(input: {
+    readonly ownerUserId: string;
+  }): Promise<MiningReferralStandingRecord>;
   /** Null when the community has no bound asset or no approved weight under the version. */
   getCommunityStanding(input: {
     readonly snapshotId: string;
@@ -369,6 +430,9 @@ export function createUnavailableMiningRepository(): MiningRepository {
     getAccountStanding: unavailable,
     listAccountRanking: unavailable,
     listCommunityRanking: unavailable,
+    getMemberBestCommunityStanding: unavailable,
+    listReferralRanking: unavailable,
+    getReferralStanding: unavailable,
     getCommunityStanding: unavailable,
     listMemberPowers: unavailable,
     listAccountBalanceAssetIds: unavailable,

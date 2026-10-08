@@ -266,7 +266,7 @@ describe("LOOP API V2 account sessions", () => {
       contractVersion: "2.0",
       defaultRoute: "community",
       navigation: {
-        primaryTabs: ["community", "mining", "launch", "market", "wallet"],
+        primaryTabs: ["chat", "square", "meme", "intel", "wallet"],
       },
       versionGate: { status: "unavailable" },
       regionGate: { status: "unavailable" },
