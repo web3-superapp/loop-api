@@ -17,6 +17,8 @@ import type { PushDispatchService } from "../push/push-dispatch-service.js";
 import {
   communicationCommandDigest,
   communicationUnavailableReasonCodes,
+  liveVoiceRoomListLimits,
+  liveVoiceRoomsFilter,
   parseCommunicationOpaqueId,
   parseCommunicationPublicProfileId,
   voiceCallCid,
@@ -46,6 +48,7 @@ import {
   CommunicationResourceConflictError,
   CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
+  type LiveVoiceRoomRecord,
   type VoiceRoomMemberRecord,
   type VoiceRoomRecord,
   type VoiceRoomViewerRecord,
@@ -194,6 +197,40 @@ export interface VoiceRoomHandRaiseQueueResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/**
+ * One row of `GET /v2/voice-rooms/live` (Decision 0093). The host is shown
+ * by the leaderboard display rule: `displayName` is null when the host is
+ * anonymous to this viewer, and then `publicProfileId` and `avatarRef` are
+ * null too, so an anonymous host cannot be identified from the list.
+ */
+export interface LiveVoiceRoomProjection {
+  readonly voiceRoomId: string;
+  readonly communityId: string;
+  readonly communityName: string;
+  readonly communityLogoRef: string | null;
+  /** Voice rooms carry no title; null until one exists (Decision 0093). */
+  readonly title: null;
+  readonly host: {
+    readonly publicProfileId: string | null;
+    readonly displayName: string | null;
+    readonly avatarRef: string | null;
+  };
+  /** LOOP role intent, host excluded (Decision 0051); not Stream presence. */
+  readonly listenerCount: number;
+  readonly speakerCount: number;
+  /** Always null: no Stream-observed count is stored for a room. */
+  readonly countsObservedAt: null;
+  readonly startedAt: string;
+  readonly joinable: boolean;
+}
+
+export interface LiveVoiceRoomListResource {
+  readonly items: readonly LiveVoiceRoomProjection[];
+  readonly nextCursor: string | null;
+  readonly observedAt: string;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
 export interface VoiceRoomReadInput {
   readonly principal: AuthenticatedLoopPrincipal;
   /** The request ID; it is the `correlationId` of any error this request answers. */
@@ -204,6 +241,11 @@ export interface VoiceRoomReadInput {
 export interface VoiceRoomMemberListInput extends VoiceRoomReadInput {
   readonly voiceRoomId: unknown;
   readonly role: unknown;
+  readonly cursor: unknown;
+  readonly limit: unknown;
+}
+
+export interface LiveVoiceRoomListInput extends VoiceRoomReadInput {
   readonly cursor: unknown;
   readonly limit: unknown;
 }
@@ -241,6 +283,9 @@ export interface VoiceRoomService {
     input: VoiceRoomCommunityReadInput,
   ): Promise<VoiceRoomCurrentResource>;
   getRoom(input: VoiceRoomRoomReadInput): Promise<VoiceRoomResource>;
+  listLiveRooms(
+    input: LiveVoiceRoomListInput,
+  ): Promise<LiveVoiceRoomListResource>;
   join(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
   leave(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
   raiseHand(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
@@ -381,6 +426,7 @@ export function createUnavailableVoiceRoomService(): VoiceRoomService {
     createRoom: unavailable,
     getCurrentRoom: unavailable,
     getRoom: unavailable,
+    listLiveRooms: unavailable,
     join: unavailable,
     leave: unavailable,
     raiseHand: unavailable,
@@ -763,16 +809,18 @@ export function createVoiceRoomService(
    */
   function page(
     ownerUserId: string,
+    route: string,
     filter: string,
     cursor: unknown,
     limit: unknown,
+    limits: { readonly default: number; readonly maximum: number },
   ): {
     readonly limit: number;
     readonly continuation: V2CursorContinuation | null;
   } {
     if (cursor === undefined) {
       return {
-        limit: parseListLimit(limit, voiceRoomMemberListLimits),
+        limit: parseListLimit(limit, limits),
         continuation: null,
       };
     }
@@ -783,7 +831,7 @@ export function createVoiceRoomService(
     try {
       continuation = codec().decode({
         ownerId: ownerUserId,
-        route: voiceRoomCursorRoutes.members,
+        route,
         filter,
         cursor,
       });
@@ -798,7 +846,7 @@ export function createVoiceRoomService(
       typeof decodedLimit !== "number" ||
       !Number.isInteger(decodedLimit) ||
       decodedLimit < 1 ||
-      decodedLimit > voiceRoomMemberListLimits.maximum
+      decodedLimit > limits.maximum
     ) {
       throw V2ApiError.invalidRequest();
     }
@@ -878,6 +926,35 @@ export function createVoiceRoomService(
       joinedAt: row.joinedAt,
       handRaised: row.handRaised,
       muted: row.muted,
+    });
+  }
+
+  function liveRoom(
+    row: LiveVoiceRoomRecord,
+    viewerUserId: string,
+  ): LiveVoiceRoomProjection {
+    const host = row.host;
+    const isSelf = host.ownerUserId === viewerUserId;
+    const named =
+      host.publicProfileId !== null &&
+      host.alias !== null &&
+      (isSelf || !host.anonymousMode);
+    return Object.freeze({
+      voiceRoomId: row.voiceRoomId,
+      communityId: row.communityId,
+      communityName: row.communityName,
+      communityLogoRef: row.communityLogoRef,
+      title: null,
+      host: Object.freeze({
+        publicProfileId: named ? host.publicProfileId : null,
+        displayName: named ? host.alias : null,
+        avatarRef: named ? host.avatarRef : null,
+      }),
+      listenerCount: row.listenerCount,
+      speakerCount: row.speakerCount,
+      countsObservedAt: null,
+      startedAt: row.startedAt,
+      joinable: row.viewerIsCommunityMember,
     });
   }
 
@@ -1024,6 +1101,66 @@ export function createVoiceRoomService(
           ? await observeParticipants(healed.record.room.callId, input.signal)
           : notObserved;
       return resource(healed.record, healed.providerSync, observed);
+    },
+
+    async listLiveRooms(
+      input: LiveVoiceRoomListInput,
+    ): Promise<LiveVoiceRoomListResource> {
+      const request = page(
+        input.principal.userId,
+        voiceRoomCursorRoutes.live,
+        liveVoiceRoomsFilter,
+        input.cursor,
+        input.limit,
+        liveVoiceRoomListLimits,
+      );
+      const lastStartedAt = continuationString(
+        request.continuation,
+        "startedAt",
+      );
+      const lastVoiceRoomId = continuationString(
+        request.continuation,
+        "voiceRoomId",
+      );
+      if (
+        request.continuation !== null &&
+        (lastStartedAt === undefined || lastVoiceRoomId === undefined)
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      const observedAt = now().toISOString();
+      const rows = await repositoryCall(() =>
+        options.repository.listLiveVoiceRooms({
+          viewerUserId: input.principal.userId,
+          limit: request.limit + 1,
+          ...(lastStartedAt === undefined || lastVoiceRoomId === undefined
+            ? {}
+            : { after: { lastStartedAt, lastVoiceRoomId } }),
+        }),
+      );
+      const hasMore = rows.length > request.limit;
+      const items = rows.slice(0, request.limit);
+      const last = items.at(-1);
+      return Object.freeze({
+        items: Object.freeze(
+          items.map((row) => liveRoom(row, input.principal.userId)),
+        ),
+        nextCursor:
+          last === undefined || !hasMore
+            ? null
+            : codec().encode({
+                ownerId: input.principal.userId,
+                route: voiceRoomCursorRoutes.live,
+                filter: liveVoiceRoomsFilter,
+                continuation: Object.freeze({
+                  startedAt: last.startedAt,
+                  limit: request.limit,
+                  voiceRoomId: last.voiceRoomId,
+                }),
+              }),
+        observedAt,
+        contractVersion: v2ContractVersion,
+      });
     },
 
     async join(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
@@ -1218,9 +1355,11 @@ export function createVoiceRoomService(
       const filter = voiceRoomMembersFilter(voiceRoomId, role);
       const request = page(
         input.principal.userId,
+        voiceRoomCursorRoutes.members,
         filter,
         input.cursor,
         input.limit,
+        voiceRoomMemberListLimits,
       );
       const lastJoinedAt = continuationString(request.continuation, "joinedAt");
       const lastPublicProfileId = continuationString(

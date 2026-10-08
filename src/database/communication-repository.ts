@@ -42,7 +42,9 @@ import {
   type HandRaiseQueueEntryRecord,
   type HandRaiseQueuePageRecord,
   type ListDirectChannelsInput,
+  type ListLiveVoiceRoomsInput,
   type ListVoiceRoomMembersInput,
+  type LiveVoiceRoomRecord,
   type VoiceRoomCommandInput,
   type VoiceRoomIdentity,
   type VoiceRoomMemberPageRecord,
@@ -1526,6 +1528,148 @@ export function createPostgresCommunicationRepository(
           );
           return Object.freeze({ room: viewer, items: Object.freeze(items) });
         });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async listLiveVoiceRooms(
+      rawInput: ListLiveVoiceRoomsInput,
+    ): Promise<readonly LiveVoiceRoomRecord[]> {
+      try {
+        const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
+        const limit = limitSchema.parse(rawInput.limit);
+        const values: unknown[] = [viewerUserId, limit];
+        let keyset = "";
+        const after = rawInput.after;
+        if (after !== undefined) {
+          values.push(
+            dateSchema.parse(new Date(after.lastStartedAt)),
+            opaqueIdSchema.parse(after.lastVoiceRoomId),
+          );
+          // `startedAt` travels through the cursor in the millisecond ISO
+          // form the response projects, so the keyset compares the
+          // millisecond-truncated column (the community directory rule).
+          keyset = `
+            and (
+              date_trunc('milliseconds', room.created_at),
+              room.voice_room_id
+            ) < ($3::timestamptz, $4::uuid)
+          `;
+        }
+        // Decision 0093. Only a room a member could enter right now is
+        // listed: live, provisioned, and out of backstage (0054). The
+        // community visibility predicate is the community directory's: an
+        // unverified community is visible only to its creator and its own
+        // non-banned members, so this list cannot enumerate it either.
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              room.voice_room_id,
+              room.community_id,
+              community.name as community_name,
+              community.logo_ref as community_logo_ref,
+              room.created_at,
+              host.owner_user_id as host_user_id,
+              profile.public_profile_id as host_public_profile_id,
+              profile.alias as host_alias,
+              profile.avatar_ref as host_avatar_ref,
+              coalesce(privacy.anonymous_mode, false) as host_anonymous_mode,
+              (
+                select count(*)
+                from public.voice_room_members as member
+                where member.voice_room_id = room.voice_room_id
+                  and member.state = 'joined'
+                  and member.role = 'speaker'
+              )::integer as speaker_count,
+              (
+                select count(*)
+                from public.voice_room_members as member
+                where member.voice_room_id = room.voice_room_id
+                  and member.state = 'joined'
+                  and member.role = 'listener'
+              )::integer as listener_count,
+              exists (
+                select 1
+                from public.community_memberships as viewer
+                where viewer.community_id = room.community_id
+                  and viewer.owner_user_id = $1::uuid
+                  and viewer.status <> 'banned'
+              ) as viewer_is_member
+            from public.voice_rooms as room
+            join public.communities as community
+              on community.community_id = room.community_id
+            join public.voice_room_members as host
+              on host.voice_room_id = room.voice_room_id
+              and host.role = 'host'
+            left join public.user_profiles as profile
+              on profile.owner_user_id = host.owner_user_id
+              and profile.profile_status = 'active'
+            left join public.privacy_preferences_v2 as privacy
+              on privacy.owner_user_id = host.owner_user_id
+            where room.state = 'live'
+              and room.provision_state = 'provisioned'
+              and room.backstage = false
+              and (
+                community.verification_status = 'verified'
+                or community.created_by_user_id = $1::uuid
+                or exists (
+                  select 1
+                  from public.community_memberships as visible
+                  where visible.community_id = community.community_id
+                    and visible.owner_user_id = $1::uuid
+                    and visible.status <> 'banned'
+                )
+              )
+              ${keyset}
+            order by
+              date_trunc('milliseconds', room.created_at) desc,
+              room.voice_room_id desc
+            limit $2
+          `,
+          values,
+        });
+        return Object.freeze(
+          result.rows.map((row) =>
+            Object.freeze({
+              voiceRoomId: opaqueIdSchema.parse(row["voice_room_id"]),
+              communityId: opaqueIdSchema.parse(row["community_id"]),
+              communityName: z.string().min(1).parse(row["community_name"]),
+              communityLogoRef:
+                row["community_logo_ref"] === null
+                  ? null
+                  : z.string().parse(row["community_logo_ref"]),
+              startedAt: dateSchema.parse(row["created_at"]).toISOString(),
+              host: Object.freeze({
+                ownerUserId: userIdSchema.parse(row["host_user_id"]),
+                publicProfileId:
+                  row["host_public_profile_id"] === null
+                    ? null
+                    : publicProfileIdSchema.parse(
+                        row["host_public_profile_id"],
+                      ),
+                alias:
+                  row["host_alias"] === null
+                    ? null
+                    : z.string().parse(row["host_alias"]),
+                avatarRef:
+                  row["host_avatar_ref"] === null
+                    ? null
+                    : z.string().parse(row["host_avatar_ref"]),
+                anonymousMode: z.boolean().parse(row["host_anonymous_mode"]),
+              }),
+              speakerCount: z.number().int().min(0).parse(row["speaker_count"]),
+              listenerCount: z
+                .number()
+                .int()
+                .min(0)
+                .parse(row["listener_count"]),
+              viewerIsCommunityMember: z
+                .boolean()
+                .parse(row["viewer_is_member"]),
+            }),
+          ),
+        );
       } catch (error) {
         return translateRepositoryError(error);
       }

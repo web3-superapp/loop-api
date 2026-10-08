@@ -713,6 +713,76 @@ host 视角：
   pending 举手的 listener）；其他情况 `[]`。
 - 与 0032 的差异：完整身份不再发布；别名只在对方未开匿名或本人时可见。
 
+### 广场在线语音房：`GET /v2/voice-rooms/live`（决策 0093，2026-10-08）
+
+广场「语音房」页内 Tab 的跨社区列表。读接口 header（Bearer + `X-Loop-Contract-Version: 2.0` + `X-Loop-Client-Version`），不带 `Idempotency-Key`。
+
+- query：`limit`（1–50，默认 20）与 `cursor` **互斥**（cursor 自带页大小）；其它 query 一律 `400 INVALID_REQUEST`。翻页只传上一页的 `nextCursor`。cursor 绑定账号与路由，换账号或拿名单的 cursor 来用都是 `400`。
+- 范围：`live`、已 provisioned、call 已离开 backstage 的房间（即现在能进的房），且社区对调用者可见（已认证社区，或自己创建 / 未被 ban 的成员所在的未认证社区）。按 `startedAt` 倒序。
+- `joinable`：调用者是该社区未被 ban 的成员。`false` 时先引导加入社区，不要直接调 `join`（会得到 `403 PERMISSION_DENIED`）。
+- `listenerCount` / `speakerCount`：LOOP「已加入」角色计数（决策 0051，**不含 host**），与房间资源 `participants.listenerCount` / `speakerCount` 同口径，**不是 Stream 在线人数**。本接口不调 Stream，`countsObservedAt` 恒为 `null`；要显示「N 人在线」进房后读 `GET /v2/voice-rooms/{id}` 的 `participants.observed`。
+- `title` 恒为 `null`（语音房没有标题），UI 用 `communityName`。
+- `communityLogoRef` / `host.avatarRef` 是预设引用（`avatar:preset/...`），与社区资源 `logoRef`、profile `avatarRef` 同一解析方式；不是 URL。
+- `host` 按排行榜显示规则：host 开了匿名（且调用者不是 host 本人）或没有别名时，`displayName`、`publicProfileId`、`avatarRef` 全为 `null`，渲染 `voiceRoom.member.anonymousMember` 文案。
+- `observedAt`：服务端读取时间。
+- 语音房入口仍受 `voiceRooms` capability 与 `evidence.status` 约束（见 §1）。
+
+```json
+{
+  "items": [
+    {
+      "voiceRoomId": "8c7b6a59-4d3e-4f21-8a0b-1c2d3e4f5a6b",
+      "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "communityName": "Builders Guild",
+      "communityLogoRef": "avatar:preset/community-03",
+      "title": null,
+      "host": {
+        "publicProfileId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+        "displayName": "frog_maxi",
+        "avatarRef": "avatar:preset/people-03"
+      },
+      "listenerCount": 4,
+      "speakerCount": 1,
+      "countsObservedAt": null,
+      "startedAt": "2026-10-08T03:00:00.000Z",
+      "joinable": true
+    },
+    {
+      "voiceRoomId": "2b3c4d5e-6f70-4182-9394-a5b6c7d8e9f0",
+      "communityId": "4b96a75e-6828-4a6b-8c1d-2e3f4a5b6c7d",
+      "communityName": "Frog Holders",
+      "communityLogoRef": null,
+      "title": null,
+      "host": {
+        "publicProfileId": null,
+        "displayName": null,
+        "avatarRef": null
+      },
+      "listenerCount": 0,
+      "speakerCount": 0,
+      "countsObservedAt": null,
+      "startedAt": "2026-10-08T01:00:00.000Z",
+      "joinable": false
+    }
+  ],
+  "nextCursor": null,
+  "observedAt": "2026-10-08T04:00:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+没有在线房间时 `items: []`、`nextCursor: null`（200，不是错误）。错误：
+
+| HTTP | code                                              | 场景                                                                                            |
+| ---- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                                 | `limit` 越界 / 非整数、`limit` 与 `cursor` 同传、cursor 无效 / 过期 / 他人 / 他路由、未知 query |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID`                  | 缺少或无效 Privy Bearer                                                                         |
+| 404  | `NOT_FOUND`                                       | `communication` 模块未启用                                                                      |
+| 409  | `VERSION_CONFLICT` / `ACCOUNT_BOOTSTRAP_REQUIRED` | 合约版本不对 / 账号未 bootstrap                                                                 |
+| 503  | `CAPABILITY_UNAVAILABLE`                          | 通信运行时不可用（`voiceRooms.availability: unavailable`）、仓储故障、cursor 密钥未配置         |
+
+unavailable 行为：`503` 时整个语音房 Tab 显示不可用并可重试（`retryable: true`），不要回退 fixture 或缓存的旧列表冒充现状。
+
 ### Development 上怎么试（决策 0050）
 
 App 目前**没有开房入口**（`loop_v2_communication_api.dart` 只封装了 `current`、

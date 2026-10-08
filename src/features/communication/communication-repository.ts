@@ -257,6 +257,44 @@ export interface ListVoiceRoomMembersInput {
   };
 }
 
+/**
+ * One row of `GET /v2/voice-rooms/live` (Decision 0093): a live, provisioned
+ * room whose call is out of backstage, in a community the viewer may see.
+ * The host identity carries the raw display inputs (alias, anonymous mode)
+ * so the service applies the one leaderboard display rule. The two counts
+ * are the LOOP `joined` role-intent counts (Decision 0051, host excluded);
+ * no Stream observation is stored, so the row carries none.
+ */
+export interface LiveVoiceRoomRecord {
+  readonly voiceRoomId: string;
+  readonly communityId: string;
+  readonly communityName: string;
+  readonly communityLogoRef: string | null;
+  /** `voice_rooms.created_at`: a provisioned room goes live at creation (Decision 0054). */
+  readonly startedAt: string;
+  readonly host: {
+    readonly ownerUserId: string;
+    /** Null when the host has no active profile. */
+    readonly publicProfileId: string | null;
+    readonly alias: string | null;
+    readonly avatarRef: string | null;
+    readonly anonymousMode: boolean;
+  };
+  readonly speakerCount: number;
+  readonly listenerCount: number;
+  /** A non-banned community membership: the join predicate. */
+  readonly viewerIsCommunityMember: boolean;
+}
+
+export interface ListLiveVoiceRoomsInput {
+  readonly viewerUserId: string;
+  readonly limit: number;
+  readonly after?: {
+    readonly lastStartedAt: string;
+    readonly lastVoiceRoomId: string;
+  };
+}
+
 export interface CommunicationCommandInput {
   readonly actorUserId: string;
   readonly idempotencyKey: string;
@@ -375,6 +413,13 @@ export interface CommunicationRepository {
   listVoiceRoomMembers(
     input: ListVoiceRoomMembersInput,
   ): Promise<VoiceRoomMemberPageRecord>;
+  /**
+   * Every live, provisioned, non-backstage room across the communities the
+   * viewer may see, newest `startedAt` first (Decision 0093).
+   */
+  listLiveVoiceRooms(
+    input: ListLiveVoiceRoomsInput,
+  ): Promise<readonly LiveVoiceRoomRecord[]>;
   inviteSpeaker(
     input: VoiceRoomTargetCommandInput,
   ): Promise<VoiceRoomTargetRecord>;
@@ -602,6 +647,7 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     cancelHandRaise: unavailable,
     listHandRaises: unavailable,
     listVoiceRoomMembers: unavailable,
+    listLiveVoiceRooms: unavailable,
     inviteSpeaker: unavailable,
     removeSpeaker: unavailable,
     muteSpeaker: unavailable,

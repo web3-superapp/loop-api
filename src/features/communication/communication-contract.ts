@@ -105,7 +105,20 @@ export const voiceRoomMemberListLimits = Object.freeze({
 
 export const voiceRoomCursorRoutes = Object.freeze({
   members: "voiceRoomMembers",
+  live: "liveVoiceRooms",
 } as const);
+
+/** `GET /v2/voice-rooms/live` page bounds (Decision 0093). */
+export const liveVoiceRoomListLimits = Object.freeze({
+  default: 20,
+  maximum: 50,
+});
+
+/**
+ * The live list has no caller filter; the cursor still binds a canonical
+ * filter string so a cursor of another route can never decode here.
+ */
+export const liveVoiceRoomsFilter = "live" as const;
 
 /** Canonical cursor filter: the room and the role view are both bound. */
 export function voiceRoomMembersFilter(
