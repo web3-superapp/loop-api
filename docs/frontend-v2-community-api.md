@@ -240,7 +240,9 @@ Privy ID、Stream ID**：
 「算力最高」`miningPower`、「讨论最多」`activity`。**没有「增长最快」**——没有任何
 可观测来源，不要加这个 seg。
 `verification=all` 额外包含调用者自己创建或已加入的非 verified 社区；
-`membership=joined` 把结果收窄到调用者以 admin/member 身份加入的社区，
+`membership=joined` 把结果收窄到调用者以 admin/member 身份加入、且当前未被封禁
+（`active` 或 `muted`，被禁言仍算已加入；退出会删除成员关系，因此不会出现）的社区，
+与四种 `sort` 及游标都可组合（决策 0099），
 `membership=owned` 收窄到调用者当前是 owner 的社区（每行多一个 `application`，
 通常配 `verification=all` 才能看到 `pending`/`rejected`），分别供 `community` 首页
 "查看全部已加入"与"我创建的"使用；同一社区只会出现在其中一个筛选里。
@@ -345,6 +347,51 @@ Privy ID、Stream ID**：
 `{ "status": "unavailable", "reasonCode": "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED" }`。
 
 `sort=members` / `sort=newest` 的 item **不带**这两个字段（不是 null，是不存在）。
+
+#### 每行的 `viewerMembership` 与 `boundAsset`（决策 0099，S111，**必有字段**）
+
+所有 `sort`、所有 `membership` 筛选下，每条 item 都带这两个字段（与
+`communityId`、`name` 等同级，不是 null 就是对象，不会缺失）：
+
+```jsonc
+{
+  "communityId": "3fa85f64-5717-4562-b3fc-2c963f66af01",
+  "name": "Frog Holders",
+  "memberCount": 9,
+  "boundAssetKey": "eip155:56:0x1111111111111111111111111111111111111111",
+  // …其余社区摘要字段不变…
+  "viewerMembership": {
+    "role": "member",
+    "status": "active",
+    "pending": false,
+  },
+  "boundAsset": {
+    "assetId": "eip155:56:0x1111111111111111111111111111111111111111",
+    "symbol": "FROG",
+    "logoUrl": "https://api-dev.example/v2/market/logos/eip155:56/0x1111111111111111111111111111111111111111.png",
+  },
+}
+```
+
+| 字段                       | 类型                                            | 说明                                                                                                                                                 |
+| -------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `viewerMembership.role`    | `"owner"` \| `"admin"` \| `"member"` \| `null`  | 当前 bearer 在该社区的成员行角色；没有成员行为 `null`                                                                                                |
+| `viewerMembership.status`  | `"active"` \| `"muted"` \| `"banned"` \| `null` | 成员行状态；被封禁的行保留原角色并读 `banned`；没有成员行为 `null`                                                                                   |
+| `viewerMembership.pending` | `boolean`                                       | 仅当调用者是 owner 且社区创建申请仍在审核（`verificationStatus = pending`）时为 `true`。加入没有审批流程，所以不存在"加入申请待审"，其余一律 `false` |
+| `boundAsset`               | 对象 \| `null`                                  | 社区绑定代币在资产注册表中的摘要；未绑定、或绑定键不在注册表中为 `null`                                                                              |
+| `boundAsset.assetId`       | `string`                                        | 即 `boundAssetKey`（`eip155:<chainId>:<小写地址>`）                                                                                                  |
+| `boundAsset.symbol`        | `string`                                        | 注册表里的代币符号，原样展示（前面加 `$` 是前端的事）                                                                                                |
+| `boundAsset.logoUrl`       | `string` \| `null`                              | 本 API 的代币 logo 代理地址（决策 0089）；market 模块未启用时为 `null`，显示占位图，不要自己拼 URL                                                   |
+
+卡片按钮的取值规则（S111 设计 §2）：`role == null` →「加入」；`member`/`admin` →
+「已加入」；`owner` →「我的」；`status == "banned"` → 不显示按钮。加入成功后无需
+自己改本地状态以外的东西，下一次读取目录该行即为 `role: "member"`。
+
+- `boundAsset` 只有三字段：**不含**名称、价格、流动性或池子信息；需要这些去
+  `GET /v2/communities/{id}`（`boundAsset` 五字段，决策 0097）或行情接口。
+- 两个字段都来自 PostgreSQL，没有外部 Provider，不存在 `unavailable` 投影；目录本身
+  不可用时整条接口按原有错误返回（见第 5 节），不会给出假的 `viewerMembership`。
+- 服务端对一页 N 行只追加两次集合查询（成员关系一次、资产一次），前端无需逐行补请求。
 
 #### 游标
 

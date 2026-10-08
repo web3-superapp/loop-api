@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +36,11 @@ import {
 } from "../src/features/community/community-repository.js";
 import { profileActivationDigest } from "../src/features/profile/profile-v2-contract.js";
 import type { ProfileV2Repository } from "../src/features/profile/profile-v2-repository.js";
+import { createV2CursorCodec } from "../src/core/http/v2-cursor.js";
+import { createCommunityService } from "../src/features/community/community-service.js";
+import { deriveStreamUserId } from "../src/features/identity/loop-identifiers.js";
+import { createTokenLogoProjector } from "../src/features/market/token-logo.js";
+import { createAliasPolicy } from "../src/features/profile/alias-policy.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 const { Client, Pool } = pg;
@@ -2136,6 +2141,297 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     expect(ownedIds).toContain(mine);
     expect(ownedIds).not.toContain(theirs);
     expect(ownedOnly[0]?.application.reviewedAt).not.toBeNull();
+  });
+
+  async function verify(communityId: string): Promise<void> {
+    await repository.verifyCommunity({
+      communityId,
+      requestId: randomUUID(),
+      reasonCode: "operator_manual_review",
+    });
+  }
+
+  async function registerAndBindAsset(
+    communityId: string,
+    address: string,
+    symbol: string,
+  ): Promise<string> {
+    const assetId = `eip155:56:${address}`;
+    await pool.query({
+      text: `
+        insert into public.assets (
+          asset_id, chain_id, address, symbol, name, decimals, status,
+          source_kind, source_block_number, source_verified_at
+        )
+        values ($1, 'eip155:56', $2, $3, $3, 18, 'pending', 'chain_call',
+          1, now())
+        on conflict (asset_id) do nothing
+      `,
+      values: [assetId, address, symbol],
+    });
+    await pool.query({
+      text: `
+        update public.communities
+        set bound_asset_key = $2
+        where community_id = $1
+      `,
+      values: [communityId, assetId],
+    });
+    return assetId;
+  }
+
+  it("keeps membership=joined to current non-owner memberships under sort=members (Decision 0099)", async () => {
+    const viewer = await createAccount("s111-viewer");
+    const others = await Promise.all(
+      ["a", "b", "c", "d", "e"].map((label) =>
+        createAccount(`s111-other-${label}`),
+      ),
+    );
+    const [ownerA, ownerB, ownerC, ownerF, extra] = others as [
+      (typeof others)[number],
+      (typeof others)[number],
+      (typeof others)[number],
+      (typeof others)[number],
+      (typeof others)[number],
+    ];
+    const largest = await createCommunity(ownerA.userId, "s111-largest");
+    const smallest = await createCommunity(ownerB.userId, "s111-smallest");
+    const banned = await createCommunity(ownerC.userId, "s111-banned");
+    const muted = await createCommunity(ownerF.userId, "s111-muted");
+    const mine = await createCommunity(viewer.userId, "s111-mine");
+    const stranger = await createCommunity(extra.userId, "s111-stranger");
+    for (const communityId of [
+      largest,
+      smallest,
+      banned,
+      muted,
+      mine,
+      stranger,
+    ]) {
+      await verify(communityId);
+    }
+    for (const communityId of [largest, smallest, banned, muted]) {
+      await join(viewer.userId, communityId);
+    }
+    // largest: owner + viewer + two more = 4; muted: owner + viewer + one = 3;
+    // smallest: owner + viewer = 2.
+    await join(ownerB.userId, largest);
+    await join(ownerC.userId, largest);
+    await join(extra.userId, muted);
+    await pool.query({
+      text: `
+        update public.community_memberships
+        set status = case community_id
+          when $2::uuid then 'banned'
+          else 'muted'
+        end
+        where owner_user_id = $1 and community_id in ($2::uuid, $3::uuid)
+      `,
+      values: [viewer.userId, banned, muted],
+    });
+
+    const page = await repository.listCommunities({
+      viewerUserId: viewer.userId,
+      sort: "members",
+      verification: "verified",
+      membership: "joined",
+      limit: 50,
+    });
+    // Banned, owned, and unrelated communities are never in `joined`; a
+    // muted membership is still current, so it stays.
+    expect(page.map((row) => row.communityId)).toEqual([
+      largest,
+      muted,
+      smallest,
+    ]);
+    expect(page.map((row) => row.memberCount)).toEqual([4, 3, 2]);
+    expect(page.map((row) => row.viewerMembership)).toEqual([
+      { role: "member", status: "active" },
+      { role: "member", status: "muted" },
+      { role: "member", status: "active" },
+    ]);
+
+    // The keyset continues under the same filter and sort.
+    const first = await repository.listCommunities({
+      viewerUserId: viewer.userId,
+      sort: "members",
+      verification: "verified",
+      membership: "joined",
+      limit: 2,
+    });
+    const last = first.at(-1);
+    expect(last?.communityId).toBe(muted);
+    const second = await repository.listCommunities({
+      viewerUserId: viewer.userId,
+      sort: "members",
+      verification: "verified",
+      membership: "joined",
+      limit: 2,
+      after: {
+        lastSortValue: String(last?.memberCount),
+        lastCommunityId: last?.communityId ?? "",
+      },
+    });
+    expect(second.map((row) => row.communityId)).toEqual([smallest]);
+
+    // `all` carries every relation, including a banned row and none at all.
+    const all = await repository.listCommunities({
+      viewerUserId: viewer.userId,
+      sort: "newest",
+      verification: "verified",
+      membership: "all",
+      limit: 50,
+    });
+    const relation = new Map(
+      all.map((row) => [row.communityId, row.viewerMembership]),
+    );
+    expect(relation.get(banned)).toEqual({ role: "member", status: "banned" });
+    expect(relation.get(mine)).toEqual({ role: "owner", status: "active" });
+    expect(relation.get(stranger)).toBeNull();
+  });
+
+  it("reads a 20-row directory page with exactly two set-based follow-up queries (Decision 0099)", async () => {
+    const viewer = await createAccount("s111-count-viewer");
+    const founder = await createAccount("s111-count-founder");
+    const communityIds: string[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      communityIds.push(
+        await createCommunity(
+          founder.userId,
+          `s111-count-${String(index).padStart(2, "0")}`,
+          `Count ${String(index)}`,
+        ),
+      );
+    }
+    for (const communityId of communityIds) {
+      await verify(communityId);
+      await join(viewer.userId, communityId);
+    }
+    const frog = await registerAndBindAsset(
+      communityIds[0] ?? "",
+      "0x5111000000000000000000000000000000000001",
+      "FROG",
+    );
+    await registerAndBindAsset(
+      communityIds[1] ?? "",
+      "0x5111000000000000000000000000000000000001",
+      "FROG",
+    );
+    const toad = await registerAndBindAsset(
+      communityIds[2] ?? "",
+      "0x5111000000000000000000000000000000000002",
+      "TOAD",
+    );
+    // Bound to a key the registry does not hold (pre-0097 data).
+    await pool.query({
+      text: `update public.communities set bound_asset_key = $2 where community_id = $1`,
+      values: [
+        communityIds[3],
+        "eip155:56:0x5111000000000000000000000000000000000003",
+      ],
+    });
+
+    const statements: string[] = [];
+    const countingPool = new Proxy(pool, {
+      get(target, property, receiver) {
+        if (property === "query") {
+          return (config: { readonly text: string }) => {
+            statements.push(config.text);
+            return target.query(config as never);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const counted = createPostgresCommunityRepository(countingPool);
+    const service = createCommunityService({
+      repository: counted,
+      tokenLogos: createTokenLogoProjector({
+        publicBaseUrl: "https://api.loop.test",
+      }),
+      cursorCodec: createV2CursorCodec({ secret: randomBytes(32) }),
+      searchQuota: {
+        consume: () => Promise.reject(new Error("no quota in this test")),
+      },
+      aliasPolicy: createAliasPolicy({ blockedTerms: [] }),
+    });
+    const resource = await service.listCommunities({
+      principal: Object.freeze({
+        userId: viewer.userId,
+        privyUserId: "did:privy:s111-count",
+        streamUserId: deriveStreamUserId(viewer.userId),
+      }),
+      sort: "members",
+      verification: "verified",
+      membership: "joined",
+      cursor: undefined,
+      limit: 20,
+    });
+
+    expect(resource.items).toHaveLength(20);
+    // One page read plus one membership IN and one asset IN, never per row.
+    expect(statements).toHaveLength(3);
+    expect(statements[1]).toContain("public.community_memberships");
+    expect(statements[1]).toContain("any($2::uuid[])");
+    expect(statements[2]).toContain("public.assets");
+    expect(statements[2]).toContain("any($1::text[])");
+
+    const byId = new Map(
+      resource.items.map((item) => [item.communityId, item]),
+    );
+    const frogRow = byId.get(communityIds[0] ?? "")?.boundAsset;
+    expect(frogRow).toMatchObject({ assetId: frog, symbol: "FROG" });
+    expect(Object.keys(frogRow ?? {}).sort()).toEqual([
+      "assetId",
+      "logoUrl",
+      "symbol",
+    ]);
+    expect(frogRow?.logoUrl).toMatch(/^https:\/\/api\.loop\.test\//);
+    expect(byId.get(communityIds[1] ?? "")?.boundAsset?.symbol).toBe("FROG");
+    expect(byId.get(communityIds[2] ?? "")?.boundAsset).toMatchObject({
+      assetId: toad,
+      symbol: "TOAD",
+    });
+    expect(byId.get(communityIds[3] ?? "")?.boundAsset).toBeNull();
+    expect(byId.get(communityIds[4] ?? "")?.boundAsset).toBeNull();
+    for (const item of resource.items) {
+      expect(item.viewerMembership).toEqual({
+        role: "member",
+        status: "active",
+        pending: false,
+      });
+    }
+
+    // A page with no bound key skips the asset read; the owner of a pending
+    // application reads `pending: true`.
+    const pendingId = await createCommunity(
+      viewer.userId,
+      "s111-count-pending",
+    );
+    statements.length = 0;
+    const owned = await service.listCommunities({
+      principal: Object.freeze({
+        userId: viewer.userId,
+        privyUserId: "did:privy:s111-count",
+        streamUserId: deriveStreamUserId(viewer.userId),
+      }),
+      sort: "newest",
+      verification: "all",
+      membership: "owned",
+      cursor: undefined,
+      limit: undefined,
+    });
+    expect(statements).toHaveLength(2);
+    expect(owned.items.map((item) => item.communityId)).toEqual([pendingId]);
+    expect(owned.items[0]?.viewerMembership).toEqual({
+      role: "owner",
+      status: "active",
+      pending: true,
+    });
+    expect(owned.items[0]?.boundAsset).toBeNull();
   });
 
   it("lists a verified community without a channel and repairs it through verifyCommunity", async () => {

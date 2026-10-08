@@ -47,6 +47,9 @@ import {
   type BlockCountsRecord,
   type BlockRecord,
   type CommunityDetailRecord,
+  type CommunityDirectoryAssetRecord,
+  type CommunityDirectoryMembershipRecord,
+  type CommunityDirectoryRecord,
   type CommunityHomeRecord,
   type CommunityMemberPageRecord,
   type CommunityMemberRecord,
@@ -161,6 +164,21 @@ const membershipRowSchema = z
     role: z.enum(communityRoles),
     status: z.enum(communityMembershipStatuses),
     joined_at: dateSchema,
+  })
+  .strict();
+
+const directoryMembershipRowSchema = z
+  .object({
+    community_id: opaqueIdSchema,
+    role: z.enum(communityRoles),
+    status: z.enum(communityMembershipStatuses),
+  })
+  .strict();
+
+const directoryAssetRowSchema = z
+  .object({
+    asset_id: z.string().min(1),
+    symbol: z.string().min(1),
   })
   .strict();
 
@@ -1280,7 +1298,7 @@ export function createPostgresCommunityRepository(
   async function listCommunitiesQuery(
     client: DatabaseClient,
     input: ListCommunitiesInput,
-  ): Promise<readonly CommunityRecord[]> {
+  ): Promise<readonly CommunityDirectoryRecord[]> {
     const after = input.after;
     const values: unknown[] = [
       input.viewerUserId,
@@ -1404,7 +1422,10 @@ export function createPostgresCommunityRepository(
     // own applications and the communities they joined). `membership=joined`
     // restricts the page to the viewer's non-owner memberships and
     // `membership=owned` to the communities they currently own (Decision
-    // 0072); a community is in exactly one of the two.
+    // 0072); a community is in exactly one of the two. Decision 0099
+    // confirms the `joined` rule: a current membership is any non-banned row
+    // (`active` or `muted`, the same rule as `home.joined`); leaving deletes
+    // the row, so a departed account is never listed.
     const result = await client.query<Record<string, unknown>>({
       text: `
         select ${communityColumns}${orderingColumns}
@@ -1435,11 +1456,79 @@ export function createPostgresCommunityRepository(
       `,
       values,
     });
+    const records = result.rows.map((row) =>
+      input.sort === "miningPower" || input.sort === "activity"
+        ? toOrderedCommunityRecord(row, input.sort)
+        : toCommunityRecord(row),
+    );
+    return await attachDirectoryFacts(client, input.viewerUserId, records);
+  }
+
+  /**
+   * Decision 0099: the viewer's membership and the bound asset summary for
+   * a whole directory page, one set-based query each. An empty page reads
+   * nothing; a page without any bound key skips the asset read.
+   */
+  async function attachDirectoryFacts(
+    client: DatabaseClient,
+    viewerUserId: string,
+    records: readonly CommunityRecord[],
+  ): Promise<readonly CommunityDirectoryRecord[]> {
+    if (records.length === 0) {
+      return Object.freeze([]);
+    }
+    const memberships = new Map<string, CommunityDirectoryMembershipRecord>();
+    const membershipResult = await client.query<Record<string, unknown>>({
+      text: `
+        select membership.community_id, membership.role, membership.status
+        from public.community_memberships as membership
+        where membership.owner_user_id = $1::uuid
+          and membership.community_id = any($2::uuid[])
+      `,
+      values: [viewerUserId, records.map((record) => record.communityId)],
+    });
+    for (const value of membershipResult.rows) {
+      const row = directoryMembershipRowSchema.parse(value);
+      memberships.set(
+        row.community_id,
+        Object.freeze({ role: row.role, status: row.status }),
+      );
+    }
+    const assetKeys = [
+      ...new Set(
+        records
+          .map((record) => record.boundAssetKey)
+          .filter((key): key is string => key !== null),
+      ),
+    ];
+    const assets = new Map<string, CommunityDirectoryAssetRecord>();
+    if (assetKeys.length > 0) {
+      const assetResult = await client.query<Record<string, unknown>>({
+        text: `
+          select asset.asset_id, asset.symbol
+          from public.assets as asset
+          where asset.asset_id = any($1::text[])
+        `,
+        values: [assetKeys],
+      });
+      for (const value of assetResult.rows) {
+        const row = directoryAssetRowSchema.parse(value);
+        assets.set(
+          row.asset_id,
+          Object.freeze({ assetId: row.asset_id, symbol: row.symbol }),
+        );
+      }
+    }
     return Object.freeze(
-      result.rows.map((row) =>
-        input.sort === "miningPower" || input.sort === "activity"
-          ? toOrderedCommunityRecord(row, input.sort)
-          : toCommunityRecord(row),
+      records.map((record) =>
+        Object.freeze({
+          ...record,
+          viewerMembership: memberships.get(record.communityId) ?? null,
+          directoryAsset:
+            record.boundAssetKey === null
+              ? null
+              : (assets.get(record.boundAssetKey) ?? null),
+        }),
       ),
     );
   }

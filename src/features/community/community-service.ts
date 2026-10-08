@@ -98,6 +98,7 @@ import {
   communityRoleRank,
   memberRowActions,
   viewerPermissions,
+  type CommunityMembershipStatus,
   type CommunityRole,
   type CommunityTargetAction,
   type CommunityViewerPermissions,
@@ -117,6 +118,7 @@ import {
   CommunityLogoMediaRejectedError,
   type CommunityDetailRecord,
   type CommunityMemberRecord,
+  type CommunityDirectoryRecord,
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
@@ -346,6 +348,25 @@ export type CommunityOrderingProjection =
       readonly reasonCode: string;
     };
 
+/**
+ * Decision 0099. `role`/`status` are the viewer's membership row (a banned
+ * row keeps its role and reads `status: "banned"`); both null without one.
+ * `pending` is true only while the viewer owns the community and its
+ * creation application awaits review; LOOP has no join approval, so no
+ * join request is ever pending.
+ */
+export interface CommunityDirectoryViewerMembership {
+  readonly role: CommunityRole | null;
+  readonly status: CommunityMembershipStatus | null;
+  readonly pending: boolean;
+}
+
+export interface CommunityDirectoryBoundAsset {
+  readonly assetId: string;
+  readonly symbol: string;
+  readonly logoUrl: string | null;
+}
+
 /** A community's observed channel activity over the discover window. */
 export type CommunityActivityProjection =
   | {
@@ -364,6 +385,10 @@ export type CommunityActivityProjection =
  * attach neither, rather than a zero nobody measured.
  */
 export interface CommunityDiscoverItem extends CommunitySummary {
+  /** Decision 0099: the viewer's relation to this community. */
+  readonly viewerMembership: CommunityDirectoryViewerMembership;
+  /** Decision 0099: the bound asset's registry summary, no market facts. */
+  readonly boundAsset: CommunityDirectoryBoundAsset | null;
   readonly miningPower?: MiningPowerProjection;
   readonly activity?: CommunityActivityProjection;
   /** Present only on `membership=owned` rows (Decision 0073). */
@@ -721,26 +746,63 @@ function discoverSortValue(
   return count === null || count === undefined ? "-1" : String(count);
 }
 
+/** Decision 0099: the viewer's relation projected from its membership row. */
+function directoryViewerMembership(
+  record: CommunityDirectoryRecord,
+): CommunityDirectoryViewerMembership {
+  const current = record.viewerMembership;
+  if (current === null) {
+    return Object.freeze({ role: null, status: null, pending: false });
+  }
+  return Object.freeze({
+    role: current.role,
+    status: current.status,
+    pending:
+      current.role === "owner" && record.verificationStatus === "pending",
+  });
+}
+
+function directoryBoundAsset(
+  record: CommunityDirectoryRecord,
+  tokenLogos: TokenLogoProjector,
+): CommunityDirectoryBoundAsset | null {
+  const asset = record.directoryAsset;
+  if (asset === null || record.boundAssetKey === null) {
+    return null;
+  }
+  return Object.freeze({
+    assetId: asset.assetId,
+    symbol: asset.symbol,
+    logoUrl: projectAssetLogoUrl(asset.assetId, tokenLogos),
+  });
+}
+
 /**
  * A discover row with the fact it was ordered by. A community the ordering
  * fact does not cover is listed with an unavailable projection naming why
  * (no approved weight or no fresh observation) — never with a zero.
  */
 function discoverItem(
-  record: CommunityRecord,
+  record: CommunityDirectoryRecord,
   sort: CommunitySort,
   basis: CommunityOrderingBasis,
   membershipFilter: CommunityMembershipFilter,
+  tokenLogos: TokenLogoProjector,
 ): CommunityDiscoverItem {
   // `membership=owned` rows are the viewer's own applications, so the
   // review state travels with them; no other list row carries it.
+  const row = Object.freeze({
+    ...summary(record),
+    viewerMembership: directoryViewerMembership(record),
+    boundAsset: directoryBoundAsset(record, tokenLogos),
+  });
   const base: CommunityDiscoverItem =
     membershipFilter === "owned"
       ? Object.freeze({
-          ...summary(record),
+          ...row,
           application: applicationProjection(record),
         })
-      : summary(record);
+      : row;
   if (sort === "miningPower" && basis.kind === "miningSnapshot") {
     const ordering = record.ordering;
     if (
@@ -969,6 +1031,19 @@ function voiceProjection(
   });
 }
 
+/** A logo the projector cannot place reads null, never a guessed URL. */
+function projectAssetLogoUrl(
+  assetId: string,
+  tokenLogos: TokenLogoProjector,
+): string | null {
+  try {
+    const logo = tokenLogos.projectForAssetId(assetId);
+    return logo.status === "available" ? logo.url : null;
+  } catch {
+    return null;
+  }
+}
+
 function boundAssetProjection(
   record: CommunityRecord,
   tokenLogos: TokenLogoProjector,
@@ -977,18 +1052,11 @@ function boundAssetProjection(
   if (asset === null || record.boundAssetKey === null) {
     return null;
   }
-  let logoUrl: string | null;
-  try {
-    const logo = tokenLogos.projectForAssetId(asset.assetId);
-    logoUrl = logo.status === "available" ? logo.url : null;
-  } catch {
-    logoUrl = null;
-  }
   return Object.freeze({
     assetId: asset.assetId,
     symbol: asset.symbol,
     name: asset.name,
-    logoUrl,
+    logoUrl: projectAssetLogoUrl(asset.assetId, tokenLogos),
     hasRegisteredPool: asset.hasRegisteredPool,
   });
 }
@@ -1672,7 +1740,13 @@ export function createCommunityService(
         return Object.freeze({
           items: Object.freeze(
             items.map((record) =>
-              discoverItem(record, sort, basis.basis, membershipFilter),
+              discoverItem(
+                record,
+                sort,
+                basis.basis,
+                membershipFilter,
+                options.tokenLogos,
+              ),
             ),
           ),
           nextCursor:

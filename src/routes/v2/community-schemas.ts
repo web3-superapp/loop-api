@@ -590,15 +590,70 @@ export const communityActivitySchema = {
 } as const;
 
 /**
- * A discover row (Decision 0061). It is the community summary plus, on the
+ * A discover row (Decision 0061). It is the community summary, the caller's
+ * `viewerMembership` and the `boundAsset` summary (Decision 0099), plus, on the
  * two ordering sorts only, the fact the page was ordered by:
  * `sort=miningPower` attaches `miningPower`, `sort=activity` attaches
  * `activity`. Neither is emitted by `sort=members` or `sort=newest`.
  */
 export const communityDiscoverItemSchema = {
   ...communitySummarySchema,
+  required: [
+    ...communitySummarySchema.required,
+    "viewerMembership",
+    "boundAsset",
+  ],
   properties: {
     ...communitySummarySchema.properties,
+    viewerMembership: {
+      type: "object",
+      additionalProperties: false,
+      required: ["role", "status", "pending"],
+      description:
+        "Decision 0099: the caller's own relation to this community. role/status are the caller's membership row, any status (a banned row keeps its role and reads status=banned); both null when the caller has no membership. pending=true only while the caller owns the community and its creation application awaits review; LOOP has no join approval, so a join is never pending.",
+      properties: {
+        role: {
+          anyOf: [
+            { type: "string", enum: [...communityRoles] },
+            { type: "null" },
+          ],
+        },
+        status: {
+          anyOf: [
+            { type: "string", enum: [...communityMembershipStatuses] },
+            { type: "null" },
+          ],
+        },
+        pending: { type: "boolean" },
+      },
+    },
+    boundAsset: {
+      description:
+        "Decision 0099: the Asset Registry summary of boundAssetKey (same source as the Decision 0097 detail block, three fields only, no market facts); null when unbound or the key is not in the registry.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["assetId", "symbol", "logoUrl"],
+          properties: {
+            assetId: {
+              type: "string",
+              pattern: canonicalBoundAssetKeyPatternSource,
+            },
+            symbol: { type: "string", minLength: 1, maxLength: 64 },
+            logoUrl: {
+              anyOf: [
+                { type: "string", format: "uri", maxLength: 2048 },
+                { type: "null" },
+              ],
+              description:
+                "This API's token logo proxy URL (Decision 0089); null when the proxy is not served.",
+            },
+          },
+        },
+        { type: "null" },
+      ],
+    },
     miningPower: miningPowerSchema,
     activity: communityActivitySchema,
     application: communityApplicationSchema,

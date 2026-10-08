@@ -59,6 +59,31 @@ export interface CommunityBoundAssetRecord {
   readonly hasRegisteredPool: boolean;
 }
 
+/**
+ * Decision 0099: a directory row with the viewer's relation and the bound
+ * asset's registry summary. Both are read for the whole page with one
+ * set-based query each, never per row.
+ */
+export interface CommunityDirectoryRecord extends CommunityRecord {
+  /** The viewer's membership row, any status; null when there is none. */
+  readonly viewerMembership: CommunityDirectoryMembershipRecord | null;
+  /**
+   * The Asset Registry row of `boundAssetKey`; null when unbound or the key
+   * is not in the registry (the same rule as Decision 0097).
+   */
+  readonly directoryAsset: CommunityDirectoryAssetRecord | null;
+}
+
+export interface CommunityDirectoryMembershipRecord {
+  readonly role: CommunityRole;
+  readonly status: CommunityMembershipStatus;
+}
+
+export interface CommunityDirectoryAssetRecord {
+  readonly assetId: string;
+  readonly symbol: string;
+}
+
 export interface CommunityApplicationFacts {
   readonly submittedAt: string;
   readonly reviewedAt: string | null;
@@ -391,7 +416,7 @@ export interface CommunityActivityObservationRecord {
 export interface CommunityRepository {
   listCommunities(
     input: ListCommunitiesInput,
-  ): Promise<readonly CommunityRecord[]>;
+  ): Promise<readonly CommunityDirectoryRecord[]>;
   /** Whether `sort=activity` has any fresh observation to order by. */
   getCommunityActivityObservation(input: {
     readonly maxAgeSeconds: number;
