@@ -38,6 +38,8 @@
     "launch:register-sale": "node --env-file-if-exists=.env.local --import tsx scripts/launch-register-sale.ts",
     "launch:review": "node --env-file-if-exists=.env.local --import tsx scripts/launch-review.ts",
     "lint": "eslint .",
+    "meme:abi-check": "tsx scripts/meme-abi-check.ts",
+    "meme:salt-refill": "node --env-file-if-exists=.env.local --import tsx scripts/meme-salt-refill.ts",
     "mining:approve-formula": "node --env-file-if-exists=.env.local --import tsx scripts/mining-approve-formula.ts",
     "mining:community-weight": "node --env-file-if-exists=.env.local --import tsx scripts/mining-community-weight.ts",
     "mining:dev-baseline": "node --env-file-if-exists=.env.local --import tsx scripts/mining-dev-baseline.ts",

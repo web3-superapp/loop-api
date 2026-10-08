@@ -53,6 +53,8 @@ import {
 } from "./notification-repository.js";
 import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
+import { createPostgresMemeRepository } from "./meme-repository.js";
+import type { MemeRepository } from "../features/meme/meme-repository.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
 import type { MediaStorage } from "../features/media/media-storage.js";
@@ -211,6 +213,8 @@ export interface Database {
   readonly mining?: MiningRepository;
   /** Invite codes and referral edges (Decision 0036). */
   readonly referral?: ReferralRepository;
+  /** MEME curve launchpad: tokens, lane, salts, Intents (Decision 0101). */
+  readonly meme?: MemeRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -428,6 +432,7 @@ export function createPostgresDatabase(
     communityAi,
     launch,
     launchChain: createPostgresLaunchChainRepository(pool),
+    meme: createPostgresMemeRepository(pool),
     mining,
     referral,
     async ping(): Promise<void> {

@@ -139,6 +139,15 @@ describe("committed OpenAPI artifact", () => {
       "/v2/media/avatars",
       "/v2/media/community-logos",
       "/v2/media/{mediaId}.webp",
+      "/v2/meme/intents/{memeIntentId}",
+      "/v2/meme/quote",
+      "/v2/meme/tokens",
+      "/v2/meme/tokens/{memeTokenId}",
+      "/v2/meme/tokens/{memeTokenId}/candles",
+      "/v2/meme/tokens/{memeTokenId}/holders",
+      "/v2/meme/tokens/{memeTokenId}/intents",
+      "/v2/meme/tokens/{memeTokenId}/intents/{memeIntentId}/broadcast-report",
+      "/v2/meme/tokens/{memeTokenId}/trades",
       "/v2/message-requests",
       "/v2/message-requests/{messageRequestId}/decision",
       "/v2/meta/about",
@@ -203,7 +212,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(152);
+    expect(operationIds).toHaveLength(162);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

@@ -32,6 +32,17 @@ const indexerLanes = new Set([
   "voice_room_reaper",
   // Decision 0097: member buys of a community's bound asset.
   "community_member_buy_feed",
+  // Decision 0101: the MEME launchpad lanes.
+  "meme_event",
+  "meme_salt_pool",
+  "meme_intent_reconcile",
+  "meme_graduation_executor",
+]);
+const memeGraduationOutcomes = new Set([
+  "confirmed",
+  "reverted",
+  "not_full",
+  "failed",
 ]);
 const safeFeedMessageIdPattern = /^loop_buy_[0-9a-f]{32}$/;
 const providerSyncStatuses = new Set(["confirmed", "unconfirmed"]);
@@ -55,6 +66,14 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch intent reconciliation is unavailable"
   | "LOOP launch intent receipt read failed"
   | "LOOP launch intent settled from its receipt"
+  | "LOOP meme lanes stay idle: the MEME contract is not configured"
+  | "LOOP meme graduation executor stays idle"
+  | "LOOP meme graduation executor attempted graduate"
+  | "LOOP meme salt pool refilled"
+  | "LOOP meme intent settled from its receipt"
+  | "LOOP meme intent receipt read failed"
+  | "LOOP meme_event lane skipped facts"
+  | "LOOP meme_event lane is idle"
   | "LOOP reconciliation worker failed to start"
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
@@ -158,6 +177,21 @@ export interface ReconciliationWorkerLogFields {
    */
   readonly messageId?: string;
   readonly truncatedCount?: number;
+  /**
+   * Decision 0101 MEME lanes: opaque token / Intent IDs, the executor's
+   * outcome, attempt count and operator flag, the graduate transaction
+   * hash, salt-pool counts, and skipped-event counts. Never a key or URL.
+   */
+  readonly memeTokenId?: string;
+  readonly memeIntentId?: string;
+  readonly outcome?: string;
+  readonly attempts?: number;
+  readonly needsOperator?: boolean;
+  readonly transactionHash?: string;
+  readonly released?: number;
+  readonly inserted?: number;
+  readonly free?: number;
+  readonly count?: number;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -322,6 +356,11 @@ function sanitizeFields(
         "previousRangeLimit",
         "behindBlocks",
         "truncatedCount",
+        "attempts",
+        "released",
+        "inserted",
+        "free",
+        "count",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];
@@ -332,6 +371,28 @@ function sanitizeFields(
         : [];
     }),
   );
+  const memeTokenId =
+    fields.memeTokenId !== undefined && safeUuidPattern.test(fields.memeTokenId)
+      ? fields.memeTokenId
+      : undefined;
+  const memeIntentId =
+    fields.memeIntentId !== undefined &&
+    safeUuidPattern.test(fields.memeIntentId)
+      ? fields.memeIntentId
+      : undefined;
+  const outcome =
+    fields.outcome !== undefined && memeGraduationOutcomes.has(fields.outcome)
+      ? fields.outcome
+      : undefined;
+  const needsOperator =
+    typeof fields.needsOperator === "boolean"
+      ? fields.needsOperator
+      : undefined;
+  const transactionHash =
+    fields.transactionHash !== undefined &&
+    /^0x[0-9a-f]{64}$/.test(fields.transactionHash)
+      ? fields.transactionHash
+      : undefined;
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -375,6 +436,11 @@ function sanitizeFields(
     ...(providerSyncStatus === undefined ? {} : { providerSyncStatus }),
     ...(messageId === undefined ? {} : { messageId }),
     ...(communityId === undefined ? {} : { communityId }),
+    ...(memeTokenId === undefined ? {} : { memeTokenId }),
+    ...(memeIntentId === undefined ? {} : { memeIntentId }),
+    ...(outcome === undefined ? {} : { outcome }),
+    ...(needsOperator === undefined ? {} : { needsOperator }),
+    ...(transactionHash === undefined ? {} : { transactionHash }),
     ...limits,
   });
 }

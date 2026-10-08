@@ -1047,7 +1047,12 @@ const marketQuoteSchema = {
     marketCapUsd: { anyOf: [decimalSchema, { type: "null" }] },
     volume24hUsd: { anyOf: [decimalSchema, { type: "null" }] },
     observedAt: dateTimeSchema,
-    source: { type: "string", enum: [...marketSources] },
+    source: {
+      type: "string",
+      enum: [...marketSources, "loop_curve"],
+      description:
+        "loop_curve (Decision 0101): an ungraduated MEME launchpad token priced from its bonding-curve snapshot (USD1 at par); change24hPct and volume24hUsd come from the indexed curve trades.",
+    },
     quality: {
       type: "string",
       enum: ["fresh", "stale", "proxied"],

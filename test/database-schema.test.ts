@@ -143,6 +143,12 @@ describe("database schema readiness contract", () => {
       "public.media_objects",
       "public.community_feed_cursors",
       "public.community_member_buy_events",
+      "public.meme_tokens",
+      "public.meme_indexed_events",
+      "public.meme_trades",
+      "public.meme_holders",
+      "public.meme_salts",
+      "public.meme_intents",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

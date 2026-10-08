@@ -11,6 +11,11 @@ import {
 } from "./features/chain/chain-contract.js";
 import type { LaunchContractConfig } from "./integrations/launch/launch-contract-adapter.js";
 import {
+  memeContractReasonCodes,
+  type MemeContractConfig,
+  type MemeContractReasonCode,
+} from "./integrations/meme/meme-contract-adapter.js";
+import {
   compareClientVersions,
   isValidClientVersion,
 } from "./features/session/client-version.js";
@@ -39,6 +44,7 @@ export const v2ModuleIds = Object.freeze([
   "security",
   "settings",
   "support",
+  "meme",
 ] as const);
 
 export type V2ModuleId = (typeof v2ModuleIds)[number];
@@ -194,6 +200,40 @@ function refineLaunchChainEnvironment(
       });
     }
   }
+}
+
+/**
+ * MEME curve launchpad keys shared by the API and worker processes
+ * (Decision 0101). Every key is optional: while any of the four contract
+ * keys is blank the `meme` capability is unavailable
+ * (`MEME_CONTRACT_NOT_CONFIGURED`) and every `/v2/meme/*` route answers 503.
+ * A present but malformed value refuses boot.
+ */
+const memeEnvironmentShape = {
+  MEME_CONTRACT_ADDRESS: optionalCredential(64),
+  MEME_CONTRACT_VERSION: optionalCredential(64),
+  MEME_CONTRACT_START_BLOCK: optionalCredential(32),
+  MEME_TOKEN_IMPLEMENTATION: optionalCredential(64),
+  MEME_SALT_POOL_TARGET: positiveIntegerString(0, 1_000),
+  MEME_VANITY_SUFFIX: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-fA-F]{0,8}$/u, { message: "must be 0-8 hex characters" }),
+  MEME_CREATE_DAILY_LIMIT: positiveIntegerString(1, 1_000),
+} as const;
+
+function memeEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof memeEnvironmentShape, string | undefined> {
+  return {
+    MEME_CONTRACT_ADDRESS: environment["MEME_CONTRACT_ADDRESS"],
+    MEME_CONTRACT_VERSION: environment["MEME_CONTRACT_VERSION"],
+    MEME_CONTRACT_START_BLOCK: environment["MEME_CONTRACT_START_BLOCK"],
+    MEME_TOKEN_IMPLEMENTATION: environment["MEME_TOKEN_IMPLEMENTATION"],
+    MEME_SALT_POOL_TARGET: environment["MEME_SALT_POOL_TARGET"] ?? "50",
+    MEME_VANITY_SUFFIX: environment["MEME_VANITY_SUFFIX"] ?? "6666",
+    MEME_CREATE_DAILY_LIMIT: environment["MEME_CREATE_DAILY_LIMIT"] ?? "3",
+  };
 }
 
 /**
@@ -447,6 +487,7 @@ const environmentSchema = z
     COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
     RECOMMENDED_COMMUNITY_IDS: optionalCredential(4_096),
     ...launchChainEnvironmentShape,
+    ...memeEnvironmentShape,
     ...marketEnvironmentShape,
     ...communityAiEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
@@ -670,6 +711,9 @@ const reconciliationWorkerEnvironmentSchema = z
     HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
     BSC_INDEXER_ENABLED: booleanString,
     LAUNCH_INDEXER_ENABLED: booleanString,
+    MEME_INDEXER_ENABLED: booleanString,
+    MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
+    LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     BSC_INDEXER_START_BLOCK: z.coerce
       .number()
       .int()
@@ -705,6 +749,7 @@ const reconciliationWorkerEnvironmentSchema = z
     PRIVY_APP_SECRET: optionalCredential(4_096),
     FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
     ...launchChainEnvironmentShape,
+    ...memeEnvironmentShape,
     ...marketEnvironmentShape,
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
@@ -1145,6 +1190,8 @@ export interface AppConfig {
    * (`LAUNCH_CONTRACT_BASELINE_PENDING`) even with a configured contract.
    */
   readonly launchGraduatedListEnabled: boolean;
+  /** MEME curve launchpad (Decision 0101); `contract` null keeps it unavailable. */
+  readonly meme: MemeConfig;
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
    * Development seed's `mock_seed` balances. Default false; the schema
@@ -1213,6 +1260,18 @@ export interface ReconciliationWorkerConfig {
    * idles with LAUNCH_CONTRACT_BASELINE_PENDING.
    */
   readonly launchIndexerEnabled: boolean;
+  /**
+   * MEME launchpad lanes (Decision 0101): `meme_event` indexer, salt pool,
+   * receipt reconcile (all behind `MEME_INDEXER_ENABLED`, default false)
+   * and the graduation fallback executor (`MEME_GRADUATION_EXECUTOR_ENABLED`,
+   * default false; signs `graduate` with `LAUNCH_DEPLOYER_PRIVATE_KEY`).
+   */
+  readonly meme: MemeConfig;
+  readonly memeIndexerEnabled: boolean;
+  /** Present only while the executor is enabled; never logged. */
+  readonly memeGraduationExecutor: {
+    readonly privateKey: `0x${string}`;
+  } | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -1652,6 +1711,140 @@ export function parseLaunchContractConfig(
     versionMajor: Number(versionMatch[1]),
     startBlock: BigInt(startBlock),
     usd1Address: usd1Address.toLowerCase(),
+  });
+}
+
+export interface MemeConfig {
+  readonly contract: MemeContractConfig | null;
+  /** Why `contract` is null (`null` once configured). */
+  readonly unconfiguredReason: MemeContractReasonCode | null;
+  readonly saltPoolTarget: number;
+  /** Lowercase hex; empty disables the vanity suffix. */
+  readonly vanitySuffix: string;
+  readonly createDailyLimit: number;
+}
+
+/**
+ * Decision 0101: the four `MEME_*` contract keys plus the launch slot's
+ * `LAUNCH_USD1_ADDRESS` (the curve's quote asset, docs/10 §1). Any key
+ * blank keeps the contract null (`MEME_CONTRACT_NOT_CONFIGURED`, or
+ * `MEME_USD1_NOT_CONFIGURED` while only the Launch USD1 is missing); a
+ * malformed present value refuses boot.
+ */
+export function parseMemeConfig(
+  data: {
+    readonly MEME_CONTRACT_ADDRESS?: string | undefined;
+    readonly MEME_CONTRACT_VERSION?: string | undefined;
+    readonly MEME_CONTRACT_START_BLOCK?: string | undefined;
+    readonly MEME_TOKEN_IMPLEMENTATION?: string | undefined;
+    readonly MEME_SALT_POOL_TARGET: number;
+    readonly MEME_VANITY_SUFFIX: string;
+    readonly MEME_CREATE_DAILY_LIMIT: number;
+  },
+  launchContract: LaunchContractConfig | null,
+): MemeConfig {
+  const address = data.MEME_CONTRACT_ADDRESS;
+  const version = data.MEME_CONTRACT_VERSION;
+  const startBlock = data.MEME_CONTRACT_START_BLOCK;
+  const implementation = data.MEME_TOKEN_IMPLEMENTATION;
+  const issues: string[] = [];
+  if (address !== undefined && !evmAddressPattern.test(address)) {
+    issues.push("MEME_CONTRACT_ADDRESS: must be a 0x-prefixed 20-byte address");
+  }
+  if (implementation !== undefined && !evmAddressPattern.test(implementation)) {
+    issues.push(
+      "MEME_TOKEN_IMPLEMENTATION: must be a 0x-prefixed 20-byte address",
+    );
+  }
+  const versionMatch =
+    version === undefined ? null : semanticVersionPattern.exec(version);
+  if (version !== undefined && versionMatch === null) {
+    issues.push(
+      "MEME_CONTRACT_VERSION: must be a semantic version MAJOR.MINOR.PATCH",
+    );
+  }
+  if (
+    startBlock !== undefined &&
+    (!blockNumberPattern.test(startBlock) ||
+      BigInt(startBlock) > 9_223_372_036_854_775_807n)
+  ) {
+    issues.push(
+      "MEME_CONTRACT_START_BLOCK: must be a non-negative integer block number",
+    );
+  }
+  if (
+    address !== undefined &&
+    implementation !== undefined &&
+    address.toLowerCase() === implementation.toLowerCase()
+  ) {
+    issues.push(
+      "MEME_TOKEN_IMPLEMENTATION: must differ from MEME_CONTRACT_ADDRESS",
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigurationError(issues);
+  }
+  const shared = {
+    saltPoolTarget: data.MEME_SALT_POOL_TARGET,
+    vanitySuffix: data.MEME_VANITY_SUFFIX.toLowerCase(),
+    createDailyLimit: data.MEME_CREATE_DAILY_LIMIT,
+  };
+  if (
+    address === undefined ||
+    version === undefined ||
+    startBlock === undefined ||
+    implementation === undefined ||
+    versionMatch === null
+  ) {
+    return Object.freeze({
+      contract: null,
+      unconfiguredReason: memeContractReasonCodes.notConfigured,
+      ...shared,
+    });
+  }
+  if (launchContract === null) {
+    return Object.freeze({
+      contract: null,
+      unconfiguredReason: memeContractReasonCodes.usd1NotConfigured,
+      ...shared,
+    });
+  }
+  return Object.freeze({
+    contract: Object.freeze({
+      address: address.toLowerCase(),
+      version,
+      versionMajor: Number(versionMatch[1]),
+      startBlock: BigInt(startBlock),
+      tokenImplementation: implementation.toLowerCase(),
+      usd1Address: launchContract.usd1Address,
+    }),
+    unconfiguredReason: null,
+    ...shared,
+  });
+}
+
+const privateKeyPattern = /^(0x)?[0-9a-fA-F]{64}$/u;
+
+/**
+ * Decision 0101: the graduation fallback executor signs `graduate(token)`
+ * with the testnet deployer key. Enabled without a well-formed key refuses
+ * boot; the key never enters a log line or an error message.
+ */
+export function parseMemeGraduationExecutor(data: {
+  readonly MEME_GRADUATION_EXECUTOR_ENABLED: boolean;
+  readonly LAUNCH_DEPLOYER_PRIVATE_KEY?: string | undefined;
+}): { readonly privateKey: `0x${string}` } | null {
+  if (!data.MEME_GRADUATION_EXECUTOR_ENABLED) {
+    return null;
+  }
+  const key = data.LAUNCH_DEPLOYER_PRIVATE_KEY?.trim();
+  if (key === undefined || !privateKeyPattern.test(key)) {
+    throw new ConfigurationError([
+      "LAUNCH_DEPLOYER_PRIVATE_KEY: a 32-byte hex key is required when MEME_GRADUATION_EXECUTOR_ENABLED=true",
+    ]);
+  }
+  return Object.freeze({
+    privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
   });
 }
 
@@ -2189,6 +2382,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
     RECOMMENDED_COMMUNITY_IDS: environment["RECOMMENDED_COMMUNITY_IDS"],
     ...launchChainEnvironmentDefaults(environment),
+    ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     ...communityAiEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
@@ -2329,6 +2523,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launchContract: parseLaunchContractConfig(parsed.data),
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
+    meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
@@ -2375,6 +2570,10 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
     BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
     LAUNCH_INDEXER_ENABLED: environment["LAUNCH_INDEXER_ENABLED"] ?? "false",
+    MEME_INDEXER_ENABLED: environment["MEME_INDEXER_ENABLED"] ?? "false",
+    MEME_GRADUATION_EXECUTOR_ENABLED:
+      environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
+    LAUNCH_DEPLOYER_PRIVATE_KEY: environment["LAUNCH_DEPLOYER_PRIVATE_KEY"],
     BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
     BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE:
       environment["BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE"] ?? "200",
@@ -2416,6 +2615,7 @@ export function loadReconciliationWorkerConfig(
     FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
       environment["FIREBASE_SERVICE_ACCOUNT_JSON_PATH"],
     ...launchChainEnvironmentDefaults(environment),
+    ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
@@ -2501,6 +2701,9 @@ export function loadReconciliationWorkerConfig(
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
     launchIndexerEnabled: parsed.data.LAUNCH_INDEXER_ENABLED,
+    meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
+    memeIndexerEnabled: parsed.data.MEME_INDEXER_ENABLED,
+    memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED

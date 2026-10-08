@@ -352,6 +352,7 @@ describe("LOOP API V2 meta policy gates", () => {
       "dappExecution",
       "communityAi",
       "profile",
+      "meme",
     ]) {
       expect(capabilities[capabilityId]?.availability).toBe("deferred");
     }
@@ -368,7 +369,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(31);
+    expect(Object.keys(capabilities)).toHaveLength(32);
   });
 
   it("names the launch chain slot in the launch capability's evidence only while it is the testnet (Decision 0038)", async () => {
@@ -392,7 +393,7 @@ describe("LOOP API V2 meta policy gates", () => {
           "reasonCode",
         ]);
       }
-      expect(Object.keys(shared)).toHaveLength(31);
+      expect(Object.keys(shared)).toHaveLength(32);
     }
 
     const testnet = await readCapabilities(
@@ -519,6 +520,7 @@ describe("LOOP API V2 meta policy gates", () => {
       "security",
       "settings",
       "support",
+      "meme",
     ]);
 
     const deliveredModuleIds = new Set<string>([
@@ -539,6 +541,7 @@ describe("LOOP API V2 meta policy gates", () => {
       "security",
       "settings",
       "support",
+      "meme",
     ]);
     const undelivered = v2ModuleIds.filter((id) => !deliveredModuleIds.has(id));
     const app = await createApp({

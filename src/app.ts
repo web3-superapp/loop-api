@@ -397,6 +397,16 @@ import {
   type SupportService,
 } from "./features/support/support-service.js";
 import { createUnavailableSupportTicketRepository } from "./features/support/support-ticket-repository.js";
+import {
+  createMemeService,
+  createUnavailableMemeService,
+  type MemeService,
+} from "./features/meme/meme-service.js";
+import type { MemeDexQuote } from "./features/meme/meme-projection.js";
+import {
+  createMemeContractAdapter,
+  type MemeContractAdapter,
+} from "./integrations/meme/meme-contract-adapter.js";
 
 const localCloudflaredProxyCidrs = ["127.0.0.0/8", "::1/128"];
 const defaultContentSecurityPolicy =
@@ -529,6 +539,9 @@ export interface BuildAppOptions {
   readonly launchService?: LaunchService;
   readonly miningService?: MiningService;
   readonly referralService?: ReferralService;
+  /** Test seams for the MEME launchpad (Decision 0101). */
+  readonly memeService?: MemeService;
+  readonly memeContractAdapter?: MemeContractAdapter;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
   /** Test seam for the push channel (Decision 0067); `null` keeps it closed. */
@@ -1806,6 +1819,77 @@ export async function buildApp(
             database.referral ?? createUnavailableReferralRepository(),
         })
       : createUnavailableReferralService());
+  // MEME curve launchpad (Decision 0101): the lane's PostgreSQL projection
+  // plus block-pinned reads of the curve on the launch slot. Without the
+  // four MEME_* keys and LAUNCH_USD1_ADDRESS every route is 503.
+  const memeRuntimeAvailable =
+    registeredModuleIds.includes("meme") &&
+    (options.memeService !== undefined ||
+      (database.meme !== undefined && v2CursorCodec !== null));
+  const memeContractAdapter =
+    options.memeContractAdapter ??
+    createMemeContractAdapter({
+      contract: config.meme.contract,
+      ...(config.meme.unconfiguredReason === null
+        ? {}
+        : { unconfiguredReason: config.meme.unconfiguredReason }),
+      chain: config.launchChain,
+      verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
+      logger: app.log,
+    });
+  const memeService =
+    options.memeService ??
+    (memeRuntimeAvailable && database.meme !== undefined
+      ? createMemeService({
+          config: config.meme,
+          repository: database.meme,
+          contract: memeContractAdapter,
+          cursorCodec: v2CursorCodec,
+          wallets: database.accountWallets ?? null,
+          readClient: asChainCallClient(launchChainReadClient ?? bscReadClient),
+          writes: config.bscWrites,
+          walletIntentExposureUsd: (input: {
+            readonly ownerUserId: string;
+            readonly since: string;
+          }) => walletIntentRuntime.repository.sumRecentExposureUsd(input),
+          publicBaseUrl: config.publicBaseUrl,
+          // Graduated rows read DexScreener like `category=meme` (56 only).
+          dexQuotes: async (_chainId, addresses) => {
+            const facts = await marketFactService.readAssetPrices(
+              addresses.map((address) => ({ address, status: "pending" })),
+            );
+            const quotes = new Map<
+              string,
+              MemeDexQuote | { readonly reasonCode: string }
+            >();
+            addresses.forEach((address, index) => {
+              const fact = facts[index];
+              const price = fact?.pair?.priceUsd ?? null;
+              quotes.set(
+                address,
+                fact === undefined ||
+                  price === null ||
+                  fact.fact.fetchedAt === null
+                  ? {
+                      reasonCode:
+                        fact?.fact.reasonCode ?? "MEME_DEX_QUOTE_UNAVAILABLE",
+                    }
+                  : {
+                      priceUsd: price,
+                      marketCapUsd: fact.pair?.marketCap ?? null,
+                      observedAt: fact.fact.fetchedAt,
+                    },
+              );
+            });
+            return quotes;
+          },
+          logger: app.log,
+          now: options.walletIntentNow ?? ((): Date => new Date()),
+        })
+      : createUnavailableMemeService());
+  if (memeRuntimeAvailable && memeContractAdapter.contract !== null) {
+    void memeContractAdapter.verifyAtStartup();
+  }
   // Community AI (Decision 0066). The capability opens on one fact: a
   // Provider API key (COMMUNITY_AI_API_KEY, falling back to
   // ANTHROPIC_API_KEY). Without it the composed service is the closed one,
@@ -2111,6 +2195,14 @@ export async function buildApp(
         supportRuntimeAvailable,
         communityAiRuntimeAvailable,
         pushRuntimeAvailable,
+        memeRuntimeAvailable,
+        memeContractState: () => {
+          const state = memeContractAdapter.currentAvailability();
+          return {
+            configured: memeContractAdapter.contract !== null,
+            reasonCode: state.status === "available" ? null : state.reasonCode,
+          };
+        },
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
@@ -2137,6 +2229,7 @@ export async function buildApp(
       launchService,
       miningService,
       referralService,
+      memeService,
       deviceService,
       pushTokenService,
       securityService,
