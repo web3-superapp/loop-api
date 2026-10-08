@@ -322,7 +322,12 @@ const tokenRowProperties = {
         additionalProperties: false,
         required: ["source", "observedAt"],
         properties: {
-          source: { type: "string", enum: ["loop_curve", "dexscreener"] },
+          source: {
+            type: "string",
+            enum: ["loop_curve", "dexscreener", "pool_slot0"],
+            description:
+              "loop_curve: the bonding-curve snapshot (not yet graduated). dexscreener: the graduated token's DexScreener pair (USD). pool_slot0 (Decision 0103): no DexScreener quote, so the price is derived from the graduated token's own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, 1.5 s cache); marketCapUsd1 is that price × 1e9.",
+          },
           observedAt: dateTimeSchema,
         },
       },
@@ -555,6 +560,8 @@ export const memeTokenDetailResourceSchema = {
                     },
                     { type: "null" },
                   ],
+                  description:
+                    "Decision 0103: non-null means the pool already existed at graduation and part of the funds stayed in the contract (only an operator can inject it). Rounding dust below 1 USD1 and below 1 token projects as null.",
                 },
               },
             },

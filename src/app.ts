@@ -403,6 +403,8 @@ import {
   type MemeService,
 } from "./features/meme/meme-service.js";
 import type { MemeDexQuote } from "./features/meme/meme-projection.js";
+import { memeRules } from "./features/meme/meme-contract.js";
+import { createMemePoolPriceReader } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
   type MemeContractAdapter,
@@ -1593,6 +1595,25 @@ export async function buildApp(
       logger: app.log,
       tokenLogos,
     });
+  // MEME curve adapter (Decision 0101), built before the market service so
+  // `category=meme` and the MEME rows share one slot0 reader (Decision 0103).
+  const memeContractAdapter =
+    options.memeContractAdapter ??
+    createMemeContractAdapter({
+      contract: config.meme.contract,
+      ...(config.meme.unconfiguredReason === null
+        ? {}
+        : { unconfiguredReason: config.meme.unconfiguredReason }),
+      chain: config.launchChain,
+      verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
+      logger: app.log,
+    });
+  const memePoolPriceReader = createMemePoolPriceReader({
+    usd1Address: () => config.meme.contract?.usd1Address ?? null,
+    readSqrtPriceX96: (pool) => memeContractAdapter.readPoolSqrtPriceX96(pool),
+    cacheMs: memeRules.chainReadCacheMs,
+    now: options.walletIntentNow ?? ((): Date => new Date()),
+  });
   const marketReadService =
     options.marketReadService ??
     createMarketReadService({
@@ -1602,6 +1623,10 @@ export async function buildApp(
       indexerRepository: bscIndexerRepository,
       watchlist: database.watchlistsV2 ?? null,
       categories: database.marketCategories ?? null,
+      memePoolPrices: Object.freeze({
+        chainId: config.launchChain.chainId,
+        read: memePoolPriceReader,
+      }),
       wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
       cursorCodec: v2CursorCodec,
@@ -1826,17 +1851,6 @@ export async function buildApp(
     registeredModuleIds.includes("meme") &&
     (options.memeService !== undefined ||
       (database.meme !== undefined && v2CursorCodec !== null));
-  const memeContractAdapter =
-    options.memeContractAdapter ??
-    createMemeContractAdapter({
-      contract: config.meme.contract,
-      ...(config.meme.unconfiguredReason === null
-        ? {}
-        : { unconfiguredReason: config.meme.unconfiguredReason }),
-      chain: config.launchChain,
-      verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
-      logger: app.log,
-    });
   const memeService =
     options.memeService ??
     (memeRuntimeAvailable && database.meme !== undefined
@@ -1883,6 +1897,7 @@ export async function buildApp(
             });
             return quotes;
           },
+          poolPrices: memePoolPriceReader,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),
         })

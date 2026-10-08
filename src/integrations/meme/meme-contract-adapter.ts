@@ -259,6 +259,13 @@ export interface MemeContractAdapter {
     input: { readonly token: string; readonly tokensIn: bigint },
     snapshot?: MemeContractSnapshot,
   ): Promise<MemeContractRead<MemeQuoteSellRead>>;
+  /**
+   * Decision 0103: `slot0().sqrtPriceX96` of a graduated token's
+   * PancakeSwap V3 pool at the latest block. Throws
+   * `MemeContractUnavailableError` when the read fails or the pool is not
+   * initialised (zero price).
+   */
+  readPoolSqrtPriceX96(pool: string): Promise<bigint>;
   encodeCreateToken(input: MemeCreateTokenCallInput): MemeContractCall;
   encodeBuy(input: MemeBuyCallInput): MemeContractCall;
   encodeSell(input: MemeSellCallInput): MemeContractCall;
@@ -296,6 +303,29 @@ export interface MemeSellCallInput {
 }
 
 export const memeContractMaximumLogRange = 2_000n;
+
+/**
+ * PancakeSwap V3 pool `slot0()` (Decision 0103). Only `sqrtPriceX96` is
+ * read; the other words decode as declared (Pancake's `feeProtocol` is
+ * uint32, unlike Uniswap's uint8).
+ */
+const pancakeV3PoolSlot0Abi = [
+  {
+    type: "function",
+    name: "slot0",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "observationIndex", type: "uint16" },
+      { name: "observationCardinality", type: "uint16" },
+      { name: "observationCardinalityNext", type: "uint16" },
+      { name: "feeProtocol", type: "uint32" },
+      { name: "unlocked", type: "bool" },
+    ],
+  },
+] as const;
 
 export class MemeContractUnavailableError extends Error {
   readonly code = "meme_contract_unavailable";
@@ -983,6 +1013,27 @@ export function createMemeContractAdapter(
         });
         return Object.freeze({ usd1Out, fee });
       });
+    },
+
+    async readPoolSqrtPriceX96(pool) {
+      const { client: readClient } = await requireReadable();
+      let sqrtPriceX96: bigint;
+      try {
+        const slot0 = await readClient.readContract({
+          address: requireAddress(pool, "pool"),
+          abi: pancakeV3PoolSlot0Abi,
+          functionName: "slot0",
+        });
+        sqrtPriceX96 = slot0[0];
+      } catch (error) {
+        return readFailed(error);
+      }
+      if (sqrtPriceX96 <= 0n) {
+        throw new MemeContractUnavailableError(
+          memeContractReasonCodes.readInvalid,
+        );
+      }
+      return sqrtPriceX96;
     },
 
     encodeCreateToken(request) {

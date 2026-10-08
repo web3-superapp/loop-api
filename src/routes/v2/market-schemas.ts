@@ -1049,15 +1049,15 @@ const marketQuoteSchema = {
     observedAt: dateTimeSchema,
     source: {
       type: "string",
-      enum: [...marketSources, "loop_curve"],
+      enum: [...marketSources, "loop_curve", "pool_slot0"],
       description:
-        "loop_curve (Decision 0101): an ungraduated MEME launchpad token priced from its bonding-curve snapshot (USD1 at par); change24hPct and volume24hUsd come from the indexed curve trades.",
+        "loop_curve (Decision 0101): an ungraduated MEME launchpad token priced from its bonding-curve snapshot (USD1 at par); change24hPct and volume24hUsd come from the indexed curve trades. pool_slot0 (Decision 0103): a graduated MEME token without a DexScreener quote, priced from its own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, quality derived); change24hPct and volume24hUsd are null.",
     },
     quality: {
       type: "string",
-      enum: ["fresh", "stale", "proxied"],
+      enum: ["fresh", "stale", "proxied", "derived"],
       description:
-        "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window.",
+        "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window; derived: computed by LOOP from a chain read (pool_slot0).",
     },
   },
 } as const;

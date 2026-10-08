@@ -49,6 +49,12 @@ import {
   type TokenPairsSnapshot,
 } from "../src/integrations/market/market-data-provider.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import type { MemeContractAdapter } from "../src/integrations/meme/meme-contract-adapter.js";
+import {
+  createFakeMemeAdapter,
+  memeEnv,
+  type FakeCurveChain,
+} from "./helpers/meme-service-fakes.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const validToken = "header.payload.signature";
@@ -693,9 +699,11 @@ describe("LOOP API V2 market module", () => {
     dependencies = fakes(),
     overrides: Readonly<Record<string, string>> = {},
     tokenLogoFetch?: typeof fetch,
+    memeContractAdapter?: MemeContractAdapter,
   ) {
     const app = await buildApp({
       ...(tokenLogoFetch === undefined ? {} : { tokenLogoFetch }),
+      ...(memeContractAdapter === undefined ? {} : { memeContractAdapter }),
       config: testConfig(overrides),
       contractSurface: "v2",
       database: dependencies.database,
@@ -2991,6 +2999,97 @@ describe("LOOP API V2 market module", () => {
           },
         }),
       ]);
+    });
+
+    it("prices a graduated testnet MEME token from its pool slot0 when DexScreener cannot (Decision 0103)", async () => {
+      const pool = "0x7777777777777777777777777777777777777777";
+      const chain: FakeCurveChain = {
+        curves: new Map(),
+        unavailable: false,
+        // The token sorts after USD1 (token1): 100 × 2^96 → 0.0001 USD1.
+        pools: new Map([[pool, 100n * (1n << 96n)]]),
+      };
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake({
+            listMemeCandidates: vi.fn(() =>
+              Promise.resolve([
+                // A mainnet candidate is never read from the 97 launch slot.
+                {
+                  assetId: frogAsset.assetId,
+                  curve: null,
+                  graduatedPool: pool,
+                },
+                {
+                  assetId: memeAsset.assetId,
+                  curve: null,
+                  graduatedPool: pool,
+                },
+              ]),
+            ),
+          }),
+        }),
+        { ...memeEnv, V2_MODULES_ENABLED: "market,chain,watchlist,meme" },
+        undefined,
+        createFakeMemeAdapter(chain),
+      );
+      const meme = await list(app, "category=meme");
+      expect(meme.statusCode).toBe(200);
+      const byId = new Map(meme.body.items.map((row) => [row["assetId"], row]));
+      expect(byId.get(memeAsset.assetId)).toEqual(
+        expect.objectContaining({
+          quote: {
+            priceUsd: "0.0001",
+            change24hPct: null,
+            marketCapUsd: "100000",
+            volume24hUsd: null,
+            observedAt: expect.any(String) as unknown,
+            source: "pool_slot0",
+            quality: "derived",
+          },
+          sparkline: {
+            status: "unavailable",
+            reasonCode: "MEME_POOL_SPARKLINE_UNAVAILABLE",
+          },
+        }),
+      );
+      expect(byId.get(memeAsset.assetId)).not.toHaveProperty(
+        "quoteUnavailable",
+      );
+      expect(byId.get(frogAsset.assetId)).toMatchObject({
+        quote: null,
+        quoteUnavailable: { reasonCode: "MARKET_PAIR_NOT_FOUND" },
+      });
+
+      // The pool read fails → the earlier reason stays.
+      chain.pools = new Map();
+      const { app: down } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake({
+            listMemeCandidates: vi.fn(() =>
+              Promise.resolve([
+                {
+                  assetId: memeAsset.assetId,
+                  curve: null,
+                  graduatedPool: pool,
+                },
+              ]),
+            ),
+          }),
+        }),
+        { ...memeEnv, V2_MODULES_ENABLED: "market,chain,watchlist,meme" },
+        undefined,
+        createFakeMemeAdapter(chain),
+      );
+      const unpriced = await list(down, "category=meme");
+      expect(unpriced.body.items[0]).toMatchObject({
+        quote: null,
+        quoteUnavailable: { reasonCode: "MARKET_CHAIN_NOT_PRICED" },
+      });
     });
 
     it("prices an ungraduated MEME launchpad token from its curve snapshot (Decision 0101)", async () => {

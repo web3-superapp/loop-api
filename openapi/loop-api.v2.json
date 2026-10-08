@@ -56871,14 +56871,20 @@
                                       "goplus",
                                       "geckoterminal",
                                       "loop_indexer",
-                                      "loop_curve"
+                                      "loop_curve",
+                                      "pool_slot0"
                                     ],
-                                    "description": "loop_curve (Decision 0101): an ungraduated MEME launchpad token priced from its bonding-curve snapshot (USD1 at par); change24hPct and volume24hUsd come from the indexed curve trades."
+                                    "description": "loop_curve (Decision 0101): an ungraduated MEME launchpad token priced from its bonding-curve snapshot (USD1 at par); change24hPct and volume24hUsd come from the indexed curve trades. pool_slot0 (Decision 0103): a graduated MEME token without a DexScreener quote, priced from its own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, quality derived); change24hPct and volume24hUsd are null."
                                   },
                                   "quality": {
                                     "type": "string",
-                                    "enum": ["fresh", "stale", "proxied"],
-                                    "description": "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window."
+                                    "enum": [
+                                      "fresh",
+                                      "stale",
+                                      "proxied",
+                                      "derived"
+                                    ],
+                                    "description": "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window; derived: computed by LOOP from a chain read (pool_slot0)."
                                   }
                                 }
                               },
@@ -134114,7 +134120,12 @@
                                 "properties": {
                                   "source": {
                                     "type": "string",
-                                    "enum": ["loop_curve", "dexscreener"]
+                                    "enum": [
+                                      "loop_curve",
+                                      "dexscreener",
+                                      "pool_slot0"
+                                    ],
+                                    "description": "loop_curve: the bonding-curve snapshot (not yet graduated). dexscreener: the graduated token's DexScreener pair (USD). pool_slot0 (Decision 0103): no DexScreener quote, so the price is derived from the graduated token's own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, 1.5 s cache); marketCapUsd1 is that price × 1e9."
                                   },
                                   "observedAt": {
                                     "type": "string",
@@ -134940,7 +134951,12 @@
                               "properties": {
                                 "source": {
                                   "type": "string",
-                                  "enum": ["loop_curve", "dexscreener"]
+                                  "enum": [
+                                    "loop_curve",
+                                    "dexscreener",
+                                    "pool_slot0"
+                                  ],
+                                  "description": "loop_curve: the bonding-curve snapshot (not yet graduated). dexscreener: the graduated token's DexScreener pair (USD). pool_slot0 (Decision 0103): no DexScreener quote, so the price is derived from the graduated token's own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, 1.5 s cache); marketCapUsd1 is that price × 1e9."
                                 },
                                 "observedAt": {
                                   "type": "string",
@@ -135271,7 +135287,8 @@
                                       }
                                     },
                                     { "type": "null" }
-                                  ]
+                                  ],
+                                  "description": "Decision 0103: non-null means the pool already existed at graduation and part of the funds stayed in the contract (only an operator can inject it). Rounding dust below 1 USD1 and below 1 token projects as null."
                                 }
                               }
                             },
@@ -136179,7 +136196,12 @@
                               "properties": {
                                 "source": {
                                   "type": "string",
-                                  "enum": ["loop_curve", "dexscreener"]
+                                  "enum": [
+                                    "loop_curve",
+                                    "dexscreener",
+                                    "pool_slot0"
+                                  ],
+                                  "description": "loop_curve: the bonding-curve snapshot (not yet graduated). dexscreener: the graduated token's DexScreener pair (USD). pool_slot0 (Decision 0103): no DexScreener quote, so the price is derived from the graduated token's own PancakeSwap V3 pool slot0().sqrtPriceX96 (USD1 at par, 1.5 s cache); marketCapUsd1 is that price × 1e9."
                                 },
                                 "observedAt": {
                                   "type": "string",
@@ -136510,7 +136532,8 @@
                                       }
                                     },
                                     { "type": "null" }
-                                  ]
+                                  ],
+                                  "description": "Decision 0103: non-null means the pool already existed at graduation and part of the funds stayed in the contract (only an operator can inject it). Rounding dust below 1 USD1 and below 1 token projects as null."
                                 }
                               }
                             },

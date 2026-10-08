@@ -34,11 +34,16 @@ import type {
  * percentages are decimal strings with two decimals.
  */
 
-/** A DexScreener quote of a graduated token (USD, decimal strings). */
+/**
+ * The quote of a graduated token (decimal strings): DexScreener (USD), or
+ * Decision 0103's `pool_slot0` read of its own pool (USD1 at par).
+ */
 export interface MemeDexQuote {
   readonly priceUsd: string;
   readonly marketCapUsd: string | null;
   readonly observedAt: string;
+  /** Absent = `dexscreener`. */
+  readonly source?: "dexscreener" | "pool_slot0";
 }
 
 export type MemeDexQuoteReader = (
@@ -117,7 +122,10 @@ export function projectMemeTokenRow(
     if (dex !== undefined && "priceUsd" in dex) {
       price = dex.priceUsd;
       marketCap = dex.marketCapUsd;
-      priceSource = { source: "dexscreener", observedAt: dex.observedAt };
+      priceSource = {
+        source: dex.source ?? "dexscreener",
+        observedAt: dex.observedAt,
+      };
     } else {
       quoteUnavailable = {
         reasonCode:
@@ -200,14 +208,35 @@ export function projectMemeGraduation(
     tokensToPool: record.tokensToPool,
     feeUsd1: record.graduationFeeUsd1,
     at: record.graduatedAt,
-    residual:
-      record.residualUsd1 === null
-        ? null
-        : {
-            usd1Left: record.residualUsd1,
-            tokensLeft: record.residualTokens ?? "0",
-          },
+    residual: projectMemeResidual(record),
   };
+}
+
+/** One whole USD1 / one whole token, both 18 decimals. */
+const memeResidualDustThreshold = 10n ** 18n;
+
+/**
+ * Decision 0103: a residual below 1 USD1 and below 1 token is the curve's
+ * rounding dust (every graduation leaves some), so it projects as null. A
+ * non-null residual therefore means the pool already existed at graduation
+ * and part of the funds stayed in the contract. The lane keeps every
+ * `GraduationResidual` event unchanged.
+ */
+function projectMemeResidual(
+  record: MemeTokenRecord,
+): Record<string, string> | null {
+  if (record.residualUsd1 === null) {
+    return null;
+  }
+  const usd1Left = record.residualUsd1;
+  const tokensLeft = record.residualTokens ?? "0";
+  if (
+    BigInt(usd1Left) < memeResidualDustThreshold &&
+    BigInt(tokensLeft) < memeResidualDustThreshold
+  ) {
+    return null;
+  }
+  return { usd1Left, tokensLeft };
 }
 
 /** Holder share of the 1e9 total supply, in basis points (rounded down). */

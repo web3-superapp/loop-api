@@ -42,6 +42,7 @@ import {
   type MemeRepository,
   type MemeSaltScope,
 } from "../src/features/meme/meme-repository.js";
+import { projectMemeGraduation } from "../src/features/meme/meme-projection.js";
 import { decodeMemeCurveLogs } from "../src/integrations/meme/meme-contract-adapter.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 import {
@@ -689,10 +690,16 @@ describe("Decision 0101 MEME launchpad on PostgreSQL", () => {
     const graduatedCandidate = (
       await database.marketCategories?.listMemeCandidates(50)
     )?.find((row) => row.assetId === `${chainId}:${token}`);
+    // Decision 0103: the graduated pool feeds the slot0 fallback.
     expect(graduatedCandidate).toEqual({
       assetId: `${chainId}:${token}`,
+      graduatedPool: pool_,
       curve: null,
     });
+    // Decision 0103: the lane keeps the 5-wei residual; the wire hides dust.
+    expect(
+      graduated === null ? undefined : projectMemeGraduation(graduated),
+    ).toMatchObject({ pool: pool_, residual: null });
   });
 
   it("refuses a TokenCreated whose metadata does not match the draft", async () => {

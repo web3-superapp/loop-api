@@ -477,6 +477,135 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     });
   });
 
+  it("projects residual dust as null and prices graduated tokens from pool slot0 (Decision 0103)", async () => {
+    const pool = "0x7777777777777777777777777777777777777777";
+    const deadPool = "0x8888888888888888888888888888888888888888";
+    const chain: FakeCurveChain = {
+      curves: new Map(),
+      unavailable: false,
+      // Token 0xac42… > USD1 0x2222…, so USD1 is token0 and the token is
+      // token1: sqrtPriceX96 = sqrt(1 / 0.0001) × 2^96 prices 0.0001 USD1.
+      pools: new Map([[pool, 100n * (1n << 96n)]]),
+    };
+    const { app, repository } = await createApp({ chain });
+    const graduated = (
+      overrides: Parameters<typeof memeTokenFixture>[0],
+    ): ReturnType<typeof memeTokenFixture> => {
+      const token = memeTokenFixture({
+        status: "graduated",
+        graduatedAt: "2026-10-08T05:00:00.000Z",
+        poolAddress: pool,
+        graduationTxHash: `0x${"50".repeat(32)}`,
+        lpTokenId: "42",
+        usd1ToPool: "16982000000000000000000",
+        tokensToPool: "200000000000000000000000000",
+        graduationFeeUsd1: "600000000000000000000",
+        ...overrides,
+      });
+      repository.tokens.set(token.memeTokenId, token);
+      return token;
+    };
+    const dust = graduated({
+      residualUsd1: "100012",
+      residualTokens: "23",
+    });
+    const usd1Left = graduated({
+      tokenAddress: "0xac42e9101f379437f3cce49a5b58609dd9a0ca95",
+      residualUsd1: memeE18.toString(),
+      residualTokens: "23",
+      poolAddress: deadPool,
+    });
+    const tokensLeft = graduated({
+      tokenAddress: "0xac42e9101f379437f3cce49a5b58609dd9a0ca96",
+      residualUsd1: "0",
+      residualTokens: (5n * memeE18).toString(),
+    });
+    const none = graduated({
+      tokenAddress: "0xac42e9101f379437f3cce49a5b58609dd9a0ca97",
+    });
+
+    const detailOf = async (id: string) => {
+      const response = await get(app, `/v2/meme/tokens/${id}`);
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{ memeToken: Record<string, unknown> }>();
+      expectKeys(
+        body.memeToken,
+        requiredOf(memeTokenDetailResourceSchema, ["memeToken"]),
+      );
+      return body.memeToken;
+    };
+
+    // Three residual states: dust → null; ≥ 1 USD1 or ≥ 1 token → kept.
+    const dustDetail = await detailOf(dust.memeTokenId);
+    expect(dustDetail["graduation"]).toMatchObject({ pool, residual: null });
+    expect((await detailOf(none.memeTokenId))["graduation"]).toMatchObject({
+      residual: null,
+    });
+    expect((await detailOf(usd1Left.memeTokenId))["graduation"]).toMatchObject({
+      residual: { usd1Left: memeE18.toString(), tokensLeft: "23" },
+    });
+    expect(
+      (await detailOf(tokensLeft.memeTokenId))["graduation"],
+    ).toMatchObject({
+      residual: { usd1Left: "0", tokensLeft: (5n * memeE18).toString() },
+    });
+
+    // 97 has no DexScreener quote: the pool's slot0 prices the token.
+    expect(dustDetail).toMatchObject({
+      priceUsd1: "0.0001",
+      marketCapUsd1: "100000",
+      change1hPct: null,
+      priceSource: {
+        source: "pool_slot0",
+        observedAt: new Date(Number(memeNowSeconds) * 1000).toISOString(),
+      },
+    });
+    expect(dustDetail).not.toHaveProperty("quoteUnavailable");
+    // A failed pool read keeps the DexScreener reason.
+    const unpriced = await detailOf(usd1Left.memeTokenId);
+    expect(unpriced).toMatchObject({
+      priceUsd1: null,
+      marketCapUsd1: null,
+      priceSource: null,
+      quoteUnavailable: { reasonCode: "MEME_DEX_CHAIN_NOT_PRICED" },
+    });
+
+    // The graduated tab rows use the same fallback.
+    const list = await get(app, "/v2/meme/tokens?tab=graduated");
+    expect(list.statusCode).toBe(200);
+    const rows = new Map(
+      list
+        .json<{ items: Record<string, unknown>[] }>()
+        .items.map((row) => [row["memeTokenId"], row]),
+    );
+    expect(rows.get(dust.memeTokenId)).toMatchObject({
+      priceUsd1: "0.0001",
+      priceSource: { source: "pool_slot0" },
+    });
+    expect(rows.get(usd1Left.memeTokenId)).toMatchObject({
+      priceUsd1: null,
+      quoteUnavailable: { reasonCode: "MEME_DEX_CHAIN_NOT_PRICED" },
+    });
+
+    // A successful slot0 read is reused for 1.5 s (the clock is fixed here),
+    // so an RPC outage inside the window still serves it; the failed pool is
+    // never cached and keeps its reason.
+    chain.unavailable = true;
+    const cached = await get(app, "/v2/meme/tokens?tab=graduated");
+    const cachedRows = new Map(
+      cached
+        .json<{ items: Record<string, unknown>[] }>()
+        .items.map((row) => [row["memeTokenId"], row]),
+    );
+    expect(cachedRows.get(dust.memeTokenId)).toMatchObject({
+      priceUsd1: "0.0001",
+      priceSource: { source: "pool_slot0" },
+    });
+    expect(cachedRows.get(usd1Left.memeTokenId)).toMatchObject({
+      quoteUnavailable: { reasonCode: "MEME_DEX_CHAIN_NOT_PRICED" },
+    });
+  });
+
   it("quotes buys and sells with the recomputation and the wallet cap", async () => {
     const { app, repository, chain } = await createApp({
       funds: defaultMemeFunds({ tokenBalance: memeWalletCap - 1n }),

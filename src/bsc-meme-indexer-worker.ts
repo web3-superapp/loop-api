@@ -51,7 +51,8 @@ import type { MemeGraduationSender } from "./integrations/meme/meme-graduation-s
  *   30 minutes and mines CREATE2 salts offline until `MEME_SALT_POOL_TARGET`
  *   free salts end in `MEME_VANITY_SUFFIX`.
  * - receipt reconcile of reported `meme_intents` (the Decision 0080 rules).
- * - graduation fallback executor: a token `full` for 60 s without
+ * - graduation fallback executor: a token `full` for
+ *   MEME_GRADUATION_DELAY_SECONDS (default 15 s, Decision 0103) without
  *   `Graduated` gets `graduate(token)` from the deployer key; a failure is
  *   retried every 5 minutes, 10 times at most, then `needs_operator`.
  */
@@ -714,7 +715,8 @@ export function createMemeIntentReconciler(options: {
 }
 
 export const MEME_GRADUATION_INTERVAL_MS = 15_000;
-export const MEME_GRADUATION_FULL_GRACE_MS = 60_000;
+/** Decision 0103 default; the runtime passes MEME_GRADUATION_DELAY_SECONDS. */
+export const MEME_GRADUATION_FULL_GRACE_MS = 15_000;
 export const MEME_GRADUATION_RETRY_MS = 5 * 60_000;
 export const MEME_GRADUATION_MAXIMUM_ATTEMPTS = 10;
 
@@ -728,7 +730,8 @@ export interface MemeGraduationEvent {
 }
 
 /**
- * Graduation fallback (docs/10 §1): tokens `full` for at least 60 s with no
+ * Graduation fallback (docs/10 §1): tokens `full` for at least
+ * `fullGraceMs` (MEME_GRADUATION_DELAY_SECONDS, default 15 s) with no
  * `Graduated` log get `graduate(token)`. The `Graduated` log, read by the
  * `meme_event` lane, is the only evidence of graduation; a confirmed
  * transaction here only stops retries.
@@ -738,6 +741,7 @@ export function createMemeGraduationExecutor(options: {
   readonly sender: MemeGraduationSender;
   readonly chainId: LaunchChainId;
   readonly intervalMs?: number;
+  readonly fullGraceMs?: number;
   readonly now?: () => Date;
   readonly onAttempt?: (event: MemeGraduationEvent) => void;
   readonly onInfrastructureBackoff?: (
@@ -745,6 +749,7 @@ export function createMemeGraduationExecutor(options: {
   ) => void;
 }): PeriodicLane {
   const now = options.now ?? ((): Date => new Date());
+  const fullGraceMs = options.fullGraceMs ?? MEME_GRADUATION_FULL_GRACE_MS;
   return periodicLane(
     "meme_graduation_executor",
     options.intervalMs ?? MEME_GRADUATION_INTERVAL_MS,
@@ -752,9 +757,7 @@ export function createMemeGraduationExecutor(options: {
       const at = now();
       const candidates = await options.repository.listGraduationCandidates({
         chainId: options.chainId,
-        fullBefore: new Date(
-          at.getTime() - MEME_GRADUATION_FULL_GRACE_MS,
-        ).toISOString(),
+        fullBefore: new Date(at.getTime() - fullGraceMs).toISOString(),
         now: at.toISOString(),
         limit: 5,
       });

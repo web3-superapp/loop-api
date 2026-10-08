@@ -358,8 +358,9 @@ Order for a first deployment:
 5. Worker: `MEME_INDEXER_ENABLED=true` starts the `meme_event` lane from
    `MEME_CONTRACT_START_BLOCK`, the salt pool (every 5 min), and the Intent
    receipt reconcile. `MEME_GRADUATION_EXECUTOR_ENABLED=true` additionally signs
-   `graduate(token)` with `LAUNCH_DEPLOYER_PRIVATE_KEY` for curves `full` for 60 s
-   (10 attempts, then `graduation_needs_operator`). Both default to false.
+   `graduate(token)` with `LAUNCH_DEPLOYER_PRIVATE_KEY` for curves `full` for
+   `MEME_GRADUATION_DELAY_SECONDS` (default 15, 0–600, Decision 0103; polled every
+   15 s, 10 attempts, then `graduation_needs_operator`). Both default to false.
 6. Intents need `BSC_WRITES_ENABLED=true` with MockUSD1 (`eip155:97:0x17d5…ce2b`)
    in `BSC_WRITE_CANARY_ASSETS`; with a non-empty
    `BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST` add the curve address to it.
