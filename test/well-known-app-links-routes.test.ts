@@ -275,6 +275,48 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     }
   });
 
+  it("serves a static community landing page that neither reads the database nor echoes the community (Decision 0095)", async () => {
+    const { app, database } = await buildTestApp({
+      APP_DOWNLOAD_URL: "https://testflight.apple.com/join/example",
+    });
+    const communityId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+    const response = await app.inject({
+      method: "GET",
+      url: `/c/${communityId}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers["cache-control"]).toBe("public, max-age=3600");
+    expect(response.headers["content-security-policy"]).toContain(
+      "default-src 'none'",
+    );
+    expect(response.headers["x-robots-tag"]).toBe("noindex");
+    expect(response.body).toContain("社区邀请");
+    expect(response.body).toContain(
+      'href="https://testflight.apple.com/join/example"',
+    );
+    expect(response.body).not.toContain(communityId);
+    expect(database.lookups).not.toHaveBeenCalled();
+
+    for (const url of [
+      "/c/not-a-community",
+      "/c/3FA85F64-5717-4562-B3FC-2C963F66AFA6",
+      "/c/%3Cscript%3E",
+    ]) {
+      const invalid = await app.inject({ method: "GET", url });
+      expect(invalid.statusCode).toBe(404);
+      expect(invalid.headers["cache-control"]).toBe("no-store");
+      expect(invalid.body).toContain("链接无效");
+      expect(invalid.body).not.toContain("<script>");
+    }
+    // The voice-room page keeps its own route.
+    const room = await app.inject({
+      method: "GET",
+      url: `/c/${communityId}/room`,
+    });
+    expect(room.body).toContain("语音房邀请");
+  });
+
   it("keeps the landing page and both association files out of OpenAPI", async () => {
     const { app } = await buildTestApp();
     await app.ready();
@@ -285,6 +327,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
 
     expect(paths).not.toContain("/u/{loopId}");
     expect(paths).not.toContain("/c/{communityId}/room");
+    expect(paths).not.toContain("/c/{communityId}");
     expect(paths).not.toContain("/.well-known/assetlinks.json");
     expect(paths).not.toContain("/.well-known/apple-app-site-association");
   });

@@ -304,7 +304,7 @@ describe("LOOP API V2 profile module", () => {
     expect(projected["profile"]).toMatchObject({ availability: "available" });
     expect(projected["avatarUpload"]).toMatchObject({
       availability: "unavailable",
-      reasonCode: "AVATAR_STORAGE_NOT_SELECTED",
+      reasonCode: "AVATAR_STORAGE_UNAVAILABLE",
     });
   });
 
@@ -713,7 +713,7 @@ describe("LOOP API V2 profile module", () => {
     expect(verifyAccessToken).not.toHaveBeenCalled();
   });
 
-  it("returns fail-closed privacy defaults and replaces them with CAS", async () => {
+  it("returns the privacy defaults (holdings and trades public) and replaces them with CAS", async () => {
     const { app, profilesV2 } = await createApp();
     const defaults = await app.inject({
       method: "GET",
@@ -721,15 +721,16 @@ describe("LOOP API V2 profile module", () => {
       headers: commonHeaders(),
     });
     expect(defaults.statusCode).toBe(200);
+    // Decision 0095 (docs/09 B11): holdings and trades default public.
     expect(defaults.json()).toEqual({
       privacy: {
         discoverable: false,
         anonymousMode: false,
         visibility: {
-          totalAssets: "self",
+          totalAssets: "everyone",
           miningPower: "self",
           communities: "self",
-          tradeHistory: "self",
+          tradeHistory: "everyone",
         },
         friendRequests: "enabled",
         groupInvites: "friends",

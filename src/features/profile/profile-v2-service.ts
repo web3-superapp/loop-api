@@ -5,6 +5,9 @@ import { V2ApiError } from "../../core/http/v2-error.js";
 import { deriveStreamUserId } from "../identity/loop-identifiers.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import type { V2SessionWriteMetadata } from "../session/session-contract.js";
+import { avatarRefMediaId } from "../media/media-contract.js";
+import type { MediaService } from "../media/media-service.js";
+import type { StreamUserSync } from "../communication/stream-user-identity.js";
 import type { AliasPolicy } from "./alias-policy.js";
 import { avatarPresets, type AvatarPreset } from "./avatar-presets.js";
 import {
@@ -153,7 +156,40 @@ function mapFailure(error: unknown): never {
 export function createProfileV2Service(options: {
   readonly repository: ProfileV2Repository;
   readonly aliasPolicy: AliasPolicy;
+  /**
+   * Decision 0095: checks that an `avatar:media/{id}` ref is the caller's
+   * own upload. Absent means media storage is not composed, so such a ref
+   * fails closed with CAPABILITY_UNAVAILABLE.
+   */
+  readonly media?: Pick<MediaService, "assertAvatarRefOwned"> | null;
+  /**
+   * Decision 0095: upserts the caller's Stream user `{id, name, image}` after
+   * a committed profile write. Best effort; absent means no Stream sync.
+   */
+  readonly streamUsers?: StreamUserSync | null;
 }): ProfileV2Service {
+  const media = options.media ?? null;
+  const streamUsers = options.streamUsers ?? null;
+
+  async function assertAvatarAllowed(
+    ownerUserId: string,
+    avatarRef: string | null,
+  ): Promise<void> {
+    if (avatarRefMediaId(avatarRef) === null) {
+      return;
+    }
+    if (media === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    await media.assertAvatarRefOwned({ ownerUserId, avatarRef });
+  }
+
+  async function syncStreamUser(ownerUserId: string): Promise<void> {
+    if (streamUsers !== null) {
+      await streamUsers.syncUser(ownerUserId);
+    }
+  }
+
   function assertAliasAllowed(alias: string | null): void {
     if (alias === null) {
       return;
@@ -190,7 +226,8 @@ export function createProfileV2Service(options: {
       try {
         const request = parseReplaceProfileV2Request(input.body);
         assertAliasAllowed(request.profile.alias);
-        return toProfileResource(
+        await assertAvatarAllowed(principal.userId, request.profile.avatarRef);
+        const resource = toProfileResource(
           await options.repository.replaceProfile({
             ownerUserId: principal.userId,
             expectedVersion: request.expectedVersion,
@@ -198,6 +235,8 @@ export function createProfileV2Service(options: {
           }),
           principal.userId,
         );
+        await syncStreamUser(principal.userId);
+        return resource;
       } catch (error) {
         return mapFailure(error);
       }
@@ -208,7 +247,8 @@ export function createProfileV2Service(options: {
       try {
         const activation = parseProfileV2ActivationValues(input.body);
         assertAliasAllowed(activation.alias);
-        return toProfileResource(
+        await assertAvatarAllowed(principal.userId, activation.avatarRef);
+        const activated = toProfileResource(
           await options.repository.activateProfile({
             ownerUserId: principal.userId,
             idempotencyKey: input.metadata.idempotencyKey,
@@ -221,6 +261,8 @@ export function createProfileV2Service(options: {
           }),
           principal.userId,
         );
+        await syncStreamUser(principal.userId);
+        return activated;
       } catch (error) {
         return mapFailure(error);
       }

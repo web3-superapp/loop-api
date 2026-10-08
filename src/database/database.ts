@@ -48,6 +48,12 @@ import {
   type NotificationRepository,
 } from "./notification-repository.js";
 import { createPostgresPushRepository } from "./push-repository.js";
+import { createPostgresMediaRepository } from "./media-repository.js";
+import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
+import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
+import type { MediaStorage } from "../features/media/media-storage.js";
+import type { PublicProfileRepository } from "../features/profile/public-profile-repository.js";
+import type { StreamUserIdentityRepository } from "../features/communication/stream-user-identity.js";
 import type { PushRepository } from "../features/push/push-repository.js";
 import {
   createPostgresWalletIntentRepository,
@@ -171,6 +177,12 @@ export interface Database {
   readonly marketFacts?: MarketFactCacheRepository;
   /** Token logo proxy cache (Decision 0089). */
   readonly tokenLogoCache?: TokenLogoCacheRepository;
+  /** Uploaded avatars and community logos (Decision 0095). */
+  readonly media?: MediaStorage;
+  /** Public profile reads, friend removal, recommended communities (Decision 0095). */
+  readonly publicProfiles?: PublicProfileRepository;
+  /** Identity facts projected onto Stream users (Decision 0095). */
+  readonly streamUserIdentities?: StreamUserIdentityRepository;
   /** V2 price alerts keyed by asset ID (Decision 0034). */
   readonly alertsV2?: AlertV2Repository;
   /** Context notification feed and V2 preferences (Decision 0034). */
@@ -205,6 +217,7 @@ export interface PostgresDatabase extends Database {
   readonly voiceRoomReaper: VoiceRoomReaperRepository;
   /** Decision 0055 community chat personas. */
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
+  readonly streamUserIdentities: StreamUserIdentityRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -325,6 +338,9 @@ export function createPostgresDatabase(
   const alerts = createPostgresAlertRepository(pool);
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
   const tokenLogoCache = createPostgresTokenLogoCacheRepository(pool);
+  const media = createPostgresMediaRepository(pool);
+  const publicProfiles = createPostgresPublicProfileRepository(pool);
+  const streamUserIdentities = createPostgresStreamUserIdentityRepository(pool);
   const alertsV2 = createPostgresAlertV2Repository(pool);
   const notifications = createPostgresNotificationRepository(pool);
   const push = createPostgresPushRepository(pool);
@@ -386,6 +402,9 @@ export function createPostgresDatabase(
     alerts,
     marketFacts,
     tokenLogoCache,
+    media,
+    publicProfiles,
+    streamUserIdentities,
     alertsV2,
     notifications,
     push,

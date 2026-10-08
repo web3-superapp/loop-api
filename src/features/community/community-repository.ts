@@ -535,6 +535,20 @@ export class CommunityIdempotencyConflictError extends Error {
   }
 }
 
+/**
+ * A `logo:media/{id}` ref that is not a community logo the caller uploaded
+ * (create) or that an owner/admin of the community uploaded (update)
+ * (Decision 0095).
+ */
+export class CommunityLogoMediaRejectedError extends Error {
+  readonly code = "community_logo_media_rejected";
+
+  constructor() {
+    super("The community logo media is not authorized");
+    this.name = "CommunityLogoMediaRejectedError";
+  }
+}
+
 /** The account has no activated V2 profile, so it has no public identity. */
 export class CommunityProfileRequiredError extends Error {
   readonly code = "community_profile_required";

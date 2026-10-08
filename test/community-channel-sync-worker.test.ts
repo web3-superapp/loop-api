@@ -647,6 +647,43 @@ describe("community channel sync worker lane", () => {
     );
   });
 
+  it("adds without a persona and never touches the persona table in real-identity mode (Decision 0095)", async () => {
+    const { repository, completeJob } = repositoryFake([
+      job(),
+      job({ kind: "remove" }),
+    ]);
+    const { gateway, addMembers } = gatewayMocks();
+    const personas = personasFake(
+      {},
+      { claimedCount: 3, confirmedCount: 2, deferredCount: 1 },
+    );
+    const worker = createCommunityChannelSyncWorker({
+      repository,
+      gateway,
+      personas: personas.personas,
+      realIdentity: true,
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      succeededCount: 2,
+      personaClaimedCount: 0,
+      personaConfirmedCount: 0,
+      personaDeferredCount: 0,
+    });
+    expect(addMembers).toHaveBeenCalledTimes(1);
+    expect(addMembers.mock.calls[0]?.[0]).not.toHaveProperty("memberPersonas");
+    expect(completeJob).toHaveBeenCalledWith(
+      expect.objectContaining({ memberState: "synced" }),
+    );
+    expect(personas.ensurePersona).not.toHaveBeenCalled();
+    expect(personas.confirmProjection).not.toHaveBeenCalled();
+    expect(personas.requestProjection).not.toHaveBeenCalled();
+    expect(personas.resetProjectionForMember).not.toHaveBeenCalled();
+    expect(personas.syncPendingProjections).not.toHaveBeenCalled();
+  });
+
   it("resets the member's persona projection after a remove", async () => {
     const { repository } = repositoryFake([job({ kind: "remove" })]);
     const { gateway } = gatewayMocks();

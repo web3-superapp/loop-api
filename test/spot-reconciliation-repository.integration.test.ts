@@ -1266,6 +1266,7 @@ describe("PostgreSQL Spot reconciliation repository", () => {
   const repository = createPostgresSpotReconciliationRepository(pool);
   const truncateFixtureState = `
     truncate table
+      public.media_objects,
       public.push_deliveries,
       public.device_push_token_commands,
       public.device_push_tokens,

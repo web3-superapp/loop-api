@@ -11,8 +11,8 @@
 - 后端 `V2_MODULES_ENABLED` 必须包含 `profile`。未启用时本文所有路径都返回
   `404 NOT_FOUND`（V2 错误体），`GET /v2/meta/capabilities` 的 `profile`
   为 `deferred`。前端应先读 capabilities：`profile.availability === "available"`
-  才调用本模块；`avatarUpload` 恒为 `unavailable`（`AVATAR_STORAGE_NOT_SELECTED`），
-  不要展示上传入口为可用。
+  才调用本模块；`avatarUpload` 为 `available` 时才展示「上传头像」（决策 0095，
+  S107）；为 `unavailable`（`AVATAR_STORAGE_UNAVAILABLE`）时只给默认头像。
 - 受保护读写接口（`/v2/profile`、`/v2/profile/privacy`）必需：
 
 ```text
@@ -182,8 +182,12 @@ body：
 ## `GET /v2/profile/privacy`
 
 无 body/query。无行时返回 version 0 的默认值（不落库）。展示类开关 fail-closed
-（`discoverable=false`、四个可见性面 `self`）；三个社交开关**默认开启**
-（决策 0070，用户 2026-09-23 裁决）：
+（`discoverable=false`、`miningPower`/`communities` 为 `self`），但
+**`totalAssets` 与 `tradeHistory` 默认 `everyone`**（决策 0095，docs/09 B11
+「主页持仓默认公开可关」；迁移 000046 已把存量 `self` 翻成 `everyone`）；
+三个社交开关**默认开启**（决策 0070，用户 2026-09-23 裁决）。隐私页
+「公开持仓与交易」单开关 = 同时写 `totalAssets` 与 `tradeHistory`
+（`everyone` / `self`）；「匿名模式」开关 UI 下线，字段保留原样回写：
 
 ```json
 {
@@ -191,10 +195,10 @@ body：
     "discoverable": false,
     "anonymousMode": false,
     "visibility": {
-      "totalAssets": "self",
+      "totalAssets": "everyone",
       "miningPower": "self",
       "communities": "self",
-      "tradeHistory": "self"
+      "tradeHistory": "everyone"
     },
     "friendRequests": "enabled",
     "groupInvites": "friends",
@@ -302,8 +306,13 @@ body：
 
 ```json
 { "capabilityId": "profile", "availability": "available", "reasonCode": null, "evidence": { "status": "notApplicable", "reasonCode": null } }
-{ "capabilityId": "avatarUpload", "availability": "unavailable", "reasonCode": "AVATAR_STORAGE_NOT_SELECTED", "evidence": { "status": "notApplicable", "reasonCode": null } }
+{ "capabilityId": "avatarUpload", "availability": "available", "reasonCode": null, "evidence": { "status": "notApplicable", "reasonCode": null } }
 ```
+
+`avatarUpload` 自决策 0095 起由运行时决定：`profile` 可用 + PostgreSQL 媒体存储
+已组合 + `STREAM_TOKEN_QUOTA_HMAC_SECRET` 已配置 → `available`；否则
+`unavailable` / `AVATAR_STORAGE_UNAVAILABLE`（原 `AVATAR_STORAGE_NOT_SELECTED`
+已改名）。
 
 `profile` 未启用时为 `deferred` / `PROFILE_MODULE_NOT_ENABLED`；启用但数据库未
 组合时为 `unavailable` / `PROFILE_RUNTIME_UNAVAILABLE`。
@@ -311,6 +320,89 @@ body：
 `GET /v2/meta/client-policy` 的 `versionGate` / `termsGate` 在配置了策略但
 `effectiveAt` 尚未到达时保持 `unavailable`，`reasonCode` 为
 `POLICY_NOT_YET_EFFECTIVE`（解析器需接受该枚举值）。
+
+## 媒体上传与头像（决策 0095，S107）
+
+### `POST /v2/media/avatars`、`POST /v2/media/community-logos`
+
+```text
+Authorization: Bearer <current Privy access token>
+X-Loop-Contract-Version: 2.0
+X-Loop-Client-Version: 1.0.0
+Idempotency-Key: <canonical lowercase UUIDv4, 每次新选图换一个>
+Content-Type: multipart/form-data; boundary=...
+```
+
+- body：**只有一个** part，名字 `file`（文件名、声明的 Content-Type 都不看）。
+  其它 part、多个文件、part 名不是 `file`、非 multipart → `400 INVALID_REQUEST`。
+- 内容按魔数识别：JPEG / PNG / WebP / HEIC(HEIF)。≤ 5 MiB，宽高都 ≥ 64 px。
+  服务端统一转成 **512×512 cover WebP（质量 82，去元数据）**，客户端裁成方形再传
+  效果最好。HEVC 编码的 HEIC 服务端解不了 → `MEDIA_DECODE_FAILED`，iOS 请交
+  JPEG（image_picker 指定 `imageQuality` 即输出 JPEG）。
+- 不需要已激活资料：注册页 `loop-id-setup` 激活前即可上传。
+- 限频：两个上传接口合计每用户每分钟 6 次 → `429 RATE_LIMITED`（`retryable: true`）。
+- 幂等：同一 `Idempotency-Key` + 同一字节 → 返回同一对象（201，同 body）；
+  同 key 不同字节或换了接口 → `409 IDEMPOTENCY_CONFLICT`。
+
+`201`：
+
+```json
+{
+  "mediaId": "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+  "ref": "avatar:media/6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+  "url": "/v2/media/6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f.webp",
+  "width": 512,
+  "height": 512,
+  "contractVersion": "2.0"
+}
+```
+
+社区 logo 上传返回 `ref: "logo:media/{mediaId}"`。`url` 是相对路径，客户端拼
+API base URL。
+
+错误（七字段错误体）：
+
+| HTTP | code                                                  | 说明                                                                                                                        |
+| ---- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                                     | 缺/错 header、非 multipart、part 不对                                                                                       |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID`                      | Bearer 缺失或无效                                                                                                           |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED` / `IDEMPOTENCY_CONFLICT` |                                                                                                                             |
+| 422  | `VALIDATION_FAILED`                                   | `detailsSafe.reasonCode` ∈ `MEDIA_TYPE_UNSUPPORTED`、`MEDIA_TOO_LARGE`、`MEDIA_DIMENSIONS_TOO_SMALL`、`MEDIA_DECODE_FAILED` |
+| 429  | `RATE_LIMITED`                                        | 每分钟 6 次                                                                                                                 |
+| 503  | `CAPABILITY_UNAVAILABLE`                              | 存储或限频未组合（与 `avatarUpload` unavailable 一致）                                                                      |
+
+### `GET /v2/media/{mediaId}.webp`
+
+公共图片资源，**不带任何 header**（与 `/v2/market/logos/...` 一样）。
+`200 image/webp`，`Cache-Control: public, max-age=31536000, immutable`，强
+`ETag`；带 `If-None-Match` → `304`。不存在 → `404 NOT_FOUND`；ID 格式错 →
+`400 INVALID_REQUEST`。对象不可变，客户端可永久缓存。
+
+### `avatarRef` 规则
+
+- 接受：13 个预设（`avatar:preset/people-01..12`、`avatar:preset/monogram`）或
+  `avatar:media/{mediaId}`。默认头像 = `avatar:preset/monogram`（别名首字母）。
+  预设人物图不再在客户端提供选择，但旧值继续可写可渲染。
+- `avatar:media/{id}` 必须是**本人**上传的头像（不是 logo、不是别人的、存在）；
+  否则 `PUT /v2/profile` / `POST /v2/profile/loop-id` → `422 VALIDATION_FAILED`，
+  `detailsSafe.reasonCode = MEDIA_NOT_OWNED`。媒体存储不可用时 →
+  `503 CAPABILITY_UNAVAILABLE`。
+- 渲染：`avatar:media/{id}` → `{baseUrl}/v2/media/{id}.webp`；`avatar:preset/*` 旧逻辑。
+
+### 真实身份进 Stream
+
+`PUT /v2/profile` 与 `POST /v2/profile/loop-id` 成功后，服务端把本人 Stream user
+upsert 为 `{ id, name: alias, image: <绝对 URL>, custom: { publicProfileId } }`
+（预设/空头像时不带 `image`，即 Stream 侧为空；资料未激活时不带
+`publicProfileId`）。Stream 失败不影响资料写入（日志记录，`pnpm
+stream:users-backfill --apply` 修复）。客户端注意：
+
+- 聊天气泡、会话行、成员列表直接用 Stream user 的 `name` / `image`；`image`
+  为空时按 avatarRef 规则或首字母兜底。
+- 点头像进公开资料页：读 Stream user 的自定义字段 `publicProfileId`（见
+  `docs/frontend-v2-social-api.md`「从 Stream 头像进入资料页」）。
+- `connectUser` 时**不要**传 `name` / `image` / 自定义字段（只传 `id`），避免客户端
+  覆盖服务端写的真实身份。
 
 ## 当前验收状态
 

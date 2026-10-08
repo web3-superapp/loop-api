@@ -825,7 +825,8 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     // added the `logo` field to every balance row; the balances fixture
     // was regenerated with it. Decision 0089: without the `market` module
     // the logo proxy route is not served, so every logo is
-    // TOKEN_LOGO_PROXY_UNAVAILABLE here (regenerated again).
+    // TOKEN_LOGO_PROXY_UNAVAILABLE here (regenerated again). Decision 0095
+    // renamed the avatarUpload reason to AVATAR_STORAGE_UNAVAILABLE.
     const baseline = (name: string): string =>
       readFileSync(
         new URL(`./fixtures/s9-baseline/${name}.json`, import.meta.url),

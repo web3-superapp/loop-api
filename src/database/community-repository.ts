@@ -17,6 +17,7 @@ import {
   deriveCommunityChannelId,
 } from "../features/communication/communication-contract.js";
 import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
+import { logoRefMediaId } from "../features/media/media-contract.js";
 import { loopIdSearchPatternSource } from "../features/identity/loop-id.js";
 import {
   canPerformSelfAction,
@@ -39,6 +40,7 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
+  CommunityLogoMediaRejectedError,
   type BlockCommandInput,
   type BlockCountsRecord,
   type BlockRecord,
@@ -427,7 +429,8 @@ function translateRepositoryError(error: unknown): never {
     error instanceof CommunityProfileRequiredError ||
     error instanceof CommunityRepositoryUnavailableError ||
     error instanceof CommunitySlugTakenError ||
-    error instanceof CommunityTargetUnavailableError
+    error instanceof CommunityTargetUnavailableError ||
+    error instanceof CommunityLogoMediaRejectedError
   ) {
     throw error;
   }
@@ -718,6 +721,53 @@ async function appendSocialGraphAudit(
       input.requestId,
     ],
   });
+}
+
+/**
+ * Decision 0095: a `logo:media/{id}` ref must name a community logo the
+ * actor uploaded, or (on update) one uploaded by a current owner/admin of
+ * the community. Preset refs and null pass.
+ */
+async function assertCommunityLogoAuthorized(
+  client: DatabaseClient,
+  input: {
+    readonly logoRef: string | null | undefined;
+    readonly actorUserId: string;
+    readonly communityId: string | null;
+  },
+): Promise<void> {
+  const mediaId = logoRefMediaId(input.logoRef ?? null);
+  if (mediaId === null) {
+    return;
+  }
+  const result = await client.query<{ authorized: boolean }>({
+    text: `
+      select exists (
+        select 1
+        from public.media_objects as media
+        where media.media_id = $1
+          and media.kind = 'community_logo'
+          and (
+            media.owner_user_id = $2
+            or (
+              $3::uuid is not null
+              and exists (
+                select 1
+                from public.community_memberships as membership
+                where membership.community_id = $3::uuid
+                  and membership.owner_user_id = media.owner_user_id
+                  and membership.role in ('owner', 'admin')
+                  and membership.status <> 'banned'
+              )
+            )
+          )
+      ) as authorized
+    `,
+    values: [mediaId, input.actorUserId, input.communityId],
+  });
+  if (result.rows[0]?.authorized !== true) {
+    throw new CommunityLogoMediaRejectedError();
+  }
 }
 
 async function requireActiveProfile(
@@ -1515,6 +1565,11 @@ export function createPostgresCommunityRepository(
           }
           await lockOwner(client, ownerUserId);
           await requireActiveProfile(client, ownerUserId);
+          await assertCommunityLogoAuthorized(client, {
+            logoRef: rawInput.logoRef,
+            actorUserId: ownerUserId,
+            communityId: null,
+          });
           const created = await client.query<{ community_id: string }>({
             text: `
               insert into public.communities (
@@ -1599,6 +1654,11 @@ export function createPostgresCommunityRepository(
           if (!canPerformSelfAction(actor, "editProfile")) {
             throw new CommunityPermissionDeniedError();
           }
+          await assertCommunityLogoAuthorized(client, {
+            logoRef: values.logoRef,
+            actorUserId: ownerUserId,
+            communityId,
+          });
           // Only the keys actually present change; `slug` and
           // `verification_status` are immutable through this path.
           await client.query({

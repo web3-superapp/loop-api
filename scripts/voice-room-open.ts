@@ -7,6 +7,8 @@ import pg from "pg";
 import { loadConfig } from "../src/config.js";
 import { V2ApiError } from "../src/core/http/v2-error.js";
 import { createPostgresCommunicationRepository } from "../src/database/communication-repository.js";
+import { createPostgresStreamUserIdentityRepository } from "../src/database/stream-user-identity-repository.js";
+import { createStreamUserIdentitySource } from "../src/features/communication/stream-user-identity.js";
 import { deriveStreamUserId } from "../src/features/identity/loop-identifiers.js";
 import {
   createVoiceRoomService,
@@ -95,7 +97,13 @@ function defaultCreateDependencies(
   return {
     service: createVoiceRoomService({
       repository: createPostgresCommunicationRepository(pool),
-      callGateway: createStreamCallGateway(config.stream),
+      // Decision 0095: the host is upserted with its real name and image.
+      callGateway: createStreamCallGateway(config.stream, {
+        identities: createStreamUserIdentitySource({
+          repository: createPostgresStreamUserIdentityRepository(pool),
+          publicBaseUrl: config.publicBaseUrl,
+        }),
+      }),
     }),
     async findOwner(communityId) {
       const result = await pool.query<{

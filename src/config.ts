@@ -444,6 +444,8 @@ const environmentSchema = z
     PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
     ANDROID_RELEASE_CERT_SHA256: optionalCredential(1_024),
     APP_DOWNLOAD_URL: optionalCredential(2_048),
+    COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
+    RECOMMENDED_COMMUNITY_IDS: optionalCredential(4_096),
     ...launchChainEnvironmentShape,
     ...marketEnvironmentShape,
     ...communityAiEnvironmentShape,
@@ -684,6 +686,8 @@ const reconciliationWorkerEnvironmentSchema = z
     MARKET_SPARKLINE_WARM_ENABLED: booleanString,
     MARKET_SPARKLINE_WARM_INTERVAL_MS: positiveIntegerString(1_000, 60_000),
     VOICE_ROOM_REAPER_ENABLED: booleanString,
+    COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
+    PUBLIC_BASE_URL: z.string().url(),
     VOICE_ROOM_REAPER_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
     VOICE_ROOM_IDLE_END_MINUTES: positiveIntegerString(1, 1_440),
     VOICE_ROOM_MAX_LIVE_HOURS: positiveIntegerString(1, 168),
@@ -1158,6 +1162,17 @@ export interface AppConfig {
    * read at composition time; its contents never enter this config.
    */
   readonly push: PushConfig | null;
+  /**
+   * Decision 0095: `true` (default) hides the Decision 0055 persona
+   * (`community.chat.viewerPersona` is null) so members show as their real
+   * Stream user. `false` restores Decision 0055.
+   */
+  readonly communityChatRealIdentity: boolean;
+  /**
+   * Decision 0095: the communities `GET /v2/communities/recommended` lists,
+   * in order; the first five are pre-selected. Empty when unset.
+   */
+  readonly recommendedCommunityIds: readonly string[];
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -1246,6 +1261,17 @@ export interface ReconciliationWorkerConfig {
    * trigger stays an in-app feed row.
    */
   readonly push: PushConfig | null;
+  /**
+   * Decision 0095: `true` (default) stops the community channel sync from
+   * generating, attaching, or re-projecting Decision 0055 personas; members
+   * show as their real Stream user. `false` restores Decision 0055.
+   */
+  readonly communityChatRealIdentity: boolean;
+  /**
+   * Decision 0095: the API origin the Stream user `image` URL is built on
+   * when the community channel sync upserts a joiner. Same key as the API.
+   */
+  readonly publicBaseUrl: string;
   readonly serviceName: "loop-reconciliation-worker";
   readonly serviceVersion: string;
 }
@@ -1991,6 +2017,44 @@ function parseMarketConfig(data: {
   });
 }
 
+export const maximumRecommendedCommunityIds = 50;
+const recommendedCommunityIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * `RECOMMENDED_COMMUNITY_IDS` (Decision 0095): comma-separated canonical
+ * lower-case UUIDv4 community IDs, duplicates dropped, order kept. Anything
+ * else refuses to start rather than silently recommending nothing.
+ */
+function parseRecommendedCommunityIds(
+  value: string | undefined,
+): readonly string[] {
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  const ids: string[] = [];
+  for (const raw of value.split(",")) {
+    const id = raw.trim();
+    if (id === "") {
+      continue;
+    }
+    if (!recommendedCommunityIdPattern.test(id)) {
+      throw new ConfigurationError([
+        "RECOMMENDED_COMMUNITY_IDS: every entry must be a canonical lower-case UUIDv4 community ID",
+      ]);
+    }
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  if (ids.length > maximumRecommendedCommunityIds) {
+    throw new ConfigurationError([
+      `RECOMMENDED_COMMUNITY_IDS: at most ${maximumRecommendedCommunityIds} communities`,
+    ]);
+  }
+  return Object.freeze(ids);
+}
+
 function parsePushConfig(data: {
   readonly FIREBASE_SERVICE_ACCOUNT_JSON_PATH?: string | undefined;
 }): PushConfig | null {
@@ -2100,6 +2164,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
     ANDROID_RELEASE_CERT_SHA256: environment["ANDROID_RELEASE_CERT_SHA256"],
     APP_DOWNLOAD_URL: environment["APP_DOWNLOAD_URL"],
+    COMMUNITY_CHAT_REAL_IDENTITY:
+      environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
+    RECOMMENDED_COMMUNITY_IDS: environment["RECOMMENDED_COMMUNITY_IDS"],
     ...launchChainEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
     ...communityAiEnvironmentDefaults(environment),
@@ -2249,6 +2316,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),
     push: parsePushConfig(parsed.data),
+    communityChatRealIdentity: parsed.data.COMMUNITY_CHAT_REAL_IDENTITY,
+    recommendedCommunityIds: parseRecommendedCommunityIds(
+      parsed.data.RECOMMENDED_COMMUNITY_IDS,
+    ),
     serviceName: "loop-api",
     serviceVersion,
   });
@@ -2300,6 +2371,9 @@ export function loadReconciliationWorkerConfig(
       environment["MARKET_SPARKLINE_WARM_INTERVAL_MS"] ?? "4000",
     VOICE_ROOM_REAPER_ENABLED:
       environment["VOICE_ROOM_REAPER_ENABLED"] ?? "true",
+    COMMUNITY_CHAT_REAL_IDENTITY:
+      environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
+    PUBLIC_BASE_URL: environment["PUBLIC_BASE_URL"] ?? "http://127.0.0.1:3000",
     VOICE_ROOM_REAPER_INTERVAL_MS:
       environment["VOICE_ROOM_REAPER_INTERVAL_MS"] ?? "60000",
     VOICE_ROOM_IDLE_END_MINUTES:
@@ -2442,6 +2516,11 @@ export function loadReconciliationWorkerConfig(
       : null,
     miningSnapshotEnabled: parsed.data.MINING_SNAPSHOT_ENABLED,
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
+    communityChatRealIdentity: parsed.data.COMMUNITY_CHAT_REAL_IDENTITY,
+    publicBaseUrl: parseUrl(
+      "PUBLIC_BASE_URL",
+      parsed.data.PUBLIC_BASE_URL,
+    ).toString(),
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });

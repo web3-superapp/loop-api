@@ -21,6 +21,7 @@ import {
   type AliasSearchQuota,
 } from "../identity/alias-search-quota.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import { mediaReasonCodes } from "../media/media-contract.js";
 import {
   miningReasonCodes,
   type MiningFormulaScope,
@@ -110,6 +111,7 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
+  CommunityLogoMediaRejectedError,
   type CommunityDetailRecord,
   type CommunityMemberRecord,
   type CommunityRecord,
@@ -596,6 +598,11 @@ function mapFailure(error: unknown): never {
   if (error instanceof CommunityTargetUnavailableError) {
     throw V2ApiError.notFound();
   }
+  if (error instanceof CommunityLogoMediaRejectedError) {
+    throw V2ApiError.fromCode("VALIDATION_FAILED", {
+      reasonCode: mediaReasonCodes.notAuthorized,
+    });
+  }
   if (error instanceof CommunityPermissionDeniedError) {
     throw V2ApiError.fromCode("PERMISSION_DENIED");
   }
@@ -984,6 +991,11 @@ export interface CommunityServiceOptions {
   readonly cursorCodec: V2CursorCodec | null;
   readonly searchQuota: AliasSearchQuota;
   readonly aliasPolicy: AliasPolicy;
+  /**
+   * Decision 0095 (`COMMUNITY_CHAT_REAL_IDENTITY`): when true
+   * `chat.viewerPersona` is always null. Default false (Decision 0055).
+   */
+  readonly realIdentity?: boolean;
 }
 
 /** The one registry read the asset search domain needs. */
@@ -1008,10 +1020,14 @@ export function createCommunityService(
       return null;
     }
     try {
-      return await repository.readCommunityChannel({
+      const record = await repository.readCommunityChannel({
         communityId,
         viewerUserId,
       });
+      // Decision 0095: in real-identity mode no persona is shown.
+      return options.realIdentity === true
+        ? Object.freeze({ ...record, viewerPersona: null })
+        : record;
     } catch {
       return null;
     }
