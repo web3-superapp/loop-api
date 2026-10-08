@@ -3,6 +3,7 @@ import {
   encodeAbiParameters,
   keccak256,
   parseAbiParameters,
+  toBytes,
   type Address,
   type Hex,
 } from "viem";
@@ -12,6 +13,9 @@ const UINT256_MAX = (1n << 256n) - 1n;
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 const MAX_REWARD_LEAVES = 100_000;
+export const LOOP_REWARD_SCHEMA_VERSION = keccak256(
+  toBytes("loop.dual-mining.reward-leaf.v1"),
+);
 
 const rewardLeafParameters = parseAbiParameters(
   "bytes32 schemaVersion, uint256 chainId, address distributor, uint8 poolId, uint16 epochId, bytes32 batchId, uint32 leafIndex, address beneficiary, uint256 amountRaw",
@@ -81,6 +85,9 @@ export function buildRewardMerkleBatch(
     input.schemaVersion,
     "Invalid reward schema version",
   );
+  if (schemaVersion !== LOOP_REWARD_SCHEMA_VERSION) {
+    throw new Error("Unsupported reward schema version");
+  }
   const batchId = normalizeBytes32(input.batchId, "Invalid reward batch ID");
   const chainId = parseUint(input.chainId, "Invalid reward chain ID");
   if (chainId === 0n) throw new Error("Invalid reward chain ID");
