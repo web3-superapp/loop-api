@@ -1221,6 +1221,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           publicProfileId: await profileOf(alice),
           alias: `alias_${alice.slice(0, 8)}`,
           anonymousMode: false,
+          avatarRef: null,
           powerVisibleToOthers: true,
         },
         {
@@ -1230,6 +1231,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           publicProfileId: await profileOf(bob),
           alias: `alias_${bob.slice(0, 8)}`,
           anonymousMode: true,
+          avatarRef: null,
           powerVisibleToOthers: false,
         },
         // Zero power: listed after the ranked rows, with no position.
@@ -1240,6 +1242,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           publicProfileId: await profileOf(carol),
           alias: `alias_${carol.slice(0, 8)}`,
           anonymousMode: false,
+          avatarRef: null,
           // No privacy row: mining_power_visibility defaults to `self`.
           powerVisibleToOthers: false,
         },

@@ -33,7 +33,10 @@ import {
   walletGasReserveConfigVersion,
 } from "../../features/wallet/wallet-read-service.js";
 import { indexerLanes } from "../../database/bsc-indexer-repository.js";
-import { marketSources } from "../../features/market/market-contract.js";
+import {
+  marketSources,
+  signedDecimalPatternSource,
+} from "../../features/market/market-contract.js";
 import {
   watchlistV2GroupKeyPatternSource,
   watchlistV2MaximumGroups,
@@ -52,6 +55,11 @@ const blockNumberSchema = {
   pattern: "^(0|[1-9][0-9]{0,19})$",
   description:
     "Block height as a canonical decimal string; heights are never JavaScript numbers.",
+} as const;
+
+const signedDecimalSchema = {
+  type: "string",
+  pattern: signedDecimalPatternSource,
 } as const;
 
 const reasonCodeSchema = {
@@ -632,6 +640,7 @@ export const walletBalancesResourceSchema = {
                   "proxyAsset",
                   "priceUsd",
                   "valueUsd",
+                  "change24hPct",
                 ],
                 properties: {
                   status: { type: "string", const: "available" },
@@ -647,6 +656,11 @@ export const walletBalancesResourceSchema = {
                   proxyAsset: { anyOf: [assetIdSchema, { type: "null" }] },
                   priceUsd: decimalAmountSchema,
                   valueUsd: decimalAmountSchema,
+                  change24hPct: {
+                    anyOf: [signedDecimalSchema, { type: "null" }],
+                    description:
+                      'Decision 0100: DexScreener priceChange.h24 of the same pair, in percent points ("-2.5" is -2.5 %); null when not reported.',
+                  },
                 },
                 description:
                   "USD valuation from a fresh or stale Provider price of the asset itself. Display information only; never a spendable amount.",
@@ -691,6 +705,7 @@ export const walletBalancesResourceSchema = {
             "priceSource",
             "asOf",
             "isSpendable",
+            "change24h",
           ],
           properties: {
             status: {
@@ -710,6 +725,38 @@ export const walletBalancesResourceSchema = {
               const: false,
               description:
                 "A net worth is display information, never a balance.",
+            },
+            change24h: {
+              anyOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["usd", "pct"],
+                  properties: {
+                    usd: {
+                      ...signedDecimalSchema,
+                      description:
+                        "Signed USD change over 24h, rounded half away from zero to 6 places.",
+                    },
+                    pct: {
+                      ...signedDecimalSchema,
+                      description:
+                        "Signed change in percent points, rounded half away from zero to 4 places.",
+                    },
+                  },
+                },
+                { type: "null" },
+              ],
+              description:
+                "Decision 0100: derived from the same price read as the rows (each valued row worth v whose price moved p % changed by v*p/(100+p)); only rows worth more than zero count. null when any of them lacks its 24h number; see change24hUnavailable.",
+            },
+            change24hUnavailable: {
+              type: "object",
+              additionalProperties: false,
+              required: ["reasonCode"],
+              properties: { reasonCode: reasonCodeSchema },
+              description:
+                "Present exactly when change24h is null: PRICE_CHANGE_PARTIAL.",
             },
           },
         },

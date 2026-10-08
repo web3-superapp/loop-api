@@ -273,8 +273,8 @@ POST /v2/devices/{sessionId}/revoke
   "configVersions": [
     {
       "module": "productPolicy",
-      "configVersion": "productPolicyV2.2026-09-01",
-      "effectiveAt": "2026-09-01T00:00:00.000Z"
+      "configVersion": "productPolicyV2.2026-10-08",
+      "effectiveAt": "2026-10-08T00:00:00.000Z"
     },
     {
       "module": "sessionPolicy",

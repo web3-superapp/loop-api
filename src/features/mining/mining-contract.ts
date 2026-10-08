@@ -146,8 +146,26 @@ export const communityWeightReviewStatuses = [
 export type CommunityWeightReviewStatus =
   (typeof communityWeightReviewStatuses)[number];
 
-export const miningRankScopes = ["users", "communities"] as const;
+export const miningRankScopes = ["users", "communities", "referrals"] as const;
 export type MiningRankScope = (typeof miningRankScopes)[number];
+
+/**
+ * Rank paging (Decision 0100): `limit` 1–50, default 30; a cursor chain
+ * stops after 500 rows in total.
+ */
+export const miningRankPaging = Object.freeze({
+  defaultLimit: 30,
+  maximumLimit: 50,
+  maximumTotal: 500,
+} as const);
+
+/**
+ * Referral rank rule (Decision 0100): direct invitees only (`referral_edges`
+ * depth 1 still in force, `effective_to is null`), every validation status
+ * counted. Changes when an "effective invite" rule is approved.
+ */
+export const miningReferralRankRuleKey =
+  "mining.rank.referrals.directActiveEdges";
 
 /** Anonymous member display key used whenever the alias may not be shown. */
 export const miningRankAnonymousMemberKey = "mining.rank.anonymousMember";

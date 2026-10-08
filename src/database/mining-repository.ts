@@ -194,8 +194,34 @@ const rankedAccountRowSchema = z
     alias: z.string().min(1).nullable(),
     anonymous_mode: z.boolean(),
     power_visible_to_others: z.boolean(),
+    avatar_ref: z.string().min(1).nullable(),
   })
   .strict();
+
+const referralRankRowSchema = z
+  .object({
+    owner_user_id: opaqueIdSchema,
+    invited_count: z.number().int().min(1),
+    position: positionSchema,
+    public_profile_id: opaqueIdSchema.nullable(),
+    alias: z.string().min(1).nullable(),
+    anonymous_mode: z.boolean(),
+    avatar_ref: z.string().min(1).nullable(),
+  })
+  .strict();
+
+const referralStandingRowSchema = z
+  .object({
+    invited_count: z.number().int().min(1).nullable(),
+    position: positionSchema.nullable(),
+    participant_count: countSchema,
+  })
+  .strict();
+
+/** Keyset decimal bound: canonical unsigned decimal or absent. */
+const keysetDecimalSchema = z
+  .string()
+  .regex(/^(0|[1-9][0-9]{0,77})(\.[0-9]{1,60})?$/);
 
 const communityStandingRowSchema = z
   .object({
@@ -400,6 +426,27 @@ const communityStandingsSql = `
       end as position
     from bound as b
     join powers as p on p.community_id = b.community_id
+  )
+`;
+
+/**
+ * Referral rank (Decision 0100): direct invitees in force per inviter
+ * (`depth = 1`, `effective_to is null`, any validation status), ranked with
+ * shared positions on ties. Only inviters with at least one invitee appear.
+ */
+const referralTotalsSql = `
+  referral_counts as (
+    select inviter_user_id as owner_user_id, count(*)::int as invited_count
+    from public.referral_edges
+    where depth = 1 and effective_to is null
+    group by inviter_user_id
+  ),
+  referral_ranked as (
+    select
+      owner_user_id,
+      invited_count,
+      (rank() over (order by invited_count desc))::int as position
+    from referral_counts
   )
 `;
 
@@ -1046,6 +1093,16 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       try {
         const snapshotId = opaqueIdSchema.parse(input.snapshotId);
         const limit = z.number().int().min(1).max(500).parse(input.limit);
+        const afterTotal =
+          input.after === undefined
+            ? null
+            : keysetDecimalSchema.parse(input.after.totalPower);
+        const afterOwner =
+          input.after === undefined
+            ? null
+            : opaqueIdSchema.parse(input.after.ownerUserId);
+        // Ordering by total desc then owner is the rank order: positions are
+        // rank() over positive totals and zero totals (position null) follow.
         const result = await pool.query({
           text: `
             with ${accountTotalsSql}
@@ -1057,17 +1114,21 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               profile.alias,
               coalesce(privacy.anonymous_mode, false) as anonymous_mode,
               coalesce(privacy.mining_power_visibility, 'self') = 'everyone'
-                as power_visible_to_others
+                as power_visible_to_others,
+              profile.avatar_ref
             from ranked as r
             left join public.user_profiles as profile
               on profile.owner_user_id = r.owner_user_id
               and profile.profile_status = 'active'
             left join public.privacy_preferences_v2 as privacy
               on privacy.owner_user_id = r.owner_user_id
-            order by r.position asc nulls last, r.owner_user_id asc
+            where $3::numeric is null
+              or r.total < $3::numeric
+              or (r.total = $3::numeric and r.owner_user_id > $4::uuid)
+            order by r.total desc, r.owner_user_id asc
             limit $2
           `,
-          values: [snapshotId, limit],
+          values: [snapshotId, limit, afterTotal, afterOwner],
         });
         return Object.freeze(
           result.rows.map((raw): MiningRankedAccountRecord => {
@@ -1080,6 +1141,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               alias: row.alias,
               anonymousMode: row.anonymous_mode,
               powerVisibleToOthers: row.power_visible_to_others,
+              avatarRef: row.avatar_ref,
             });
           }),
         );
@@ -1095,17 +1157,158 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const snapshotId = opaqueIdSchema.parse(input.snapshotId);
         const configVersion = configVersionSchema.parse(input.configVersion);
         const limit = z.number().int().min(1).max(500).parse(input.limit);
+        const after = input.after;
+        const afterPower =
+          after === undefined ? null : keysetDecimalSchema.parse(after.power);
+        const afterName =
+          after === undefined
+            ? null
+            : z.string().min(1).max(1024).parse(after.communityName);
+        const afterId =
+          after === undefined ? null : opaqueIdSchema.parse(after.communityId);
+        // power desc, name, id is the rank order (positions are rank() over
+        // positive power; zero-power communities follow with position null).
         const result = await pool.query({
           text: `
             with ${communityStandingsSql}
             select *
             from standings
-            order by position asc nulls last, community_name asc, community_id asc
+            where $4::numeric is null
+              or power::numeric < $4::numeric
+              or (
+                power::numeric = $4::numeric
+                and (
+                  community_name > $5::text
+                  or (community_name = $5::text and community_id > $6::uuid)
+                )
+              )
+            order by power::numeric desc, community_name asc, community_id asc
             limit $3
           `,
-          values: [snapshotId, configVersion, limit],
+          values: [
+            snapshotId,
+            configVersion,
+            limit,
+            afterPower,
+            afterName,
+            afterId,
+          ],
         });
         return Object.freeze(result.rows.map(mapCommunityStanding));
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async getMemberBestCommunityStanding(
+      input: Parameters<MiningRepository["getMemberBestCommunityStanding"]>[0],
+    ) {
+      try {
+        const snapshotId = opaqueIdSchema.parse(input.snapshotId);
+        const configVersion = configVersionSchema.parse(input.configVersion);
+        const ownerUserId = opaqueIdSchema.parse(input.ownerUserId);
+        const result = await pool.query({
+          text: `
+            with ${communityStandingsSql}
+            select s.*
+            from standings as s
+            join public.community_memberships as m
+              on m.community_id = s.community_id
+              and m.owner_user_id = $3
+              and m.status <> 'banned'
+            where s.position is not null
+            order by s.position asc, s.community_name asc, s.community_id asc
+            limit 1
+          `,
+          values: [snapshotId, configVersion, ownerUserId],
+        });
+        const raw: unknown = result.rows[0];
+        return raw === undefined ? null : mapCommunityStanding(raw);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async listReferralRanking(
+      input: Parameters<MiningRepository["listReferralRanking"]>[0],
+    ) {
+      try {
+        const limit = z.number().int().min(1).max(500).parse(input.limit);
+        const afterCount =
+          input.after === undefined
+            ? null
+            : z.number().int().min(1).parse(input.after.invitedCount);
+        const afterOwner =
+          input.after === undefined
+            ? null
+            : opaqueIdSchema.parse(input.after.ownerUserId);
+        const result = await pool.query({
+          text: `
+            with ${referralTotalsSql}
+            select
+              r.owner_user_id,
+              r.invited_count,
+              r.position,
+              profile.public_profile_id,
+              profile.alias,
+              coalesce(privacy.anonymous_mode, false) as anonymous_mode,
+              profile.avatar_ref
+            from referral_ranked as r
+            left join public.user_profiles as profile
+              on profile.owner_user_id = r.owner_user_id
+              and profile.profile_status = 'active'
+            left join public.privacy_preferences_v2 as privacy
+              on privacy.owner_user_id = r.owner_user_id
+            where $2::int is null
+              or r.invited_count < $2::int
+              or (r.invited_count = $2::int and r.owner_user_id > $3::uuid)
+            order by r.invited_count desc, r.owner_user_id asc
+            limit $1
+          `,
+          values: [limit, afterCount, afterOwner],
+        });
+        return Object.freeze(
+          result.rows.map((raw) => {
+            const row = referralRankRowSchema.parse(raw);
+            return Object.freeze({
+              ownerUserId: row.owner_user_id,
+              invitedCount: row.invited_count,
+              position: row.position,
+              publicProfileId: row.public_profile_id,
+              alias: row.alias,
+              anonymousMode: row.anonymous_mode,
+              avatarRef: row.avatar_ref,
+            });
+          }),
+        );
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async getReferralStanding(
+      input: Parameters<MiningRepository["getReferralStanding"]>[0],
+    ) {
+      try {
+        const ownerUserId = opaqueIdSchema.parse(input.ownerUserId);
+        const result = await pool.query({
+          text: `
+            with ${referralTotalsSql}
+            select
+              r.invited_count,
+              r.position,
+              (select count(*) from referral_ranked)::int as participant_count
+            from (select 1) as one
+            left join referral_ranked as r on r.owner_user_id = $1
+          `,
+          values: [ownerUserId],
+        });
+        const row = referralStandingRowSchema.parse(result.rows[0]);
+        return Object.freeze({
+          invitedCount: row.invited_count,
+          position: row.position,
+          participantCount: row.participant_count,
+        });
       } catch (error) {
         return translate(error);
       }

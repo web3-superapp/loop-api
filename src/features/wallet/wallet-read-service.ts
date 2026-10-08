@@ -44,6 +44,7 @@ import {
   type WalletKind,
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import { computeNetWorthChange24h } from "./net-worth-change.js";
 import {
   addDecimalStrings,
   marketReasonCodes,
@@ -188,6 +189,11 @@ export interface WalletValuationProjection {
   readonly proxyAsset: string | null;
   readonly priceUsd: string;
   readonly valueUsd: string;
+  /**
+   * DexScreener `priceChange.h24` of the same pair in percent points
+   * (Decision 0100); null when the Provider did not report it.
+   */
+  readonly change24hPct: string | null;
 }
 
 export interface WalletNetWorthProjection {
@@ -202,6 +208,12 @@ export interface WalletNetWorthProjection {
   readonly asOf: string;
   /** Always false: a valuation is display information, not a balance. */
   readonly isSpendable: false;
+  /**
+   * 24h change of `valueUsd` from the same price read (Decision 0100); null
+   * when a valued row lacks its 24h number, with `change24hUnavailable`.
+   */
+  readonly change24h: { readonly usd: string; readonly pct: string } | null;
+  readonly change24hUnavailable?: { readonly reasonCode: string };
 }
 
 export interface WalletBalancesResource {
@@ -1675,6 +1687,7 @@ export function createWalletReadService(
             balance.displayBalance,
             pair.priceUsd,
           ),
+          change24hPct: pair.priceChangeH24,
         });
       }
 
@@ -1684,6 +1697,7 @@ export function createWalletReadService(
           return unavailable(walletReasonCodes.marketRuntimeMissing);
         }
         const unavailableCount = balances.length - valuations.length;
+        const change = computeNetWorthChange24h(valuations);
         let valueUsd = "0";
         let asOf: string | null = null;
         let quality: "fresh" | "stale" = "fresh";
@@ -1709,6 +1723,14 @@ export function createWalletReadService(
           priceSource: "dexscreener" as const,
           asOf: asOf ?? now().toISOString(),
           isSpendable: false as const,
+          ...(change.status === "available"
+            ? { change24h: Object.freeze({ usd: change.usd, pct: change.pct }) }
+            : {
+                change24h: null,
+                change24hUnavailable: Object.freeze({
+                  reasonCode: change.reasonCode,
+                }),
+              }),
         });
       }
 

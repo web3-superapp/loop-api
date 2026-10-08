@@ -7,11 +7,19 @@ import type {
 } from "../mining/mining-baseline.js";
 
 export const v2ContractVersion = "2.0" as const;
-export const v2ProductConfigVersion = "productPolicyV2.2026-09-01" as const;
-export const v2ProductEffectiveAt = "2026-09-01T00:00:00.000Z" as const;
+export const v2ProductConfigVersion = "productPolicyV2.2026-10-08" as const;
+export const v2ProductEffectiveAt = "2026-10-08T00:00:00.000Z" as const;
 
-export type V2PrimaryTab =
-  "community" | "launch" | "market" | "mining" | "wallet";
+/** The v3 five-tab navigation (Decision 0100; requirements `docs/09` §1). */
+export const v2PrimaryTabs = Object.freeze([
+  "chat",
+  "square",
+  "meme",
+  "intel",
+  "wallet",
+] as const);
+
+export type V2PrimaryTab = (typeof v2PrimaryTabs)[number];
 
 export type V2CapabilityAvailability = "available" | "deferred" | "unavailable";
 
@@ -480,13 +488,7 @@ export const v2CapabilityIds = Object.freeze([
   "communityAi",
 ] as const);
 
-const primaryTabs = Object.freeze([
-  "community",
-  "mining",
-  "launch",
-  "market",
-  "wallet",
-] as const satisfies readonly V2PrimaryTab[]);
+const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
 
 const unavailableVersionGate = Object.freeze({
   status: "unavailable",

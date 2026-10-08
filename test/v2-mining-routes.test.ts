@@ -280,6 +280,8 @@ describe("LOOP API V2 mining module", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         scope,
+        me: null,
+        nextCursor: null,
         ranking: {
           status: "unavailable",
           reasonCode: "MINING_FORMULA_BASELINE_PENDING",
@@ -551,6 +553,7 @@ describe("LOOP API V2 mining module", () => {
               alias: "whale",
               anonymousMode: false,
               powerVisibleToOthers: true,
+              avatarRef: "avatar:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
             },
             {
               ownerUserId: s7AccountId,
@@ -560,8 +563,28 @@ describe("LOOP API V2 mining module", () => {
               alias: "me",
               anonymousMode: false,
               powerVisibleToOthers: false,
+              avatarRef: null,
             },
           ]),
+        ),
+        getMemberBestCommunityStanding: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId: cakeAsset,
+            weight: "0.5",
+            power: "230",
+            participantCount: 2,
+            position: 1,
+          }),
+        ),
+        listReferralRanking: vi.fn(() => Promise.resolve([])),
+        getReferralStanding: vi.fn(() =>
+          Promise.resolve({
+            invitedCount: null,
+            position: null,
+            participantCount: 0,
+          }),
         ),
         listCommunityRanking: vi.fn(() =>
           Promise.resolve([
@@ -1098,6 +1121,7 @@ describe("LOOP API V2 mining module", () => {
                   position: 1,
                   publicProfileId: otherProfile,
                   alias: "whale",
+                  avatarRef: null,
                   ...combination,
                 },
                 {
@@ -1106,6 +1130,7 @@ describe("LOOP API V2 mining module", () => {
                   position: 2,
                   publicProfileId: selfProfile,
                   alias: "me",
+                  avatarRef: null,
                   ...combination,
                 },
               ]),
@@ -1137,6 +1162,7 @@ describe("LOOP API V2 mining module", () => {
                 alias: "whale",
                 publicProfileId: otherProfile,
                 audience: "everyone",
+                avatarRef: null,
               },
           isSelf: false,
         });
@@ -1151,10 +1177,314 @@ describe("LOOP API V2 mining module", () => {
             alias: "me",
             publicProfileId: selfProfile,
             audience: combination.anonymousMode ? "self" : "everyone",
+            avatarRef: null,
           },
           isSelf: true,
         });
       }
+    });
+
+    describe("rank pages, me, and the referral rank (Decision 0100)", () => {
+      const ownerFor = (index: number): string =>
+        `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+
+      it("publishes me on every scope and keeps the users and communities rows unchanged", async () => {
+        const { app } = await createApp(approvedRepository());
+        const users = (
+          await app.inject({
+            method: "GET",
+            url: "/v2/mining/rank?scope=users",
+            headers: s7CommonHeaders(),
+          })
+        ).json<Record<string, unknown>>();
+        expect(users).toMatchObject({
+          me: { rank: 2, value: "1000" },
+          nextCursor: null,
+          myPosition: { status: "available", position: 2, power: "1000" },
+        });
+        expect(
+          (users["ranking"] as { items: Record<string, unknown>[] }).items[0],
+        ).toEqual({
+          position: 1,
+          power: "3000",
+          powerVisibility: "everyone",
+          display: {
+            kind: "alias",
+            alias: "whale",
+            publicProfileId: "d64786bb-408d-415d-8a69-6277d56c921b",
+            audience: "everyone",
+            avatarRef: "avatar:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+          },
+          isSelf: false,
+        });
+        const communities = (
+          await app.inject({
+            method: "GET",
+            url: "/v2/mining/rank?scope=communities",
+            headers: s7CommonHeaders(),
+          })
+        ).json<Record<string, unknown>>();
+        expect(communities).toMatchObject({
+          me: { rank: 1, value: "230", communityId },
+          nextCursor: null,
+          myPosition: {
+            status: "unavailable",
+            reasonCode: "MINING_RANK_NOT_APPLICABLE",
+          },
+        });
+        // Zero power, no ranked community: me is null on both scopes.
+        const unranked = await createApp(
+          approvedRepository({
+            getAccountStanding: vi.fn(() =>
+              Promise.resolve({
+                totalPower: "0",
+                position: null,
+                participantCount: 3,
+              }),
+            ),
+            getMemberBestCommunityStanding: vi.fn(() => Promise.resolve(null)),
+          }),
+        );
+        for (const scope of ["users", "communities"]) {
+          const body = (
+            await unranked.app.inject({
+              method: "GET",
+              url: `/v2/mining/rank?scope=${scope}`,
+              headers: s7CommonHeaders(),
+            })
+          ).json<Record<string, unknown>>();
+          expect(body["me"], scope).toBeNull();
+        }
+      });
+
+      it("pages users by cursor with the last row's keyset and the page size the cursor carries", async () => {
+        const listAccountRanking = vi.fn(
+          (input: { readonly limit: number; readonly after?: unknown }) =>
+            Promise.resolve(
+              Array.from({ length: input.limit }, (_unused, index) => ({
+                ownerUserId: ownerFor(index + 1),
+                totalPower: String(1000 - index),
+                position: index + 1,
+                publicProfileId: null,
+                alias: null,
+                anonymousMode: false,
+                powerVisibleToOthers: true,
+                avatarRef: null,
+              })),
+            ),
+        );
+        const { app } = await createApp(
+          approvedRepository({ listAccountRanking }),
+        );
+        const first = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users&limit=2",
+          headers: s7CommonHeaders(),
+        });
+        expect(first.statusCode).toBe(200);
+        const firstBody = first.json<{
+          ranking: { items: unknown[] };
+          nextCursor: string | null;
+        }>();
+        expect(firstBody.ranking.items).toHaveLength(2);
+        expect(listAccountRanking).toHaveBeenLastCalledWith({
+          snapshotId,
+          limit: 3,
+        });
+        expect(typeof firstBody.nextCursor).toBe("string");
+        const second = await app.inject({
+          method: "GET",
+          url: `/v2/mining/rank?scope=users&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+          headers: s7CommonHeaders(),
+        });
+        expect(second.statusCode).toBe(200);
+        expect(listAccountRanking).toHaveBeenLastCalledWith({
+          snapshotId,
+          limit: 3,
+          after: { totalPower: "999", ownerUserId: ownerFor(2) },
+        });
+        // A cursor is bound to its scope, and cursor + limit is refused.
+        for (const url of [
+          `/v2/mining/rank?scope=referrals&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+          `/v2/mining/rank?scope=users&limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+          "/v2/mining/rank?scope=users&limit=51",
+          "/v2/mining/rank?scope=users&limit=0",
+          "/v2/mining/rank?scope=users&cursor=abc.def",
+        ]) {
+          const refused = await app.inject({
+            method: "GET",
+            url,
+            headers: s7CommonHeaders(),
+          });
+          expect(refused.statusCode, url).toBe(400);
+          expect(refused.json()).toMatchObject({ code: "INVALID_REQUEST" });
+        }
+      });
+
+      it("stops a cursor chain at 500 rows", async () => {
+        const listAccountRanking = vi.fn(
+          (input: {
+            readonly limit: number;
+            readonly after?: { readonly totalPower: string };
+          }) => {
+            const start =
+              input.after === undefined
+                ? 0
+                : 100_000 - Number(input.after.totalPower) + 1;
+            return Promise.resolve(
+              Array.from({ length: input.limit }, (_unused, index) => ({
+                ownerUserId: ownerFor(start + index + 1),
+                totalPower: String(100_000 - start - index),
+                position: start + index + 1,
+                publicProfileId: null,
+                alias: null,
+                anonymousMode: false,
+                powerVisibleToOthers: true,
+                avatarRef: null,
+              })),
+            );
+          },
+        );
+        const { app } = await createApp(
+          approvedRepository({ listAccountRanking }),
+        );
+        let url = "/v2/mining/rank?scope=users&limit=50";
+        let served = 0;
+        let pages = 0;
+        for (;;) {
+          const body = (
+            await app.inject({ method: "GET", url, headers: s7CommonHeaders() })
+          ).json<{
+            ranking: { items: unknown[] };
+            nextCursor: string | null;
+          }>();
+          served += body.ranking.items.length;
+          pages += 1;
+          if (body.nextCursor === null) {
+            break;
+          }
+          url = `/v2/mining/rank?scope=users&cursor=${encodeURIComponent(body.nextCursor)}`;
+        }
+        expect(served).toBe(500);
+        expect(pages).toBe(10);
+      });
+
+      it("ranks inviters by direct invitees with me, without waiting for a snapshot", async () => {
+        const referralRows = [
+          {
+            ownerUserId: other,
+            invitedCount: 7,
+            position: 1,
+            publicProfileId: "d64786bb-408d-415d-8a69-6277d56c921b",
+            alias: "whale",
+            anonymousMode: true,
+            avatarRef: null,
+          },
+          {
+            ownerUserId: s7AccountId,
+            invitedCount: 3,
+            position: 2,
+            publicProfileId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+            alias: "me",
+            anonymousMode: true,
+            avatarRef: "avatar:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+          },
+        ];
+        const listReferralRanking = vi.fn(() => Promise.resolve(referralRows));
+        const getReferralStanding = vi.fn(() =>
+          Promise.resolve({
+            invitedCount: 3,
+            position: 2,
+            participantCount: 2,
+          }),
+        );
+        // The default repository has no approved formula and no snapshot.
+        const { app } = await createApp(
+          repositoryFake({ listReferralRanking, getReferralStanding }),
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=referrals",
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          scope: "referrals",
+          ranking: {
+            status: "available",
+            scope: "referrals",
+            ruleKey: "mining.rank.referrals.directActiveEdges",
+            participants: 2,
+            items: [
+              {
+                position: 1,
+                invitedCount: 7,
+                // Anonymous mode hides another inviter's alias (Decision 0049).
+                display: {
+                  kind: "anonymous",
+                  labelKey: "mining.rank.anonymousMember",
+                },
+                isSelf: false,
+              },
+              {
+                position: 2,
+                invitedCount: 3,
+                display: {
+                  kind: "alias",
+                  alias: "me",
+                  audience: "self",
+                  avatarRef:
+                    "avatar:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+                },
+                isSelf: true,
+              },
+            ],
+          },
+          me: { rank: 2, value: "3" },
+          nextCursor: null,
+          myPosition: {
+            status: "unavailable",
+            reasonCode: "MINING_RANK_NOT_APPLICABLE",
+          },
+          snapshot: { status: "unavailable" },
+        });
+        expect(listReferralRanking).toHaveBeenCalledWith({ limit: 31 });
+        expect(getReferralStanding).toHaveBeenCalledWith({
+          ownerUserId: s7AccountId,
+        });
+        // No invitee: me is null.
+        const none = await createApp(
+          repositoryFake({
+            listReferralRanking: vi.fn(() => Promise.resolve([])),
+            getReferralStanding: vi.fn(() =>
+              Promise.resolve({
+                invitedCount: null,
+                position: null,
+                participantCount: 0,
+              }),
+            ),
+          }),
+        );
+        const empty = await none.app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=referrals",
+          headers: s7CommonHeaders(),
+        });
+        expect(empty.json()).toMatchObject({
+          ranking: { status: "available", items: [], participants: 0 },
+          me: null,
+          nextCursor: null,
+        });
+        // A repository that cannot answer fails closed.
+        const broken = await createApp(repositoryFake());
+        const failed = await broken.app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=referrals",
+          headers: s7CommonHeaders(),
+        });
+        expect(failed.statusCode).toBe(503);
+        expect(failed.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+      });
     });
 
     it("projects a community's standing, the caller's contribution on the bound asset, and the reasons it has none", async () => {

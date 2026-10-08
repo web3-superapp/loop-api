@@ -119,6 +119,8 @@ describe("GET /v2/meta/about", () => {
       "sessionPolicy",
       "community",
       "marketTrending",
+      "marketCategories",
+      "intelPromotions",
       "deviceRisk",
       "accountSettings",
       "support",
@@ -148,6 +150,8 @@ describe("GET /v2/meta/about", () => {
       swapPolicy: swapPolicy.configVersion,
       community: "communityV1",
       marketTrending: "marketTrendingV1",
+      marketCategories: "marketCategoriesV1",
+      intelPromotions: "intelPromotionsV1",
     });
     expect(
       body.openSource.entries.every(
@@ -157,8 +161,8 @@ describe("GET /v2/meta/about", () => {
     ).toBe(true);
     expect(body.configVersions[0]).toEqual({
       module: "productPolicy",
-      configVersion: "productPolicyV2.2026-09-01",
-      effectiveAt: "2026-09-01T00:00:00.000Z",
+      configVersion: "productPolicyV2.2026-10-08",
+      effectiveAt: "2026-10-08T00:00:00.000Z",
     });
     expect(body.termsGate).toEqual({
       status: "unavailable",
@@ -223,7 +227,7 @@ describe("GET /v2/meta/about", () => {
       body.configVersions.filter((entry) => entry.module === "clientPolicy"),
     ).toEqual([]);
     expect(body.configVersions[0]?.configVersion).toBe(
-      "productPolicyV2.2026-09-01",
+      "productPolicyV2.2026-10-08",
     );
   });
 

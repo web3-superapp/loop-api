@@ -7,7 +7,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 覆盖页面：`market`、`token`、`chart-full`、`token-holders`、`token-trades`、
 `new-pairs`、`smart-money`，以及 `community-chat` 里贴出合约地址后的 **Token Card**
-（§4a，决策 0058）。`watchlist-edit` 仍走 `GET/PUT /v2/watchlist`；
+（§4a，决策 0058）；v3 情报页的行情三分类与活动位见 §12、§13（决策 0100）。`watchlist-edit` 仍走 `GET/PUT /v2/watchlist`；
 价格提醒与通知见 `docs/frontend-v2-notifications-api.md`。
 
 ## 1. 启用条件与 capability
@@ -686,16 +686,16 @@ GeckoTerminal 默认关闭：`newPairs: {status: "unavailable", reasonCode: "MAR
 
 ## 10. 错误码速查
 
-| HTTP | code                             | 出现位置                                                                                           |
-| ---- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | 未知 query、坏 cursor、cursor+limit 同时、带 `Idempotency-Key`、非法 interval、非小写/畸形地址     |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺失或无效 Bearer                                                                                  |
-| 404  | `NOT_FOUND`                      | 模块未启用、`native` 未登记、未登记地址被所有已启用 Provider 明确否认、trades/holders 的未登记地址 |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                   |
-| 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56` 的 `assetId`                                                                        |
-| 429  | `RATE_LIMITED`                   | 未登记地址查找配额用尽（asset / candles）                                                          |
-| 502  | `PROVIDER_UNREACHABLE`           | 只有图片代理 `GET /v2/market/logos/…`：上游超时/失败（§2b）                                        |
-| 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置（trades 分页）；未登记地址查找的配额运行时缺失                                   |
+| HTTP | code                             | 出现位置                                                                                                                                                                                      |
+| ---- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | 未知 query、坏 cursor、cursor+limit 同时、带 `Idempotency-Key`、非法 interval、非小写/畸形地址；分类列表缺 `category` / 未知 `category`、`sort`、`limit` 越界、cursor 与 category/sort 不匹配 |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺失或无效 Bearer                                                                                                                                                                             |
+| 404  | `NOT_FOUND`                      | 模块未启用、`native` 未登记、未登记地址被所有已启用 Provider 明确否认、trades/holders 的未登记地址                                                                                            |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                                              |
+| 422  | `CHAIN_MISMATCH`                 | 非 `eip155:56` 的 `assetId`                                                                                                                                                                   |
+| 429  | `RATE_LIMITED`                   | 未登记地址查找配额用尽（asset / candles）                                                                                                                                                     |
+| 502  | `PROVIDER_UNREACHABLE`           | 只有图片代理 `GET /v2/market/logos/…`：上游超时/失败（§2b）                                                                                                                                   |
+| 503  | `CAPABILITY_UNAVAILABLE`         | cursor 密钥未配置（trades 分页、分类列表）；未登记地址查找的配额运行时缺失；`meme`/`community` 分类的候选来源未组装                                                                           |
 
 Provider 故障**不是 HTTP 错误**：请求 200，受影响的块 `unavailable` 或事实 `quality: stale`。
 
@@ -709,3 +709,152 @@ Provider 故障**不是 HTTP 错误**：请求 200，受影响的块 `unavailabl
 | 社区讨论量 / 增长 / 算力排名、挖矿数据块 | 无后端（D19），整块 unavailable                                 |
 | Swap 入口                                | `capability.swappable === false`                                |
 | 钱包估值 / 净值                          | 仍为 `MARKET_PRICE_PROVIDER_NOT_CONFIGURED`（待主代理裁决接入） |
+
+## 12. `GET /v2/market/assets?category=…` → 情报页「行情」三分类（决策 0100）
+
+```
+GET /v2/market/assets?category=major|meme|community[&sort=marketCap|change24h|volume24h][&limit=1..50]
+GET /v2/market/assets?category=…&sort=…&cursor=<nextCursor>
+Authorization: Bearer <Privy access token>
+X-Loop-Contract-Version: 2.0
+X-Loop-Client-Version: <semver>
+```
+
+- `category` 必填；`sort` 默认 `marketCap`；`limit` 默认 30、最大 50。翻页时**同时带原来的
+  `category` 与 `sort`** 加 `cursor`，**不要再带 `limit`**（带了 400，页大小在 cursor 里）。
+  cursor 绑定账号、category、sort，600 秒过期；过期/不匹配 → 400，前端回到第一页重拉。
+- 「自选」chip 不走本接口，仍读 `GET /v2/market/overview` 的 `watchlist`。
+- 三个分类的来源：
+  - `major`：后端静态白名单（configVersion `marketCategoriesV1`）里 Registry 已登记且未封禁的资产。
+    当前 Development 为 BNB、USDT、WBNB、BTCB、ETH、XRP、ADA、DOT、LINK、UNI、Cake（USDC 未登记，不在列）。
+  - `meme`：每个已登记 Launch 发售的项目代币（去重，**含 BSC 测试网**，测试网行情一定是 `quote: null`）。
+  - `community`：已认证社区绑定的代币，每行带 `community`。
+- 排序：按 sort 字段从大到小；该数字缺失（`quote: null` 或 quote 里该字段为 null）的行排在所有有值行之后；
+  并列时按 `assetId` 升序。翻页期间价格变化可能让某行跨页移动，不会重复同一个 key、不会死循环。
+
+响应（2026-10-08 形状示例，数字为示意）：
+
+```json
+{
+  "category": "community",
+  "sort": "marketCap",
+  "items": [
+    {
+      "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      "symbol": "USDT",
+      "name": "Tether USD",
+      "logoUrl": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0x55d398326f99059ff775485246999027b3197955.png",
+      "quote": {
+        "priceUsd": "1.0001",
+        "change24hPct": "-0.02",
+        "marketCapUsd": "6012345678",
+        "volume24hUsd": "512345678.9",
+        "observedAt": "2026-10-08T09:30:00.000Z",
+        "source": "dexscreener",
+        "quality": "fresh"
+      },
+      "sparkline": {
+        "status": "available",
+        "interval": "1h",
+        "closes": ["1.0002", "1.0001"],
+        "observedAt": "2026-10-08T09:00:00.000Z",
+        "source": "geckoterminal",
+        "quality": "fresh"
+      },
+      "community": {
+        "communityId": "439cabe6-4c98-4f99-860f-192ad52403a1",
+        "name": "Builders Guild",
+        "logoRef": "logo:media/0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e"
+      }
+    },
+    {
+      "assetId": "eip155:97:0x358d40a1a2b02d550c64e7a9b8dc599f8219d976",
+      "symbol": "LTPT",
+      "name": "Loop Test Project Token",
+      "logoUrl": null,
+      "quote": null,
+      "quoteUnavailable": { "reasonCode": "MARKET_CHAIN_NOT_PRICED" },
+      "sparkline": {
+        "status": "unavailable",
+        "reasonCode": "MARKET_CHAIN_NOT_PRICED"
+      }
+    }
+  ],
+  "nextCursor": null,
+  "rules": {
+    "configVersion": "marketCategoriesV1",
+    "effectiveAt": "2026-10-08T00:00:00.000Z",
+    "ordering": "dexscreener_market_cap_desc"
+  },
+  "observedAt": "2026-10-08T09:30:01.123Z",
+  "contractVersion": "2.0"
+}
+```
+
+（第二行实际只会出现在 `category=meme`；这里放在一起只为展示 null 分支。）
+
+行字段：
+
+| 字段                                | 说明                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `logoUrl`                           | 与 overview 行 `logo.url` 同一规则；`null` → 画字母头像                                                                                                                                                                                                                                                                                                                          |
+| `quote`                             | 主交易对（最深的 base pair）的 DexScreener 数字；全部是十进制字符串。`change24hPct` 为百分点（`"-2.5"` 即 −2.5 %）。quote 内某字段 `null` = Provider 本次没报这个数，显示「—」                                                                                                                                                                                                   |
+| `quote.quality`                     | `fresh` / `stale`（超 TTL、仍在宽限期，可加「延迟」小字）/ `proxied`（BNB 原生币用 WBNB 定价）                                                                                                                                                                                                                                                                                   |
+| `quote.observedAt` + `quote.source` | 合并成一行 `LoopProvenanceLine`（「DexScreener · 观察于 HH:mm」）                                                                                                                                                                                                                                                                                                                |
+| `quoteUnavailable.reasonCode`       | 仅 `quote: null` 时出现：`MARKET_CHAIN_NOT_PRICED`（测试网等不读行情的链）、`MARKET_PROVIDER_DEXSCREENER_DISABLED`、`MARKET_PROVIDER_UNREACHABLE`、`MARKET_PROVIDER_RATE_LIMITED`、`MARKET_PAIR_NOT_FOUND`、`MARKET_PAIR_UNREPRESENTABLE`、`MARKET_FACT_NOT_REPORTED`、`MARKET_FACT_CACHE_UNAVAILABLE`。行照常显示 symbol/name，价格位用 `LoopInlineUnavailable`，**不要显示 0** |
+| `sparkline`                         | 与 overview 行相同（§3a）                                                                                                                                                                                                                                                                                                                                                        |
+| `community`                         | 仅 `category=community`；`logoRef` 解析方式与社区资料相同                                                                                                                                                                                                                                                                                                                        |
+
+unavailable 行为：
+
+- DexScreener 关闭或不可达：仍是 `200`，每行 `quote: null` + 原因；不是 HTTP 错误。
+- `meme` / `community` 的候选来源（数据库）不可用：`503 CAPABILITY_UNAVAILABLE`（不会返回空列表冒充「没有币」）。
+  `major` 只依赖 Registry。
+- cursor 密钥未配置：三个分类都 `503`。
+- 空分类（例如还没有任何 Launch 登记项目代币）是真实的 `items: []` + `nextCursor: null`，显示空态。
+
+## 13. `GET /v2/intel/promotions` → 情报页活动位（决策 0100）
+
+```
+GET /v2/intel/promotions
+Authorization: Bearer <Privy access token>
+X-Loop-Contract-Version: 2.0
+```
+
+无 query（带了 400）。响应：
+
+```json
+{
+  "items": [
+    {
+      "id": "5b0f8a2e-6d1c-4e7a-9b3f-2c8d4e6f1a01",
+      "title": "LOOP 挖矿算力周榜",
+      "subtitle": "看看本周谁的算力最高",
+      "imageUrl": null,
+      "deeplink": "/intel",
+      "startsAt": "2026-10-08T00:00:00.000Z",
+      "endsAt": "2027-01-01T00:00:00.000Z",
+      "order": 1
+    },
+    {
+      "id": "5b0f8a2e-6d1c-4e7a-9b3f-2c8d4e6f1a02",
+      "title": "推荐社区",
+      "subtitle": "发现正在活跃的社区",
+      "imageUrl": null,
+      "deeplink": "/square",
+      "startsAt": "2026-10-08T00:00:00.000Z",
+      "endsAt": "2027-01-01T00:00:00.000Z",
+      "order": 2
+    }
+  ],
+  "configVersion": "intelPromotionsV1",
+  "effectiveAt": "2026-10-08T00:00:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+- 只返回当前生效（`startsAt <= now < endsAt`）的卡片，按 `order` 升序；`items: []` → 隐藏活动位整块。
+- `deeplink` **只会**是 app 内路由：`/intel`、`/square`、`/meme`、`/community/profile?id=<communityId>`。
+  后端启动时校验，任何外链/scheme 都进不了响应；前端仍应只用 GoRouter 内部跳转，不交给浏览器。
+- `imageUrl` 为 `null` 时前端用自己的卡片底图；非 null 时一定是 https。
+- 错误：400（带 query）、401、409 `ACCOUNT_BOOTSTRAP_REQUIRED`；`market` 模块未启用时 404。

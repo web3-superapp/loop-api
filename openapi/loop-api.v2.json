@@ -274,10 +274,10 @@
                           "items": {
                             "type": "string",
                             "enum": [
-                              "community",
-                              "mining",
-                              "launch",
-                              "market",
+                              "chat",
+                              "square",
+                              "meme",
+                              "intel",
                               "wallet"
                             ]
                           }
@@ -1132,12 +1132,12 @@
                     "contractVersion": { "type": "string", "enum": ["2.0"] },
                     "configVersion": {
                       "type": "string",
-                      "enum": ["productPolicyV2.2026-09-01"]
+                      "enum": ["productPolicyV2.2026-10-08"]
                     },
                     "effectiveAt": {
                       "type": "string",
                       "format": "date-time",
-                      "enum": ["2026-09-01T00:00:00.000Z"]
+                      "enum": ["2026-10-08T00:00:00.000Z"]
                     },
                     "capabilities": {
                       "type": "array",
@@ -56611,6 +56611,1498 @@
         }
       }
     },
+    "/v2/market/assets": {
+      "get": {
+        "operationId": "listV2MarketCategoryAssets",
+        "summary": "List one market category (major, meme, community)",
+        "tags": ["market"],
+        "description": "Decision 0100. `major` is the static allow-list `marketMajorAssetIds` (configVersion marketCategoriesV1) intersected with non-blocked registry rows; `meme` is the project token of every registered Launch sale (testnet included; such rows carry quote null with MARKET_CHAIN_NOT_PRICED); `community` is every asset a verified community is bound to, with that community. Every candidate (at most 100) is priced in one batched DexScreener read under the overview's 1200 ms deadline, ordered by the sort field descending (rows without that number last, assetId ascending as the tie-breaker), then paged. The cursor is bound to the caller, category and sort, and carries the last row's sort key: the next page is every row strictly after it on fresh prices. `meme`/`community` answer 503 CAPABILITY_UNAVAILABLE when their candidate source is not composed; a missing cursor secret is 503 for every category.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["major", "meme", "community"]
+            },
+            "in": "query",
+            "name": "category",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["marketCap", "change24h", "volume24h"],
+              "default": "marketCap"
+            },
+            "in": "query",
+            "name": "sort",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1536,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50 },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Page size, default 30. Not allowed together with cursor (the cursor carries its page size)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "category",
+                    "sort",
+                    "items",
+                    "nextCursor",
+                    "rules",
+                    "observedAt",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "category": {
+                      "type": "string",
+                      "enum": ["major", "meme", "community"]
+                    },
+                    "sort": {
+                      "type": "string",
+                      "enum": ["marketCap", "change24h", "volume24h"]
+                    },
+                    "items": {
+                      "type": "array",
+                      "maxItems": 50,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "assetId",
+                          "symbol",
+                          "name",
+                          "logoUrl",
+                          "quote",
+                          "sparkline"
+                        ],
+                        "properties": {
+                          "assetId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                          },
+                          "symbol": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128
+                          },
+                          "logoUrl": {
+                            "anyOf": [
+                              { "type": "string", "format": "uri" },
+                              { "type": "null" }
+                            ],
+                            "description": "The asset logo URL (same rule as the overview rows' logo.url); null when none can be formed — draw the monogram."
+                          },
+                          "quote": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "priceUsd",
+                                  "change24hPct",
+                                  "marketCapUsd",
+                                  "volume24hUsd",
+                                  "observedAt",
+                                  "source",
+                                  "quality"
+                                ],
+                                "properties": {
+                                  "priceUsd": {
+                                    "type": "string",
+                                    "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                    "description": "Canonical decimal string; never a JavaScript number."
+                                  },
+                                  "change24hPct": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                        "description": "Canonical decimal string; never a JavaScript number."
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "DexScreener priceChange.h24 in percent points (\"-2.5\" is -2.5 %); null when the Provider did not report it."
+                                  },
+                                  "marketCapUsd": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                        "description": "Canonical decimal string; never a JavaScript number."
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "volume24hUsd": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                        "description": "Canonical decimal string; never a JavaScript number."
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "observedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "dexscreener",
+                                      "goplus",
+                                      "geckoterminal",
+                                      "loop_indexer"
+                                    ]
+                                  },
+                                  "quality": {
+                                    "type": "string",
+                                    "enum": ["fresh", "stale", "proxied"],
+                                    "description": "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window."
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "quoteUnavailable": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["reasonCode"],
+                            "properties": {
+                              "reasonCode": {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              }
+                            },
+                            "description": "Present exactly when quote is null. MARKET_CHAIN_NOT_PRICED (asset on a chain the market Provider is not read for, e.g. a BSC testnet Launch token), MARKET_PROVIDER_DEXSCREENER_DISABLED, MARKET_PROVIDER_UNREACHABLE, MARKET_PROVIDER_RATE_LIMITED, MARKET_PAIR_NOT_FOUND, MARKET_PAIR_UNREPRESENTABLE, MARKET_FACT_NOT_REPORTED, MARKET_FACT_CACHE_UNAVAILABLE."
+                          },
+                          "sparkline": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "status",
+                                  "interval",
+                                  "closes",
+                                  "observedAt",
+                                  "source",
+                                  "quality"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["available"]
+                                  },
+                                  "interval": {
+                                    "type": "string",
+                                    "enum": ["1h"]
+                                  },
+                                  "closes": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 24,
+                                    "items": {
+                                      "type": "string",
+                                      "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                      "description": "Canonical decimal string; never a JavaScript number."
+                                    },
+                                    "description": "Hourly closes, oldest first; the last one is the open hour. Never a JavaScript number."
+                                  },
+                                  "observedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "dexscreener",
+                                      "goplus",
+                                      "geckoterminal",
+                                      "loop_indexer"
+                                    ]
+                                  },
+                                  "quality": {
+                                    "type": "string",
+                                    "enum": ["fresh", "stale", "proxied"]
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["status", "reasonCode"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["unavailable"]
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                  }
+                                }
+                              }
+                            ],
+                            "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
+                          },
+                          "community": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["communityId", "name", "logoRef"],
+                            "properties": {
+                              "communityId": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 40
+                              },
+                              "logoRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(avatar:preset/community-(0[1-9]|1[0-2])|logo:media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              }
+                            },
+                            "description": "Only on category=community."
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [{ "type": "string" }, { "type": "null" }]
+                    },
+                    "rules": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["configVersion", "effectiveAt", "ordering"],
+                      "properties": {
+                        "configVersion": {
+                          "type": "string",
+                          "enum": ["marketCategoriesV1"]
+                        },
+                        "effectiveAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "ordering": {
+                          "type": "string",
+                          "enum": [
+                            "dexscreener_market_cap_desc",
+                            "dexscreener_price_change_h24_desc",
+                            "dexscreener_volume_h24_desc"
+                          ]
+                        }
+                      }
+                    },
+                    "observedAt": { "type": "string", "format": "date-time" },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["CHAIN_MISMATCH"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/intel/promotions": {
+      "get": {
+        "operationId": "listV2IntelPromotions",
+        "summary": "List the intel page promotion cards",
+        "tags": ["market"],
+        "description": "Decision 0100. A static, versioned list (configVersion intelPromotionsV1) of the cards in force now, ordered by `order`. `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts. An empty `items` means no card is running: hide the strip.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "configVersion",
+                    "effectiveAt",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "title",
+                          "subtitle",
+                          "imageUrl",
+                          "deeplink",
+                          "startsAt",
+                          "endsAt",
+                          "order"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 40
+                          },
+                          "subtitle": { "type": "string", "maxLength": 80 },
+                          "imageUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uri",
+                                "pattern": "^https://"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "deeplink": {
+                            "type": "string",
+                            "pattern": "^(/intel|/square|/meme|/community/profile\\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+                            "description": "An in-app route only: /intel, /square, /meme, or /community/profile?id=<communityId>. Never an external URL."
+                          },
+                          "startsAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "endsAt": { "type": "string", "format": "date-time" },
+                          "order": { "type": "integer", "minimum": 0 }
+                        }
+                      }
+                    },
+                    "configVersion": {
+                      "type": "string",
+                      "enum": ["intelPromotionsV1"]
+                    },
+                    "effectiveAt": { "type": "string", "format": "date-time" },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["CHAIN_MISMATCH"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/market/assets/{assetId}": {
       "get": {
         "operationId": "getV2MarketAsset",
@@ -65370,7 +66862,8 @@
                                   "reasonCode",
                                   "proxyAsset",
                                   "priceUsd",
-                                  "valueUsd"
+                                  "valueUsd",
+                                  "change24hPct"
                                 ],
                                 "properties": {
                                   "status": {
@@ -65423,6 +66916,16 @@
                                     "type": "string",
                                     "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
                                     "description": "Exact decimal string; never a JavaScript floating-point value."
+                                  },
+                                  "change24hPct": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "Decision 0100: DexScreener priceChange.h24 of the same pair, in percent points (\"-2.5\" is -2.5 %); null when not reported."
                                   }
                                 },
                                 "description": "USD valuation from a fresh or stale Provider price of the asset itself. Display information only; never a spendable amount."
@@ -65499,7 +67002,8 @@
                             "quality",
                             "priceSource",
                             "asOf",
-                            "isSpendable"
+                            "isSpendable",
+                            "change24h"
                           ],
                           "properties": {
                             "status": {
@@ -65538,6 +67042,41 @@
                               "type": "boolean",
                               "description": "A net worth is display information, never a balance.",
                               "enum": [false]
+                            },
+                            "change24h": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["usd", "pct"],
+                                  "properties": {
+                                    "usd": {
+                                      "type": "string",
+                                      "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                      "description": "Signed USD change over 24h, rounded half away from zero to 6 places."
+                                    },
+                                    "pct": {
+                                      "type": "string",
+                                      "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                      "description": "Signed change in percent points, rounded half away from zero to 4 places."
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "Decision 0100: derived from the same price read as the rows (each valued row worth v whose price moved p % changed by v*p/(100+p)); only rows worth more than zero count. null when any of them lacks its 24h number; see change24hUnavailable."
+                            },
+                            "change24hUnavailable": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode"],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                }
+                              },
+                              "description": "Present exactly when change24h is null: PRICE_CHANGE_PARTIAL."
                             }
                           }
                         },
@@ -108822,15 +110361,36 @@
     "/v2/mining/rank": {
       "get": {
         "operationId": "getV2MiningRank",
-        "summary": "Get the user or community power ranking",
+        "summary": "Get the user, community, or referral ranking",
         "tags": ["mining"],
-        "description": "scope=users|communities. Rankings use only complete server snapshots under the formula version in force and list the accounts (or communities with an approved weight) holding positive power, rank() with shared positions on ties, at most 100 rows. Display rule: alias only for discoverable, non-anonymous profiles; otherwise the anonymous member label. myPosition is MINING_RANK_NOT_RANKED for a zero-power caller and MINING_RANK_NOT_APPLICABLE for the community scope. formula is the version in force; snapshot is the same block as the summary, with stale and latestAttempt (Decision 0057).",
+        "description": "scope=users|communities|referrals. users and communities use only complete server snapshots under the formula version in force: every account in the snapshot (or every bound community with an approved weight), positive power first by rank() with shared positions on ties, zero power after it with position null. referrals (Decision 0100) is live from PostgreSQL: inviters ranked by direct invitees in force (referral_edges depth 1, effective_to null, any validation status), only inviters with at least one; it does not wait for a snapshot. Pages: limit 1-50 (default 30), nextCursor bound to the caller and scope, at most 500 rows over a cursor chain; cursor and limit together are 400. Display rule (Decision 0049): alias (with avatarRef) unless the row's owner is in anonymous mode and is not the viewer; otherwise the anonymous member label. me is the caller's own {rank, value} on the requested scope (value = power, or the invitee count as a decimal string; communities: the best-ranked community the caller is a non-banned member of, with communityId), null when unranked. myPosition is kept for older clients (MINING_RANK_NOT_APPLICABLE on communities and referrals). formula is the version in force; snapshot is the same block as the summary, with stale and latestAttempt (Decision 0057).",
         "parameters": [
           {
-            "schema": { "type": "string", "enum": ["users", "communities"] },
+            "schema": {
+              "type": "string",
+              "enum": ["users", "communities", "referrals"]
+            },
             "in": "query",
             "name": "scope",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1536,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50 },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Default 30. Not allowed together with cursor."
           },
           {
             "schema": {
@@ -108873,6 +110433,8 @@
                     "scope",
                     "ranking",
                     "myPosition",
+                    "me",
+                    "nextCursor",
                     "snapshot",
                     "display",
                     "formula",
@@ -108881,7 +110443,7 @@
                   "properties": {
                     "scope": {
                       "type": "string",
-                      "enum": ["users", "communities"]
+                      "enum": ["users", "communities", "referrals"]
                     },
                     "ranking": {
                       "anyOf": [
@@ -108917,7 +110479,7 @@
                             "scope": { "type": "string", "enum": ["users"] },
                             "items": {
                               "type": "array",
-                              "maxItems": 100,
+                              "maxItems": 50,
                               "items": {
                                 "type": "object",
                                 "additionalProperties": false,
@@ -108960,7 +110522,8 @@
                                           "kind",
                                           "alias",
                                           "publicProfileId",
-                                          "audience"
+                                          "audience",
+                                          "avatarRef"
                                         ],
                                         "properties": {
                                           "kind": {
@@ -108980,6 +110543,16 @@
                                             "type": "string",
                                             "enum": ["everyone", "self"],
                                             "description": "self only on the viewer's own row while anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (Decision 0049)."
+                                          },
+                                          "avatarRef": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$"
+                                              },
+                                              { "type": "null" }
+                                            ],
+                                            "description": "Decision 0100: the profile's stored avatar ref, resolved like a profile avatarRef; null when it has none."
                                           }
                                         }
                                       },
@@ -109033,7 +110606,7 @@
                             },
                             "items": {
                               "type": "array",
-                              "maxItems": 100,
+                              "maxItems": 50,
                               "items": {
                                 "type": "object",
                                 "additionalProperties": false,
@@ -109093,9 +110666,130 @@
                             },
                             "participants": { "type": "integer", "minimum": 0 }
                           }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "scope",
+                            "items",
+                            "participants",
+                            "ruleKey"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": ["referrals"]
+                            },
+                            "items": {
+                              "type": "array",
+                              "maxItems": 50,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "position",
+                                  "invitedCount",
+                                  "display",
+                                  "isSelf"
+                                ],
+                                "properties": {
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "rank() by direct invitee count; shared on ties."
+                                  },
+                                  "invitedCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "Direct invitees in force (referral_edges depth 1, effective_to null), any validation status. Always public."
+                                  },
+                                  "display": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "kind",
+                                          "alias",
+                                          "publicProfileId",
+                                          "audience",
+                                          "avatarRef"
+                                        ],
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["alias"]
+                                          },
+                                          "alias": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 64
+                                          },
+                                          "publicProfileId": {
+                                            "type": "string",
+                                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                          },
+                                          "audience": {
+                                            "type": "string",
+                                            "enum": ["everyone", "self"],
+                                            "description": "self only on the viewer's own row while anonymous mode is on: the owner sees the alias, everyone else sees the anonymous label (Decision 0049)."
+                                          },
+                                          "avatarRef": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^avatar:[A-Za-z0-9][A-Za-z0-9._/-]{0,126}$"
+                                              },
+                                              { "type": "null" }
+                                            ],
+                                            "description": "Decision 0100: the profile's stored avatar ref, resolved like a profile avatarRef; null when it has none."
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["kind", "labelKey"],
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["anonymous"]
+                                          },
+                                          "labelKey": {
+                                            "type": "string",
+                                            "enum": [
+                                              "mining.rank.anonymousMember"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "isSelf": { "type": "boolean" }
+                                }
+                              }
+                            },
+                            "participants": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Inviters with at least one direct invitee in force."
+                            },
+                            "ruleKey": {
+                              "type": "string",
+                              "enum": [
+                                "mining.rank.referrals.directActiveEdges"
+                              ]
+                            }
+                          }
                         }
                       ],
-                      "description": "Every account in the snapshot (users) or every bound community with an approved weight (communities), positive power first by rank, zero power after it with position null; at most 100 rows."
+                      "description": "Every account in the snapshot (users), every bound community with an approved weight (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). One page of at most 50 rows; follow nextCursor."
                     },
                     "myPosition": {
                       "anyOf": [
@@ -109131,6 +110825,34 @@
                           }
                         }
                       ]
+                    },
+                    "me": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["rank", "value"],
+                          "properties": {
+                            "rank": { "type": "integer", "minimum": 1 },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                              "description": "Power (users, communities) or the direct invitee count (referrals), as a decimal string."
+                            },
+                            "communityId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                              "description": "Only on scope=communities: the caller's best-ranked community."
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Decision 0100: the caller's own place on the requested scope; null when unranked (zero power, no ranked community, no invitee) or while the ranking is unavailable."
+                    },
+                    "nextCursor": {
+                      "anyOf": [{ "type": "string" }, { "type": "null" }],
+                      "description": "Next page; null on the last page, after 500 rows in total, or when the cursor secret is not configured."
                     },
                     "snapshot": {
                       "anyOf": [

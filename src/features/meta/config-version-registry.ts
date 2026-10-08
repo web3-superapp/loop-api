@@ -1,5 +1,12 @@
 import { communityConfigVersion } from "../community/community-contract.js";
-import { marketTrendingRules } from "../market/market-contract.js";
+import {
+  intelPromotionsConfigVersion,
+  intelPromotionsEffectiveAt,
+} from "../market/intel-promotions.js";
+import {
+  marketCategoryRules,
+  marketTrendingRules,
+} from "../market/market-contract.js";
 import { deviceRiskPolicy } from "../security/security-contract.js";
 import { settingsPolicy } from "../settings/settings-service.js";
 import { supportResponsePolicy } from "../support/support-contract.js";
@@ -46,6 +53,16 @@ export const v2ConfigVersionRegistry: readonly ConfigVersionEntry[] =
       module: "marketTrending",
       configVersion: marketTrendingRules.configVersion,
       effectiveAt: null,
+    }),
+    Object.freeze({
+      module: "marketCategories",
+      configVersion: marketCategoryRules.configVersion,
+      effectiveAt: marketCategoryRules.effectiveAt,
+    }),
+    Object.freeze({
+      module: "intelPromotions",
+      configVersion: intelPromotionsConfigVersion,
+      effectiveAt: intelPromotionsEffectiveAt,
     }),
     Object.freeze({
       module: "deviceRisk",

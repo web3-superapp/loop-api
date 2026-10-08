@@ -10,7 +10,16 @@ import {
   reasonCodePatternSource,
   transactionHashPatternSource,
 } from "../../features/chain/chain-contract.js";
+import { communityLogoRefPatternSource } from "../../features/community/community-contract.js";
 import {
+  intelPromotionDeeplinkPatternSource,
+  intelPromotionsConfigVersion,
+  intelPromotionsMaximumItems,
+} from "../../features/market/intel-promotions.js";
+import {
+  marketAssetCategories,
+  marketAssetSorts,
+  marketCategoryRules,
   candleIntervals,
   candleLimits,
   marketFactQualities,
@@ -986,4 +995,208 @@ export const marketReadErrors = {
 export const marketLookupReadErrors = {
   ...marketReadErrors,
   429: v2ErrorResponseSchema(["RATE_LIMITED"]),
+} as const;
+
+const cursorQuerySchema = {
+  type: "string",
+  minLength: 3,
+  maxLength: 1_536,
+  pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+} as const;
+
+export const marketCategoryAssetsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["category"],
+  properties: {
+    category: { type: "string", enum: [...marketAssetCategories] },
+    sort: {
+      type: "string",
+      enum: [...marketAssetSorts],
+      default: marketCategoryRules.defaultSort,
+    },
+    cursor: cursorQuerySchema,
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: marketCategoryRules.maximumLimit,
+      description: `Page size, default ${String(marketCategoryRules.defaultLimit)}. Not allowed together with cursor (the cursor carries its page size).`,
+    },
+  },
+} as const;
+
+const marketQuoteSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "priceUsd",
+    "change24hPct",
+    "marketCapUsd",
+    "volume24hUsd",
+    "observedAt",
+    "source",
+    "quality",
+  ],
+  properties: {
+    priceUsd: decimalSchema,
+    change24hPct: {
+      anyOf: [decimalSchema, { type: "null" }],
+      description:
+        'DexScreener priceChange.h24 in percent points ("-2.5" is -2.5 %); null when the Provider did not report it.',
+    },
+    marketCapUsd: { anyOf: [decimalSchema, { type: "null" }] },
+    volume24hUsd: { anyOf: [decimalSchema, { type: "null" }] },
+    observedAt: dateTimeSchema,
+    source: { type: "string", enum: [...marketSources] },
+    quality: {
+      type: "string",
+      enum: ["fresh", "stale", "proxied"],
+      description:
+        "proxied: native BNB priced through WBNB; stale: past its TTL inside the grace window.",
+    },
+  },
+} as const;
+
+export const marketCategoryAssetsResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "category",
+    "sort",
+    "items",
+    "nextCursor",
+    "rules",
+    "observedAt",
+    "contractVersion",
+  ],
+  properties: {
+    category: { type: "string", enum: [...marketAssetCategories] },
+    sort: { type: "string", enum: [...marketAssetSorts] },
+    items: {
+      type: "array",
+      maxItems: marketCategoryRules.maximumLimit,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "assetId",
+          "symbol",
+          "name",
+          "logoUrl",
+          "quote",
+          "sparkline",
+        ],
+        properties: {
+          assetId: { type: "string", pattern: assetIdPatternSource },
+          symbol: { type: "string", minLength: 1, maxLength: 32 },
+          name: { type: "string", minLength: 1, maxLength: 128 },
+          logoUrl: {
+            anyOf: [{ type: "string", format: "uri" }, { type: "null" }],
+            description:
+              "The asset logo URL (same rule as the overview rows' logo.url); null when none can be formed — draw the monogram.",
+          },
+          quote: { anyOf: [marketQuoteSchema, { type: "null" }] },
+          quoteUnavailable: {
+            type: "object",
+            additionalProperties: false,
+            required: ["reasonCode"],
+            properties: { reasonCode: reasonCodeSchema },
+            description:
+              "Present exactly when quote is null. MARKET_CHAIN_NOT_PRICED (asset on a chain the market Provider is not read for, e.g. a BSC testnet Launch token), MARKET_PROVIDER_DEXSCREENER_DISABLED, MARKET_PROVIDER_UNREACHABLE, MARKET_PROVIDER_RATE_LIMITED, MARKET_PAIR_NOT_FOUND, MARKET_PAIR_UNREPRESENTABLE, MARKET_FACT_NOT_REPORTED, MARKET_FACT_CACHE_UNAVAILABLE.",
+          },
+          sparkline: marketSparklineSchema,
+          community: {
+            type: "object",
+            additionalProperties: false,
+            required: ["communityId", "name", "logoRef"],
+            properties: {
+              communityId: { type: "string", pattern: opaqueIdPatternSource },
+              name: { type: "string", minLength: 1, maxLength: 40 },
+              logoRef: {
+                anyOf: [
+                  { type: "string", pattern: communityLogoRefPatternSource },
+                  { type: "null" },
+                ],
+              },
+            },
+            description: "Only on category=community.",
+          },
+        },
+      },
+    },
+    nextCursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+    rules: {
+      type: "object",
+      additionalProperties: false,
+      required: ["configVersion", "effectiveAt", "ordering"],
+      properties: {
+        configVersion: {
+          type: "string",
+          const: marketCategoryRules.configVersion,
+        },
+        effectiveAt: dateTimeSchema,
+        ordering: {
+          type: "string",
+          enum: [
+            "dexscreener_market_cap_desc",
+            "dexscreener_price_change_h24_desc",
+            "dexscreener_volume_h24_desc",
+          ],
+        },
+      },
+    },
+    observedAt: dateTimeSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const intelPromotionsResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["items", "configVersion", "effectiveAt", "contractVersion"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: intelPromotionsMaximumItems,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "title",
+          "subtitle",
+          "imageUrl",
+          "deeplink",
+          "startsAt",
+          "endsAt",
+          "order",
+        ],
+        properties: {
+          id: { type: "string", pattern: opaqueIdPatternSource },
+          title: { type: "string", minLength: 1, maxLength: 40 },
+          subtitle: { type: "string", maxLength: 80 },
+          imageUrl: {
+            anyOf: [
+              { type: "string", format: "uri", pattern: "^https://" },
+              { type: "null" },
+            ],
+          },
+          deeplink: {
+            type: "string",
+            pattern: intelPromotionDeeplinkPatternSource,
+            description:
+              "An in-app route only: /intel, /square, /meme, or /community/profile?id=<communityId>. Never an external URL.",
+          },
+          startsAt: dateTimeSchema,
+          endsAt: dateTimeSchema,
+          order: { type: "integer", minimum: 0 },
+        },
+      },
+    },
+    configVersion: { type: "string", const: intelPromotionsConfigVersion },
+    effectiveAt: dateTimeSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
 } as const;

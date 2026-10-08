@@ -159,6 +159,62 @@ export const marketTrendingRules = Object.freeze({
   maximumItems: 20,
 } as const);
 
+/**
+ * Categorised asset list (Decision 0100). `major` is a static allow-list of
+ * registry asset IDs (only the ones the registry holds and has not blocked
+ * are listed); `meme` is every project token of a registered Launch sale;
+ * `community` is every asset a verified community is bound to. A category
+ * never holds more than `candidateLimit` assets: every candidate is priced
+ * in one batched Provider read so the whole category can be ordered.
+ */
+export const marketAssetCategories = Object.freeze([
+  "major",
+  "meme",
+  "community",
+] as const);
+export type MarketAssetCategory = (typeof marketAssetCategories)[number];
+
+export const marketAssetSorts = Object.freeze([
+  "marketCap",
+  "change24h",
+  "volume24h",
+] as const);
+export type MarketAssetSort = (typeof marketAssetSorts)[number];
+
+/**
+ * Mainstream BSC assets present in the registry on 2026-10-08 (Development
+ * database): BNB native, USDT, WBNB, BTCB, ETH, XRP, ADA, DOT, LINK, UNI,
+ * Cake. USDC is not registered there and is left out until it is.
+ */
+export const marketMajorAssetIds = Object.freeze([
+  "eip155:56:native",
+  "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+  "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+  "eip155:56:0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
+  "eip155:56:0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+  "eip155:56:0x1d2f0da169ceb9fc7b3144628db156f3f6c60dbe",
+  "eip155:56:0x3ee2200efb3400fabb9aacf31297cbdd1d435d47",
+  "eip155:56:0x7083609fce4d1d8dc0c979aab8c869ea2c873402",
+  "eip155:56:0xf8a0bf9cf54bb92f17374d9e9a321e6a111a51bd",
+  "eip155:56:0xbf5140a22578168fd562dccf235e5d43a02ce9b1",
+  "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+] as const);
+
+export const marketCategoryRules = Object.freeze({
+  configVersion: "marketCategoriesV1",
+  effectiveAt: "2026-10-08T00:00:00.000Z",
+  defaultSort: "marketCap",
+  defaultLimit: 30,
+  maximumLimit: 50,
+  /** Candidates priced and ordered per request, per category. */
+  candidateLimit: 100,
+} as const);
+
+export const marketCategoryReasonCodes = Object.freeze({
+  /** The asset lives on a chain the market Provider is not read for (e.g. BSC testnet). */
+  chainNotPriced: "MARKET_CHAIN_NOT_PRICED",
+} as const);
+
 /** Canonical decimal string, optionally negative, never exponent notation. */
 export const signedDecimalPatternSource =
   "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$";

@@ -1,4 +1,9 @@
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import {
+  InvalidV2CursorError,
+  type V2CursorCodec,
+  type V2CursorContinuation,
+} from "../../core/http/v2-cursor.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import {
   ChainRegistryUnavailableError,
@@ -24,8 +29,10 @@ import {
 import {
   miningRankAnonymousMemberKey,
   miningRankDisplayRuleKey,
+  miningRankPaging,
   miningRankPowerRuleKey,
   miningRankScopes,
+  miningReferralRankRuleKey,
   miningReasonCodes,
   unavailable,
   type MiningDailyOutputDocument,
@@ -51,6 +58,7 @@ import {
   MiningRepositoryUnavailableError,
   type MiningFormulaRecord,
   type MiningRankedAccountRecord,
+  type MiningReferralRankRecord,
   type MiningRepository,
   type MiningSnapshotAttemptRecord,
   type MiningSnapshotRecord,
@@ -66,8 +74,6 @@ import { selectMiningWeight } from "./mining-snapshot.js";
  * written here. Asset symbols on the composition page come from the Asset
  * Registry (the same rows the snapshot lane priced), never from a fixture.
  */
-
-export const miningRankLimit = 100;
 
 export interface MiningFormulaProjection {
   readonly configVersion: string;
@@ -242,6 +248,8 @@ export type MiningRankDisplayProjection =
        * owner still sees the alias, everyone else sees the anonymous label.
        */
       readonly audience: MiningRankPowerVisibility;
+      /** Stored avatar ref of the profile (Decision 0100); null when none. */
+      readonly avatarRef: string | null;
     }
   | {
       readonly kind: "anonymous";
@@ -274,12 +282,37 @@ export interface MiningRankedCommunityProjection {
   readonly participants: number;
 }
 
+/** One inviter on the referral rank (Decision 0100). */
+export interface MiningRankedReferrerProjection {
+  readonly position: number;
+  /** Direct invitees in force, every validation status. Always public. */
+  readonly invitedCount: number;
+  readonly display: MiningRankDisplayProjection;
+  readonly isSelf: boolean;
+}
+
+/** The caller's own place on the requested rank (Decision 0100). */
+export interface MiningRankMeProjection {
+  readonly rank: number;
+  /** Power (users, communities) or direct invitee count (referrals), as a decimal string. */
+  readonly value: string;
+  /** Only on `communities`: the caller's best-ranked community. */
+  readonly communityId?: string;
+}
+
 export type MiningRankingProjection =
   | {
       readonly status: "available";
       readonly scope: "users";
       readonly items: readonly MiningRankedUserProjection[];
       readonly participants: number;
+    }
+  | {
+      readonly status: "available";
+      readonly scope: "referrals";
+      readonly items: readonly MiningRankedReferrerProjection[];
+      readonly participants: number;
+      readonly ruleKey: typeof miningReferralRankRuleKey;
     }
   | {
       readonly status: "available";
@@ -301,6 +334,10 @@ export interface MiningRankResource {
   readonly scope: MiningRankScope;
   readonly ranking: MiningRankingProjection;
   readonly myPosition: MiningPositionProjection;
+  /** Null when the caller holds no place on this rank (Decision 0100). */
+  readonly me: MiningRankMeProjection | null;
+  /** Next page of `ranking.items`; null on the last page (Decision 0100). */
+  readonly nextCursor: string | null;
   readonly snapshot: MiningSnapshotOrUnavailable;
   readonly display: {
     readonly anonymousMemberKey: typeof miningRankAnonymousMemberKey;
@@ -363,6 +400,8 @@ export interface MiningService {
   getRank(input: {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly scope?: unknown;
+    readonly cursor?: unknown;
+    readonly limit?: unknown;
   }): Promise<MiningRankResource>;
   getCommunity(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -526,27 +565,73 @@ function estimateProjection(
  * whether others see the number; `discoverable` decides nothing here. The
  * viewer always sees their own alias and power.
  */
+const rankCursorRoute = "miningRank";
+
+function rankCursorString(
+  continuation: V2CursorContinuation,
+  key: string,
+): string {
+  const value = continuation[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw V2ApiError.invalidRequest();
+  }
+  return value;
+}
+
+function rankCursorNumber(
+  continuation: V2CursorContinuation,
+  key: string,
+): number {
+  const value = continuation[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw V2ApiError.invalidRequest();
+  }
+  return value;
+}
+
+/** The Decision 0049 display rule, shared by every rank scope. */
+function projectRankDisplay(
+  row: Pick<
+    MiningRankedAccountRecord,
+    "alias" | "publicProfileId" | "anonymousMode" | "avatarRef"
+  >,
+  isSelf: boolean,
+): MiningRankDisplayProjection {
+  return row.alias !== null &&
+    row.publicProfileId !== null &&
+    (isSelf || !row.anonymousMode)
+    ? Object.freeze({
+        kind: "alias" as const,
+        alias: row.alias,
+        publicProfileId: row.publicProfileId,
+        audience: row.anonymousMode ? ("self" as const) : ("everyone" as const),
+        avatarRef: row.avatarRef,
+      })
+    : Object.freeze({
+        kind: "anonymous" as const,
+        labelKey: miningRankAnonymousMemberKey,
+      });
+}
+
+function projectRankedReferrer(
+  row: MiningReferralRankRecord,
+  viewerUserId: string,
+): MiningRankedReferrerProjection {
+  const isSelf = row.ownerUserId === viewerUserId;
+  return Object.freeze({
+    position: row.position,
+    invitedCount: row.invitedCount,
+    display: projectRankDisplay(row, isSelf),
+    isSelf,
+  });
+}
+
 function projectRankedUser(
   row: MiningRankedAccountRecord,
   viewerUserId: string,
 ): MiningRankedUserProjection {
   const isSelf = row.ownerUserId === viewerUserId;
-  const display: MiningRankDisplayProjection =
-    row.alias !== null &&
-    row.publicProfileId !== null &&
-    (isSelf || !row.anonymousMode)
-      ? Object.freeze({
-          kind: "alias" as const,
-          alias: row.alias,
-          publicProfileId: row.publicProfileId,
-          audience: row.anonymousMode
-            ? ("self" as const)
-            : ("everyone" as const),
-        })
-      : Object.freeze({
-          kind: "anonymous" as const,
-          labelKey: miningRankAnonymousMemberKey,
-        });
+  const display = projectRankDisplay(row, isSelf);
   return Object.freeze({
     position: row.position,
     power: isSelf || row.powerVisibleToOthers ? row.totalPower : null,
@@ -564,6 +649,11 @@ export function createMiningService(dependencies: {
   readonly registry: Pick<ChainRegistryRepository, "listAssets">;
   /** Publishes every asset row's logo as this API's proxy URL (Decision 0089). */
   readonly tokenLogos: TokenLogoProjector;
+  /**
+   * Rank cursors (Decision 0100). Without it the first page is still served
+   * and `nextCursor` is null; a cursor is then `CAPABILITY_UNAVAILABLE`.
+   */
+  readonly cursorCodec?: V2CursorCodec | null;
   readonly now?: () => Date;
 }): MiningService {
   const { repository, registry } = dependencies;
@@ -589,6 +679,101 @@ export function createMiningService(dependencies: {
 
   function baseline(): Promise<MiningBaselineResolution> {
     return resolveMiningBaseline(repository, now());
+  }
+
+  /**
+   * One rank page request (Decision 0100): the page size, the keyset of the
+   * previous page's last row, and how to mint the next cursor. The cursor is
+   * bound to the caller and the scope; it carries its own page size and the
+   * running row count so a chain stops at `maximumTotal`.
+   */
+  function readRankPage(
+    ownerId: string,
+    scope: MiningRankScope,
+    query: { readonly cursor?: unknown; readonly limit?: unknown },
+  ): {
+    readonly pageSize: number;
+    readonly fetchSize: number;
+    readonly continuation: V2CursorContinuation | null;
+    next(
+      served: number,
+      key: Readonly<Record<string, string | number>>,
+    ): string | null;
+  } {
+    const codec = dependencies.cursorCodec ?? null;
+    const filter = `scope=${scope}`;
+    if (query.cursor !== undefined && query.limit !== undefined) {
+      throw V2ApiError.invalidRequest();
+    }
+    let pageSize: number = miningRankPaging.defaultLimit;
+    let servedBefore = 0;
+    let continuation: V2CursorContinuation | null = null;
+    if (query.cursor !== undefined) {
+      if (codec === null) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      if (typeof query.cursor !== "string") {
+        throw V2ApiError.invalidRequest();
+      }
+      try {
+        continuation = codec.decode({
+          ownerId,
+          route: rankCursorRoute,
+          filter,
+          cursor: query.cursor,
+        });
+      } catch (error) {
+        if (error instanceof InvalidV2CursorError) {
+          throw V2ApiError.invalidRequest();
+        }
+        throw error;
+      }
+      const size = continuation["limit"];
+      const served = continuation["served"];
+      if (
+        typeof size !== "number" ||
+        !Number.isInteger(size) ||
+        size < 1 ||
+        size > miningRankPaging.maximumLimit ||
+        typeof served !== "number" ||
+        !Number.isInteger(served) ||
+        served < 1 ||
+        served >= miningRankPaging.maximumTotal
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      pageSize = size;
+      servedBefore = served;
+    } else if (query.limit !== undefined) {
+      if (
+        typeof query.limit !== "number" ||
+        !Number.isInteger(query.limit) ||
+        query.limit < 1 ||
+        query.limit > miningRankPaging.maximumLimit
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      pageSize = query.limit;
+    }
+    const remaining = miningRankPaging.maximumTotal - servedBefore;
+    const effective = Math.min(pageSize, remaining);
+    return {
+      pageSize: effective,
+      fetchSize: effective + 1,
+      continuation,
+      next(served, key) {
+        const total = servedBefore + served;
+        if (codec === null || total >= miningRankPaging.maximumTotal) {
+          return null;
+        }
+        return codec.encode({
+          ownerId,
+          route: rankCursorRoute,
+          filter,
+          continuation: { ...key, limit: pageSize, served: total },
+        });
+      },
+    };
   }
 
   /**
@@ -819,6 +1004,7 @@ export function createMiningService(dependencies: {
         if (scope === null) {
           throw V2ApiError.invalidRequest();
         }
+        const page = readRankPage(input.principal.userId, scope, input);
         const display = Object.freeze({
           anonymousMemberKey: miningRankAnonymousMemberKey,
           ruleKey: miningRankDisplayRuleKey,
@@ -826,12 +1012,70 @@ export function createMiningService(dependencies: {
         });
         const resolution = await baseline();
         const formula = await formulaState(resolution);
+        const viewer = input.principal.userId;
+
+        if (scope === "referrals") {
+          // A live PostgreSQL fact: it does not wait for a Mining snapshot.
+          const after = page.continuation;
+          const [rows, standing] = await Promise.all([
+            repository.listReferralRanking({
+              limit: page.fetchSize,
+              ...(after === null
+                ? {}
+                : {
+                    after: {
+                      invitedCount: rankCursorNumber(after, "count"),
+                      ownerUserId: rankCursorString(after, "owner"),
+                    },
+                  }),
+            }),
+            repository.getReferralStanding({ ownerUserId: viewer }),
+          ]);
+          const items = rows.slice(0, page.pageSize);
+          const last = items.at(-1);
+          return Object.freeze({
+            scope,
+            ranking: Object.freeze({
+              status: "available" as const,
+              scope: "referrals" as const,
+              items: Object.freeze(
+                items.map((row) => projectRankedReferrer(row, viewer)),
+              ),
+              participants: standing.participantCount,
+              ruleKey: miningReferralRankRuleKey,
+            }),
+            myPosition: unavailable(miningReasonCodes.rankNotApplicable),
+            me:
+              standing.position === null || standing.invitedCount === null
+                ? null
+                : Object.freeze({
+                    rank: standing.position,
+                    value: String(standing.invitedCount),
+                  }),
+            nextCursor:
+              last === undefined || rows.length <= page.pageSize
+                ? null
+                : page.next(items.length, {
+                    count: last.invitedCount,
+                    owner: last.ownerUserId,
+                  }),
+            snapshot: hasNoMiningSnapshot(resolution)
+              ? missingSnapshot(resolution)
+              : snapshotProjection(resolution),
+            display,
+            formula,
+            contractVersion: v2ContractVersion,
+          });
+        }
+
         if (hasNoMiningSnapshot(resolution)) {
           const reason = missingReason(resolution);
           return Object.freeze({
             scope,
             ranking: reason,
             myPosition: reason,
+            me: null,
+            nextCursor: null,
             snapshot: missingSnapshot(resolution),
             display,
             formula,
@@ -840,18 +1084,37 @@ export function createMiningService(dependencies: {
         }
         const snapshot = resolution.snapshot;
         if (scope === "communities") {
-          const rows = await repository.listCommunityRanking({
-            snapshotId: snapshot.snapshotId,
-            configVersion: resolution.formula.configVersion,
-            limit: miningRankLimit,
-          });
+          const after = page.continuation;
+          const [rows, mine] = await Promise.all([
+            repository.listCommunityRanking({
+              snapshotId: snapshot.snapshotId,
+              configVersion: resolution.formula.configVersion,
+              limit: page.fetchSize,
+              ...(after === null
+                ? {}
+                : {
+                    after: {
+                      power: rankCursorString(after, "power"),
+                      communityName: rankCursorString(after, "name"),
+                      communityId: rankCursorString(after, "community"),
+                    },
+                  }),
+            }),
+            repository.getMemberBestCommunityStanding({
+              snapshotId: snapshot.snapshotId,
+              configVersion: resolution.formula.configVersion,
+              ownerUserId: viewer,
+            }),
+          ]);
+          const items = rows.slice(0, page.pageSize);
+          const last = items.at(-1);
           return Object.freeze({
             scope,
             ranking: Object.freeze({
               status: "available" as const,
               scope: "communities" as const,
               items: Object.freeze(
-                rows.map((row) =>
+                items.map((row) =>
                   Object.freeze({
                     position: row.position,
                     power: row.power,
@@ -865,38 +1128,65 @@ export function createMiningService(dependencies: {
                   }),
                 ),
               ),
-              participants: rows.filter((row) => row.position !== null).length,
+              participants: items.filter((row) => row.position !== null).length,
             }),
             myPosition: unavailable(miningReasonCodes.rankNotApplicable),
+            me:
+              mine === null || mine.position === null
+                ? null
+                : Object.freeze({
+                    rank: mine.position,
+                    value: mine.power,
+                    communityId: mine.communityId,
+                  }),
+            nextCursor:
+              last === undefined || rows.length <= page.pageSize
+                ? null
+                : page.next(items.length, {
+                    power: last.power,
+                    name: last.communityName,
+                    community: last.communityId,
+                  }),
             snapshot: snapshotProjection(resolution),
             display,
             formula,
             contractVersion: v2ContractVersion,
           });
         }
+        const after = page.continuation;
         const [rows, standing] = await Promise.all([
           repository.listAccountRanking({
             snapshotId: snapshot.snapshotId,
-            limit: miningRankLimit,
+            limit: page.fetchSize,
+            ...(after === null
+              ? {}
+              : {
+                  after: {
+                    totalPower: rankCursorString(after, "power"),
+                    ownerUserId: rankCursorString(after, "owner"),
+                  },
+                }),
           }),
           repository.getAccountStanding({
             snapshotId: snapshot.snapshotId,
-            ownerUserId: input.principal.userId,
+            ownerUserId: viewer,
           }),
         ]);
+        const items = rows.slice(0, page.pageSize);
+        const last = items.at(-1);
         return Object.freeze({
           scope,
           ranking: Object.freeze({
             status: "available" as const,
             scope: "users" as const,
             items: Object.freeze(
-              rows.map((row) => projectRankedUser(row, input.principal.userId)),
+              items.map((row) => projectRankedUser(row, viewer)),
             ),
             participants: standing?.participantCount ?? 0,
           }),
           myPosition:
             standing === null
-              ? await absentReason(input.principal.userId)
+              ? await absentReason(viewer)
               : standing.position === null
                 ? unavailable(miningReasonCodes.rankNotRanked)
                 : Object.freeze({
@@ -904,6 +1194,20 @@ export function createMiningService(dependencies: {
                     position: standing.position,
                     power: standing.totalPower,
                   }),
+          me:
+            standing === null || standing.position === null
+              ? null
+              : Object.freeze({
+                  rank: standing.position,
+                  value: standing.totalPower,
+                }),
+          nextCursor:
+            last === undefined || rows.length <= page.pageSize
+              ? null
+              : page.next(items.length, {
+                  power: last.totalPower,
+                  owner: last.ownerUserId,
+                }),
           snapshot: snapshotProjection(resolution),
           display,
           formula,
@@ -913,7 +1217,6 @@ export function createMiningService(dependencies: {
         return translate(error);
       }
     },
-
     async getCommunity(input) {
       try {
         const record = await repository.getCommunityWeight(input.communityId);

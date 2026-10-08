@@ -27,11 +27,11 @@ import {
 
 const baselineClientPolicy = {
   contractVersion: "2.0",
-  configVersion: "productPolicyV2.2026-09-01",
-  effectiveAt: "2026-09-01T00:00:00.000Z",
+  configVersion: "productPolicyV2.2026-10-08",
+  effectiveAt: "2026-10-08T00:00:00.000Z",
   defaultRoute: "community",
   navigation: {
-    primaryTabs: ["community", "mining", "launch", "market", "wallet"],
+    primaryTabs: ["chat", "square", "meme", "intel", "wallet"],
   },
   versionGate: {
     status: "unavailable",
