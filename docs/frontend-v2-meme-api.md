@@ -1,5 +1,7 @@
 # 前端联调：V2 MEME 曲线发射台（S116 / 决策 0101；S116b / 决策 0103 修订）
 
+> **2026-10-09（决策 0102）**：`GET /v2/meme/tokens/{memeTokenId}` 的 `memeToken` 多两个键：`listing: "listed" | "hidden"` 与 `listingReason: { reasonCode: string | null, reasonText: string | null } | null`（恰在 `hidden` 时非 null，`reasonText` 是运营写给用户看的一句话）。`hidden` 的代币不出现在 `/v2/meme/tokens` 与 `category=meme`，详情仍可读；客户端把两个键当可选处理并在 hidden 时显示提示。
+
 > S116b 变更（决策 0103）：§3/§4 已毕业无 DexScreener 报价时回退读池子 `slot0`（`priceSource.source = "pool_slot0"`）；
 > §4 `graduation.residual` 取整零头投影为 `null`；§9 `quote.source` 新增 `pool_slot0`、`quality` 新增 `derived`；
 > §10 毕业兜底等待改为 15 秒（可配）。
