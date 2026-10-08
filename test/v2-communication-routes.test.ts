@@ -149,6 +149,70 @@ function handRaiseRows() {
   }));
 }
 
+const otherCommunityId = "4b96a75e-6828-4a6b-8c1d-2e3f4a5b6c7d";
+const otherVoiceRoomId = "9d8c7b6a-5e4f-4a3b-9c2d-1e0f2a3b4c5d";
+
+/**
+ * Three live rooms, newest first: one the viewer hosts (anonymous, still
+ * shown to itself), one by a named host in a community the viewer is not in,
+ * and one whose host is anonymous to the viewer.
+ */
+function liveRoomRows() {
+  return [
+    {
+      voiceRoomId,
+      communityId,
+      communityName: "Builders Guild",
+      communityLogoRef: "avatar:preset/community-03",
+      startedAt: "2026-10-08T03:00:00.000Z",
+      host: {
+        ownerUserId: accountId,
+        publicProfileId: selfProfileId,
+        alias: "cy",
+        avatarRef: "avatar:preset/people-01",
+        anonymousMode: true,
+      },
+      speakerCount: 1,
+      listenerCount: 4,
+      viewerIsCommunityMember: true,
+    },
+    {
+      voiceRoomId: otherVoiceRoomId,
+      communityId: otherCommunityId,
+      communityName: "Frog Holders",
+      communityLogoRef: null,
+      startedAt: "2026-10-08T02:00:00.000Z",
+      host: {
+        ownerUserId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
+        publicProfileId: targetProfileId,
+        alias: "frog_maxi",
+        avatarRef: "avatar:preset/people-03",
+        anonymousMode: false,
+      },
+      speakerCount: 0,
+      listenerCount: 0,
+      viewerIsCommunityMember: false,
+    },
+    {
+      voiceRoomId: groupId,
+      communityId: otherCommunityId,
+      communityName: "Frog Holders",
+      communityLogoRef: null,
+      startedAt: "2026-10-08T01:00:00.000Z",
+      host: {
+        ownerUserId: "8e34ca80-6356-49a8-b534-e7a197c52a77",
+        publicProfileId: anonymousProfileId,
+        alias: "hidden_frog",
+        avatarRef: "avatar:preset/people-05",
+        anonymousMode: true,
+      },
+      speakerCount: 2,
+      listenerCount: 7,
+      viewerIsCommunityMember: false,
+    },
+  ];
+}
+
 function testConfig(overrides: Readonly<Record<string, string>> = {}) {
   return loadConfig({
     NODE_ENV: "test",
@@ -281,6 +345,7 @@ function communicationRepositoryFake(
     listVoiceRoomMembers: vi.fn(() =>
       Promise.resolve({ room: room(), items: rosterRows() }),
     ),
+    listLiveVoiceRooms: vi.fn(() => Promise.resolve(liveRoomRows())),
     recordMuteAll: vi.fn(() => Promise.resolve(room())),
     endVoiceRoom: vi.fn(() =>
       Promise.resolve(
@@ -1358,6 +1423,305 @@ describe("LOOP API V2 communication module", () => {
     expect(callMocks["muteUser"]).not.toHaveBeenCalled();
     expect(callMocks["endCall"]).not.toHaveBeenCalled();
     expect(callMocks["updateUserPermissions"]).not.toHaveBeenCalled();
+  });
+
+  describe("live voice rooms (Decision 0093)", () => {
+    it("lists live rooms across communities with joinable and the host display rule", async () => {
+      const { app, communicationMocks, callMocks } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = jsonOf<Record<string, unknown>>(response);
+      expect(Object.keys(body).sort()).toEqual([
+        "contractVersion",
+        "items",
+        "nextCursor",
+        "observedAt",
+      ]);
+      expect(body["nextCursor"]).toBeNull();
+      expect(body["contractVersion"]).toBe("2.0");
+      expect(typeof body["observedAt"]).toBe("string");
+      expect(body["items"]).toEqual([
+        {
+          voiceRoomId,
+          communityId,
+          communityName: "Builders Guild",
+          communityLogoRef: "avatar:preset/community-03",
+          title: null,
+          // The viewer hosts this room: its own alias even in anonymous mode.
+          host: {
+            publicProfileId: selfProfileId,
+            displayName: "cy",
+            avatarRef: "avatar:preset/people-01",
+          },
+          listenerCount: 4,
+          speakerCount: 1,
+          countsObservedAt: null,
+          startedAt: "2026-10-08T03:00:00.000Z",
+          joinable: true,
+        },
+        {
+          voiceRoomId: otherVoiceRoomId,
+          communityId: otherCommunityId,
+          communityName: "Frog Holders",
+          communityLogoRef: null,
+          title: null,
+          host: {
+            publicProfileId: targetProfileId,
+            displayName: "frog_maxi",
+            avatarRef: "avatar:preset/people-03",
+          },
+          listenerCount: 0,
+          speakerCount: 0,
+          countsObservedAt: null,
+          startedAt: "2026-10-08T02:00:00.000Z",
+          joinable: false,
+        },
+        {
+          voiceRoomId: groupId,
+          communityId: otherCommunityId,
+          communityName: "Frog Holders",
+          communityLogoRef: null,
+          title: null,
+          // Anonymous to this viewer: nothing that identifies the host.
+          host: { publicProfileId: null, displayName: null, avatarRef: null },
+          listenerCount: 7,
+          speakerCount: 2,
+          countsObservedAt: null,
+          startedAt: "2026-10-08T01:00:00.000Z",
+          joinable: false,
+        },
+      ]);
+      expect(communicationMocks["listLiveVoiceRooms"]).toHaveBeenCalledWith({
+        viewerUserId: accountId,
+        limit: 21,
+      });
+      // The list never reads Stream.
+      expect(callMocks["observeSession"]).not.toHaveBeenCalled();
+      expect(callMocks["queryMembers"]).not.toHaveBeenCalled();
+      expect(callMocks["goLive"]).not.toHaveBeenCalled();
+    });
+
+    it("pages with an owner-bound cursor that carries the page size", async () => {
+      const rows = liveRoomRows();
+      const communication = communicationRepositoryFake({
+        listLiveVoiceRooms: vi.fn((input: { readonly after?: unknown }) =>
+          Promise.resolve(input.after === undefined ? rows : rows.slice(2)),
+        ),
+      });
+      const { app, communicationMocks } = await createApp(
+        fakes({ communication }),
+      );
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live?limit=2",
+        headers: commonHeaders(),
+      });
+      expect(first.statusCode).toBe(200);
+      const firstBody = jsonOf<{
+        items: readonly { voiceRoomId: string }[];
+        nextCursor: string | null;
+      }>(first);
+      expect(firstBody.items.map((item) => item.voiceRoomId)).toEqual([
+        voiceRoomId,
+        otherVoiceRoomId,
+      ]);
+      expect(typeof firstBody.nextCursor).toBe("string");
+      expect(communicationMocks["listLiveVoiceRooms"]).toHaveBeenLastCalledWith(
+        { viewerUserId: accountId, limit: 3 },
+      );
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/live?cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(second.statusCode).toBe(200);
+      expect(jsonOf<{ nextCursor: string | null }>(second).nextCursor).toBe(
+        null,
+      );
+      expect(communicationMocks["listLiveVoiceRooms"]).toHaveBeenLastCalledWith(
+        {
+          viewerUserId: accountId,
+          limit: 3,
+          after: {
+            lastStartedAt: "2026-10-08T02:00:00.000Z",
+            lastVoiceRoomId: otherVoiceRoomId,
+          },
+        },
+      );
+
+      // A cursor minted for another account is refused.
+      const foreignCursor = createV2CursorCodec({
+        secret: new TextEncoder().encode(cursorSecret),
+      }).encode({
+        ownerId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
+        route: "liveVoiceRooms",
+        filter: "live",
+        continuation: {
+          startedAt: "2026-10-08T02:00:00.000Z",
+          limit: 2,
+          voiceRoomId: otherVoiceRoomId,
+        },
+      });
+      const calls = communicationMocks["listLiveVoiceRooms"]!.mock.calls.length;
+      for (const url of [
+        // cursor and limit are mutually exclusive
+        `/v2/voice-rooms/live?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        "/v2/voice-rooms/live?limit=0",
+        "/v2/voice-rooms/live?limit=51",
+        "/v2/voice-rooms/live?limit=abc",
+        "/v2/voice-rooms/live?cursor=not-a-cursor",
+        "/v2/voice-rooms/live?cursor=abc.def",
+        "/v2/voice-rooms/live?role=listener",
+        `/v2/voice-rooms/live?cursor=${encodeURIComponent(foreignCursor)}`,
+      ]) {
+        const rejected = await app.inject({
+          method: "GET",
+          url,
+          headers: commonHeaders(),
+        });
+        expect(rejected.statusCode, url).toBe(400);
+        expect(rejected.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+      expect(communicationMocks["listLiveVoiceRooms"]!.mock.calls.length).toBe(
+        calls,
+      );
+    });
+
+    it("rejects a cursor minted for another route", async () => {
+      const communication = communicationRepositoryFake();
+      const { app } = await createApp(fakes({ communication }));
+      const roster = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}/members?role=listener&limit=2`,
+        headers: commonHeaders(),
+      });
+      const rosterCursor = jsonOf<{ nextCursor: string | null }>(
+        roster,
+      ).nextCursor;
+      expect(typeof rosterCursor).toBe("string");
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/live?cursor=${encodeURIComponent(rosterCursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    });
+
+    it("requires a bearer token and the contract headers", async () => {
+      const { app, communicationMocks } = await createApp();
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders({ authorization: undefined }),
+      });
+      expect(anonymous.statusCode).toBe(401);
+      expect(anonymous.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+      const wrongContract = await app.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders({ "x-loop-contract-version": "1.0" }),
+      });
+      expect(wrongContract.statusCode).toBe(409);
+      expect(wrongContract.json()).toMatchObject({ code: "VERSION_CONFLICT" });
+      expect(communicationMocks["listLiveVoiceRooms"]).not.toHaveBeenCalled();
+    });
+
+    it("fails closed with CAPABILITY_UNAVAILABLE when the repository or the cursor codec is unavailable", async () => {
+      const communication = communicationRepositoryFake({
+        listLiveVoiceRooms: vi.fn(() =>
+          Promise.reject(new CommunicationRepositoryUnavailableError()),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      const body = jsonOf<Record<string, unknown>>(response);
+      expect(body).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        retryable: true,
+      });
+      expect(Object.keys(body).sort()).toEqual([
+        "category",
+        "code",
+        "correlationId",
+        "detailsSafe",
+        "providerReferenceSafe",
+        "retryable",
+        "userMessageKey",
+      ]);
+
+      // Without a cursor codec a page that needs a continuation cannot be
+      // signed, so the read fails closed instead of publishing an unpageable list.
+      const dependencies = fakes();
+      const noCodec = await buildApp({
+        config: testConfig(),
+        contractSurface: "v2",
+        database: dependencies.database,
+        privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+        streamCallGateway: dependencies.callGateway,
+        streamCommunityChannelGateway: dependencies.channelGateway,
+        voiceRoomService: createVoiceRoomService({
+          repository: dependencies.communication,
+          callGateway: dependencies.callGateway,
+          cursorCodec: null,
+        }),
+        logger: false,
+      });
+      apps.push(noCodec);
+      const unsigned = await noCodec.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live?limit=2",
+        headers: commonHeaders(),
+      });
+      expect(unsigned.statusCode).toBe(503);
+      expect(unsigned.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+    });
+
+    it("answers 503 when the communication runtime is unavailable and 404 when the module is disabled", async () => {
+      const { app: unavailable } = await createApp(fakes(), {
+        V2_MODULES_ENABLED: "communication",
+      });
+      const response = await unavailable.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+
+      const { app: disabled } = await createApp(fakes(), {
+        V2_MODULES_ENABLED: "community",
+      });
+      const missing = await disabled.inject({
+        method: "GET",
+        url: "/v2/voice-rooms/live",
+        headers: commonHeaders(),
+      });
+      expect(missing.statusCode).toBe(404);
+    });
+
+    it("does not shadow GET /v2/voice-rooms/{voiceRoomId}", async () => {
+      const { app, communicationMocks } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(communicationMocks["getVoiceRoom"]).toHaveBeenCalled();
+      expect(communicationMocks["listLiveVoiceRooms"]).not.toHaveBeenCalled();
+    });
   });
 
   describe("roster (Decision 0052)", () => {

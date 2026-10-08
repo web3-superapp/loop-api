@@ -21,6 +21,8 @@ import {
   communicationReadErrors,
   communityIdParamsSchema,
   handRaiseQueueResourceSchema,
+  liveVoiceRoomListQuerySchema,
+  liveVoiceRoomListResourceSchema,
   voiceRoomCurrentResourceSchema,
   voiceRoomIdParamsSchema,
   voiceRoomMemberListQuerySchema,
@@ -127,6 +129,44 @@ export function registerV2VoiceRoomRoutes(
       const resource = await service.getCurrentRoom({
         principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
+        requestId: request.id,
+        signal: request.signal,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/voice-rooms/live",
+    {
+      schema: {
+        operationId: "listV2LiveVoiceRooms",
+        summary: "List live voice rooms across communities",
+        description:
+          "The plaza voice-room tab (Decision 0093): every room that is `live`, provisioned and out of backstage, in a community the caller may see (a verified community, or one the caller created or belongs to without a ban), newest `startedAt` first. `joinable` is whether the caller is a non-banned member of the room's community. `listenerCount` and `speakerCount` are LOOP role-intent counts (Decision 0051, host excluded); this read never calls Stream, so `countsObservedAt` is null. The host is shown by the leaderboard display rule. `limit` (default 20, at most 50) and `cursor` are mutually exclusive.",
+        tags: ["communication"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: liveVoiceRoomListQuerySchema,
+        response: {
+          200: liveVoiceRoomListResourceSchema,
+          ...communicationReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as {
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await service.listLiveRooms({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        cursor: query.cursor,
+        limit: query.limit,
         requestId: request.id,
         signal: request.signal,
       });

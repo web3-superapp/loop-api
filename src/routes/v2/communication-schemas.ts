@@ -4,13 +4,16 @@ import {
 } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
+  communityLogoRefPatternSource,
   maximumRawTextLength,
   opaqueIdPatternSource,
   publicProfileIdPatternSource,
+  storedAvatarRefPatternSource,
 } from "../../features/community/community-contract.js";
 import {
   directChannelListLimits,
   handRaiseStates,
+  liveVoiceRoomListLimits,
   streamCallCidPatternSource,
   streamDirectChannelCidPatternSource,
   voiceRoomMemberAnonymousKey,
@@ -716,6 +719,140 @@ export const handRaiseQueueResourceSchema = {
       },
     },
     display: voiceRoomDisplayRulesSchema,
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/**
+ * Decision 0093: `GET /v2/voice-rooms/live`. `limit` and `cursor` are
+ * mutually exclusive because the cursor carries the page size.
+ */
+export const liveVoiceRoomListQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: cursorSchema,
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: liveVoiceRoomListLimits.maximum,
+      description: `Page size; ${String(liveVoiceRoomListLimits.default)} when omitted.`,
+    },
+  },
+} as const;
+
+const liveVoiceRoomItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "voiceRoomId",
+    "communityId",
+    "communityName",
+    "communityLogoRef",
+    "title",
+    "host",
+    "listenerCount",
+    "speakerCount",
+    "countsObservedAt",
+    "startedAt",
+    "joinable",
+  ],
+  properties: {
+    voiceRoomId: { type: "string", pattern: canonicalUuidV4PatternSource },
+    communityId: { type: "string", pattern: canonicalUuidV4PatternSource },
+    communityName: {
+      type: "string",
+      minLength: 1,
+      maxLength: maximumRawTextLength,
+      description: "`communities.name` at read time (Decision 0052).",
+    },
+    communityLogoRef: {
+      anyOf: [
+        { type: "string", pattern: communityLogoRefPatternSource },
+        { type: "null" },
+      ],
+      description:
+        "The community's preset logo reference, the same value as `logoRef` on the community resource; LOOP stores no logo URL.",
+    },
+    title: {
+      type: "null",
+      description:
+        "Voice rooms carry no title (create takes no body), so this is always null; show `communityName` instead. Reserved for a future room title (Decision 0093).",
+    },
+    host: {
+      type: "object",
+      additionalProperties: false,
+      required: ["publicProfileId", "displayName", "avatarRef"],
+      properties: {
+        publicProfileId: {
+          anyOf: [
+            { type: "string", pattern: publicProfileIdPatternSource },
+            { type: "null" },
+          ],
+        },
+        displayName: {
+          anyOf: [
+            { type: "string", minLength: 1, maxLength: maximumRawTextLength },
+            { type: "null" },
+          ],
+          description: `The host's alias by the leaderboard display rule (Decision 0049): null when the host's anonymous mode is on (unless the viewer is the host) or the host has no alias; render \`${voiceRoomMemberAnonymousKey}\` then. When null, publicProfileId and avatarRef are null too.`,
+        },
+        avatarRef: {
+          anyOf: [
+            { type: "string", pattern: storedAvatarRefPatternSource },
+            { type: "null" },
+          ],
+        },
+      },
+    },
+    listenerCount: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "LOOP `joined` listeners by role intent, host excluded (Decision 0051): the same number as `participants.listenerCount` on the room resource. Not Stream presence.",
+    },
+    speakerCount: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "LOOP `joined` speakers by role intent, host excluded (Decision 0051). Not Stream presence.",
+    },
+    countsObservedAt: {
+      type: "null",
+      description:
+        "Always null: LOOP stores no Stream-observed count for a room and this list never calls Stream. Read GET /v2/voice-rooms/{voiceRoomId} for `participants.observed`.",
+    },
+    startedAt: {
+      type: "string",
+      format: "date-time",
+      description:
+        "When the room went live; a provisioned room goes live at creation (Decision 0054). The list is ordered by it, newest first.",
+    },
+    joinable: {
+      type: "boolean",
+      description:
+        "The viewer has a non-banned membership in the room's community, the join predicate of POST /v2/voice-rooms/{voiceRoomId}/join. False means join the community first.",
+    },
+  },
+} as const;
+
+export const liveVoiceRoomListResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["items", "nextCursor", "observedAt", "contractVersion"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: liveVoiceRoomListLimits.maximum,
+      items: liveVoiceRoomItemSchema,
+    },
+    nextCursor: nullableCursorSchema,
+    observedAt: {
+      type: "string",
+      format: "date-time",
+      description: "When LOOP read the list.",
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

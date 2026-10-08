@@ -2396,4 +2396,236 @@ describe("PostgreSQL V2 communication repository", () => {
       ).rejects.toThrow();
     });
   });
+
+  describe("listLiveVoiceRooms (Decision 0093)", () => {
+    async function liveRoomIn(
+      ownerUserId: string,
+      communityId: string,
+      startedAt: string,
+    ): Promise<string> {
+      const voiceRoomId = await createVoiceRoom(ownerUserId, communityId);
+      await provision(voiceRoomId);
+      // Pin the start so the newest-first order is deterministic.
+      await pool.query({
+        text: `update public.voice_rooms set created_at = $2, updated_at = greatest(updated_at, $2::timestamptz) where voice_room_id = $1`,
+        values: [voiceRoomId, startedAt],
+      });
+      return voiceRoomId;
+    }
+
+    it("lists every live, provisioned, non-backstage room the viewer may see, newest first, with joinable and role counts", async () => {
+      // Every room an earlier test left live is ended so this list is ours.
+      await pool.query(`
+        update public.voice_rooms
+        set state = 'ended', ended_at = clock_timestamp(), updated_at = clock_timestamp()
+        where state = 'live'
+      `);
+
+      const viewer = await createAccount();
+      const listener = await createAccount();
+
+      // A verified community the viewer belongs to.
+      const ownerA = await createAccount();
+      const communityA = await createCommunity(ownerA.userId);
+      await verifyCommunity(communityA);
+      await join(viewer.userId, communityA);
+      await join(listener.userId, communityA);
+      const roomA = await liveRoomIn(
+        ownerA.userId,
+        communityA,
+        "2026-01-08T03:00:00.123Z",
+      );
+      await joinRoom(listener.userId, roomA);
+
+      // A verified community the viewer is not in; its host is anonymous.
+      const ownerB = await createAccount();
+      const communityB = await createCommunity(ownerB.userId);
+      await verifyCommunity(communityB);
+      await pool.query({
+        text: `insert into public.privacy_preferences_v2 (owner_user_id, anonymous_mode) values ($1, true)`,
+        values: [ownerB.userId],
+      });
+      const roomB = await liveRoomIn(
+        ownerB.userId,
+        communityB,
+        "2026-01-08T02:00:00.456Z",
+      );
+
+      // An unverified community: visible only to its creator and members.
+      const ownerC = await createAccount();
+      const communityC = await createCommunity(ownerC.userId);
+      const roomC = await liveRoomIn(
+        ownerC.userId,
+        communityC,
+        "2026-01-08T01:00:00.000Z",
+      );
+
+      // A verified community whose room is not provisioned yet.
+      const ownerD = await createAccount();
+      const communityD = await createCommunity(ownerD.userId);
+      await verifyCommunity(communityD);
+      await join(viewer.userId, communityD);
+      await createVoiceRoom(ownerD.userId, communityD);
+
+      // A verified community whose go-live was not confirmed (backstage).
+      const ownerE = await createAccount();
+      const communityE = await createCommunity(ownerE.userId);
+      await verifyCommunity(communityE);
+      const roomE = await createVoiceRoom(ownerE.userId, communityE);
+      await communication.recordVoiceRoomProvisioning({
+        voiceRoomId: roomE,
+        provisionState: "reconciling",
+        errorCode: "stream_call_go_live_unconfirmed",
+        backstage: true,
+      });
+
+      // A verified community whose room has ended.
+      const ownerF = await createAccount();
+      const communityF = await createCommunity(ownerF.userId);
+      await verifyCommunity(communityF);
+      const roomF = await liveRoomIn(
+        ownerF.userId,
+        communityF,
+        "2026-01-08T04:00:00.000Z",
+      );
+      await communication.endVoiceRoom({
+        actorUserId: ownerF.userId,
+        voiceRoomId: roomF,
+        idempotencyKey: randomUUID(),
+        requestSha256: communicationCommandDigest("voiceRoomEnd", [roomF]),
+        requestId: randomUUID(),
+      });
+
+      const rows = await communication.listLiveVoiceRooms({
+        viewerUserId: viewer.userId,
+        limit: 10,
+      });
+      expect(rows.map((row) => row.voiceRoomId)).toEqual([roomA, roomB]);
+      expect(rows[0]).toEqual({
+        voiceRoomId: roomA,
+        communityId: communityA,
+        communityName: "Frog Holders",
+        communityLogoRef: null,
+        startedAt: "2026-01-08T03:00:00.123Z",
+        host: {
+          ownerUserId: ownerA.userId,
+          publicProfileId: ownerA.publicProfileId,
+          alias: rows[0]?.host.alias ?? "missing",
+          avatarRef: null,
+          anonymousMode: false,
+        },
+        speakerCount: 0,
+        listenerCount: 1,
+        viewerIsCommunityMember: true,
+      });
+      expect(rows[0]?.host.alias).toMatch(/^member_/);
+      expect(rows[1]).toMatchObject({
+        voiceRoomId: roomB,
+        communityId: communityB,
+        host: {
+          ownerUserId: ownerB.userId,
+          publicProfileId: ownerB.publicProfileId,
+          anonymousMode: true,
+        },
+        speakerCount: 0,
+        listenerCount: 0,
+        viewerIsCommunityMember: false,
+      });
+
+      // The creator of the unverified community sees its own room.
+      const creatorRows = await communication.listLiveVoiceRooms({
+        viewerUserId: ownerC.userId,
+        limit: 10,
+      });
+      expect(creatorRows.map((row) => row.voiceRoomId)).toEqual([
+        roomA,
+        roomB,
+        roomC,
+      ]);
+      expect(creatorRows[2]?.viewerIsCommunityMember).toBe(true);
+
+      // A banned member keeps seeing a verified community's room but cannot join it.
+      await pool.query({
+        text: `
+          update public.community_memberships
+          set status = 'banned'
+          where community_id = $1 and owner_user_id = $2
+        `,
+        values: [communityA, viewer.userId],
+      });
+      const banned = await communication.listLiveVoiceRooms({
+        viewerUserId: viewer.userId,
+        limit: 10,
+      });
+      expect(banned[0]).toMatchObject({
+        voiceRoomId: roomA,
+        viewerIsCommunityMember: false,
+      });
+    });
+
+    it("pages by the millisecond (startedAt, voiceRoomId) keyset without gaps or repeats", async () => {
+      await pool.query(`
+        update public.voice_rooms
+        set state = 'ended', ended_at = clock_timestamp(), updated_at = clock_timestamp()
+        where state = 'live'
+      `);
+      const viewer = await createAccount();
+      const expected: string[] = [];
+      const rooms: { voiceRoomId: string; startedAt: string }[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const owner = await createAccount();
+        const communityId = await createCommunity(owner.userId);
+        await verifyCommunity(communityId);
+        // Two rooms share one millisecond: the room ID breaks the tie.
+        const startedAt =
+          index < 2
+            ? "2026-01-08T05:00:00.789Z"
+            : `2026-01-08T0${String(4 - index)}:00:00.000Z`;
+        const voiceRoomId = await liveRoomIn(
+          owner.userId,
+          communityId,
+          startedAt,
+        );
+        rooms.push({ voiceRoomId, startedAt });
+      }
+      rooms.sort((left, right) =>
+        left.startedAt === right.startedAt
+          ? right.voiceRoomId.localeCompare(left.voiceRoomId)
+          : right.startedAt.localeCompare(left.startedAt),
+      );
+      expected.push(...rooms.map((room) => room.voiceRoomId));
+
+      const seen: string[] = [];
+      let after: { lastStartedAt: string; lastVoiceRoomId: string } | undefined;
+      for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+        const page = await communication.listLiveVoiceRooms({
+          viewerUserId: viewer.userId,
+          limit: 2,
+          ...(after === undefined ? {} : { after }),
+        });
+        seen.push(...page.map((row) => row.voiceRoomId));
+        const last = page.at(-1);
+        if (page.length < 2 || last === undefined) {
+          break;
+        }
+        after = {
+          lastStartedAt: last.startedAt,
+          lastVoiceRoomId: last.voiceRoomId,
+        };
+      }
+      expect(seen).toEqual(expected);
+    });
+
+    it("rejects an invalid viewer or page size as unavailable, never as a row", async () => {
+      await expect(
+        communication.listLiveVoiceRooms({ viewerUserId: "nope", limit: 2 }),
+      ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
+      await expect(
+        communication.listLiveVoiceRooms({
+          viewerUserId: randomUUID(),
+          limit: 0,
+        }),
+      ).rejects.toBeInstanceOf(CommunicationRepositoryUnavailableError);
+    });
+  });
 });
