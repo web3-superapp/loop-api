@@ -618,6 +618,22 @@ describe("Decision 0098: group rename, admin community edit, voice-room title (P
         }),
       ).rejects.toBeInstanceOf(CommunityOwnerOnlyFieldError);
 
+      // Decision 0097: the owner's bound token must be a registry asset.
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values (
+            $1, 'eip155:56', '0x55d398326f99059ff775485246999027b3197955',
+            'USDT', 'Tether USD', 18, 'pending', 'chain_call',
+            122037728, now()
+          )
+          on conflict (asset_id) do nothing
+        `,
+        values: [boundAsset],
+      });
       const ownerEdit = await update(owner.userId, communityId, {
         boundAssetKey: boundAsset,
       });
