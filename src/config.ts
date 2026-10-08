@@ -683,6 +683,10 @@ const reconciliationWorkerEnvironmentSchema = z
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
     MARKET_SPARKLINE_WARM_ENABLED: booleanString,
     MARKET_SPARKLINE_WARM_INTERVAL_MS: positiveIntegerString(1_000, 60_000),
+    VOICE_ROOM_REAPER_ENABLED: booleanString,
+    VOICE_ROOM_REAPER_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
+    VOICE_ROOM_IDLE_END_MINUTES: positiveIntegerString(1, 1_440),
+    VOICE_ROOM_MAX_LIVE_HOURS: positiveIntegerString(1, 168),
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
     MINING_SNAPSHOT_ENABLED: booleanString,
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
@@ -1202,6 +1206,20 @@ export interface ReconciliationWorkerConfig {
    * checks against `market.geckoterminal.enabled`.
    */
   readonly sparklineWarm: { readonly intervalMs: number } | null;
+  /**
+   * `voice_room_reaper` lane (Decision 0094); default on. It ends live
+   * voice rooms nobody is in (`VOICE_ROOM_IDLE_END_MINUTES`, default 10) and
+   * any room live longer than `VOICE_ROOM_MAX_LIVE_HOURS` (default 12).
+   * `stream` is the Stream credential pair, parsed independently of the
+   * community-channel-sync switch; without it the lane stays off, because
+   * it can neither observe presence nor end the call.
+   */
+  readonly voiceRoomReaper: {
+    readonly intervalMs: number;
+    readonly idleEndMinutes: number;
+    readonly maxLiveHours: number;
+    readonly stream: StreamConfig | null;
+  } | null;
   /**
    * `wallet-intent-reconcile` lane (Decision 0035); default off. It reads
    * receipts over RPC and, when Privy credentials are present, Privy wallet
@@ -2280,6 +2298,13 @@ export function loadReconciliationWorkerConfig(
       environment["MARKET_SPARKLINE_WARM_ENABLED"] ?? "true",
     MARKET_SPARKLINE_WARM_INTERVAL_MS:
       environment["MARKET_SPARKLINE_WARM_INTERVAL_MS"] ?? "4000",
+    VOICE_ROOM_REAPER_ENABLED:
+      environment["VOICE_ROOM_REAPER_ENABLED"] ?? "true",
+    VOICE_ROOM_REAPER_INTERVAL_MS:
+      environment["VOICE_ROOM_REAPER_INTERVAL_MS"] ?? "60000",
+    VOICE_ROOM_IDLE_END_MINUTES:
+      environment["VOICE_ROOM_IDLE_END_MINUTES"] ?? "10",
+    VOICE_ROOM_MAX_LIVE_HOURS: environment["VOICE_ROOM_MAX_LIVE_HOURS"] ?? "12",
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
@@ -2386,6 +2411,21 @@ export function loadReconciliationWorkerConfig(
     sparklineWarm: parsed.data.MARKET_SPARKLINE_WARM_ENABLED
       ? Object.freeze({
           intervalMs: parsed.data.MARKET_SPARKLINE_WARM_INTERVAL_MS,
+        })
+      : null,
+    voiceRoomReaper: parsed.data.VOICE_ROOM_REAPER_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.VOICE_ROOM_REAPER_INTERVAL_MS,
+          idleEndMinutes: parsed.data.VOICE_ROOM_IDLE_END_MINUTES,
+          maxLiveHours: parsed.data.VOICE_ROOM_MAX_LIVE_HOURS,
+          stream:
+            parsed.data.STREAM_API_KEY !== undefined &&
+            parsed.data.STREAM_API_SECRET !== undefined
+              ? Object.freeze({
+                  apiKey: parsed.data.STREAM_API_KEY,
+                  apiSecret: parsed.data.STREAM_API_SECRET,
+                })
+              : null,
         })
       : null,
     walletIntentReconcile: parsed.data.WALLET_INTENT_RECONCILE_ENABLED

@@ -53,6 +53,10 @@ import {
   type VoiceRoomTargetCommandInput,
   type VoiceRoomTargetRecord,
   type VoiceRoomLeaveRecord,
+  type VoiceRoomReapCandidate,
+  type VoiceRoomReapOutcome,
+  type VoiceRoomReaperRepository,
+  type VoiceRoomReapReason,
   type VoiceRoomViewerRecord,
 } from "../features/communication/communication-repository.js";
 import { generateOpaqueId } from "../core/ids/opaque-id.js";
@@ -2882,6 +2886,199 @@ export function createPostgresCommunityChannelPersonaRepository(
             });
           }),
         );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+  });
+}
+
+/**
+ * Audit reason codes of the `voice_room_reaper` lane (Decision 0094), in the
+ * lower-case form `voice_room_events.reason_code` requires. The worker log
+ * carries the upper-case `VOICE_ROOM_*_ENDED` form of the same code.
+ */
+export const voiceRoomReaperAuditReasonCodes: Readonly<
+  Record<VoiceRoomReapReason, string>
+> = Object.freeze({
+  idle: "voice_room_idle_ended",
+  max_age: "voice_room_max_age_ended",
+});
+
+const reaperLimitSchema = z.number().int().min(1).max(50);
+const idleEndMinutesSchema = z.number().int().min(1).max(1_440);
+const maxLiveHoursSchema = z.number().int().min(1).max(168);
+
+/**
+ * The `voice_room_reaper` lane repository (Decision 0094). The listing is a
+ * plain read; the end re-checks the rule under the `voice_rooms` row lock,
+ * which the join and leave commands also take, so a member who joins between
+ * the listing and the end keeps the room live.
+ */
+export function createPostgresVoiceRoomReaperRepository(
+  pool: Pool,
+): VoiceRoomReaperRepository {
+  return Object.freeze({
+    async listLiveVoiceRoomsForReaper(input: {
+      readonly limit: number;
+    }): Promise<readonly VoiceRoomReapCandidate[]> {
+      try {
+        const limit = reaperLimitSchema.parse(input.limit);
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              room.voice_room_id,
+              room.call_id,
+              room.provision_state,
+              room.created_at,
+              greatest(room.updated_at, members.last_member_change)
+                as last_activity_at,
+              coalesce(members.non_host_joined, 0)::integer
+                as non_host_joined_count,
+              clock_timestamp() as database_now
+            from public.voice_rooms as room
+            left join lateral (
+              select
+                max(member.updated_at) as last_member_change,
+                count(*) filter (
+                  where member.state = 'joined' and member.role <> 'host'
+                ) as non_host_joined
+              from public.voice_room_members as member
+              where member.voice_room_id = room.voice_room_id
+            ) as members on true
+            where room.state = 'live'
+            order by room.created_at asc, room.voice_room_id asc
+            limit $1
+          `,
+          values: [limit],
+        });
+        return Object.freeze(
+          result.rows.map((row) =>
+            Object.freeze({
+              voiceRoomId: opaqueIdSchema.parse(row["voice_room_id"]),
+              callId: z
+                .string()
+                .regex(/^loop_voice_[0-9a-f]{32}$/)
+                .parse(row["call_id"]),
+              provisionState: z
+                .enum(voiceRoomProvisionStates)
+                .parse(row["provision_state"]),
+              createdAt: dateSchema.parse(row["created_at"]).toISOString(),
+              lastActivityAt: dateSchema
+                .parse(row["last_activity_at"])
+                .toISOString(),
+              nonHostJoinedCount: z
+                .number()
+                .int()
+                .min(0)
+                .parse(row["non_host_joined_count"]),
+              databaseNow: dateSchema.parse(row["database_now"]).toISOString(),
+            }),
+          ),
+        );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async endVoiceRoomByReaper(rawInput: {
+      readonly voiceRoomId: string;
+      readonly reason: VoiceRoomReapReason;
+      readonly idleEndMinutes: number;
+      readonly maxLiveHours: number;
+      readonly requestId: string;
+    }): Promise<VoiceRoomReapOutcome> {
+      try {
+        const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
+        const reason = z.enum(["idle", "max_age"]).parse(rawInput.reason);
+        const idleEndMinutes = idleEndMinutesSchema.parse(
+          rawInput.idleEndMinutes,
+        );
+        const maxLiveHours = maxLiveHoursSchema.parse(rawInput.maxLiveHours);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        return await withTransaction(pool, async (client) => {
+          const locked = await client.query<{
+            call_id: string;
+            max_age_due: boolean;
+            idle_due: boolean;
+            non_host_joined: number;
+          }>({
+            text: `
+              select
+                room.call_id,
+                room.created_at
+                  <= clock_timestamp() - make_interval(hours => $2)
+                  as max_age_due,
+                greatest(
+                  room.updated_at,
+                  (
+                    select max(member.updated_at)
+                    from public.voice_room_members as member
+                    where member.voice_room_id = room.voice_room_id
+                  )
+                ) <= clock_timestamp() - make_interval(mins => $3)
+                  as idle_due,
+                (
+                  select count(*)
+                  from public.voice_room_members as member
+                  where member.voice_room_id = room.voice_room_id
+                    and member.state = 'joined'
+                    and member.role <> 'host'
+                )::integer as non_host_joined
+              from public.voice_rooms as room
+              where room.voice_room_id = $1 and room.state = 'live'
+              for update of room
+            `,
+            values: [voiceRoomId, maxLiveHours, idleEndMinutes],
+          });
+          const row = locked.rows[0];
+          if (row === undefined) {
+            return Object.freeze({ outcome: "skipped" as const });
+          }
+          const due =
+            reason === "max_age"
+              ? row.max_age_due
+              : row.idle_due && row.non_host_joined === 0;
+          if (!due) {
+            return Object.freeze({ outcome: "skipped" as const });
+          }
+          await client.query({
+            text: `
+              update public.voice_rooms
+              set
+                state = 'ended',
+                ended_at = clock_timestamp(),
+                record_version = record_version + 1,
+                updated_at = clock_timestamp()
+              where voice_room_id = $1 and state = 'live'
+            `,
+            values: [voiceRoomId],
+          });
+          await client.query({
+            text: `
+              update public.voice_room_hand_raises
+              set state = 'cancelled', updated_at = clock_timestamp()
+              where voice_room_id = $1 and state = 'pending'
+            `,
+            values: [voiceRoomId],
+          });
+          await appendVoiceRoomAudit(client, {
+            voiceRoomId,
+            actorUserId: null,
+            targetUserId: null,
+            eventType: "room_ended",
+            reasonCode: voiceRoomReaperAuditReasonCodes[reason],
+            idempotencyRecordId: null,
+            requestId,
+          });
+          return Object.freeze({
+            outcome: "ended" as const,
+            callId: z
+              .string()
+              .regex(/^loop_voice_[0-9a-f]{32}$/)
+              .parse(row.call_id),
+          });
+        });
       } catch (error) {
         return translateRepositoryError(error);
       }

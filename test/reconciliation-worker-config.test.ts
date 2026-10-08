@@ -72,6 +72,16 @@ describe("loadReconciliationWorkerConfig", () => {
       },
       alertEvaluator: null,
       sparklineWarm: { intervalMs: 4_000 },
+      // Decision 0094: default on; the Stream pair is the lane's own.
+      voiceRoomReaper: {
+        intervalMs: 60_000,
+        idleEndMinutes: 10,
+        maxLiveHours: 12,
+        stream: {
+          apiKey: "not-for-this-lane",
+          apiSecret: "not-for-this-process",
+        },
+      },
       walletIntentReconcile: null,
       miningSnapshotEnabled: false,
       push: null,
@@ -80,6 +90,53 @@ describe("loadReconciliationWorkerConfig", () => {
       serviceVersion: "0.1.0",
     });
     expect(Object.isFrozen(config)).toBe(true);
+  });
+
+  describe("voice_room_reaper lane (Decision 0094)", () => {
+    it("is on by default with 60 s, 10 min and 12 h and no Stream pair", () => {
+      expect(loadReconciliationWorkerConfig(validEnvironment())).toMatchObject({
+        voiceRoomReaper: {
+          intervalMs: 60_000,
+          idleEndMinutes: 10,
+          maxLiveHours: 12,
+          stream: null,
+        },
+      });
+    });
+
+    it("reads the thresholds and can be switched off", () => {
+      const environment = validEnvironment();
+      environment["VOICE_ROOM_REAPER_INTERVAL_MS"] = "30000";
+      environment["VOICE_ROOM_IDLE_END_MINUTES"] = "5";
+      environment["VOICE_ROOM_MAX_LIVE_HOURS"] = "24";
+      expect(loadReconciliationWorkerConfig(environment)).toMatchObject({
+        voiceRoomReaper: {
+          intervalMs: 30_000,
+          idleEndMinutes: 5,
+          maxLiveHours: 24,
+        },
+      });
+      environment["VOICE_ROOM_REAPER_ENABLED"] = "false";
+      expect(
+        loadReconciliationWorkerConfig(environment).voiceRoomReaper,
+      ).toBeNull();
+    });
+
+    it.each([
+      ["VOICE_ROOM_IDLE_END_MINUTES", "0"],
+      ["VOICE_ROOM_IDLE_END_MINUTES", "1441"],
+      ["VOICE_ROOM_IDLE_END_MINUTES", "2.5"],
+      ["VOICE_ROOM_MAX_LIVE_HOURS", "0"],
+      ["VOICE_ROOM_MAX_LIVE_HOURS", "169"],
+      ["VOICE_ROOM_REAPER_INTERVAL_MS", "999"],
+      ["VOICE_ROOM_REAPER_ENABLED", "yes"],
+    ])("refuses %s=%s", (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+      expect(() => loadReconciliationWorkerConfig(environment)).toThrow(
+        ConfigurationError,
+      );
+    });
   });
 
   it("loads the explicit Testnet reconciliation read capability", () => {
