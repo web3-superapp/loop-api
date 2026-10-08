@@ -44,7 +44,9 @@ function parseUint256(value: string, error: string): bigint {
   return parsed;
 }
 
-function allocatePool(input: PoolBudgetInput): PoolAllocationResult {
+export function allocatePoolBudget(
+  input: PoolBudgetInput,
+): PoolAllocationResult {
   const budget = parseUint256(input.budgetRaw, "Invalid pool budget");
   if (input.weights.length > MAX_WEIGHT_ROWS) {
     throw new Error("Too many pool weight rows");
@@ -100,7 +102,7 @@ export function allocateDualPoolBudget(input: {
   readonly assetPower: PoolBudgetInput;
 }): DualPoolAllocationResult {
   return {
-    consensusNft: allocatePool(input.consensusNft),
-    assetPower: allocatePool(input.assetPower),
+    consensusNft: allocatePoolBudget(input.consensusNft),
+    assetPower: allocatePoolBudget(input.assetPower),
   };
 }
