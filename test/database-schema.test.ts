@@ -46,6 +46,7 @@ describe("database schema readiness contract", () => {
       "public.voice_room_hand_raises",
       "public.voice_room_events",
       "public.chat_group_membership_events",
+      "public.communication_group_events",
       "public.profile_activation_commands",
       "public.profile_code_sequence",
       "public.provider_operations",

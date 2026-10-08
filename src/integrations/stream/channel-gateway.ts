@@ -831,6 +831,72 @@ export interface StreamCommunityChannelGateway {
   sendCommunityFeedMessage(
     input: SendStreamCommunityFeedMessageInput,
   ): Promise<SendStreamCommunityFeedMessageResult>;
+  /**
+   * Decision 0098: sets the `name` of an existing friend-group channel with
+   * one `updateChannelPartial` acting as the group creator, and resolves
+   * only when Stream echoes that name on the group channel. A channel Stream
+   * does not know is a deterministic rejection.
+   */
+  updateGroupChannelName(
+    input: UpdateStreamGroupChannelNameInput,
+  ): Promise<void>;
+}
+
+export interface UpdateStreamGroupChannelNameInput {
+  /** `loop_group_{32 hex}`; community and direct channels are refused. */
+  readonly channelId: string;
+  readonly actingStreamUserId: string;
+  /** Already trimmed; 1-60 code points, the group-creation rule. */
+  readonly name: string;
+  readonly signal: AbortSignal;
+}
+
+const groupChannelIdPattern = /^loop_group_[0-9a-f]{32}$/;
+
+function parseUpdateGroupChannelNameInput(
+  value: unknown,
+): UpdateStreamGroupChannelNameInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "channelId",
+      "actingStreamUserId",
+      "name",
+      "signal",
+    ]) ||
+    typeof value["channelId"] !== "string" ||
+    !groupChannelIdPattern.test(value["channelId"]) ||
+    !isStreamUserId(value["actingStreamUserId"]) ||
+    !isCanonicalGroupName(value["name"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    actingStreamUserId: value["actingStreamUserId"],
+    name: value["name"],
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+function validateGroupChannelNameResponse(
+  value: unknown,
+  input: UpdateStreamGroupChannelNameInput,
+): void {
+  if (!isRecord(value) || !isRecord(value["channel"])) {
+    return projectionMismatch();
+  }
+  const channel = value["channel"];
+  if (
+    channel["id"] !== input.channelId ||
+    channel["type"] !== streamChannelType ||
+    channel["cid"] !== `${streamChannelType}:${input.channelId}` ||
+    !isRecord(channel["custom"]) ||
+    channel["custom"]["loop_channel_kind"] !== "group" ||
+    channel["custom"]["name"] !== input.name
+  ) {
+    return projectionMismatch();
+  }
 }
 
 const maximumCommunityChannelMemberBatch = 100;
@@ -1666,6 +1732,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     readCommunityChannelActivity: unavailablePromise,
     readCommunityChannelMessages: unavailablePromise,
     sendCommunityFeedMessage: unavailablePromise,
+    updateGroupChannelName: unavailablePromise,
   });
 }
 
@@ -2167,6 +2234,28 @@ export function createStreamCommunityChannelGateway(
           });
         }
         throw new StreamChannelRequestRejectedError();
+      }
+    },
+
+    async updateGroupChannelName(
+      rawInput: UpdateStreamGroupChannelNameInput,
+    ): Promise<void> {
+      const input = parseUpdateGroupChannelNameInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        const response = await client.chat
+          .channel(streamChannelType, input.channelId)
+          .updateChannelPartial({
+            user_id: input.actingStreamUserId,
+            set: { name: input.name },
+          });
+        input.signal.throwIfAborted();
+        validateGroupChannelNameResponse(response, input);
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        return sanitizeCommunityProviderFailure(error, input.signal);
       }
     },
   });

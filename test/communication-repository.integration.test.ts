@@ -693,6 +693,7 @@ describe("PostgreSQL V2 communication repository", () => {
     const record = await communication.createVoiceRoom({
       actorUserId,
       communityId,
+      title: null,
       idempotencyKey: randomUUID(),
       requestSha256: communicationCommandDigest("voiceRoomCreate", [
         communityId,
@@ -1988,6 +1989,7 @@ describe("PostgreSQL V2 communication repository", () => {
     const first = await communication.createVoiceRoom({
       actorUserId: owner.userId,
       communityId,
+      title: null,
       idempotencyKey: key,
       requestSha256: digest,
       requestId: randomUUID(),
@@ -1995,6 +1997,7 @@ describe("PostgreSQL V2 communication repository", () => {
     const replay = await communication.createVoiceRoom({
       actorUserId: owner.userId,
       communityId,
+      title: null,
       idempotencyKey: key,
       requestSha256: digest,
       requestId: randomUUID(),
@@ -2506,6 +2509,7 @@ describe("PostgreSQL V2 communication repository", () => {
         communityId: communityA,
         communityName: "Frog Holders",
         communityLogoRef: null,
+        title: null,
         startedAt: "2026-01-08T03:00:00.123Z",
         host: {
           ownerUserId: ownerA.userId,
@@ -2514,6 +2518,7 @@ describe("PostgreSQL V2 communication repository", () => {
           avatarRef: null,
           anonymousMode: false,
         },
+        speakers: [],
         speakerCount: 0,
         listenerCount: 1,
         viewerIsCommunityMember: true,

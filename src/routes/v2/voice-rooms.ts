@@ -11,6 +11,7 @@ import type { VoiceRoomService } from "../../features/communication/voice-room-s
 import {
   assertNoBodyOrQueryV2,
   assertNoBodyV2,
+  assertNoQuery,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
   validateCommandHeaders,
@@ -20,6 +21,7 @@ import {
   communicationCommandErrors,
   communicationReadErrors,
   communityIdParamsSchema,
+  createVoiceRoomRequestSchema,
   handRaiseQueueResourceSchema,
   liveVoiceRoomListQuerySchema,
   liveVoiceRoomListResourceSchema,
@@ -74,19 +76,20 @@ export function registerV2VoiceRoomRoutes(
         operationId: "createV2CommunityVoiceRoom",
         summary: "Open a community voice room",
         description:
-          "Owner or admin only. The room record and its host are committed first; the Stream `audio_room` call is then created (the call type starts in backstage) and immediately taken live with one `go_live` request, so `room.backstage` is `false` for a provisioned room and listeners and speakers can join the call (Decision 0054). An unconfirmed create (`providerSync.reasonCode` STREAM_CALL_CREATE_UNCONFIRMED) or an unconfirmed go-live (STREAM_CALL_GO_LIVE_UNCONFIRMED) leaves the room `reconciling` and it cannot be joined.",
+          "Owner or admin only. The room record and its host are committed first; the Stream `audio_room` call is then created (the call type starts in backstage) and immediately taken live with one `go_live` request, so `room.backstage` is `false` for a provisioned room and listeners and speakers can join the call (Decision 0054). An unconfirmed create (`providerSync.reasonCode` STREAM_CALL_CREATE_UNCONFIRMED) or an unconfirmed go-live (STREAM_CALL_GO_LIVE_UNCONFIRMED) leaves the room `reconciling` and it cannot be joined. The body is optional (Decision 0098): `{ title }` sets a 1-40 code point room title; no body, `{}`, null, or a blank title opens an untitled room.",
         tags: ["communication"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
         params: communityIdParamsSchema,
         querystring: emptyQueryStringSchema,
+        body: createVoiceRoomRequestSchema,
         response: {
           201: voiceRoomResourceSchema,
           ...communicationCommandErrors,
         },
       },
       onRequest: validateCommandHeaders,
-      preValidation: assertNoBodyOrQueryV2,
+      preValidation: assertNoQuery,
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
@@ -94,6 +97,7 @@ export function registerV2VoiceRoomRoutes(
       const resource = await service.createRoom({
         principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
+        body: request.body,
         signal: request.signal,
         ...commandMetadata(request),
       });
@@ -328,6 +332,14 @@ export function registerV2VoiceRoomRoutes(
       "Mute every participant",
       "Host only. The LOOP audit row commits first, then one Stream muteUsers call is attempted; the response reports whether it was confirmed.",
       "muteAll",
+    ],
+    [
+      "delete",
+      "speakers/me",
+      "stepDownV2VoiceRoomSpeaker",
+      "Step down from speaker to listener",
+      "Decision 0098. The caller's own step-down: LOOP commits the speaker -> listener transition (audited `speaker_stepped_down`, the mute intent cleared) before Stream `send-audio` is revoked and the call member role reset to listener; `providerSync` reports whether those writes were confirmed. The host cannot step down (PERMISSION_DENIED; it ends the room instead). A caller that is not a joined speaker gets a 200 no-op with `providerSync` confirmed and nothing written. An ended room is DATA_STALE.",
+      "stepDown",
     ],
     [
       "post",

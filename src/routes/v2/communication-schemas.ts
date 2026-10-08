@@ -324,6 +324,108 @@ export const pendingChatOperationResourceSchema = {
   },
 } as const;
 
+/**
+ * Decision 0098: the optional create body. No body (no Content-Type), `{}`,
+ * `title: null`, and a blank title all create an untitled room.
+ */
+export const createVoiceRoomRequestSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: {
+          anyOf: [{ type: "string", maxLength: 512 }, { type: "null" }],
+          description:
+            "Optional room title. Trimmed server-side; 1-40 Unicode code points with no control or format characters. Empty after trimming means no title.",
+        },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
+const liveVoiceRoomPersonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["publicProfileId", "displayName", "avatarRef"],
+  properties: {
+    publicProfileId: {
+      anyOf: [
+        { type: "string", pattern: publicProfileIdPatternSource },
+        { type: "null" },
+      ],
+    },
+    displayName: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: maximumRawTextLength },
+        { type: "null" },
+      ],
+      description: `The account's alias by the leaderboard display rule (Decision 0049): null when its anonymous mode is on (unless it is the viewer) or it has no active profile; render \`${voiceRoomMemberAnonymousKey}\` then. When null, publicProfileId and avatarRef are null too.`,
+    },
+    avatarRef: {
+      anyOf: [
+        { type: "string", pattern: storedAvatarRefPatternSource },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const voiceRoomTitleSchema = {
+  anyOf: [
+    { type: "string", minLength: 1, maxLength: maximumRawTextLength },
+    { type: "null" },
+  ],
+  description:
+    "Decision 0098: the title the host gave the room at creation (1-40 code points), or null; show `{communityName} 语音房` when null.",
+} as const;
+
+/** Decision 0098: `PATCH /v2/chat/groups/{groupId}`. */
+export const renameChatGroupRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      description:
+        "The new group name. Trimmed server-side and limited to 1-60 Unicode code points with no control or format characters: exactly the creation rule.",
+    },
+  },
+} as const;
+
+export const chatGroupResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["groupId", "name", "nameVersion", "updatedAt", "contractVersion"],
+  properties: {
+    groupId: { type: "string", pattern: opaqueIdPatternSource },
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      description: "The group's current stored name (1-60 code points).",
+    },
+    nameVersion: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "1 at creation; every rename that changes the name adds exactly 1. A same-name request leaves it unchanged.",
+    },
+    updatedAt: {
+      type: "string",
+      format: "date-time",
+      description:
+        "When the group row last changed (for a rename: when it was renamed).",
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
 export const chatGroupMembershipResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -398,12 +500,18 @@ const voiceRoomBodySchema = {
   additionalProperties: false,
   required: [
     "room",
+    "host",
     "viewer",
     "participants",
     "providerSync",
     "contractVersion",
   ],
   properties: {
+    host: {
+      anyOf: [liveVoiceRoomPersonSchema, { type: "null" }],
+      description:
+        "Decision 0098: the host by the live-list display rule (the same projection as `host` on GET /v2/voice-rooms/live). When the host is anonymous to the viewer (or has no active profile) all three fields are null; the host always sees itself.",
+    },
     room: {
       type: "object",
       additionalProperties: false,
@@ -411,6 +519,7 @@ const voiceRoomBodySchema = {
         "voiceRoomId",
         "communityId",
         "communityName",
+        "title",
         "callCid",
         "state",
         "provisionState",
@@ -428,6 +537,7 @@ const voiceRoomBodySchema = {
           description:
             "The community's name as `GET /v2/communities/{communityId}` publishes it, read from the same row at response time (Decision 0052). Intended for the room banner; it is a display value, never an identifier.",
         },
+        title: voiceRoomTitleSchema,
         callCid: { type: "string", pattern: streamCallCidPatternSource },
         state: { type: "string", enum: [...voiceRoomStates] },
         provisionState: {
@@ -660,6 +770,7 @@ export const voiceRoomMemberListResourceSchema = {
         required: [
           "publicProfileId",
           "display",
+          "avatarRef",
           "role",
           "joinedAt",
           "handRaised",
@@ -669,6 +780,14 @@ export const voiceRoomMemberListResourceSchema = {
         ],
         properties: {
           ...voiceRoomMemberIdentityProperties,
+          avatarRef: {
+            anyOf: [
+              { type: "string", pattern: storedAvatarRefPatternSource },
+              { type: "null" },
+            ],
+            description:
+              "Decision 0098: the member's avatar ref, resolved like a profile `avatarRef`. Null when the row is anonymous to this viewer (`display.kind = anonymous`) or the member has none.",
+          },
           role: { type: "string", enum: [...voiceRoomMemberRoleFilters] },
           joinedAt: { type: "string", format: "date-time" },
           handRaised: {
@@ -751,6 +870,7 @@ const liveVoiceRoomItemSchema = {
     "communityLogoRef",
     "title",
     "host",
+    "speakersPreview",
     "listenerCount",
     "speakerCount",
     "countsObservedAt",
@@ -774,36 +894,15 @@ const liveVoiceRoomItemSchema = {
       description:
         "The community's preset logo reference, the same value as `logoRef` on the community resource; LOOP stores no logo URL.",
     },
-    title: {
-      type: "null",
+    title: voiceRoomTitleSchema,
+    host: liveVoiceRoomPersonSchema,
+    speakersPreview: {
+      type: "array",
+      minItems: 1,
+      maxItems: 4,
+      items: liveVoiceRoomPersonSchema,
       description:
-        "Voice rooms carry no title (create takes no body), so this is always null; show `communityName` instead. Reserved for a future room title (Decision 0093).",
-    },
-    host: {
-      type: "object",
-      additionalProperties: false,
-      required: ["publicProfileId", "displayName", "avatarRef"],
-      properties: {
-        publicProfileId: {
-          anyOf: [
-            { type: "string", pattern: publicProfileIdPatternSource },
-            { type: "null" },
-          ],
-        },
-        displayName: {
-          anyOf: [
-            { type: "string", minLength: 1, maxLength: maximumRawTextLength },
-            { type: "null" },
-          ],
-          description: `The host's alias by the leaderboard display rule (Decision 0049): null when the host's anonymous mode is on (unless the viewer is the host) or the host has no alias; render \`${voiceRoomMemberAnonymousKey}\` then. When null, publicProfileId and avatarRef are null too.`,
-        },
-        avatarRef: {
-          anyOf: [
-            { type: "string", pattern: storedAvatarRefPatternSource },
-            { type: "null" },
-          ],
-        },
-      },
+        "Decision 0098: the card's avatar stack. The host first (the same object as `host`), then up to three LOOP `joined` speakers in join order; at most four entries. Each entry follows the host display rule: an account anonymous to the viewer (or without an active profile) is present with all three fields null.",
     },
     listenerCount: {
       type: "integer",

@@ -24,6 +24,7 @@ import {
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
+  CommunityOwnerOnlyFieldError,
   CommunityPermissionDeniedError,
   CommunityProfileRequiredError,
   CommunityRepositoryUnavailableError,
@@ -1624,6 +1625,54 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
     expect(reserved.statusCode).toBe(422);
     expect(reserved.json()).toMatchObject({ code: "ALIAS_RESERVED" });
+  });
+
+  it("refuses an admin's bound-token change with PERMISSION_DENIED and reasonCode OWNER_ONLY_FIELD (Decision 0098)", async () => {
+    const { app, updateCommunityMock } = await createApp();
+    updateCommunityMock.mockImplementationOnce(() =>
+      Promise.reject(new CommunityOwnerOnlyFieldError()),
+    );
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders(),
+      payload: {
+        boundAssetKey: "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    const body = response.json<Record<string, unknown>>();
+    expect(Object.keys(body).sort()).toEqual([
+      "category",
+      "code",
+      "correlationId",
+      "detailsSafe",
+      "providerReferenceSafe",
+      "retryable",
+      "userMessageKey",
+    ]);
+    expect(body).toMatchObject({
+      code: "PERMISSION_DENIED",
+      category: "authorization",
+      retryable: false,
+      detailsSafe: { reasonCode: "OWNER_ONLY_FIELD" },
+    });
+
+    // A plain denial (a member editing) carries no reason code.
+    updateCommunityMock.mockImplementationOnce(() =>
+      Promise.reject(new CommunityPermissionDeniedError()),
+    );
+    const member = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders({ "idempotency-key": idempotencyKey("c") }),
+      payload: { name: "Frog Holders" },
+    });
+    expect(member.statusCode).toBe(403);
+    expect(member.json()).toMatchObject({
+      code: "PERMISSION_DENIED",
+      detailsSafe: null,
+    });
   });
 
   it("pages the caller's own memberships with membership=joined", async () => {

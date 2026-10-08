@@ -36,6 +36,7 @@ import {
   type CommunityChannelSyncRepository,
   type RecordCommunityChannelActivityInput,
   type ChatGroupLeavePreparation,
+  type ChatGroupRenameRecord,
   type CommunityChannelViewerRecord,
   type CreateVoiceRoomInput,
   type DirectChannelRecord,
@@ -53,6 +54,7 @@ import {
   type VoiceRoomTargetCommandInput,
   type VoiceRoomTargetRecord,
   type VoiceRoomLeaveRecord,
+  type VoiceRoomStepDownRecord,
   type VoiceRoomReapCandidate,
   type VoiceRoomReapOutcome,
   type VoiceRoomReaperRepository,
@@ -97,6 +99,34 @@ const streamCommunityChannelIdSchema = z
 const streamDirectChannelIdSchema = z
   .string()
   .regex(/^loop_direct_[0-9a-f]{32}$/);
+const streamGroupChannelIdSchema = z
+  .string()
+  .regex(/^loop_group_[0-9a-f]{32}$/);
+/** Decision 0098: the stored title, as the voice_rooms_title_check admits it. */
+const voiceRoomTitleSchema = z.string().refine((value) => {
+  const length = Array.from(value).length;
+  return length >= 1 && length <= 40 && value === value.trim();
+});
+/** The `communication_groups_metadata_check` name bound, re-checked on read. */
+const groupNameSchema = z.string().refine((value) => {
+  const length = Array.from(value).length;
+  return length >= 1 && length <= 60 && value === value.trim();
+});
+const nameVersionSchema = z.number().int().min(1);
+
+const liveSpeakerPreviewSchema = z
+  .array(
+    z
+      .object({
+        owner_user_id: userIdSchema,
+        public_profile_id: publicProfileIdSchema.nullable(),
+        alias: z.string().nullable(),
+        avatar_ref: z.string().nullable(),
+        anonymous_mode: z.boolean(),
+      })
+      .strict(),
+  )
+  .max(3);
 
 const voiceRoomColumns = `
   room.voice_room_id,
@@ -106,6 +136,7 @@ const voiceRoomColumns = `
     from public.communities as community
     where community.community_id = room.community_id
   ) as community_name,
+  room.title,
   room.call_id,
   room.state,
   room.provision_state,
@@ -220,6 +251,54 @@ async function claimCommand(
   return id;
 }
 
+/**
+ * `claimCommand`, also reporting whether this call inserted the record
+ * (`xmax = 0` on the returned row) or found an earlier claim of the same
+ * key. Decision 0098 uses it to recognize the replay of a no-op rename,
+ * which leaves no audit row behind.
+ */
+async function claimCommandWithOrigin(
+  client: DatabaseClient,
+  input: {
+    readonly ownerUserId: string;
+    readonly idempotencyKey: string;
+    readonly requestSha256: string;
+  },
+): Promise<{ readonly id: string; readonly inserted: boolean }> {
+  const claimed = await client.query<{ id: string; inserted: boolean }>({
+    text: `
+      insert into public.idempotency_records (
+        owner_user_id,
+        scope,
+        idempotency_key,
+        key_source,
+        request_sha256,
+        digest_version
+      )
+      values ($1, $2, $3, 'client', $4, $5)
+      on conflict (scope, idempotency_key)
+      do update set last_seen_at = clock_timestamp()
+      where idempotency_records.owner_user_id = excluded.owner_user_id
+        and idempotency_records.key_source = excluded.key_source
+        and idempotency_records.request_sha256 = excluded.request_sha256
+        and idempotency_records.digest_version = excluded.digest_version
+      returning id, (xmax = 0) as inserted
+    `,
+    values: [
+      input.ownerUserId,
+      communicationCommandIdempotencyScope,
+      input.idempotencyKey,
+      input.requestSha256,
+      communicationCommandDigestVersion,
+    ],
+  });
+  const row = claimed.rows[0];
+  if (row === undefined) {
+    throw new CommunicationIdempotencyConflictError();
+  }
+  return { id: row.id, inserted: row.inserted };
+}
+
 async function findVoiceRoomAudit(
   client: DatabaseClient,
   idempotencyRecordId: string,
@@ -330,6 +409,10 @@ function toVoiceRoomRecord(value: Record<string, unknown>): VoiceRoomRecord {
     voiceRoomId: opaqueIdSchema.parse(value["voice_room_id"]),
     communityId: opaqueIdSchema.parse(value["community_id"]),
     communityName: z.string().min(1).parse(value["community_name"]),
+    title:
+      value["title"] === null
+        ? null
+        : voiceRoomTitleSchema.parse(value["title"]),
     callId: z
       .string()
       .regex(/^loop_voice_[0-9a-f]{32}$/)
@@ -418,19 +501,32 @@ async function readViewerRecord(
   });
   const handRaise = handRaiseRow.rows[0];
 
-  const hostRow = await client.query<{ owner_user_id: string }>({
+  // Decision 0098: the host's identity columns ride along, so the room
+  // resource can show the host by the leaderboard display rule.
+  const hostRow = await client.query<Record<string, unknown>>({
     text: `
-      select owner_user_id
-      from public.voice_room_members
-      where voice_room_id = $1 and role = 'host'
+      select
+        host.owner_user_id,
+        profile.public_profile_id,
+        profile.alias,
+        profile.avatar_ref,
+        coalesce(privacy.anonymous_mode, false) as anonymous_mode
+      from public.voice_room_members as host
+      left join public.user_profiles as profile
+        on profile.owner_user_id = host.owner_user_id
+        and profile.profile_status = 'active'
+      left join public.privacy_preferences_v2 as privacy
+        on privacy.owner_user_id = host.owner_user_id
+      where host.voice_room_id = $1 and host.role = 'host'
       limit 1
     `,
     values: [room.voiceRoomId],
   });
-  const hostUserId = hostRow.rows[0]?.owner_user_id;
-  if (hostUserId === undefined) {
+  const host = hostRow.rows[0];
+  if (host === undefined) {
     throw new CommunicationRepositoryUnavailableError();
   }
+  const hostUserId = userIdSchema.parse(host["owner_user_id"]);
 
   const counts = await client.query<{ role: string; total: string }>({
     text: `
@@ -468,7 +564,20 @@ async function readViewerRecord(
             state: z.enum(handRaiseStates).parse(handRaise.state),
             createdAt: dateSchema.parse(handRaise.created_at).toISOString(),
           }),
-    hostStreamUserId: deriveStreamUserId(userIdSchema.parse(hostUserId)),
+    hostStreamUserId: deriveStreamUserId(hostUserId),
+    host: Object.freeze({
+      ownerUserId: hostUserId,
+      publicProfileId:
+        host["public_profile_id"] === null
+          ? null
+          : publicProfileIdSchema.parse(host["public_profile_id"]),
+      alias: host["alias"] === null ? null : z.string().parse(host["alias"]),
+      avatarRef:
+        host["avatar_ref"] === null
+          ? null
+          : z.string().parse(host["avatar_ref"]),
+      anonymousMode: z.boolean().parse(host["anonymous_mode"]),
+    }),
     speakerCount,
     listenerCount,
     joinedCount,
@@ -825,6 +934,10 @@ export function createPostgresCommunicationRepository(
         const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
         const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
         const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const title =
+          rawInput.title === null
+            ? null
+            : voiceRoomTitleSchema.parse(rawInput.title);
         return await withTransaction(pool, async (client) => {
           const recordId = await claimCommand(client, {
             ownerUserId: actorUserId,
@@ -867,9 +980,10 @@ export function createPostgresCommunicationRepository(
           const inserted = await client.query<Record<string, unknown>>({
             text: `
               insert into public.voice_rooms (
-                voice_room_id, community_id, call_id, created_by_user_id
+                voice_room_id, community_id, call_id, created_by_user_id,
+                title
               )
-              values ($1, $2, $3, $4)
+              values ($1, $2, $3, $4, $5)
               returning
                 voice_room_id,
                 community_id,
@@ -878,6 +992,7 @@ export function createPostgresCommunicationRepository(
                   from public.communities as community
                   where community.community_id = voice_rooms.community_id
                 ) as community_name,
+                title,
                 call_id,
                 state,
                 provision_state,
@@ -890,6 +1005,7 @@ export function createPostgresCommunicationRepository(
               communityId,
               deriveVoiceCallId(voiceRoomId),
               actorUserId,
+              title,
             ],
           });
           const row = inserted.rows[0];
@@ -1498,6 +1614,7 @@ export function createPostgresCommunicationRepository(
                 ) as hand_raised,
                 profile.public_profile_id,
                 profile.alias,
+                profile.avatar_ref,
                 coalesce(privacy.anonymous_mode, false) as anonymous_mode
               from public.voice_room_members as member
               join public.user_profiles as profile
@@ -1523,6 +1640,10 @@ export function createPostgresCommunicationRepository(
               ),
               alias:
                 row["alias"] === null ? null : z.string().parse(row["alias"]),
+              avatarRef:
+                row["avatar_ref"] === null
+                  ? null
+                  : z.string().parse(row["avatar_ref"]),
               anonymousMode: z.boolean().parse(row["anonymous_mode"]),
               role: z.enum(voiceRoomMemberRoleFilters).parse(row["role"]),
               joinedAt: dateSchema.parse(row["joined_at"]).toISOString(),
@@ -1573,12 +1694,48 @@ export function createPostgresCommunicationRepository(
               room.community_id,
               community.name as community_name,
               community.logo_ref as community_logo_ref,
+              room.title,
               room.created_at,
               host.owner_user_id as host_user_id,
               profile.public_profile_id as host_public_profile_id,
               profile.alias as host_alias,
               profile.avatar_ref as host_avatar_ref,
               coalesce(privacy.anonymous_mode, false) as host_anonymous_mode,
+              -- Decision 0098: the first three joined speakers for the card's
+              -- avatar stack, in join order with the account as tie-break.
+              coalesce((
+                select json_agg(
+                  json_build_object(
+                    'owner_user_id', preview.owner_user_id,
+                    'public_profile_id', preview.public_profile_id,
+                    'alias', preview.alias,
+                    'avatar_ref', preview.avatar_ref,
+                    'anonymous_mode', preview.anonymous_mode
+                  )
+                  order by preview.joined_at, preview.owner_user_id
+                )
+                from (
+                  select
+                    speaker.owner_user_id,
+                    speaker.joined_at,
+                    speaker_profile.public_profile_id,
+                    speaker_profile.alias,
+                    speaker_profile.avatar_ref,
+                    coalesce(speaker_privacy.anonymous_mode, false)
+                      as anonymous_mode
+                  from public.voice_room_members as speaker
+                  left join public.user_profiles as speaker_profile
+                    on speaker_profile.owner_user_id = speaker.owner_user_id
+                    and speaker_profile.profile_status = 'active'
+                  left join public.privacy_preferences_v2 as speaker_privacy
+                    on speaker_privacy.owner_user_id = speaker.owner_user_id
+                  where speaker.voice_room_id = room.voice_room_id
+                    and speaker.state = 'joined'
+                    and speaker.role = 'speaker'
+                  order by speaker.joined_at, speaker.owner_user_id
+                  limit 3
+                ) as preview
+              ), '[]'::json) as speaker_preview,
               (
                 select count(*)
                 from public.voice_room_members as member
@@ -1643,6 +1800,10 @@ export function createPostgresCommunicationRepository(
                 row["community_logo_ref"] === null
                   ? null
                   : z.string().parse(row["community_logo_ref"]),
+              title:
+                row["title"] === null
+                  ? null
+                  : voiceRoomTitleSchema.parse(row["title"]),
               startedAt: dateSchema.parse(row["created_at"]).toISOString(),
               host: Object.freeze({
                 ownerUserId: userIdSchema.parse(row["host_user_id"]),
@@ -1662,6 +1823,19 @@ export function createPostgresCommunicationRepository(
                     : z.string().parse(row["host_avatar_ref"]),
                 anonymousMode: z.boolean().parse(row["host_anonymous_mode"]),
               }),
+              speakers: Object.freeze(
+                liveSpeakerPreviewSchema
+                  .parse(row["speaker_preview"])
+                  .map((speaker) =>
+                    Object.freeze({
+                      ownerUserId: speaker.owner_user_id,
+                      publicProfileId: speaker.public_profile_id,
+                      alias: speaker.alias,
+                      avatarRef: speaker.avatar_ref,
+                      anonymousMode: speaker.anonymous_mode,
+                    }),
+                  ),
+              ),
               speakerCount: z.number().int().min(0).parse(row["speaker_count"]),
               listenerCount: z
                 .number()
@@ -1674,6 +1848,96 @@ export function createPostgresCommunicationRepository(
             }),
           ),
         );
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    /**
+     * Decision 0098: the caller's own step-down from speaker to listener.
+     * The room row is locked first (as every role transition does), then the
+     * caller's member row. The host cannot step down; anyone who is not a
+     * joined speaker is a no-op that writes nothing. A same-key replay of a
+     * recorded step-down answers `stepped_down` again so the idempotent
+     * Stream revoke is repeated.
+     */
+    async stepDownSpeaker(
+      rawInput: VoiceRoomCommandInput,
+    ): Promise<VoiceRoomStepDownRecord> {
+      try {
+        const actorUserId = userIdSchema.parse(rawInput.actorUserId);
+        const voiceRoomId = opaqueIdSchema.parse(rawInput.voiceRoomId);
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const callerStreamUserId = deriveStreamUserId(actorUserId);
+        return await withTransaction(pool, async (client) => {
+          const recordId = await claimCommand(client, {
+            ownerUserId: actorUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          if ((await findVoiceRoomAudit(client, recordId)) !== null) {
+            const room = await readVoiceRoom(client, voiceRoomId);
+            return Object.freeze({
+              ...(await readViewerRecord(client, room, actorUserId)),
+              outcome: "stepped_down" as const,
+              callerStreamUserId,
+            });
+          }
+          const room = await requireLiveRoom(client, voiceRoomId);
+          const currentRow = await client.query<{
+            role: string;
+            state: string;
+          }>({
+            text: `
+              select role, state from public.voice_room_members
+              where voice_room_id = $1 and owner_user_id = $2 limit 1
+              for update
+            `,
+            values: [voiceRoomId, actorUserId],
+          });
+          const current = currentRow.rows[0];
+          if (current?.role === "host") {
+            throw new CommunicationPermissionDeniedError();
+          }
+          if (
+            current === undefined ||
+            current.state !== "joined" ||
+            current.role !== "speaker"
+          ) {
+            return Object.freeze({
+              ...(await readViewerRecord(client, room, actorUserId)),
+              outcome: "no_op" as const,
+              callerStreamUserId,
+            });
+          }
+          await client.query({
+            text: `
+              update public.voice_room_members
+              set role = 'listener', muted_at = null,
+                updated_at = clock_timestamp()
+              where voice_room_id = $1 and owner_user_id = $2
+            `,
+            values: [voiceRoomId, actorUserId],
+          });
+          await appendVoiceRoomAudit(client, {
+            voiceRoomId,
+            actorUserId,
+            targetUserId: actorUserId,
+            eventType: "speaker_stepped_down",
+            fromRole: "speaker",
+            toRole: "listener",
+            reasonCode: "self_step_down",
+            idempotencyRecordId: recordId,
+            requestId,
+          });
+          return Object.freeze({
+            ...(await readViewerRecord(client, room, actorUserId)),
+            outcome: "stepped_down" as const,
+            callerStreamUserId,
+          });
+        });
       } catch (error) {
         return translateRepositoryError(error);
       }
@@ -1916,6 +2180,164 @@ export function createPostgresCommunicationRepository(
               values ($1, $2, 'member_left', 'self_leave', $3, $4)
             `,
             values: [groupId, actorUserId, recordId, requestId],
+          });
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    /**
+     * Decision 0098. The idempotency record is claimed first; a replay whose
+     * rename was recorded answers from its audit row, and a replay of a
+     * same-name no-op (claimed before, no audit row) answers from the
+     * current row without writing. Otherwise the group row is locked, the
+     * caller must be its creator, and a different name is written together
+     * with `name_version + 1` and one `group_renamed` audit row stamped with
+     * the same timestamp as `updated_at`.
+     */
+    async renameChatGroup(rawInput: {
+      readonly actorUserId: string;
+      readonly groupId: string;
+      readonly name: string;
+      readonly idempotencyKey: string;
+      readonly requestSha256: string;
+      readonly requestId: string;
+    }): Promise<ChatGroupRenameRecord> {
+      try {
+        const actorUserId = userIdSchema.parse(rawInput.actorUserId);
+        const groupId = opaqueIdSchema.parse(rawInput.groupId);
+        const name = groupNameSchema.parse(rawInput.name);
+        const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
+        const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        return await withTransaction(pool, async (client) => {
+          const claim = await claimCommandWithOrigin(client, {
+            ownerUserId: actorUserId,
+            idempotencyKey,
+            requestSha256,
+          });
+          const result = await client.query<Record<string, unknown>>({
+            text: `
+              select
+                groups.name,
+                groups.name_version,
+                groups.updated_at,
+                groups.stream_channel_id,
+                creator.owner_user_id as creator_user_id,
+                self.member_role as self_role
+              from public.communication_groups as groups
+              join public.communication_group_members as creator
+                on creator.group_id = groups.group_id
+                and creator.member_role = 'creator'
+              left join public.communication_group_members as self
+                on self.group_id = groups.group_id
+                and self.owner_user_id = $2
+              where groups.group_id = $1
+                and groups.channel_kind = 'group'
+                and groups.channel_state = 'active'
+              limit 1
+              for update of groups
+            `,
+            values: [groupId, actorUserId],
+          });
+          const row = result.rows[0];
+          if (row === undefined) {
+            throw new CommunicationNotFoundError();
+          }
+          const base = {
+            groupId,
+            streamChannelId: streamGroupChannelIdSchema.parse(
+              row["stream_channel_id"],
+            ),
+            channelCreatedByStreamUserId: deriveStreamUserId(
+              userIdSchema.parse(row["creator_user_id"]),
+            ),
+          };
+          const current = (changed: boolean): ChatGroupRenameRecord =>
+            Object.freeze({
+              ...base,
+              name: groupNameSchema.parse(row["name"]),
+              nameVersion: nameVersionSchema.parse(row["name_version"]),
+              updatedAt: dateSchema.parse(row["updated_at"]).toISOString(),
+              changed,
+            });
+          const replay = await client.query<Record<string, unknown>>({
+            text: `
+              select new_name, name_version, created_at
+              from public.communication_group_events
+              where idempotency_record_id = $1
+              limit 1
+            `,
+            values: [claim.id],
+          });
+          const recorded = replay.rows[0];
+          if (recorded !== undefined) {
+            return Object.freeze({
+              ...base,
+              name: groupNameSchema.parse(recorded["new_name"]),
+              nameVersion: nameVersionSchema.parse(recorded["name_version"]),
+              updatedAt: dateSchema.parse(recorded["created_at"]).toISOString(),
+              changed: true,
+            });
+          }
+          if (!claim.inserted) {
+            // The same key already answered a same-name no-op.
+            return current(false);
+          }
+          if (row["self_role"] === null || row["self_role"] === undefined) {
+            // A non-member cannot tell a group exists.
+            throw new CommunicationNotFoundError();
+          }
+          if (row["self_role"] !== "creator") {
+            throw new CommunicationPermissionDeniedError();
+          }
+          if (row["name"] === name) {
+            return current(false);
+          }
+          const updated = await client.query<Record<string, unknown>>({
+            text: `
+              update public.communication_groups
+              set
+                name = $2,
+                name_version = name_version + 1,
+                updated_at = greatest(clock_timestamp(), updated_at)
+              where group_id = $1
+              returning name, name_version, updated_at
+            `,
+            values: [groupId, name],
+          });
+          const next = updated.rows[0];
+          if (next === undefined) {
+            throw new CommunicationDataStaleError();
+          }
+          const nameVersion = nameVersionSchema.parse(next["name_version"]);
+          const updatedAt = dateSchema.parse(next["updated_at"]);
+          await client.query({
+            text: `
+              insert into public.communication_group_events (
+                group_id, event_type, actor_user_id, old_name, new_name,
+                name_version, idempotency_record_id, request_id, created_at
+              )
+              values ($1, 'group_renamed', $2, $3, $4, $5, $6, $7, $8)
+            `,
+            values: [
+              groupId,
+              actorUserId,
+              row["name"],
+              name,
+              nameVersion,
+              claim.id,
+              requestId,
+              updatedAt,
+            ],
+          });
+          return Object.freeze({
+            ...base,
+            name: groupNameSchema.parse(next["name"]),
+            nameVersion,
+            updatedAt: updatedAt.toISOString(),
+            changed: true,
           });
         });
       } catch (error) {

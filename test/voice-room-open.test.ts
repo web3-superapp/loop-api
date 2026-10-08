@@ -32,6 +32,7 @@ function resource(
       voiceRoomId,
       communityId,
       communityName: "Builders Guild",
+      title: null,
       callCid: "audio_room:loop_voice_3fa85f6457174562b3fc2c963f66afa6",
       state: "live",
       provisionState,
@@ -39,6 +40,7 @@ function resource(
       createdAt: "2026-09-17T07:00:00.000Z",
       endedAt: null,
     }),
+    host: null,
     viewer: Object.freeze({
       role: "host",
       canInviteSpeakers: true,

@@ -513,11 +513,28 @@ export class CommunityTargetUnavailableError extends Error {
 }
 
 export class CommunityPermissionDeniedError extends Error {
-  readonly code = "community_permission_denied";
+  readonly code: string = "community_permission_denied";
 
   constructor() {
     super("The actor may not perform this community action");
     this.name = "CommunityPermissionDeniedError";
+  }
+}
+
+/** Decision 0098: `detailsSafe.reasonCode` of an admin's owner-only edit. */
+export const communityOwnerOnlyFieldReasonCode = "OWNER_ONLY_FIELD";
+
+/**
+ * Decision 0098: an admin may edit the community profile except its bound
+ * token (`boundAssetKey`), which stays owner-only. A permission denial that
+ * carries `reasonCode: OWNER_ONLY_FIELD`.
+ */
+export class CommunityOwnerOnlyFieldError extends CommunityPermissionDeniedError {
+  override readonly code: string = "community_owner_only_field";
+
+  constructor() {
+    super();
+    this.name = "CommunityOwnerOnlyFieldError";
   }
 }
 

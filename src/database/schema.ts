@@ -1,4 +1,4 @@
-export const latestMigrationName = "000047_v2_community_member_buy_feed";
+export const latestMigrationName = "000048_v2_group_rename_voice_title";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -22,6 +22,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.voice_room_hand_raises",
   "public.voice_room_events",
   "public.chat_group_membership_events",
+  "public.communication_group_events",
   "public.profile_activation_commands",
   "public.profile_code_sequence",
   "public.provider_operations",

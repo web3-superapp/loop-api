@@ -18,6 +18,7 @@ import { createUnavailableWatchlistRepository } from "../src/database/watchlist-
 import { createUnavailableCommunityRepository } from "../src/features/community/community-repository.js";
 import {
   CommunicationDataStaleError,
+  CommunicationIdempotencyConflictError,
   CommunicationNotFoundError,
   CommunicationPermissionDeniedError,
   CommunicationRepositoryUnavailableError,
@@ -27,6 +28,7 @@ import {
   type DirectChannelRecord,
   type VoiceRoomViewerRecord,
 } from "../src/features/communication/communication-repository.js";
+import { communicationCommandDigest } from "../src/features/communication/communication-contract.js";
 import { createVoiceRoomService } from "../src/features/communication/voice-room-service.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
@@ -77,6 +79,7 @@ function room(
       voiceRoomId,
       communityId,
       communityName: "Builders Guild",
+      title: null,
       callId,
       state: "live" as const,
       provisionState: "provisioned" as const,
@@ -88,6 +91,13 @@ function room(
     viewerRole: "host" as const,
     viewerHandRaise: null,
     hostStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+    host: {
+      ownerUserId: accountId,
+      publicProfileId: selfProfileId,
+      alias: "cy",
+      avatarRef: "avatar:preset/people-01",
+      anonymousMode: false,
+    },
     speakerCount: 1,
     listenerCount: 4,
     joinedCount: 6,
@@ -105,6 +115,7 @@ function rosterRows() {
       ownerUserId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
       publicProfileId: targetProfileId,
       alias: "frog_maxi",
+      avatarRef: "avatar:preset/people-03",
       anonymousMode: false,
       role: "listener" as const,
       joinedAt: createdAt,
@@ -115,6 +126,7 @@ function rosterRows() {
       ownerUserId: "8e34ca80-6356-49a8-b534-e7a197c52a77",
       publicProfileId: anonymousProfileId,
       alias: "hidden_frog",
+      avatarRef: "avatar:preset/people-05",
       anonymousMode: true,
       role: "listener" as const,
       joinedAt: "2026-09-08T01:00:01.000Z",
@@ -125,6 +137,7 @@ function rosterRows() {
       ownerUserId: accountId,
       publicProfileId: selfProfileId,
       alias: "cy",
+      avatarRef: "avatar:preset/people-01",
       anonymousMode: true,
       role: "listener" as const,
       joinedAt: "2026-09-08T01:00:02.000Z",
@@ -152,6 +165,22 @@ function handRaiseRows() {
 const otherCommunityId = "4b96a75e-6828-4a6b-8c1d-2e3f4a5b6c7d";
 const otherVoiceRoomId = "9d8c7b6a-5e4f-4a3b-9c2d-1e0f2a3b4c5d";
 
+const namedSpeaker = Object.freeze({
+  ownerUserId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
+  publicProfileId: targetProfileId,
+  alias: "frog_maxi",
+  avatarRef: "avatar:preset/people-03",
+  anonymousMode: false,
+});
+
+const anonymousSpeaker = Object.freeze({
+  ownerUserId: "9f45db91-7467-4ab9-8645-f8b2a8d63b88",
+  publicProfileId: anonymousProfileId,
+  alias: "hidden_frog",
+  avatarRef: "avatar:preset/people-05",
+  anonymousMode: true,
+});
+
 /**
  * Three live rooms, newest first: one the viewer hosts (anonymous, still
  * shown to itself), one by a named host in a community the viewer is not in,
@@ -164,6 +193,7 @@ function liveRoomRows() {
       communityId,
       communityName: "Builders Guild",
       communityLogoRef: "avatar:preset/community-03",
+      title: "周五 AMA",
       startedAt: "2026-10-08T03:00:00.000Z",
       host: {
         ownerUserId: accountId,
@@ -172,6 +202,7 @@ function liveRoomRows() {
         avatarRef: "avatar:preset/people-01",
         anonymousMode: true,
       },
+      speakers: [namedSpeaker, anonymousSpeaker],
       speakerCount: 1,
       listenerCount: 4,
       viewerIsCommunityMember: true,
@@ -181,6 +212,7 @@ function liveRoomRows() {
       communityId: otherCommunityId,
       communityName: "Frog Holders",
       communityLogoRef: null,
+      title: null,
       startedAt: "2026-10-08T02:00:00.000Z",
       host: {
         ownerUserId: "7d23b97f-5245-48f7-a423-d6f086b41f66",
@@ -189,6 +221,7 @@ function liveRoomRows() {
         avatarRef: "avatar:preset/people-03",
         anonymousMode: false,
       },
+      speakers: [],
       speakerCount: 0,
       listenerCount: 0,
       viewerIsCommunityMember: false,
@@ -198,6 +231,7 @@ function liveRoomRows() {
       communityId: otherCommunityId,
       communityName: "Frog Holders",
       communityLogoRef: null,
+      title: null,
       startedAt: "2026-10-08T01:00:00.000Z",
       host: {
         ownerUserId: "8e34ca80-6356-49a8-b534-e7a197c52a77",
@@ -206,7 +240,20 @@ function liveRoomRows() {
         avatarRef: "avatar:preset/people-05",
         anonymousMode: true,
       },
-      speakerCount: 2,
+      // Three speakers: with the host that is the four-entry maximum. The
+      // viewer itself is anonymous but always sees its own identity.
+      speakers: [
+        namedSpeaker,
+        anonymousSpeaker,
+        {
+          ownerUserId: accountId,
+          publicProfileId: selfProfileId,
+          alias: "cy",
+          avatarRef: null,
+          anonymousMode: true,
+        },
+      ],
+      speakerCount: 3,
       listenerCount: 7,
       viewerIsCommunityMember: false,
     },
@@ -354,6 +401,7 @@ function communicationRepositoryFake(
             voiceRoomId,
             communityId,
             communityName: "Builders Guild",
+            title: null,
             callId,
             state: "ended",
             provisionState: "provisioned",
@@ -374,6 +422,24 @@ function communicationRepositoryFake(
       }),
     ),
     commitChatGroupLeave: vi.fn(() => Promise.resolve()),
+    stepDownSpeaker: vi.fn(() =>
+      Promise.resolve({
+        ...room({ viewerRole: "listener", speakerCount: 0, listenerCount: 5 }),
+        outcome: "stepped_down" as const,
+        callerStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+      }),
+    ),
+    renameChatGroup: vi.fn(() =>
+      Promise.resolve({
+        groupId,
+        name: "Frog Squad II",
+        nameVersion: 2,
+        updatedAt: "2026-10-08T05:00:00.000Z",
+        changed: true,
+        streamChannelId: `loop_group_${groupId.replaceAll("-", "")}`,
+        channelCreatedByStreamUserId: `loop_${accountId.replaceAll("-", "")}`,
+      }),
+    ),
   };
   for (const [name, value] of Object.entries(overrides)) {
     mocks[name] = value as ReturnType<typeof vi.fn>;
@@ -466,6 +532,7 @@ function channelGatewayFake(
         memberCount: 2,
       }),
     ),
+    updateGroupChannelName: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }
@@ -1451,13 +1518,28 @@ describe("LOOP API V2 communication module", () => {
           communityId,
           communityName: "Builders Guild",
           communityLogoRef: "avatar:preset/community-03",
-          title: null,
+          title: "周五 AMA",
           // The viewer hosts this room: its own alias even in anonymous mode.
           host: {
             publicProfileId: selfProfileId,
             displayName: "cy",
             avatarRef: "avatar:preset/people-01",
           },
+          // Decision 0098: host first, then speakers in join order; the
+          // anonymous speaker is present with all three fields null.
+          speakersPreview: [
+            {
+              publicProfileId: selfProfileId,
+              displayName: "cy",
+              avatarRef: "avatar:preset/people-01",
+            },
+            {
+              publicProfileId: targetProfileId,
+              displayName: "frog_maxi",
+              avatarRef: "avatar:preset/people-03",
+            },
+            { publicProfileId: null, displayName: null, avatarRef: null },
+          ],
           listenerCount: 4,
           speakerCount: 1,
           countsObservedAt: null,
@@ -1475,6 +1557,13 @@ describe("LOOP API V2 communication module", () => {
             displayName: "frog_maxi",
             avatarRef: "avatar:preset/people-03",
           },
+          speakersPreview: [
+            {
+              publicProfileId: targetProfileId,
+              displayName: "frog_maxi",
+              avatarRef: "avatar:preset/people-03",
+            },
+          ],
           listenerCount: 0,
           speakerCount: 0,
           countsObservedAt: null,
@@ -1489,8 +1578,22 @@ describe("LOOP API V2 communication module", () => {
           title: null,
           // Anonymous to this viewer: nothing that identifies the host.
           host: { publicProfileId: null, displayName: null, avatarRef: null },
+          speakersPreview: [
+            { publicProfileId: null, displayName: null, avatarRef: null },
+            {
+              publicProfileId: targetProfileId,
+              displayName: "frog_maxi",
+              avatarRef: "avatar:preset/people-03",
+            },
+            { publicProfileId: null, displayName: null, avatarRef: null },
+            {
+              publicProfileId: selfProfileId,
+              displayName: "cy",
+              avatarRef: null,
+            },
+          ],
           listenerCount: 7,
-          speakerCount: 2,
+          speakerCount: 3,
           countsObservedAt: null,
           startedAt: "2026-10-08T01:00:00.000Z",
           joinable: false,
@@ -1745,6 +1848,7 @@ describe("LOOP API V2 communication module", () => {
               publicProfileId: targetProfileId,
               audience: "everyone",
             },
+            avatarRef: "avatar:preset/people-03",
             role: "listener",
             joinedAt: createdAt,
             handRaised: true,
@@ -1759,6 +1863,8 @@ describe("LOOP API V2 communication module", () => {
               kind: "anonymous",
               labelKey: "voiceRoom.member.anonymousMember",
             },
+            // Decision 0098: an anonymous row shows no avatar.
+            avatarRef: null,
             role: "listener",
             joinedAt: "2026-09-08T01:00:01.000Z",
             handRaised: false,
@@ -1775,6 +1881,8 @@ describe("LOOP API V2 communication module", () => {
               publicProfileId: selfProfileId,
               audience: "self",
             },
+            // The viewer always sees its own avatar.
+            avatarRef: "avatar:preset/people-01",
             role: "listener",
             joinedAt: "2026-09-08T01:00:02.000Z",
             handRaised: false,
@@ -2901,6 +3009,7 @@ describe("LOOP API V2 communication module", () => {
               voiceRoomId,
               communityId,
               communityName: "Builders Guild",
+              title: null,
               callId,
               state: "ended",
               provisionState: "provisioned",
@@ -3121,6 +3230,548 @@ describe("LOOP API V2 communication module", () => {
     // Only the idempotent Stream removal replays; nothing commits twice.
     expect(removeMembers).toHaveBeenCalledTimes(1);
     expect(communicationMocks["commitChatGroupLeave"]).not.toHaveBeenCalled();
+  });
+
+  describe("group rename (Decision 0098)", () => {
+    const streamChannelId = `loop_group_${groupId.replaceAll("-", "")}`;
+    const creatorStreamUserId = `loop_${accountId.replaceAll("-", "")}`;
+
+    it("commits the rename, then sets the Stream channel name as the creator", async () => {
+      const order: string[] = [];
+      const updateGroupChannelName = vi.fn(() => {
+        order.push("stream");
+        return Promise.resolve();
+      });
+      const communication = communicationRepositoryFake({
+        renameChatGroup: vi.fn(() => {
+          order.push("commit");
+          return Promise.resolve({
+            groupId,
+            name: "Frog Squad II",
+            nameVersion: 2,
+            updatedAt: "2026-10-08T05:00:00.000Z",
+            changed: true,
+            streamChannelId,
+            channelCreatedByStreamUserId: creatorStreamUserId,
+          });
+        }),
+      });
+      const channelGateway = channelGatewayFake({ updateGroupChannelName });
+      const { app, communicationMocks } = await createApp(
+        fakes({ communication, channelGateway }),
+      );
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commandHeaders(),
+        payload: { name: "  Frog Squad II  " },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({
+        groupId,
+        name: "Frog Squad II",
+        nameVersion: 2,
+        updatedAt: "2026-10-08T05:00:00.000Z",
+        contractVersion: "2.0",
+      });
+      expect(order).toEqual(["commit", "stream"]);
+      expect(communicationMocks["renameChatGroup"]).toHaveBeenCalledWith({
+        actorUserId: accountId,
+        groupId,
+        name: "Frog Squad II",
+        idempotencyKey: idempotencyKey(),
+        requestSha256: communicationCommandDigest("chatGroupRename", [
+          groupId,
+          "Frog Squad II",
+        ]),
+        requestId: expect.any(String) as string,
+      });
+      expect(updateGroupChannelName).toHaveBeenCalledWith({
+        channelId: streamChannelId,
+        actingStreamUserId: creatorStreamUserId,
+        name: "Frog Squad II",
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+    });
+
+    it("answers 200 when the Stream write fails: PostgreSQL is the authority", async () => {
+      const updateGroupChannelName = vi.fn(() =>
+        Promise.reject(new Error("provider down")),
+      );
+      const channelGateway = channelGatewayFake({ updateGroupChannelName });
+      const { app } = await createApp(fakes({ channelGateway }));
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commandHeaders(),
+        payload: { name: "Frog Squad II" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ nameVersion: 2 });
+      expect(updateGroupChannelName).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers a same-name no-op with the unchanged version and still re-syncs Stream", async () => {
+      const updateGroupChannelName = vi.fn(() => Promise.resolve());
+      const communication = communicationRepositoryFake({
+        renameChatGroup: vi.fn(() =>
+          Promise.resolve({
+            groupId,
+            name: "Frog Squad",
+            nameVersion: 1,
+            updatedAt: createdAt,
+            changed: false,
+            streamChannelId,
+            channelCreatedByStreamUserId: creatorStreamUserId,
+          }),
+        ),
+      });
+      const { app } = await createApp(
+        fakes({
+          communication,
+          channelGateway: channelGatewayFake({ updateGroupChannelName }),
+        }),
+      );
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commandHeaders(),
+        payload: { name: "Frog Squad" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        groupId,
+        name: "Frog Squad",
+        nameVersion: 1,
+        updatedAt: createdAt,
+        contractVersion: "2.0",
+      });
+      expect(updateGroupChannelName).toHaveBeenCalledTimes(1);
+    });
+
+    it("maps a non-creator to 403, an unknown group to 404, a reused key to 409, and an unavailable store to 503", async () => {
+      const cases = [
+        [new CommunicationPermissionDeniedError(), 403, "PERMISSION_DENIED"],
+        [new CommunicationNotFoundError(), 404, "NOT_FOUND"],
+        [
+          new CommunicationIdempotencyConflictError(),
+          409,
+          "IDEMPOTENCY_CONFLICT",
+        ],
+        [
+          new CommunicationRepositoryUnavailableError(),
+          503,
+          "CAPABILITY_UNAVAILABLE",
+        ],
+      ] as const;
+      for (const [error, status, code] of cases) {
+        const updateGroupChannelName = vi.fn(() => Promise.resolve());
+        const communication = communicationRepositoryFake({
+          renameChatGroup: vi.fn(() => Promise.reject(error)),
+        });
+        const { app } = await createApp(
+          fakes({
+            communication,
+            channelGateway: channelGatewayFake({ updateGroupChannelName }),
+          }),
+        );
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/v2/chat/groups/${groupId}`,
+          headers: commandHeaders(),
+          payload: { name: "Frog Squad II" },
+        });
+        expect(response.statusCode, code).toBe(status);
+        const body = response.json<Record<string, unknown>>();
+        expect(body["code"]).toBe(code);
+        expect(Object.keys(body).sort()).toEqual([
+          "category",
+          "code",
+          "correlationId",
+          "detailsSafe",
+          "providerReferenceSafe",
+          "retryable",
+          "userMessageKey",
+        ]);
+        expect(updateGroupChannelName).not.toHaveBeenCalled();
+      }
+    });
+
+    it("rejects a bad name, extra keys, a missing key header, and a missing bearer before the repository", async () => {
+      const { app, communicationMocks, verifyAccessToken } = await createApp();
+      for (const payload of [
+        { name: "x".repeat(61) },
+        { name: "   " },
+        { name: "bad\u0007name" },
+        { name: "Frog", friendPublicProfileIds: [] },
+        {},
+      ]) {
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/v2/chat/groups/${groupId}`,
+          headers: commandHeaders(),
+          payload,
+        });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+      // Sixty code points (CJK, so more than sixty UTF-16 units is fine).
+      const sixty = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commandHeaders(),
+        payload: { name: "群".repeat(60) },
+      });
+      expect(sixty.statusCode).toBe(200);
+      expect(communicationMocks["renameChatGroup"]).toHaveBeenCalledTimes(1);
+
+      const noKey = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commonHeaders(),
+        payload: { name: "Frog Squad II" },
+      });
+      expect(noKey.statusCode).toBe(400);
+
+      verifyAccessToken.mockClear();
+      const noBearer = await app.inject({
+        method: "PATCH",
+        url: `/v2/chat/groups/${groupId}`,
+        headers: commandHeaders({ authorization: undefined }),
+        payload: { name: "Frog Squad II" },
+      });
+      expect(noBearer.statusCode).toBe(401);
+      expect(noBearer.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+
+      const badId = await app.inject({
+        method: "PATCH",
+        url: "/v2/chat/groups/not-a-group",
+        headers: commandHeaders(),
+        payload: { name: "Frog Squad II" },
+      });
+      expect(badId.statusCode).toBe(400);
+      expect(communicationMocks["renameChatGroup"]).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("speaker step-down and host projection (Decision 0098)", () => {
+    const callerStreamUserId = `loop_${accountId.replaceAll("-", "")}`;
+
+    it("commits the step-down, then revokes send-audio and resets the call role", async () => {
+      const order: string[] = [];
+      const callGateway = callGatewayFake({
+        updateUserPermissions: vi.fn(() => {
+          order.push("revoke");
+          return Promise.resolve();
+        }),
+        updateCallMembers: vi.fn(() => {
+          order.push("members");
+          return Promise.resolve();
+        }),
+      });
+      const communication = communicationRepositoryFake({
+        stepDownSpeaker: vi.fn(() => {
+          order.push("commit");
+          return Promise.resolve({
+            ...room({
+              viewerRole: "listener",
+              speakerCount: 0,
+              listenerCount: 5,
+            }),
+            outcome: "stepped_down" as const,
+            callerStreamUserId,
+          });
+        }),
+      });
+      const { app, callMocks, communicationMocks } = await createApp(
+        fakes({ callGateway, communication }),
+      );
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/me`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        room: { voiceRoomId },
+        viewer: { role: "listener" },
+        participants: { speakerCount: 0, listenerCount: 5 },
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(order).toEqual(["commit", "revoke", "members"]);
+      expect(communicationMocks["stepDownSpeaker"]).toHaveBeenCalledWith({
+        actorUserId: accountId,
+        voiceRoomId,
+        idempotencyKey: idempotencyKey(),
+        requestSha256: communicationCommandDigest("voiceRoomSpeakerStepDown", [
+          voiceRoomId,
+        ]),
+        requestId: expect.any(String) as string,
+      });
+      expect(callMocks["updateUserPermissions"]).toHaveBeenCalledWith({
+        callId,
+        streamUserId: callerStreamUserId,
+        grantPermissions: [],
+        revokePermissions: ["send-audio"],
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+      expect(callMocks["updateCallMembers"]).toHaveBeenCalledWith({
+        callId,
+        addStreamUserIds: [callerStreamUserId],
+        removeStreamUserIds: [],
+        role: "listener",
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+    });
+
+    it("reports an unconfirmed revoke without failing the step-down", async () => {
+      const callGateway = callGatewayFake({
+        updateUserPermissions: vi.fn(() =>
+          Promise.reject(new StreamCallGatewayUnavailableError()),
+        ),
+      });
+      const { app } = await createApp(fakes({ callGateway }));
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/me`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        providerSync: { status: "unconfirmed" },
+      });
+    });
+
+    it("answers a non-speaker with a 200 no-op and makes no Stream write", async () => {
+      const communication = communicationRepositoryFake({
+        stepDownSpeaker: vi.fn(() =>
+          Promise.resolve({
+            ...room({ viewerRole: "listener" }),
+            outcome: "no_op" as const,
+            callerStreamUserId,
+          }),
+        ),
+      });
+      const { app, callMocks } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/me`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        viewer: { role: "listener" },
+        providerSync: { status: "confirmed", reasonCode: null },
+      });
+      expect(callMocks["updateUserPermissions"]).not.toHaveBeenCalled();
+      expect(callMocks["updateCallMembers"]).not.toHaveBeenCalled();
+    });
+
+    it("refuses the host with 403 and an ended room with 409, and requires the write headers", async () => {
+      for (const [error, status, code] of [
+        [new CommunicationPermissionDeniedError(), 403, "PERMISSION_DENIED"],
+        [new CommunicationDataStaleError(), 409, "DATA_STALE"],
+      ] as const) {
+        const communication = communicationRepositoryFake({
+          stepDownSpeaker: vi.fn(() => Promise.reject(error)),
+        });
+        const { app, callMocks } = await createApp(fakes({ communication }));
+        const response = await app.inject({
+          method: "DELETE",
+          url: `/v2/voice-rooms/${voiceRoomId}/speakers/me`,
+          headers: commandHeaders(),
+        });
+        expect(response.statusCode, code).toBe(status);
+        expect(response.json()).toMatchObject({ code });
+        expect(callMocks["updateUserPermissions"]).not.toHaveBeenCalled();
+      }
+      const { app, communicationMocks } = await createApp();
+      const noKey = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/me`,
+        headers: commonHeaders(),
+      });
+      expect(noKey.statusCode).toBe(400);
+      expect(communicationMocks["stepDownSpeaker"]).not.toHaveBeenCalled();
+      // The host's remove-speaker route still takes a public profile ID.
+      const remove = await app.inject({
+        method: "DELETE",
+        url: `/v2/voice-rooms/${voiceRoomId}/speakers/${targetProfileId}`,
+        headers: commandHeaders(),
+      });
+      expect(remove.statusCode).toBe(200);
+      expect(communicationMocks["removeSpeaker"]).toHaveBeenCalledTimes(1);
+      expect(communicationMocks["stepDownSpeaker"]).not.toHaveBeenCalled();
+    });
+
+    it("projects the host on the room resource by the display rule", async () => {
+      const anonymousHost = {
+        ownerUserId: "8e34ca80-6356-49a8-b534-e7a197c52a77",
+        publicProfileId: anonymousProfileId,
+        alias: "hidden_frog",
+        avatarRef: "avatar:preset/people-05",
+        anonymousMode: true,
+      };
+      const cases = [
+        // The host itself: its own identity even in anonymous mode.
+        [
+          room({ host: { ...room().host, anonymousMode: true } }),
+          {
+            publicProfileId: selfProfileId,
+            displayName: "cy",
+            avatarRef: "avatar:preset/people-01",
+          },
+        ],
+        [
+          room({
+            viewerRole: "listener",
+            host: { ...anonymousHost, anonymousMode: false },
+          }),
+          {
+            publicProfileId: anonymousProfileId,
+            displayName: "hidden_frog",
+            avatarRef: "avatar:preset/people-05",
+          },
+        ],
+        [
+          room({ viewerRole: "listener", host: anonymousHost }),
+          { publicProfileId: null, displayName: null, avatarRef: null },
+        ],
+      ] as const;
+      for (const [record, expected] of cases) {
+        const communication = communicationRepositoryFake({
+          getVoiceRoom: vi.fn(() => Promise.resolve(record)),
+        });
+        const { app } = await createApp(fakes({ communication }));
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/voice-rooms/${voiceRoomId}`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json<Record<string, unknown>>()["host"]).toEqual(
+          expected,
+        );
+      }
+    });
+  });
+
+  describe("voice room title (Decision 0098)", () => {
+    it("creates a titled room: the trimmed title is stored and bound into the digest", async () => {
+      const communication = communicationRepositoryFake({
+        createVoiceRoom: vi.fn(() =>
+          Promise.resolve(
+            room({
+              room: {
+                ...room().room,
+                title: "周五 AMA",
+                provisionState: "pending",
+                backstage: true,
+              },
+            }),
+          ),
+        ),
+        recordVoiceRoomProvisioning: vi.fn(() =>
+          Promise.resolve({ ...room().room, title: "周五 AMA" }),
+        ),
+      });
+      const { app, communicationMocks } = await createApp(
+        fakes({ communication }),
+      );
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/voice-rooms`,
+        headers: commandHeaders(),
+        payload: { title: "  周五 AMA  " },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({
+        room: { voiceRoomId, title: "周五 AMA", provisionState: "provisioned" },
+      });
+      expect(communicationMocks["createVoiceRoom"]).toHaveBeenCalledWith(
+        expect.objectContaining({
+          communityId,
+          title: "周五 AMA",
+          requestSha256: communicationCommandDigest("voiceRoomCreate", [
+            communityId,
+            "title",
+            "周五 AMA",
+          ]),
+        }),
+      );
+    });
+
+    it("keeps an untitled create (no body, {}, null, blank) on the pre-0098 digest", async () => {
+      const { app, communicationMocks } = await createApp();
+      const payloads = [undefined, {}, { title: null }, { title: "   " }];
+      for (const [index, payload] of payloads.entries()) {
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/voice-rooms`,
+          headers: commandHeaders({
+            "idempotency-key": idempotencyKey(String(index)),
+          }),
+          ...(payload === undefined ? {} : { payload }),
+        });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(201);
+        expect(response.json()).toMatchObject({ room: { title: null } });
+        expect(communicationMocks["createVoiceRoom"]).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            title: null,
+            requestSha256: communicationCommandDigest("voiceRoomCreate", [
+              communityId,
+            ]),
+          }),
+        );
+      }
+    });
+
+    it("rejects a title over 40 code points, a control character, a non-string, and unknown keys", async () => {
+      const { app, communicationMocks } = await createApp();
+      for (const payload of [
+        { title: "语".repeat(41) },
+        { title: "bad\u0000title" },
+        { title: { text: "x" } },
+        { title: "ok", topic: "x" },
+        [],
+      ]) {
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/voice-rooms`,
+          headers: commandHeaders(),
+          payload,
+        });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+      const forty = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/voice-rooms`,
+        headers: commandHeaders(),
+        payload: { title: "语".repeat(40) },
+      });
+      expect(forty.statusCode).toBe(201);
+      expect(communicationMocks["createVoiceRoom"]).toHaveBeenCalledTimes(1);
+    });
+
+    it("projects the stored title on room reads", async () => {
+      const communication = communicationRepositoryFake({
+        getVoiceRoom: vi.fn(() =>
+          Promise.resolve(
+            room({ room: { ...room().room, title: "周五 AMA" } }),
+          ),
+        ),
+      });
+      const { app } = await createApp(fakes({ communication }));
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/voice-rooms/${voiceRoomId}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ room: { title: "周五 AMA" } });
+    });
   });
 
   it("fails closed on the Stream token routes without provider credentials", async () => {

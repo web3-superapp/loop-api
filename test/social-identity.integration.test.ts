@@ -172,7 +172,7 @@ describe("Decision 0095 social identity on PostgreSQL", () => {
     });
   }
 
-  it("is the migration head and flips the holdings/trades defaults to everyone", async () => {
+  it("is below the migration head and flips the holdings/trades defaults to everyone", async () => {
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by id desc limit 1",
     );

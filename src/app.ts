@@ -636,6 +636,42 @@ function loggerOptions(
   };
 }
 
+function markNullableBodiesOptional<T>(document: T): T {
+  const paths = (document as { paths?: Record<string, unknown> }).paths;
+  if (paths === undefined) {
+    return document;
+  }
+  for (const operations of Object.values(paths)) {
+    if (typeof operations !== "object" || operations === null) {
+      continue;
+    }
+    for (const operation of Object.values(operations)) {
+      const requestBody = (
+        operation as {
+          requestBody?: {
+            required?: boolean;
+            content?: Record<string, { schema?: { anyOf?: unknown[] } }>;
+          };
+        } | null
+      )?.requestBody;
+      const anyOf = requestBody?.content?.["application/json"]?.schema?.anyOf;
+      if (
+        requestBody !== undefined &&
+        Array.isArray(anyOf) &&
+        anyOf.some(
+          (branch) =>
+            typeof branch === "object" &&
+            branch !== null &&
+            (branch as { type?: unknown }).type === "null",
+        )
+      ) {
+        requestBody.required = false;
+      }
+    }
+  }
+  return document;
+}
+
 export async function buildApp(
   options: BuildAppOptions,
 ): Promise<FastifyInstance> {
@@ -880,6 +916,13 @@ export async function buildApp(
 
   await app.register(swagger, {
     hideUntagged: true,
+    // @fastify/swagger marks every request body required. A body schema
+    // that admits `null` is the optional-body contract (Decision 0098), so
+    // that operation's requestBody is published as not required.
+    transformObject: (document) =>
+      "openapiObject" in document
+        ? markNullableBodiesOptional(document.openapiObject)
+        : document.swaggerObject,
     openapi: {
       openapi: "3.1.0",
       info: {
@@ -1269,6 +1312,7 @@ export async function buildApp(
           repository: communicationRepository,
           channelGateway: streamCommunityChannelGateway,
           cursorCodec: v2CursorCodec,
+          logger: app.log,
         })
       : createUnavailableV2ChatService());
   const securityNow = options.securityNow ?? ((): Date => new Date());

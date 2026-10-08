@@ -25,6 +25,7 @@ import {
 import {
   chatGroupMembershipResourceSchema,
   chatGroupParamsSchema,
+  chatGroupResourceSchema,
   chatOperationParamsSchema,
   chatOperationResourceSchema,
   communicationCommandErrors,
@@ -35,6 +36,7 @@ import {
   directChannelListQuerySchema,
   directChannelListResourceSchema,
   pendingChatOperationResourceSchema,
+  renameChatGroupRequestSchema,
   streamTokenResourceSchema,
 } from "./communication-schemas.js";
 
@@ -249,6 +251,43 @@ export function registerV2ChatRoutes(
         signal: request.signal,
       });
       return sendOperation(reply, resource);
+    },
+  );
+
+  app.patch(
+    "/v2/chat/groups/:groupId",
+    {
+      schema: {
+        operationId: "renameV2ChatGroup",
+        summary: "Rename a small group (creator only)",
+        description:
+          "Decision 0098. Only the group's creator may rename it; another member gets PERMISSION_DENIED and a non-member or an unknown or inactive group gets NOT_FOUND. The name follows the creation rule (trimmed, 1-60 code points). PostgreSQL commits the rename (nameVersion + 1, one `group_renamed` audit row) before the Stream channel `name` is set; a failed Stream write is logged and does not fail the command. Renaming to the current name is a successful no-op that leaves nameVersion and updatedAt unchanged. A same-key replay returns the recorded result.",
+        tags: ["communication"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: chatGroupParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: renameChatGroupRequestSchema,
+        response: {
+          200: chatGroupResourceSchema,
+          ...communicationCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as { readonly groupId: string };
+      const resource = await service.renameGroup({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        groupId: params.groupId,
+        body: request.body,
+        signal: request.signal,
+        ...commandMetadata(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
     },
   );
 

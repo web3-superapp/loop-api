@@ -312,11 +312,74 @@ describe("V2 chat wrapper over the frozen V1 surface", () => {
         requestId,
         signal: new AbortController().signal,
       }),
+      unavailable.renameGroup({
+        principal,
+        groupId: operationId,
+        body: { name: "Frog Squad II" },
+        idempotencyKey: operationId,
+        requestId,
+        signal: new AbortController().signal,
+      }),
     ]) {
       await expect(call).rejects.toBeInstanceOf(V2ApiError);
       await expect(call).rejects.toMatchObject({
         code: "CAPABILITY_UNAVAILABLE",
       });
     }
+  });
+
+  it("logs an unconfirmed Stream rename once and still answers the committed name (Decision 0098)", async () => {
+    const warn = vi.fn();
+    const renameChatGroup = vi.fn(() =>
+      Promise.resolve({
+        groupId: operationId,
+        name: "Frog Squad II",
+        nameVersion: 2,
+        updatedAt: createdAt,
+        changed: true,
+        streamChannelId: groupChannelId,
+        channelCreatedByStreamUserId: principal.streamUserId,
+      }),
+    );
+    const chat = createV2ChatService({
+      chatChannelService: chatChannelServiceFake(),
+      streamTokenService: streamTokenServiceFake(),
+      repository: {
+        ...createUnavailableCommunicationRepository(),
+        renameChatGroup,
+      },
+      // No Stream credentials: the gateway refuses, the rename stands.
+      channelGateway: createUnavailableStreamCommunityChannelGateway(),
+      logger: { warn },
+    });
+    await expect(
+      chat.renameGroup({
+        principal,
+        groupId: operationId,
+        body: { name: " Frog Squad II " },
+        idempotencyKey: operationId,
+        requestId,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toEqual({
+      groupId: operationId,
+      name: "Frog Squad II",
+      nameVersion: 2,
+      updatedAt: createdAt,
+      contractVersion: "2.0",
+    });
+    expect(renameChatGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Frog Squad II" }),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      {
+        correlationId: requestId,
+        groupId: operationId,
+        nameVersion: 2,
+        errorClass: "StreamChannelGatewayUnavailableError",
+      },
+      "Stream group channel name was not confirmed",
+    );
   });
 });
