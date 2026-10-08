@@ -81,7 +81,7 @@ export function registerV2SocialRoutes(
         operationId: "followV2Connection",
         summary: "Follow another account",
         description:
-          "The follow graph is directed and needs no consent. A nonexistent, unactivated, non-discoverable, self, or blocked target all return the same non-enumerating NOT_FOUND.",
+          "The follow graph is directed and needs no consent. A nonexistent, unactivated, self, or blocked target all return the same non-enumerating NOT_FOUND. The target's discoverable flag is not consulted (Decision 0096).",
         tags: ["social"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

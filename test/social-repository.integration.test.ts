@@ -51,6 +51,14 @@ describe("PostgreSQL social repository", () => {
     }
     await pool.query({
       text: `
+        delete from public.user_blocks
+        where owner_user_id = any($1::uuid[])
+          or target_user_id = any($1::uuid[])
+      `,
+      values: [ids],
+    });
+    await pool.query({
+      text: `
         delete from public.social_privacy_preferences
         where owner_user_id = any($1::uuid[])
       `,
@@ -456,6 +464,99 @@ describe("PostgreSQL social repository", () => {
         }),
       ),
     ).rejects.toBeInstanceOf(SocialTargetUnavailableError);
+  });
+
+  it("admits targets regardless of discoverable and refuses disabled or blocked ones (Decision 0096)", async () => {
+    const sender = await createUser({ label: "s107b-sender", alias: "Sender" });
+    const bare = await createUser({ label: "s107b-bare", alias: "Bare" });
+    await pool.query({
+      text: `delete from public.social_privacy_preferences where owner_user_id = $1`,
+      values: [bare.ownerUserId],
+    });
+    await pool.query({
+      text: `delete from public.privacy_preferences where owner_user_id = $1`,
+      values: [bare.ownerUserId],
+    });
+    const notDiscoverable = await createUser({
+      label: "s107b-hidden",
+      alias: "Hidden",
+      discoverable: false,
+    });
+    const closed = await createUser({
+      label: "s107b-closed",
+      alias: "Closed",
+      discoverable: false,
+      friendRequests: "disabled",
+    });
+    const blockedByTarget = await createUser({
+      label: "s107b-blocker",
+      alias: "Blocker",
+    });
+    const blockedBySender = await createUser({
+      label: "s107b-blocked",
+      alias: "Blocked",
+    });
+    await pool.query({
+      text: `
+        insert into public.user_blocks (
+          owner_user_id, kind, stable_id, target_user_id
+        ) values
+          ($1, 'user', $2, $3),
+          ($3, 'user', $4, $5)
+      `,
+      values: [
+        blockedByTarget.ownerUserId,
+        sender.publicProfileId,
+        sender.ownerUserId,
+        blockedBySender.publicProfileId,
+        blockedBySender.ownerUserId,
+      ],
+    });
+
+    const toBare = await repository.sendFriendRequest(
+      sendInput({
+        ownerUserId: sender.ownerUserId,
+        targetPublicProfileId: bare.publicProfileId,
+        suffix: "s107b-bare",
+      }),
+    );
+    expect(toBare.created).toBe(true);
+    expect(toBare.operation.result).toMatchObject({ status: "pending" });
+
+    const toHidden = await repository.sendFriendRequest(
+      sendInput({
+        ownerUserId: sender.ownerUserId,
+        targetPublicProfileId: notDiscoverable.publicProfileId,
+        suffix: "s107b-hidden",
+      }),
+    );
+    expect(toHidden.created).toBe(true);
+    expect(toHidden.operation.result).toMatchObject({ status: "pending" });
+
+    for (const target of [closed, blockedByTarget, blockedBySender]) {
+      await expect(
+        repository.sendFriendRequest(
+          sendInput({
+            ownerUserId: sender.ownerUserId,
+            targetPublicProfileId: target.publicProfileId,
+            suffix: `s107b-refused-${target.publicProfileId}`,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(SocialTargetUnavailableError);
+    }
+
+    // Search still honours discoverable (Decision 0090 unchanged).
+    const search = await repository.searchFriends({
+      ownerUserId: sender.ownerUserId,
+      aliasPrefix: "hi",
+      limit: 20,
+    });
+    expect(
+      search.find(
+        ({ publicProfileId }) =>
+          publicProfileId === notDiscoverable.publicProfileId,
+      ),
+    ).toBeUndefined();
   });
 
   it("serializes reverse sends and concurrent decisions so only the first transition wins", async () => {

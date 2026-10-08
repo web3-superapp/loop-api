@@ -22145,7 +22145,7 @@
         "operationId": "followV2Connection",
         "summary": "Follow another account",
         "tags": ["social"],
-        "description": "The follow graph is directed and needs no consent. A nonexistent, unactivated, non-discoverable, self, or blocked target all return the same non-enumerating NOT_FOUND.",
+        "description": "The follow graph is directed and needs no consent. A nonexistent, unactivated, self, or blocked target all return the same non-enumerating NOT_FOUND. The target's discoverable flag is not consulted (Decision 0096).",
         "parameters": [
           {
             "schema": {

@@ -1359,22 +1359,35 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
             values: [input.ownerUserId, targetUserId],
           });
 
+          // Decision 0096: admission is an activated target (alias set), no
+          // block in either direction, and the target's friendRequests gate
+          // (a missing row is the open default, Decision 0070). The target's
+          // `discoverable` flag is not consulted: it governs only whether
+          // search and recommendations list the account (Decision 0090).
           const eligibleTarget = await client.query<{ owner_user_id: string }>({
             text: `
               select profile.owner_user_id
               from public.user_profiles as profile
-              join public.privacy_preferences as privacy
-                on privacy.owner_user_id = profile.owner_user_id
               left join public.social_privacy_preferences as social_privacy
                 on social_privacy.owner_user_id = profile.owner_user_id
               where profile.public_profile_id = $1
                 and profile.alias is not null
-                and privacy.discoverable = true
                 and coalesce(social_privacy.friend_requests, 'enabled')
-                  = 'enabled'
+                  <> 'disabled'
+                and not exists (
+                  select 1
+                  from public.user_blocks as blocks
+                  where blocks.kind = 'user'
+                    and (
+                      (blocks.owner_user_id = $2
+                        and blocks.target_user_id = profile.owner_user_id)
+                      or (blocks.owner_user_id = profile.owner_user_id
+                        and blocks.target_user_id = $2)
+                    )
+                )
               limit 1
             `,
-            values: [input.targetPublicProfileId],
+            values: [input.targetPublicProfileId, input.ownerUserId],
           });
           if (eligibleTarget.rows[0]?.owner_user_id !== targetUserId) {
             return failCommand(client, {
