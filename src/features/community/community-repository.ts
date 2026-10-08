@@ -43,6 +43,20 @@ export interface CommunityRecord {
   readonly application: CommunityApplicationFacts;
   /** Only set by the two ordering sorts of Decision 0061. */
   readonly ordering?: CommunityOrderingFacts | undefined;
+  /**
+   * Decision 0097: the Asset Registry row of `boundAssetKey`, read only for
+   * a single-community record (detail and commands). Null when unbound or
+   * the key is not in the registry; absent on list rows.
+   */
+  readonly boundAsset?: CommunityBoundAssetRecord | null | undefined;
+}
+
+export interface CommunityBoundAssetRecord {
+  readonly assetId: string;
+  readonly symbol: string;
+  readonly name: string;
+  /** A `registered` pool holds the asset, so member buys can be observed. */
+  readonly hasRegisteredPool: boolean;
 }
 
 export interface CommunityApplicationFacts {
@@ -546,6 +560,19 @@ export class CommunityLogoMediaRejectedError extends Error {
   constructor() {
     super("The community logo media is not authorized");
     this.name = "CommunityLogoMediaRejectedError";
+  }
+}
+
+/**
+ * Decision 0097: a `boundAssetKey` that is not an Asset Registry row (any
+ * status). Raised only for a key the command actually changes.
+ */
+export class CommunityBoundAssetNotRegisteredError extends Error {
+  readonly code = "community_bound_asset_not_registered";
+
+  constructor() {
+    super("The bound asset is not in the Asset Registry");
+    this.name = "CommunityBoundAssetNotRegisteredError";
   }
 }
 

@@ -142,6 +142,23 @@ never an authorization key. `GET /v2/account/me` is unchanged.
 | `GET /v2/communities/recommended`                                            | Bearer + contract/client headers                                                                                                | `{items: community summaries, defaultSelectedIds (first 5)}`                                                                                                                           | `implemented` | `implemented`; `RECOMMENDED_COMMUNITY_IDS`, empty when unset                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `GET /v2/mining/referral/rules`                                              | Bearer + contract/client headers; no payload                                                                                    | Versioned five-level Mining Power boost snapshot                                                                                                                                       | `implemented` | `implemented`; `edges` and `inviteCode` `unavailable` until D19                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
+Decision 0097 (S108): `POST /v2/communities` and `PATCH /v2/communities/{id}`
+refuse a `boundAssetKey` that is not an Asset Registry row (`422
+VALIDATION_FAILED`, `detailsSafe.reasonCode = ASSET_NOT_REGISTERED`; an
+unchanged key is not re-checked). Every community resource (detail and
+commands, not list rows) carries `boundAsset: {assetId, symbol, name, logoUrl,
+hasRegisteredPool} | null` — `implemented`. The default-on
+`community_member_buy_feed` worker lane (`COMMUNITY_MEMBER_BUY_FEED_ENABLED`,
+`COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS` default 15 000, range 5 000–600 000,
+needs the Stream pair, quote set takes `BSC_USD1_TOKEN_ADDRESS` +
+`BSC_USD1_VERIFIED`) turns `pool_event` swaps that buy a verified community's
+bound asset, by an active member with public trades, into one `loop_feed_bot`
+message (`custom.loop_schema = member_buy.v1`, no push) in the community
+channel; at most 20 per community per pass, never ahead of the indexer
+checkpoint, no history replay (tables `community_feed_cursors`,
+`community_member_buy_events`, migration 000047) — `implemented`. Frontend
+contract: `docs/frontend-v2-community-api.md` §「群友买入与绑定代币」.
+
 ### V2 Community AI (Decision 0066, registered with `V2_MODULES_ENABLED=community`)
 
 Registered with the `community` module, but gated on one additional fact: a

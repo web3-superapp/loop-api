@@ -177,7 +177,7 @@ describe("Decision 0095 social identity on PostgreSQL", () => {
       "select name from public.pgmigrations order by id desc limit 1",
     );
     expect(head.rows[0]?.name).toBe(latestMigrationName);
-    expect(latestMigrationName).toBe("000046_v2_social_identity");
+    expect(Number(latestMigrationName.slice(0, 6)) >= 46).toBe(true);
     const user = await account("defaults_probe");
     await pool.query({
       text: "insert into public.privacy_preferences_v2 (owner_user_id) values ($1)",

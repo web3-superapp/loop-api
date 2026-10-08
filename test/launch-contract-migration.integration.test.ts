@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -270,10 +271,14 @@ describe("PostgreSQL Launch contract registry (migration 000041, Decision 0076)"
 
   it("refuses to roll back while chain facts exist, then rolls back cleanly", async () => {
     // 000042 (Decision 0077), 000043 (Decision 0080), 000044 (Decision
-    // 0087), 000045 (Decision 0089, logo cache), and 000046 (Decision 0095,
-    // social identity) sit on top and hold no lane facts, reconciled
+    // 0087), 000045 (Decision 0089, logo cache), 000046 (Decision 0095,
+    // social identity), and every later migration (000047, Decision 0097,
+    // member buy feed, …) sit on top and hold no lane facts, reconciled
     // Intents, or claim / refund facts here.
-    await migrate(temporaryDatabaseUrl, "down", 5);
+    const migrationsAbove041 = readdirSync(migrationsDirectory).filter(
+      (file) => /^[0-9]{6}_.*\.ts$/.test(file) && file > "000041_~",
+    ).length;
+    await migrate(temporaryDatabaseUrl, "down", migrationsAbove041);
     await expect(migrate(temporaryDatabaseUrl, "down", 1)).rejects.toThrow(
       /refusing to roll back 000041/,
     );

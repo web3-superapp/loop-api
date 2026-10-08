@@ -97,6 +97,16 @@ import {
 } from "./features/communication/voice-room-reaper-service.js";
 import { createStreamCallGateway } from "./integrations/stream/call-gateway.js";
 import {
+  createMemberBuyFeedService,
+  type MemberBuyFeedEvent,
+} from "./features/community/member-buy-feed-service.js";
+import type { MemberBuyFeedRepository } from "./features/community/member-buy-feed-repository.js";
+import {
+  createMemberBuyFeedWorker,
+  type CreateMemberBuyFeedWorkerOptions,
+  type MemberBuyFeedWorker,
+} from "./community-member-buy-feed-worker.js";
+import {
   createVoiceRoomReaperWorker,
   type CreateVoiceRoomReaperWorkerOptions,
   type VoiceRoomReaperWorker,
@@ -178,6 +188,8 @@ export interface ReconciliationWorkerDatabase {
   readonly streamUserIdentities?: StreamUserIdentityRepository;
   /** `voice_room_reaper` lane (Decision 0094); absent keeps it off. */
   readonly voiceRoomReaper?: VoiceRoomReaperRepository;
+  /** `community_member_buy_feed` lane (Decision 0097); absent keeps it off. */
+  readonly memberBuyFeed?: MemberBuyFeedRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -231,6 +243,10 @@ export type VoiceRoomReaperWorkerFactory = (
   options: CreateVoiceRoomReaperWorkerOptions,
 ) => VoiceRoomReaperWorker;
 
+export type MemberBuyFeedWorkerFactory = (
+  options: CreateMemberBuyFeedWorkerOptions,
+) => MemberBuyFeedWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -262,6 +278,9 @@ export interface RunReconciliationWorkerOptions {
   readonly createVoiceRoomReaperWorker?: VoiceRoomReaperWorkerFactory;
   /** Test seam for the reaper's Stream call gateway (Decision 0094). */
   readonly createVoiceRoomCallGateway?: typeof createStreamCallGateway;
+  readonly createMemberBuyFeedWorker?: MemberBuyFeedWorkerFactory;
+  /** Test seam for the member buy feed's Stream gateway (Decision 0097). */
+  readonly createMemberBuyFeedGateway?: typeof createStreamCommunityChannelGateway;
   /**
    * Installs the process-wide outbound keep-alive dispatcher before any
    * Provider client is built (Decision 0088 ruling 1, S93b). Test seam; the
@@ -1001,6 +1020,111 @@ export async function runReconciliationWorker(
         });
       }
     }
+    // The `community_member_buy_feed` lane (Decision 0097) is default-on.
+    // It posts into Stream, so without the Stream pair it is left out and
+    // said so once.
+    const memberBuyFeedConfig = options.config.communityMemberBuyFeed;
+    let memberBuyFeedWorker: MemberBuyFeedWorker | null = null;
+    if (memberBuyFeedConfig !== null && database.memberBuyFeed !== undefined) {
+      const lane = "community_member_buy_feed";
+      if (memberBuyFeedConfig.stream === null) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane,
+            reasonCode: "MEMBER_BUY_FEED_STREAM_NOT_CONFIGURED",
+          },
+          "LOOP member buy feed lane stays idle: Stream is not configured",
+        );
+      } else {
+        const onMemberBuyFeedEvent = (event: MemberBuyFeedEvent): void => {
+          switch (event.kind) {
+            case "cursor_initialized":
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane,
+                  reasonCode: event.reasonCode,
+                  blockNumber: event.blockNumber,
+                },
+                "LOOP member buy feed cursor initialized at the indexer checkpoint",
+              );
+              return;
+            case "sent":
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane,
+                  reasonCode: event.duplicate
+                    ? "MEMBER_BUY_FEED_MESSAGE_ALREADY_SENT"
+                    : "MEMBER_BUY_FEED_MESSAGE_SENT",
+                  communityId: event.communityId,
+                  messageId: event.messageId,
+                },
+                "LOOP member buy feed posted a message",
+              );
+              return;
+            case "truncated":
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane,
+                  reasonCode: event.reasonCode,
+                  communityId: event.communityId,
+                  truncatedCount: event.truncatedCount,
+                },
+                "LOOP member buy feed truncated a community's pass",
+              );
+              return;
+            case "rejected":
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane,
+                  reasonCode: event.reasonCode,
+                  communityId: event.communityId,
+                  messageId: event.messageId,
+                },
+                "LOOP member buy feed message was rejected by Stream",
+              );
+              return;
+            case "stream_unavailable":
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane,
+                  reasonCode: event.reasonCode,
+                  communityId: event.communityId,
+                  errorClass: event.errorClass,
+                },
+                "LOOP member buy feed could not reach Stream; the pass stalls",
+              );
+              return;
+          }
+        };
+        memberBuyFeedWorker = (
+          options.createMemberBuyFeedWorker ?? createMemberBuyFeedWorker
+        )({
+          service: createMemberBuyFeedService({
+            repository: database.memberBuyFeed,
+            sender: (
+              options.createMemberBuyFeedGateway ??
+              createStreamCommunityChannelGateway
+            )(memberBuyFeedConfig.stream),
+            chainId: bscChainId,
+            usd1Address: memberBuyFeedConfig.usd1Address,
+            onEvent: onMemberBuyFeedEvent,
+          }),
+          intervalMs: memberBuyFeedConfig.intervalMs,
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        });
+      }
+    }
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -1082,6 +1206,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               voiceRoomReaperWorker.run(controller.signal),
+            ),
+          ]),
+      ...(memberBuyFeedWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              memberBuyFeedWorker.run(controller.signal),
             ),
           ]),
     ];

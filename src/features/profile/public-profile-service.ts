@@ -8,8 +8,12 @@ import {
 import { V2ApiError } from "../../core/http/v2-error.js";
 import type { AssetRecord } from "../../database/chain-registry-repository.js";
 import { formatDecimalAmount } from "../chain/chain-contract.js";
+import {
+  absoluteAmount,
+  classifySwap,
+  swapQuoteSets,
+} from "../chain/swap-classification.js";
 import { commandDigest } from "../community/community-contract.js";
-import { bscWrappedNativeAddress } from "../market/market-contract.js";
 import { addDecimalStrings } from "../market/market-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import type { WalletReadService } from "../wallet/wallet-read-service.js";
@@ -43,10 +47,6 @@ export const publicProfileReasonCodes = Object.freeze({
 export const profileTradeLimits = Object.freeze({ default: 20, maximum: 50 });
 export const recommendedDefaultSelectedCount = 5;
 const tradesCursorRoute = "v2ProfileTrades";
-
-/** Well-known BSC USD stablecoins (lowercase). USD1 comes from configuration. */
-export const bscUsdtAddress = "0x55d398326f99059ff775485246999027b3197955";
-export const bscUsdcAddress = "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d";
 
 export type PublicDataStatus = "available" | "hidden" | "unavailable";
 
@@ -174,10 +174,6 @@ export function tradeEventId(
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function absolute(value: bigint): bigint {
-  return value < 0n ? -value : value;
-}
-
 function mapFailure(error: unknown): never {
   if (error instanceof V2ApiError) {
     throw error;
@@ -220,16 +216,9 @@ function parseLimit(value: unknown): number {
 export function createPublicProfileService(
   input: CreatePublicProfileServiceInput,
 ): PublicProfileService {
-  const assetId = (address: string): string => `${input.chainId}:${address}`;
-  const quoteAssetIds: ReadonlySet<string> = new Set(
-    [bscWrappedNativeAddress, bscUsdtAddress, bscUsdcAddress, input.usd1Address]
-      .filter((value): value is string => value !== null)
-      .map((value) => assetId(value.toLowerCase())),
-  );
-  const stableAssetIds: ReadonlySet<string> = new Set(
-    [bscUsdtAddress, bscUsdcAddress, input.usd1Address]
-      .filter((value): value is string => value !== null)
-      .map((value) => assetId(value.toLowerCase())),
+  const { quoteAssetIds, stableAssetIds } = swapQuoteSets(
+    input.chainId,
+    input.usd1Address,
   );
 
   /** The visible target, or 404 PROFILE_NOT_FOUND. */
@@ -573,31 +562,29 @@ export function createPublicProfileService(
         usdValue: stableAssetIds.has(asset.assetId) ? amount : null,
       });
     }
-    const token0Quote = quoteAssetIds.has(row.token0AssetId);
-    const token1Quote = quoteAssetIds.has(row.token1AssetId);
-    const baseIsToken0 = !(token0Quote && !token1Quote);
-    const baseId = baseIsToken0 ? row.token0AssetId : row.token1AssetId;
-    const quoteId = baseIsToken0 ? row.token1AssetId : row.token0AssetId;
-    const baseRaw = BigInt(baseIsToken0 ? row.amount0 : row.amount1);
-    const quoteRaw = BigInt(baseIsToken0 ? row.amount1 : row.amount0);
+    const swap = classifySwap(row, quoteAssetIds);
     const [base, quote] = await Promise.all([
-      lookupAsset(baseId),
-      lookupAsset(quoteId),
+      lookupAsset(swap.baseAssetId),
+      lookupAsset(swap.quoteAssetId),
     ]);
     if (base === null) {
       return null;
     }
     return Object.freeze({
       ...common,
-      // A negative pool amount means the pool paid the asset out: the
-      // wallet received it.
-      kind: baseRaw < 0n ? "buy" : "sell",
+      kind: swap.kind,
       assetId: base.assetId,
       symbol: base.symbol,
-      amount: formatDecimalAmount(absolute(baseRaw), base.decimals),
+      amount: formatDecimalAmount(
+        absoluteAmount(swap.baseAmountRaw),
+        base.decimals,
+      ),
       usdValue:
         quote !== null && stableAssetIds.has(quote.assetId)
-          ? formatDecimalAmount(absolute(quoteRaw), quote.decimals)
+          ? formatDecimalAmount(
+              absoluteAmount(swap.quoteAmountRaw),
+              quote.decimals,
+            )
           : null,
     });
   }

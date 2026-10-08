@@ -503,6 +503,7 @@ export const communityResourceSchema = {
     "onlineCount",
     "announcements",
     "officialLinks",
+    "boundAsset",
     "contractVersion",
   ],
   properties: {
@@ -519,6 +520,41 @@ export const communityResourceSchema = {
     onlineCount: communityPresenceSchema,
     announcements: unavailableSchema,
     officialLinks: unavailableSchema,
+    boundAsset: {
+      description:
+        "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "assetId",
+            "symbol",
+            "name",
+            "logoUrl",
+            "hasRegisteredPool",
+          ],
+          properties: {
+            assetId: {
+              type: "string",
+              pattern: canonicalBoundAssetKeyPatternSource,
+            },
+            symbol: { type: "string", minLength: 1, maxLength: 64 },
+            name: { type: "string", minLength: 1, maxLength: 256 },
+            logoUrl: {
+              anyOf: [
+                { type: "string", format: "uri", maxLength: 2048 },
+                { type: "null" },
+              ],
+              description:
+                "This API's token logo proxy URL (Decision 0089); null when the proxy is not served.",
+            },
+            hasRegisteredPool: { type: "boolean" },
+          },
+        },
+        { type: "null" },
+      ],
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -1160,6 +1196,8 @@ export const createCommunityRequestSchema = {
       ],
     },
     boundAssetKey: {
+      description:
+        "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
       anyOf: [
         { type: "string", pattern: boundAssetKeyPatternSource },
         { type: "null" },

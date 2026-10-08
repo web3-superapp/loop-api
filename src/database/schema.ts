@@ -1,4 +1,4 @@
-export const latestMigrationName = "000046_v2_social_identity";
+export const latestMigrationName = "000047_v2_community_member_buy_feed";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -116,4 +116,6 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch_settlement_records",
   "public.token_logo_cache",
   "public.media_objects",
+  "public.community_feed_cursors",
+  "public.community_member_buy_events",
 ] as const);
