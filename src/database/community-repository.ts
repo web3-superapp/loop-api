@@ -32,6 +32,7 @@ import {
   type CommunityTargetAction,
 } from "../features/community/community-policy.js";
 import {
+  CommunityBoundAssetNotRegisteredError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -142,6 +143,16 @@ const communityRowSchema = z
     application_submitted_at: dateSchema,
     reviewed_at: dateSchema.nullable(),
     rejected_reason: z.string().min(1).nullable(),
+    bound_asset: z
+      .object({
+        asset_id: z.string().min(1),
+        symbol: z.string().min(1),
+        name: z.string().min(1),
+        has_registered_pool: z.boolean(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -183,6 +194,31 @@ const communityColumns = `
   community.application_submitted_at,
   community.reviewed_at,
   community.rejected_reason
+`;
+
+/**
+ * Decision 0097: the bound asset's registry row and whether a registered
+ * pool holds it. Read only by the single-community readers.
+ */
+const boundAssetColumn = `
+  (
+    select json_build_object(
+      'asset_id', bound.asset_id,
+      'symbol', bound.symbol,
+      'name', bound.name,
+      'has_registered_pool', exists (
+        select 1
+        from public.pools as bound_pool
+        where bound_pool.status = 'registered'
+          and bound.asset_id in (
+            bound_pool.token0_asset_id,
+            bound_pool.token1_asset_id
+          )
+      )
+    )
+    from public.assets as bound
+    where bound.asset_id = community.bound_asset_key
+  ) as bound_asset
 `;
 
 /**
@@ -258,7 +294,41 @@ function toCommunityRecord(value: unknown): CommunityRecord {
       reviewedAt: row.reviewed_at?.toISOString() ?? null,
       rejectedReason: row.rejected_reason,
     }),
+    ...(row.bound_asset === undefined
+      ? {}
+      : {
+          boundAsset:
+            row.bound_asset === null
+              ? null
+              : Object.freeze({
+                  assetId: row.bound_asset.asset_id,
+                  symbol: row.bound_asset.symbol,
+                  name: row.bound_asset.name,
+                  hasRegisteredPool: row.bound_asset.has_registered_pool,
+                }),
+        }),
   });
+}
+
+/** Decision 0097: a bound asset key must name an Asset Registry row. */
+async function assertBoundAssetRegistered(
+  client: DatabaseClient,
+  boundAssetKey: string | null | undefined,
+): Promise<void> {
+  if (boundAssetKey === null || boundAssetKey === undefined) {
+    return;
+  }
+  const result = await client.query<{ found: boolean }>({
+    text: `
+      select exists (
+        select 1 from public.assets where asset_id = $1
+      ) as found
+    `,
+    values: [boundAssetKey],
+  });
+  if (result.rows[0]?.found !== true) {
+    throw new CommunityBoundAssetNotRegisteredError();
+  }
 }
 
 const miningOrderingRowSchema = z
@@ -431,7 +501,8 @@ function translateRepositoryError(error: unknown): never {
     error instanceof CommunityRepositoryUnavailableError ||
     error instanceof CommunitySlugTakenError ||
     error instanceof CommunityTargetUnavailableError ||
-    error instanceof CommunityLogoMediaRejectedError
+    error instanceof CommunityLogoMediaRejectedError ||
+    error instanceof CommunityBoundAssetNotRegisteredError
   ) {
     throw error;
   }
@@ -798,11 +869,11 @@ async function readCommunity(
 ): Promise<CommunityRecord> {
   const result = await client.query<Record<string, unknown>>({
     text: `
-      select ${communityColumns}
+      select ${communityColumns}, ${boundAssetColumn}
       from public.communities as community
       where community.community_id = $1
       limit 1
-      ${forUpdate ? "for update" : ""}
+      ${forUpdate ? "for update of community" : ""}
     `,
     values: [communityId],
   });
@@ -821,7 +892,7 @@ async function readVisibleCommunity(
 ): Promise<CommunityRecord> {
   const result = await client.query<Record<string, unknown>>({
     text: `
-      select ${communityColumns}
+      select ${communityColumns}, ${boundAssetColumn}
       from public.communities as community
       where community.community_id = $2
         and ${communityVisibleToViewerSql}
@@ -1567,6 +1638,7 @@ export function createPostgresCommunityRepository(
             actorUserId: ownerUserId,
             communityId: null,
           });
+          await assertBoundAssetRegistered(client, rawInput.boundAssetKey);
           const created = await client.query<{ community_id: string }>({
             text: `
               insert into public.communities (
@@ -1641,7 +1713,7 @@ export function createPostgresCommunityRepository(
           if ((await findCommunityAudit(client, recordId)) !== null) {
             return readDetail(client, communityId, ownerUserId);
           }
-          const stored = await readCommunity(client, communityId, true);
+          const current = await readCommunity(client, communityId, true);
           const actor = await readMembership(
             client,
             communityId,
@@ -1656,7 +1728,7 @@ export function createPostgresCommunityRepository(
           if (
             actor?.role !== "owner" &&
             values.boundAssetKey !== undefined &&
-            values.boundAssetKey !== stored.boundAssetKey
+            values.boundAssetKey !== current.boundAssetKey
           ) {
             throw new CommunityOwnerOnlyFieldError();
           }
@@ -1665,6 +1737,11 @@ export function createPostgresCommunityRepository(
             actorUserId: ownerUserId,
             communityId,
           });
+          // A key that is not changing is not re-validated, so a community
+          // bound before Decision 0097 can still edit its other fields.
+          if (values.boundAssetKey !== current.boundAssetKey) {
+            await assertBoundAssetRegistered(client, values.boundAssetKey);
+          }
           // Only the keys actually present change; `slug` and
           // `verification_status` are immutable through this path.
           await client.query({

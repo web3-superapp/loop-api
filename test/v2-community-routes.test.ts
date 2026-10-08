@@ -20,6 +20,7 @@ import { createUnavailablePerpWalletBindingRepository } from "../src/database/pe
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import {
+  CommunityBoundAssetNotRegisteredError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -964,6 +965,113 @@ describe("LOOP API V2 community, social, and search modules", () => {
         description: "Frogs only",
       }),
     );
+  });
+
+  it("refuses a bound asset that is not in the Asset Registry (Decision 0097)", async () => {
+    for (const [method, url] of [
+      ["POST", "/v2/communities"],
+      ["PATCH", `/v2/communities/${communityId}`],
+    ] as const) {
+      const dependencies = fakes();
+      dependencies.communityRepository.createCommunity = vi.fn(() =>
+        Promise.reject(new CommunityBoundAssetNotRegisteredError()),
+      );
+      dependencies.communityRepository.updateCommunity = vi.fn(() =>
+        Promise.reject(new CommunityBoundAssetNotRegisteredError()),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method,
+        url,
+        headers: commandHeaders(),
+        payload:
+          method === "POST"
+            ? {
+                name: "Frog Holders",
+                slug: "frog-holders",
+                description: null,
+                logoRef: null,
+                boundAssetKey:
+                  "eip155:56:0x1111111111111111111111111111111111111111",
+              }
+            : {
+                boundAssetKey:
+                  "eip155:56:0x1111111111111111111111111111111111111111",
+              },
+      });
+      expect(response.statusCode, method).toBe(422);
+      const body = response.json<Record<string, unknown>>();
+      expect(Object.keys(body).sort()).toEqual([
+        "category",
+        "code",
+        "correlationId",
+        "detailsSafe",
+        "providerReferenceSafe",
+        "retryable",
+        "userMessageKey",
+      ]);
+      expect(body).toMatchObject({
+        code: "VALIDATION_FAILED",
+        category: "validation",
+        retryable: false,
+        detailsSafe: { reasonCode: "ASSET_NOT_REGISTERED" },
+        providerReferenceSafe: null,
+      });
+    }
+  });
+
+  it("projects the bound asset block on the community resource (Decision 0097)", async () => {
+    const dependencies = fakes();
+    const boundAssetKey =
+      "eip155:56:0x1111111111111111111111111111111111111111";
+    dependencies.communityRepository.getCommunity = vi.fn(() =>
+      Promise.resolve({
+        community: {
+          ...community,
+          boundAssetKey,
+          boundAsset: {
+            assetId: boundAssetKey,
+            symbol: "FROG",
+            name: "Frog Token",
+            hasRegisteredPool: false,
+          },
+        },
+        viewerMembership: ownerMembership,
+      }),
+    );
+    const { app } = await createApp(dependencies);
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}`,
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      community: { boundAssetKey },
+      boundAsset: {
+        assetId: boundAssetKey,
+        symbol: "FROG",
+        name: "Frog Token",
+        // The market module (logo proxy) is not served in this app.
+        logoUrl: null,
+        hasRegisteredPool: false,
+      },
+    });
+
+    const unbound = await app.inject({
+      method: "POST",
+      url: "/v2/communities",
+      headers: commandHeaders(),
+      payload: {
+        name: "Frog Holders",
+        slug: "frog-holders",
+        description: null,
+        logoRef: null,
+        boundAssetKey: null,
+      },
+    });
+    expect(unbound.statusCode).toBe(201);
+    expect(unbound.json()).toMatchObject({ boundAsset: null });
   });
 
   it("keeps contract and domain blocks unavailable in every verb", async () => {

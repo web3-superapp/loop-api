@@ -30,7 +30,10 @@ const indexerLanes = new Set([
   "launch_intent_reconcile",
   // Decision 0094: ends abandoned and over-age voice rooms.
   "voice_room_reaper",
+  // Decision 0097: member buys of a community's bound asset.
+  "community_member_buy_feed",
 ]);
+const safeFeedMessageIdPattern = /^loop_buy_[0-9a-f]{32}$/;
 const providerSyncStatuses = new Set(["confirmed", "unconfirmed"]);
 const launchIntentSettlements = new Set([
   "confirmed",
@@ -67,7 +70,13 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP voice room reaper could not confirm the Stream call end"
   | "LOOP voice room reaper could not end a room"
   | "LOOP voice room reaper could not observe presence; the room is kept"
-  | "LOOP voice room reaper lane stays idle: Stream is not configured";
+  | "LOOP voice room reaper lane stays idle: Stream is not configured"
+  | "LOOP member buy feed lane stays idle: Stream is not configured"
+  | "LOOP member buy feed cursor initialized at the indexer checkpoint"
+  | "LOOP member buy feed posted a message"
+  | "LOOP member buy feed truncated a community's pass"
+  | "LOOP member buy feed message was rejected by Stream"
+  | "LOOP member buy feed could not reach Stream; the pass stalls";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -142,6 +151,13 @@ export interface ReconciliationWorkerLogFields {
   readonly voiceRoomId?: string;
   readonly requestId?: string;
   readonly providerSyncStatus?: "confirmed" | "unconfirmed";
+  /**
+   * Decision 0097 community_member_buy_feed lane: the community (opaque ID,
+   * also used by the 0055 persona lines), the deterministic Stream message
+   * ID, and how many buys a pass recorded without sending.
+   */
+  readonly messageId?: string;
+  readonly truncatedCount?: number;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -283,6 +299,17 @@ function sanitizeFields(
     providerSyncStatuses.has(fields.providerSyncStatus)
       ? fields.providerSyncStatus
       : undefined;
+  const messageId =
+    fields.messageId !== undefined &&
+    safeFeedMessageIdPattern.test(fields.messageId)
+      ? fields.messageId
+      : undefined;
+  const communityId =
+    fields.lane === "community_member_buy_feed" &&
+    fields.communityId !== undefined &&
+    safeUuidPattern.test(fields.communityId)
+      ? fields.communityId
+      : undefined;
   const limits = Object.fromEntries(
     (
       [
@@ -294,6 +321,7 @@ function sanitizeFields(
         "previousTopicGroupLimit",
         "previousRangeLimit",
         "behindBlocks",
+        "truncatedCount",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];
@@ -345,6 +373,8 @@ function sanitizeFields(
     ...(voiceRoomId === undefined ? {} : { voiceRoomId }),
     ...(requestId === undefined ? {} : { requestId }),
     ...(providerSyncStatus === undefined ? {} : { providerSyncStatus }),
+    ...(messageId === undefined ? {} : { messageId }),
+    ...(communityId === undefined ? {} : { communityId }),
     ...limits,
   });
 }

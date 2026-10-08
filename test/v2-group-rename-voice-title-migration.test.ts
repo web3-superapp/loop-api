@@ -60,8 +60,8 @@ describe("000048 group rename and voice-room title migration contract (Decision 
     expect(statement).toContain("drop column title");
   });
 
-  it("is the head and its table is a required relation", () => {
-    expect(latestMigrationName).toBe("000048_v2_group_rename_voice_title");
+  it("is at or below the head and its table is a required relation", () => {
+    expect(Number(latestMigrationName.slice(0, 6)) >= 48).toBe(true);
     expect(requiredDatabaseRelations).toContain(
       "public.communication_group_events",
     );

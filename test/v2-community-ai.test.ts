@@ -98,6 +98,7 @@ function communityResource(
       status: "unavailable" as const,
       reasonCode: "COMMUNITY_ANNOUNCEMENTS_DEFERRED",
     }),
+    boundAsset: null,
     officialLinks: Object.freeze({
       status: "unavailable" as const,
       reasonCode: "COMMUNITY_OFFICIAL_LINKS_DEFERRED",

@@ -58,6 +58,7 @@ async function pollUntil(
 
 const truncateControlPlane = `
   truncate table
+    public.community_member_buy_events,
     public.media_objects,
     public.community_ai_answer_reports,
     public.community_ai_answers,
