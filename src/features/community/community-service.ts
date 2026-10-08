@@ -106,8 +106,10 @@ import {
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
+  CommunityOwnerOnlyFieldError,
   CommunityPermissionDeniedError,
   CommunityProfileRequiredError,
+  communityOwnerOnlyFieldReasonCode,
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
@@ -601,6 +603,11 @@ function mapFailure(error: unknown): never {
   if (error instanceof CommunityLogoMediaRejectedError) {
     throw V2ApiError.fromCode("VALIDATION_FAILED", {
       reasonCode: mediaReasonCodes.notAuthorized,
+    });
+  }
+  if (error instanceof CommunityOwnerOnlyFieldError) {
+    throw V2ApiError.fromCode("PERMISSION_DENIED", {
+      reasonCode: communityOwnerOnlyFieldReasonCode,
     });
   }
   if (error instanceof CommunityPermissionDeniedError) {

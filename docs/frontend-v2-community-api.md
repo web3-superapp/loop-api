@@ -382,7 +382,7 @@ MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boun
 `422 VALIDATION_FAILED`（归一化后长度越界）、
 `400 INVALID_REQUEST`（字段形状不合法）、`409 PROFILE_ACTIVATION_REQUIRED`。
 
-### 4.3b `PATCH /v2/communities/{communityId}` — 编辑社区资料（owner 专属）
+### 4.3b `PATCH /v2/communities/{communityId}` — 编辑社区资料（owner / admin，决策 0098）
 
 写 header + 部分字段 body（至少一个，未出现的字段不变）：
 
@@ -396,9 +396,31 @@ MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boun
 ```
 
 校验规则与创建一致。`slug` 与 `verificationStatus` **不可通过本接口修改**
-（出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。仅 owner 可调用，
-admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，服务端写一条
-`community_profile_updated` 审计。`pending`/`rejected` 状态下同样可编辑，且编辑
+（出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。owner 与 admin
+可调用（决策 0098，2026-10-08 起 admin 可改名称 / 简介 / logo），member 或非成员 →
+`403 PERMISSION_DENIED`（`detailsSafe: null`）。**绑定代币 `boundAssetKey` 仍只有
+owner 能改**：admin 的请求里 `boundAssetKey` 与当前值不同（含清空为 `null`）→
+`403 PERMISSION_DENIED`，`detailsSafe = {"reasonCode": "OWNER_ONLY_FIELD"}`，整条
+请求不落库；admin 把当前值原样带回不算修改，可以通过。管理中心对 admin 应直接隐藏
+绑定代币字段（不发这个键最稳）。成功返回 4.4 的社区资源，服务端写一条
+`community_profile_updated` 审计（`reason_code` 区分 `owner_profile_edit` /
+`admin_profile_edit`）。
+
+admin 改绑定代币的错误体：
+
+```json
+{
+  "code": "PERMISSION_DENIED",
+  "category": "authorization",
+  "retryable": false,
+  "userMessageKey": "errors.permission.denied",
+  "correlationId": "<request id>",
+  "detailsSafe": { "reasonCode": "OWNER_ONLY_FIELD" },
+  "providerReferenceSafe": null
+}
+```
+
+文案建议：「绑定代币仅群主可修改」。`pending`/`rejected` 状态下同样可编辑，且编辑
 **不会**改变审核状态：被驳回后先 PATCH 改资料，再调 4.3c 重新提交。
 
 ### 4.3c `POST /v2/communities/{communityId}/resubmit` — 重新提交申请（owner 专属）

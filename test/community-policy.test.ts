@@ -146,12 +146,15 @@ describe("V2 community permission matrix", () => {
     ).toBe(true);
   });
 
-  it("gives only the owner the community profile edit right", () => {
+  it("gives the owner and admins the community profile edit right (Decision 0098)", () => {
     expect(communitySelfPermissionMatrix.owner.editProfile).toBe(true);
-    expect(communitySelfPermissionMatrix.admin.editProfile).toBe(false);
+    expect(communitySelfPermissionMatrix.admin.editProfile).toBe(true);
     expect(communitySelfPermissionMatrix.member.editProfile).toBe(false);
     expect(canPerformSelfAction(active("owner"), "editProfile")).toBe(true);
-    expect(canPerformSelfAction(active("admin"), "editProfile")).toBe(false);
+    expect(canPerformSelfAction(active("admin"), "editProfile")).toBe(true);
+    expect(
+      canPerformSelfAction({ role: "admin", status: "banned" }, "editProfile"),
+    ).toBe(false);
     expect(canPerformSelfAction(active("member"), "editProfile")).toBe(false);
     expect(canPerformSelfAction(null, "editProfile")).toBe(false);
     expect(

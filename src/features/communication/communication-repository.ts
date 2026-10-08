@@ -167,6 +167,8 @@ export interface VoiceRoomRecord {
   readonly communityId: string;
   /** `communities.name` at read time; the same value `GET /v2/communities/{id}` publishes (Decision 0052). */
   readonly communityName: string;
+  /** Decision 0098: the host's optional title (1-40 code points), or null. */
+  readonly title: string | null;
   readonly callId: string;
   readonly state: VoiceRoomState;
   readonly provisionState: VoiceRoomProvisionState;
@@ -181,11 +183,27 @@ export interface VoiceRoomLeaveRecord extends VoiceRoomViewerRecord {
   readonly outcome: VoiceRoomLeaveOutcome;
 }
 
+/**
+ * Decision 0098: a speaker's own step-down. `stepped_down` when this command
+ * (or its same-key replay) moved the caller from speaker to listener and the
+ * service must revoke Stream `send-audio`; `no_op` when the caller was not a
+ * joined speaker (nothing written, no provider write).
+ */
+export interface VoiceRoomStepDownRecord extends VoiceRoomViewerRecord {
+  readonly outcome: "stepped_down" | "no_op";
+  readonly callerStreamUserId: string;
+}
+
 export interface VoiceRoomViewerRecord {
   readonly room: VoiceRoomRecord;
   readonly viewerRole: VoiceRoomRole | null;
   readonly viewerHandRaise: HandRaiseProjectionRecord | null;
   readonly hostStreamUserId: string;
+  /**
+   * Decision 0098: the host's identity columns (the live-list shape); the
+   * service applies the display rule. `ownerUserId` never leaves the service.
+   */
+  readonly host: LiveVoiceRoomMemberRecord;
   /** LOOP role intent: joined members with role=speaker (never the host). */
   readonly speakerCount: number;
   /** LOOP role intent: joined members with role=listener (never the host). */
@@ -234,6 +252,8 @@ export interface VoiceRoomMemberRecord {
   readonly ownerUserId: string;
   readonly publicProfileId: string;
   readonly alias: string | null;
+  /** Decision 0098: the stored avatar ref; projected only when not anonymous. */
+  readonly avatarRef: string | null;
   readonly anonymousMode: boolean;
   readonly role: VoiceRoomMemberRoleFilter;
   readonly joinedAt: string;
@@ -265,21 +285,34 @@ export interface ListVoiceRoomMembersInput {
  * are the LOOP `joined` role-intent counts (Decision 0051, host excluded);
  * no Stream observation is stored, so the row carries none.
  */
+/**
+ * One account shown on a live-room card (Decision 0098). `ownerUserId` never
+ * leaves the service; it only decides whether the viewer is that account.
+ */
+export interface LiveVoiceRoomMemberRecord {
+  readonly ownerUserId: string;
+  /** Null when the account has no active profile. */
+  readonly publicProfileId: string | null;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+  readonly anonymousMode: boolean;
+}
+
 export interface LiveVoiceRoomRecord {
   readonly voiceRoomId: string;
   readonly communityId: string;
   readonly communityName: string;
   readonly communityLogoRef: string | null;
+  /** Decision 0098: `voice_rooms.title`. */
+  readonly title: string | null;
   /** `voice_rooms.created_at`: a provisioned room goes live at creation (Decision 0054). */
   readonly startedAt: string;
-  readonly host: {
-    readonly ownerUserId: string;
-    /** Null when the host has no active profile. */
-    readonly publicProfileId: string | null;
-    readonly alias: string | null;
-    readonly avatarRef: string | null;
-    readonly anonymousMode: boolean;
-  };
+  readonly host: LiveVoiceRoomMemberRecord;
+  /**
+   * Decision 0098: up to three `joined` speakers (host excluded), in join
+   * order (`joined_at`, then account), for the card's avatar stack.
+   */
+  readonly speakers: readonly LiveVoiceRoomMemberRecord[];
   readonly speakerCount: number;
   readonly listenerCount: number;
   /** A non-banned community membership: the join predicate. */
@@ -312,6 +345,23 @@ export interface VoiceRoomTargetCommandInput extends VoiceRoomCommandInput {
 
 export interface CreateVoiceRoomInput extends CommunicationCommandInput {
   readonly communityId: string;
+  /** Decision 0098: the trimmed title, or null for none. */
+  readonly title: string | null;
+}
+
+/**
+ * Decision 0098: the outcome of a small-group rename. `changed` is false when
+ * the stored name already equals the request (nothing is written) and on a
+ * same-key replay of such a request.
+ */
+export interface ChatGroupRenameRecord {
+  readonly groupId: string;
+  readonly name: string;
+  readonly nameVersion: number;
+  readonly updatedAt: string;
+  readonly changed: boolean;
+  readonly streamChannelId: string;
+  readonly channelCreatedByStreamUserId: string;
 }
 
 export interface ChatGroupLeavePreparation {
@@ -439,6 +489,14 @@ export interface CommunicationRepository {
     input: VoiceRoomTargetCommandInput,
   ): Promise<VoiceRoomTargetRecord>;
   recordMuteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
+  /**
+   * Decision 0098: the caller steps down from speaker to listener. The host
+   * is PERMISSION_DENIED (it ends the room instead); an ended room is
+   * DATA_STALE; a caller that is not a joined speaker is a `no_op`.
+   */
+  stepDownSpeaker(
+    input: VoiceRoomCommandInput,
+  ): Promise<VoiceRoomStepDownRecord>;
   endVoiceRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomViewerRecord>;
   /**
    * Authorize a small-group leave and return the exact Stream identities the
@@ -461,6 +519,20 @@ export interface CommunicationRepository {
     readonly requestSha256: string;
     readonly requestId: string;
   }): Promise<void>;
+  /**
+   * Decision 0098: rename an active friend group. Only the creator may; a
+   * non-member gets NOT_FOUND (the group is not enumerable), a member that
+   * is not the creator PERMISSION_DENIED. The same name is a no-op success.
+   * A same-key replay returns the recorded result without writing again.
+   */
+  renameChatGroup(input: {
+    readonly actorUserId: string;
+    readonly groupId: string;
+    readonly name: string;
+    readonly idempotencyKey: string;
+    readonly requestSha256: string;
+    readonly requestId: string;
+  }): Promise<ChatGroupRenameRecord>;
 }
 
 export interface CommunityChannelSyncJobRecord {
@@ -706,9 +778,11 @@ export function createUnavailableCommunicationRepository(): CommunicationReposit
     muteSpeaker: unavailable,
     unmuteSpeaker: unavailable,
     recordMuteAll: unavailable,
+    stepDownSpeaker: unavailable,
     endVoiceRoom: unavailable,
     prepareChatGroupLeave: unavailable,
     commitChatGroupLeave: unavailable,
+    renameChatGroup: unavailable,
   });
 }
 

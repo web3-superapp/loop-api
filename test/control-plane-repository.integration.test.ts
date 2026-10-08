@@ -88,6 +88,7 @@ const truncateControlPlane = `
     public.launch_review_events,
     public.launch_projects,
     public.chat_group_membership_events,
+    public.communication_group_events,
     public.voice_room_events,
     public.voice_room_hand_raises,
     public.voice_room_members,

@@ -119,6 +119,15 @@ export function parseCreateChatGroupRequest(
   });
 }
 
+/**
+ * Decision 0098: a rename takes exactly the creation rule (trimmed, 1-60
+ * code points, no control or format characters) and returns the trimmed
+ * name. Throws a ZodError otherwise.
+ */
+export function parseChatGroupName(value: unknown): string {
+  return groupNameSchema.parse(value);
+}
+
 export function parseCreateDirectChannelRequest(
   value: unknown,
 ): CreateDirectChannelRequest {

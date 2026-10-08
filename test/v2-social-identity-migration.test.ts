@@ -55,8 +55,8 @@ describe("000046 social identity migration contract (Decision 0095)", () => {
     );
   });
 
-  it("is the head and its table is a required relation", () => {
-    expect(latestMigrationName).toBe("000046_v2_social_identity");
+  it("is followed by 000048 (Decision 0098) and its table is a required relation", () => {
+    expect(latestMigrationName).toBe("000048_v2_group_rename_voice_title");
     expect(requiredDatabaseRelations).toContain("public.media_objects");
   });
 });

@@ -35,6 +35,7 @@ import {
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
+  CommunityOwnerOnlyFieldError,
   CommunityPermissionDeniedError,
   CommunityProfileRequiredError,
   CommunityRepositoryUnavailableError,
@@ -1640,7 +1641,7 @@ export function createPostgresCommunityRepository(
           if ((await findCommunityAudit(client, recordId)) !== null) {
             return readDetail(client, communityId, ownerUserId);
           }
-          await readCommunity(client, communityId, true);
+          const stored = await readCommunity(client, communityId, true);
           const actor = await readMembership(
             client,
             communityId,
@@ -1649,6 +1650,15 @@ export function createPostgresCommunityRepository(
           );
           if (!canPerformSelfAction(actor, "editProfile")) {
             throw new CommunityPermissionDeniedError();
+          }
+          // Decision 0098: only the owner may change the bound token. An
+          // admin sending the stored value unchanged is not a change.
+          if (
+            actor?.role !== "owner" &&
+            values.boundAssetKey !== undefined &&
+            values.boundAssetKey !== stored.boundAssetKey
+          ) {
+            throw new CommunityOwnerOnlyFieldError();
           }
           await assertCommunityLogoAuthorized(client, {
             logoRef: values.logoRef,
@@ -1688,7 +1698,10 @@ export function createPostgresCommunityRepository(
             actorUserId: ownerUserId,
             targetUserId: ownerUserId,
             eventType: "community_profile_updated",
-            reasonCode: "owner_profile_edit",
+            reasonCode:
+              actor?.role === "owner"
+                ? "owner_profile_edit"
+                : "admin_profile_edit",
             idempotencyRecordId: recordId,
             requestId,
           });

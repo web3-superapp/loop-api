@@ -106,6 +106,7 @@ POST   /v2/chat/direct-channels          {"targetPublicProfileId": "<uuid>"}
 POST   /v2/chat/groups                   {"name": "…", "friendPublicProfileIds": ["<uuid>", …]}
 GET    /v2/chat/operations/{operationId}
 DELETE /v2/chat/groups/{groupId}/membership
+PATCH  /v2/chat/groups/{groupId}          {"name": "…"}   # 改群名（决策 0098）
 ```
 
 - **好友关系（含 `message-requests accept` 产生的 friendship）是 DM 唯一准入。**
@@ -143,6 +144,58 @@ DELETE /v2/chat/groups/{groupId}/membership
   "streamCid": "messaging:loop_direct_<32 hex>"
 }
 ```
+
+### 小群改名：`PATCH /v2/chat/groups/{groupId}`（决策 0098，2026-10-08）
+
+写接口 header：Privy Bearer + `Idempotency-Key`（规范 UUIDv4）+
+`X-Loop-Contract-Version: 2.0` + `X-Loop-Client-Version`。
+
+```http
+PATCH /v2/chat/groups/2b3c4d5e-6f70-4182-9394-a5b6c7d8e9f0
+Content-Type: application/json
+
+{ "name": "蛙群 二期" }
+```
+
+```json
+{
+  "groupId": "2b3c4d5e-6f70-4182-9394-a5b6c7d8e9f0",
+  "name": "蛙群 二期",
+  "nameVersion": 2,
+  "updatedAt": "2026-10-08T05:00:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+- `groupId` 是 `POST /v2/chat/groups` 成功结果里的 `groupId`（不是 Stream CID）。
+- **只有群主（创建者）能改**；其他群成员 → `403 PERMISSION_DENIED`；不是该群成员、
+  群不存在或群还没建成（创建操作未 `succeeded`）→ `404 NOT_FOUND`（非枚举）。
+- 名称规则与建群完全一致：服务端先 trim，1–**60** 码点，不允许控制 / 格式字符；
+  违规 → `400 INVALID_REQUEST`。产品文案限 40 码点的话前端自己卡 40，服务端不会拒
+  41–60。body 只能有 `name` 一个键。
+- 改成与当前相同的名字：`200`，`nameVersion`、`updatedAt` 不变（无操作）。
+- `nameVersion` 建群时为 1，每次真正改名 +1，可用来丢弃过期的本地乐观值。
+- 同一 `Idempotency-Key` 重放返回第一次的结果；同 key 换名字 → `409 IDEMPOTENCY_CONFLICT`。
+- PostgreSQL 先提交，随后服务端以群主身份把 Stream 频道 `name` 改成新名（一次
+  `updateChannelPartial`）。**Stream 这一步失败只记日志，接口仍返回 200**；Stream
+  侧会收到 `channel.updated` 事件，客户端监听到后标题自然更新。前端在 200 后可以
+  先乐观更新本地标题；若 Stream 那一步失败，同 key 重试或再次改名会把 Stream 补齐。
+- 群信息页「群名称与简介」：群主显示可编辑行；非群主只读并提示「仅群主可改」。
+  简介本步没有接口。
+
+错误：
+
+| HTTP | code                                              | 场景                                                               |
+| ---- | ------------------------------------------------- | ------------------------------------------------------------------ |
+| 400  | `INVALID_REQUEST`                                 | 名称不合规、多余键、`groupId` 非 UUIDv4、缺 / 坏 `Idempotency-Key` |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID`                  | 缺少或无效 Privy Bearer                                            |
+| 403  | `PERMISSION_DENIED`                               | 调用者是群成员但不是群主                                           |
+| 404  | `NOT_FOUND`                                       | 非成员 / 群不存在 / 群未建成；`communication` 模块未启用           |
+| 409  | `IDEMPOTENCY_CONFLICT`                            | 同 key 不同名字                                                    |
+| 409  | `VERSION_CONFLICT` / `ACCOUNT_BOOTSTRAP_REQUIRED` | 合约版本不对 / 账号未 bootstrap                                    |
+| 503  | `CAPABILITY_UNAVAILABLE`                          | 通信运行时或仓储不可用（`retryable: true`）                        |
+
+unavailable 行为：`503` 时改名行显示「暂不可用，稍后重试」，**不要**在本地假装改名成功。
 
 ### 收件箱私聊行：`GET /v2/chat/direct-channels`（决策 0056，2026-09-20）
 
@@ -301,7 +354,7 @@ GET /v2/chat/direct-channels?cursor=<cursor> # cursor 与 limit 互斥
 ## 5. 语音房（`voiceroom` / `voiceroom-full`）
 
 ```text
-POST   /v2/communities/{communityId}/voice-rooms          # owner/admin 开房
+POST   /v2/communities/{communityId}/voice-rooms          # owner/admin 开房；可选 body {"title": "…"}（决策 0098）
 GET    /v2/communities/{communityId}/voice-rooms/current  # 当前直播中的房间
 GET    /v2/voice-rooms/{voiceRoomId}
 GET    /v2/voice-rooms/{voiceRoomId}/hand-raises
@@ -312,6 +365,7 @@ POST   /v2/voice-rooms/{voiceRoomId}/hand-raise
 DELETE /v2/voice-rooms/{voiceRoomId}/hand-raise
 POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 邀请发言
 DELETE /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}   # host 移出发言
+DELETE /v2/voice-rooms/{voiceRoomId}/speakers/me                  # 发言者自助下麦（决策 0098）
 POST   /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute  # host 逐人静音（决策 0052）
 DELETE /v2/voice-rooms/{voiceRoomId}/speakers/{publicProfileId}/mute  # 本人或 host 取消静音意图（决策 0053）
 POST   /v2/voice-rooms/{voiceRoomId}/mute-all                     # host
@@ -326,6 +380,7 @@ POST   /v2/voice-rooms/{voiceRoomId}/end                          # host
     "voiceRoomId": "<uuid>",
     "communityId": "<uuid>",
     "communityName": "Builders Guild",
+    "title": "周五 AMA",
     "callCid": "audio_room:loop_voice_<32 hex>",
     "state": "live",
     "provisionState": "provisioned",
@@ -713,6 +768,59 @@ host 视角：
   pending 举手的 listener）；其他情况 `[]`。
 - 与 0032 的差异：完整身份不再发布；别名只在对方未开匿名或本人时可见。
 
+### 发言者自助下麦、房间 host、名单头像（决策 0098，2026-10-08）
+
+**`DELETE /v2/voice-rooms/{voiceRoomId}/speakers/me`**：写接口 header（Bearer +
+`Idempotency-Key` + `X-Loop-Contract-Version: 2.0` + `X-Loop-Client-Version`），无 body。
+
+- 调用者是已加入的发言者：LOOP 先把角色改回 `listener`（清掉静音意图，审计
+  `speaker_stepped_down`），再对 Stream 收回 `send-audio` 并把 call 成员角色改回
+  listener。返回 `200` 房间资源，`viewer.role = "listener"`，计数已更新；
+  `providerSync` 报告 Stream 两步是否确认（失败时 `unconfirmed` +
+  `STREAM_PERMISSION_UNCONFIRMED`，命令仍成功，客户端本地关麦即可）。
+- 调用者不是发言者（听众 / 已离开 / 没进过房）：`200` 无操作，房间资源原样返回，
+  `providerSync` 为 `confirmed`，不写库、不调 Stream（与 `leave` 的 no-op 同风格）。
+- host 调用 → `403 PERMISSION_DENIED`（host 不能下麦，只能结束房间）。房间已结束 →
+  `409 DATA_STALE`。同 key 重放返回同一结果。
+- 底部控制条「下麦」用它；host 移别人下麦仍是 `DELETE …/speakers/{publicProfileId}`。
+
+**房间资源新增顶层 `host`**（与 `room`、`viewer` 平级，所有返回房间资源的接口都有）：
+
+```json
+"host": {
+  "publicProfileId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "displayName": "frog_maxi",
+  "avatarRef": "avatar:preset/people-03"
+}
+```
+
+与 `GET /v2/voice-rooms/live` 的 `host` 同一投影：host 对调用者匿名（或没有激活资料）
+时三项全 `null`，渲染匿名占位；host 本人永远看到自己。类型是 `object | null`，`null`
+目前不会出现，客户端按「三项 null」同样处理即可。主持人区大头像用它。
+
+**名单行新增 `avatarRef`**（`GET /v2/voice-rooms/{id}/members`）：`display.kind =
+"alias"`（具名，或调用者自己的行）时是该成员的头像引用（`avatar:preset/...` 或
+`avatar:media/{id}`，解析同 profile `avatarRef`），匿名行为 `null`。举手队列条目不变。
+
+### 开房标题：`POST /v2/communities/{communityId}/voice-rooms` 的可选 body（决策 0098，2026-10-08）
+
+```http
+POST /v2/communities/3fa85f64-5717-4562-b3fc-2c963f66afa6/voice-rooms
+Content-Type: application/json
+
+{ "title": "周五 AMA" }
+```
+
+- body 可选：不带 body（也不带 `Content-Type`）、`{}`、`{"title": null}`、或 trim 后为空
+  的标题都开一个**无标题**房间（`room.title: null`）。老客户端不带 body 的行为不变。
+- 标题 trim 后 1–40 码点，不能含控制 / 格式字符；超长、非字符串、多余键 → `400
+INVALID_REQUEST`。标题只能在开房时设置，本步没有改标题接口。
+- 幂等：带标题时标题进入请求摘要，同一 `Idempotency-Key` 换标题 → `409
+IDEMPOTENCY_CONFLICT`；不带标题时与 0098 之前的摘要相同。
+- 返回的房间资源 `room.title` 就是存下的值；`GET /v2/voice-rooms/{id}`、
+  `GET …/voice-rooms/current` 与 `GET /v2/voice-rooms/live` 都带同一个 `title`。
+- 权限不变：只有 owner / admin 能开房；其它错误码同 §6。
+
 ### 广场在线语音房：`GET /v2/voice-rooms/live`（决策 0093，2026-10-08）
 
 广场「语音房」页内 Tab 的跨社区列表。读接口 header（Bearer + `X-Loop-Contract-Version: 2.0` + `X-Loop-Client-Version`），不带 `Idempotency-Key`。
@@ -721,7 +829,13 @@ host 视角：
 - 范围：`live`、已 provisioned、call 已离开 backstage 的房间（即现在能进的房），且社区对调用者可见（已认证社区，或自己创建 / 未被 ban 的成员所在的未认证社区）。按 `startedAt` 倒序。
 - `joinable`：调用者是该社区未被 ban 的成员。`false` 时先引导加入社区，不要直接调 `join`（会得到 `403 PERMISSION_DENIED`）。
 - `listenerCount` / `speakerCount`：LOOP「已加入」角色计数（决策 0051，**不含 host**），与房间资源 `participants.listenerCount` / `speakerCount` 同口径，**不是 Stream 在线人数**。本接口不调 Stream，`countsObservedAt` 恒为 `null`；要显示「N 人在线」进房后读 `GET /v2/voice-rooms/{id}` 的 `participants.observed`。
-- `title` 恒为 `null`（语音房没有标题），UI 用 `communityName`。
+- `title`（决策 0098）：主持人开房时填的标题，没填为 `null`；`null` 时 UI 显示
+  「{communityName} 语音房」。
+- `speakersPreview`（决策 0098）：卡片头像叠放。第一个永远是 host（与 `host` 字段
+  同一对象），后面是至多 3 个 LOOP「已加入」的发言者，按加入时间先后；总数 1–4。
+  每一项与 `host` 同一显示规则：对调用者匿名（或该账号没有激活资料）的人仍占一个
+  位置，但 `publicProfileId` / `displayName` / `avatarRef` 三项全为 `null`，渲染占位
+  头像；调用者本人永远看到自己的身份。已离开或被移下麦的人不在里面。
 - `communityLogoRef` / `host.avatarRef` 是预设引用（`avatar:preset/...`），与社区资源 `logoRef`、profile `avatarRef` 同一解析方式；不是 URL。
 - `host` 按排行榜显示规则：host 开了匿名（且调用者不是 host 本人）或没有别名时，`displayName`、`publicProfileId`、`avatarRef` 全为 `null`，渲染 `voiceRoom.member.anonymousMember` 文案。
 - `observedAt`：服务端读取时间。
@@ -735,12 +849,20 @@ host 视角：
       "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
       "communityName": "Builders Guild",
       "communityLogoRef": "avatar:preset/community-03",
-      "title": null,
+      "title": "周五 AMA",
       "host": {
         "publicProfileId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
         "displayName": "frog_maxi",
         "avatarRef": "avatar:preset/people-03"
       },
+      "speakersPreview": [
+        {
+          "publicProfileId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+          "displayName": "frog_maxi",
+          "avatarRef": "avatar:preset/people-03"
+        },
+        { "publicProfileId": null, "displayName": null, "avatarRef": null }
+      ],
       "listenerCount": 4,
       "speakerCount": 1,
       "countsObservedAt": null,
@@ -758,6 +880,9 @@ host 视角：
         "displayName": null,
         "avatarRef": null
       },
+      "speakersPreview": [
+        { "publicProfileId": null, "displayName": null, "avatarRef": null }
+      ],
       "listenerCount": 0,
       "speakerCount": 0,
       "countsObservedAt": null,
@@ -820,7 +945,7 @@ pnpm voice-room:open <communityId> --confirm      # NODE_ENV=production 拒绝
 | ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400  | `INVALID_REQUEST`                | header/query/body 违规，`Idempotency-Key` 不是规范 UUIDv4                                                                                             |
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | 缺少或无效 Privy Bearer                                                                                                                               |
-| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、host 调 `leave`、非成员读房、创建者退群、非 owner/admin 开房                                                                      |
+| 403  | `PERMISSION_DENIED`              | 非 host 的房间控制、host 调 `leave` 或 `speakers/me`、非成员读房、创建者退群、非 owner/admin 开房、非群主改群名（决策 0098）                          |
 | 404  | `NOT_FOUND`                      | 模块未启用、房间/群/操作不存在或不属于调用者、非好友目标                                                                                              |
 | 409  | `DATA_STALE`                     | 已结束房间的写操作（含 `leave`）、重复举手、取消不存在的举手、非法角色迁移；live 房里"不在房间内"的 `leave` 不再是它（200，决策 0069）                |
 | 409  | `IDEMPOTENCY_CONFLICT`           | 同一 key 配不同请求内容                                                                                                                               |

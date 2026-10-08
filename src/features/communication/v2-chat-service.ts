@@ -16,7 +16,10 @@ import {
 } from "../../integrations/stream/channel-gateway.js";
 import type { StreamTokenProduct } from "../../integrations/stream/token-issuer.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
-import type { ChatOperationResource } from "./chat-channel-contract.js";
+import {
+  parseChatGroupName,
+  type ChatOperationResource,
+} from "./chat-channel-contract.js";
 import {
   ChatChannelIdempotencyConflictError,
   ChatChannelTargetUnavailableError,
@@ -109,6 +112,32 @@ export interface V2ChatGroupMembershipResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/** Decision 0098: the renamed group. */
+export interface V2ChatGroupResource {
+  readonly groupId: string;
+  readonly name: string;
+  readonly nameVersion: number;
+  readonly updatedAt: string;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+export interface V2ChatGroupRenameInput {
+  readonly principal: AuthenticatedLoopPrincipal;
+  readonly groupId: unknown;
+  readonly body: unknown;
+  readonly idempotencyKey: string;
+  readonly requestId: string;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * The one log line the rename writes: the Stream channel name was not
+ * confirmed. Identifiers, the request ID, and an error class name only.
+ */
+export interface V2ChatServiceLogger {
+  warn(context: Record<string, unknown>, message: string): void;
+}
+
 export interface V2ChatCommandInput {
   readonly principal: AuthenticatedLoopPrincipal;
   readonly idempotencyKey: string;
@@ -177,6 +206,7 @@ export interface V2ChatService {
   leaveGroup(
     input: V2ChatGroupLeaveInput,
   ): Promise<V2ChatGroupMembershipResource>;
+  renameGroup(input: V2ChatGroupRenameInput): Promise<V2ChatGroupResource>;
 }
 
 function mapChatError(error: unknown): never {
@@ -321,6 +351,24 @@ export interface V2ChatServiceOptions {
   readonly channelGateway: StreamCommunityChannelGateway;
   /** Null when V2_CURSOR_HMAC_SECRET is absent: the list read fails closed. */
   readonly cursorCodec?: V2CursorCodec | null;
+  /** Absent means an unconfirmed Stream rename is not logged (tests). */
+  readonly logger?: V2ChatServiceLogger;
+}
+
+function projectRenameBody(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw V2ApiError.invalidRequest();
+  }
+  const body = value as Record<string, unknown>;
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || keys[0] !== "name") {
+    throw V2ApiError.invalidRequest();
+  }
+  try {
+    return parseChatGroupName(body["name"]);
+  } catch {
+    throw V2ApiError.invalidRequest();
+  }
 }
 
 export function createUnavailableV2ChatService(): V2ChatService {
@@ -333,6 +381,7 @@ export function createUnavailableV2ChatService(): V2ChatService {
     getOrCreateDirect: unavailable,
     getOperation: unavailable,
     leaveGroup: unavailable,
+    renameGroup: unavailable,
   });
 }
 
@@ -469,6 +518,61 @@ export function createV2ChatService(
       return Object.freeze({
         groupId,
         membership: null,
+        contractVersion: v2ContractVersion,
+      });
+    },
+
+    /**
+     * Decision 0098. PostgreSQL is the authority: the rename commits first
+     * and the response reports it. The Stream channel name is then set
+     * once, acting as the creator; a failure is logged and does not fail
+     * the command (the client already shows the new name, and a retry or
+     * the next rename converges Stream). Stream is written on every
+     * success, including a same-name no-op and a same-key replay, so a
+     * retry also repairs an earlier unconfirmed write.
+     */
+    async renameGroup(
+      input: V2ChatGroupRenameInput,
+    ): Promise<V2ChatGroupResource> {
+      const groupId = parseCommunicationOpaqueId(input.groupId);
+      const name = projectRenameBody(input.body);
+      const record = await chatCall(() =>
+        options.repository.renameChatGroup({
+          actorUserId: input.principal.userId,
+          groupId,
+          name,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: communicationCommandDigest("chatGroupRename", [
+            groupId,
+            name,
+          ]),
+          requestId: input.requestId,
+        }),
+      );
+      try {
+        await options.channelGateway.updateGroupChannelName({
+          channelId: record.streamChannelId,
+          actingStreamUserId: record.channelCreatedByStreamUserId,
+          name: record.name,
+          signal: input.signal,
+        });
+      } catch (error) {
+        input.signal.throwIfAborted();
+        options.logger?.warn(
+          {
+            correlationId: input.requestId,
+            groupId,
+            nameVersion: record.nameVersion,
+            errorClass: error instanceof Error ? error.name : "unknown",
+          },
+          "Stream group channel name was not confirmed",
+        );
+      }
+      return Object.freeze({
+        groupId,
+        name: record.name,
+        nameVersion: record.nameVersion,
+        updatedAt: record.updatedAt,
         contractVersion: v2ContractVersion,
       });
     },

@@ -37,6 +37,7 @@ function row(
     communityId: `3fa85f64-5717-4562-b3fc-${suffix}`,
     communityName: `Community ${String(index)}`,
     communityLogoRef: null,
+    title: null,
     startedAt: new Date(now.getTime() - index * 60_000).toISOString(),
     host: {
       ownerUserId: hostUserId,
@@ -46,6 +47,7 @@ function row(
       anonymousMode: false,
       ...host,
     },
+    speakers: [],
     speakerCount: index,
     listenerCount: index * 2,
     viewerIsCommunityMember: index % 2 === 0,
@@ -116,6 +118,13 @@ describe("VoiceRoomService.listLiveRooms (Decision 0093)", () => {
         displayName: "frog_maxi",
         avatarRef: "avatar:preset/people-03",
       },
+      speakersPreview: [
+        {
+          publicProfileId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+          displayName: "frog_maxi",
+          avatarRef: "avatar:preset/people-03",
+        },
+      ],
       listenerCount: 0,
       speakerCount: 0,
       countsObservedAt: null,

@@ -1937,3 +1937,134 @@ describe("community channel message read (Decision 0066)", () => {
     ).rejects.toBeInstanceOf(StreamChannelProjectionMismatchError);
   });
 });
+
+describe("group channel rename (Decision 0098)", () => {
+  function renamed(name: string, kind = "group"): Record<string, unknown> {
+    return {
+      duration: "1ms",
+      members: [],
+      channel: {
+        id: groupChannelId,
+        type: "messaging",
+        cid: `messaging:${groupChannelId}`,
+        custom: {
+          loop_channel_kind: kind,
+          loop_channel_schema_version: 1,
+          name,
+        },
+      },
+    };
+  }
+
+  it("sets the channel name with one partial update acting as the creator", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(renamed("Frog Squad II")));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.updateGroupChannelName({
+        channelId: groupChannelId,
+        actingStreamUserId: hostUserId,
+        name: "Frog Squad II",
+        signal: signal(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requestedUrl(fetchMock).pathname).toBe(
+      `/api/v2/chat/channels/messaging/${groupChannelId}`,
+    );
+    expect(requestBody(fetchMock, 0)).toEqual({
+      user_id: hostUserId,
+      set: { name: "Frog Squad II" },
+    });
+  });
+
+  it("treats a different echoed name or a non-group channel as a projection mismatch", async () => {
+    for (const body of [
+      renamed("Old"),
+      renamed("Frog Squad II", "community"),
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(jsonResponse(body))),
+      );
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.updateGroupChannelName({
+          channelId: groupChannelId,
+          actingStreamUserId: hostUserId,
+          name: "Frog Squad II",
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(StreamChannelProjectionMismatchError);
+    }
+  });
+
+  it("classifies a deterministic 4xx as rejected and a 5xx as unavailable", async () => {
+    for (const [status, expected] of [
+      [404, StreamChannelRequestRejectedError],
+      [500, StreamChannelGatewayUnavailableError],
+    ] as const) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            jsonResponse(
+              { code: 16, message: "nope", StatusCode: status },
+              status,
+            ),
+          ),
+        ),
+      );
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.updateGroupChannelName({
+          channelId: groupChannelId,
+          actingStreamUserId: hostUserId,
+          name: "Frog Squad II",
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(expected);
+    }
+  });
+
+  it("refuses community or direct channels, bad names, and the unavailable adapter without a provider call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    for (const input of [
+      { channelId: communityChannelId, name: "Frog" },
+      {
+        channelId: "loop_direct_0123456789abcdef0123456789abcdef",
+        name: "Frog",
+      },
+      { channelId: groupChannelId, name: " padded " },
+      { channelId: groupChannelId, name: "x".repeat(61) },
+      { channelId: groupChannelId, name: "" },
+    ]) {
+      await expect(
+        gateway.updateGroupChannelName({
+          ...input,
+          actingStreamUserId: hostUserId,
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().updateGroupChannelName({
+        channelId: groupChannelId,
+        actingStreamUserId: hostUserId,
+        name: "Frog",
+        signal: signal(),
+      }),
+    ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
+  });
+});

@@ -172,12 +172,12 @@ describe("Decision 0095 social identity on PostgreSQL", () => {
     });
   }
 
-  it("is the migration head and flips the holdings/trades defaults to everyone", async () => {
+  it("is below the migration head and flips the holdings/trades defaults to everyone", async () => {
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by id desc limit 1",
     );
     expect(head.rows[0]?.name).toBe(latestMigrationName);
-    expect(latestMigrationName).toBe("000046_v2_social_identity");
+    expect(latestMigrationName).toBe("000048_v2_group_rename_voice_title");
     const user = await account("defaults_probe");
     await pool.query({
       text: "insert into public.privacy_preferences_v2 (owner_user_id) values ($1)",

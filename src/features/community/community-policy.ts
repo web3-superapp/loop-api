@@ -111,7 +111,9 @@ export const communitySelfPermissionMatrix: Readonly<
   }),
   admin: Object.freeze({
     leave: true,
-    editProfile: false,
+    // Decision 0098: an admin edits name, description, and logo; the bound
+    // token stays owner-only (enforced field by field in the repository).
+    editProfile: true,
     resubmitApplication: false,
   }),
   member: Object.freeze({

@@ -428,3 +428,47 @@ export function unavailableCommunityVoice(
     reasonCode,
   });
 }
+
+/** Decision 0098: the voice-room title bound, in Unicode code points. */
+export const voiceRoomTitleMaximumCodePoints = 40;
+const forbiddenVoiceRoomTitleCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Decision 0098: the optional create body `{ title }`. No body, `{}`,
+ * `title: null`, and a title that is empty after trimming all mean "no
+ * title". A title is trimmed and must be 1-40 code points with no control
+ * or format characters; anything else is INVALID_REQUEST.
+ */
+export function parseVoiceRoomCreateBody(value: unknown): {
+  readonly title: string | null;
+} {
+  if (value === undefined || value === null) {
+    return Object.freeze({ title: null });
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw V2ApiError.invalidRequest();
+  }
+  const body = value as Record<string, unknown>;
+  const keys = Object.keys(body);
+  if (keys.some((key) => key !== "title")) {
+    throw V2ApiError.invalidRequest();
+  }
+  const raw = body["title"];
+  if (raw === undefined || raw === null) {
+    return Object.freeze({ title: null });
+  }
+  if (typeof raw !== "string" || raw.length > 512) {
+    throw V2ApiError.invalidRequest();
+  }
+  const title = raw.trim();
+  if (title.length === 0) {
+    return Object.freeze({ title: null });
+  }
+  if (
+    Array.from(title).length > voiceRoomTitleMaximumCodePoints ||
+    forbiddenVoiceRoomTitleCharacters.test(title)
+  ) {
+    throw V2ApiError.invalidRequest();
+  }
+  return Object.freeze({ title });
+}

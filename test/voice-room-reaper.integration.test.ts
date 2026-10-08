@@ -183,6 +183,7 @@ describe("voice_room_reaper lane against PostgreSQL (Decision 0094)", () => {
     const record = await communication.createVoiceRoom({
       actorUserId: host,
       communityId,
+      title: null,
       idempotencyKey: randomUUID(),
       requestSha256: communicationCommandDigest("voiceRoomCreate", [
         communityId,

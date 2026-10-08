@@ -21,6 +21,7 @@ import {
   liveVoiceRoomsFilter,
   parseCommunicationOpaqueId,
   parseCommunicationPublicProfileId,
+  parseVoiceRoomCreateBody,
   voiceCallCid,
   voiceRoomCursorRoutes,
   voiceRoomHandRaiseCallEvent,
@@ -48,6 +49,7 @@ import {
   CommunicationResourceConflictError,
   CommunicationUnprovisionedRoomError,
   type CommunicationRepository,
+  type LiveVoiceRoomMemberRecord,
   type LiveVoiceRoomRecord,
   type VoiceRoomMemberRecord,
   type VoiceRoomRecord,
@@ -105,6 +107,8 @@ export interface VoiceRoomResource {
     readonly communityId: string;
     /** The community's current name, so a room banner never needs a second read. */
     readonly communityName: string;
+    /** Decision 0098: the host's title, or null (show `{communityName}` instead). */
+    readonly title: string | null;
     readonly callCid: string;
     readonly state: VoiceRoomState;
     readonly provisionState: VoiceRoomProvisionState;
@@ -112,6 +116,8 @@ export interface VoiceRoomResource {
     readonly createdAt: string;
     readonly endedAt: string | null;
   };
+  /** Decision 0098: the host by the live-list display rule (three nulls when anonymous). */
+  readonly host: LiveVoiceRoomPersonProjection | null;
   readonly viewer: {
     readonly role: VoiceRoomRole | null;
     readonly canInviteSpeakers: boolean;
@@ -165,6 +171,8 @@ export interface VoiceRoomMemberIdentityProjection {
 }
 
 export interface VoiceRoomMemberRowProjection extends VoiceRoomMemberIdentityProjection {
+  /** Decision 0098: null when the row is anonymous to the viewer. */
+  readonly avatarRef: string | null;
   readonly role: VoiceRoomMemberRoleFilter;
   readonly joinedAt: string;
   readonly handRaised: boolean;
@@ -198,6 +206,20 @@ export interface VoiceRoomHandRaiseQueueResource {
 }
 
 /**
+ * One account on a live-room card. By the leaderboard display rule all three
+ * fields are null when the account is anonymous to the viewer (or has no
+ * active profile), so it cannot be identified from the list.
+ */
+export interface LiveVoiceRoomPersonProjection {
+  readonly publicProfileId: string | null;
+  readonly displayName: string | null;
+  readonly avatarRef: string | null;
+}
+
+/** At most this many entries in `speakersPreview` (host included). */
+export const liveVoiceRoomSpeakersPreviewLimit = 4;
+
+/**
  * One row of `GET /v2/voice-rooms/live` (Decision 0093). The host is shown
  * by the leaderboard display rule: `displayName` is null when the host is
  * anonymous to this viewer, and then `publicProfileId` and `avatarRef` are
@@ -208,13 +230,14 @@ export interface LiveVoiceRoomProjection {
   readonly communityId: string;
   readonly communityName: string;
   readonly communityLogoRef: string | null;
-  /** Voice rooms carry no title; null until one exists (Decision 0093). */
-  readonly title: null;
-  readonly host: {
-    readonly publicProfileId: string | null;
-    readonly displayName: string | null;
-    readonly avatarRef: string | null;
-  };
+  /** Decision 0098: the host's title, or null. */
+  readonly title: string | null;
+  readonly host: LiveVoiceRoomPersonProjection;
+  /**
+   * Decision 0098: the host first, then up to three joined speakers in join
+   * order; at most four entries. Each follows the host display rule.
+   */
+  readonly speakersPreview: readonly LiveVoiceRoomPersonProjection[];
   /** LOOP role intent, host excluded (Decision 0051); not Stream presence. */
   readonly listenerCount: number;
   readonly speakerCount: number;
@@ -267,6 +290,8 @@ export interface VoiceRoomCommandContext {
 
 export interface CreateVoiceRoomCommandInput extends VoiceRoomCommandContext {
   readonly communityId: unknown;
+  /** Decision 0098: the optional `{ title }` body; undefined when absent. */
+  readonly body?: unknown;
 }
 
 export interface VoiceRoomCommandInput extends VoiceRoomCommandContext {
@@ -307,6 +332,8 @@ export interface VoiceRoomService {
     input: VoiceRoomSpeakerCommandInput,
   ): Promise<VoiceRoomResource>;
   muteAll(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
+  /** Decision 0098: the caller steps down from speaker to listener. */
+  stepDown(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
   endRoom(input: VoiceRoomCommandInput): Promise<VoiceRoomResource>;
 }
 
@@ -438,6 +465,7 @@ export function createUnavailableVoiceRoomService(): VoiceRoomService {
     muteSpeaker: unavailable,
     unmuteSpeaker: unavailable,
     muteAll: unavailable,
+    stepDown: unavailable,
     endRoom: unavailable,
   });
 }
@@ -459,6 +487,7 @@ export function createVoiceRoomService(
         voiceRoomId: record.room.voiceRoomId,
         communityId: record.room.communityId,
         communityName: record.room.communityName,
+        title: record.room.title,
         callCid: voiceCallCid(record.room.callId),
         state: record.room.state,
         provisionState: record.room.provisionState,
@@ -466,6 +495,9 @@ export function createVoiceRoomService(
         createdAt: record.room.createdAt,
         endedAt: record.room.endedAt,
       }),
+      // Decision 0098: the host by the live-list display rule. Only the host
+      // holds the `host` role, so a host viewer is looking at itself.
+      host: personProjection(record.host, isHost),
       viewer: Object.freeze({
         role: record.viewerRole,
         canInviteSpeakers: isHost && record.room.state === "live",
@@ -920,8 +952,12 @@ export function createVoiceRoomService(
     viewer: { readonly userId: string; readonly isHost: boolean },
     roomLive: boolean,
   ): VoiceRoomMemberRowProjection {
+    const identity = memberIdentity(row, viewer, roomLive);
     return Object.freeze({
-      ...memberIdentity(row, viewer, roomLive),
+      ...identity,
+      // Decision 0098: the avatar follows the display: an anonymous row
+      // shows none.
+      avatarRef: identity.display.kind === "alias" ? row.avatarRef : null,
       role: row.role,
       joinedAt: row.joinedAt,
       handRaised: row.handRaised,
@@ -929,27 +965,48 @@ export function createVoiceRoomService(
     });
   }
 
+  function livePerson(
+    person: LiveVoiceRoomMemberRecord,
+    viewerUserId: string,
+  ): LiveVoiceRoomPersonProjection {
+    return personProjection(person, person.ownerUserId === viewerUserId);
+  }
+
+  function personProjection(
+    person: LiveVoiceRoomMemberRecord,
+    isSelf: boolean,
+  ): LiveVoiceRoomPersonProjection {
+    const named =
+      person.publicProfileId !== null &&
+      person.alias !== null &&
+      (isSelf || !person.anonymousMode);
+    return Object.freeze({
+      publicProfileId: named ? person.publicProfileId : null,
+      displayName: named ? person.alias : null,
+      avatarRef: named ? person.avatarRef : null,
+    });
+  }
+
   function liveRoom(
     row: LiveVoiceRoomRecord,
     viewerUserId: string,
   ): LiveVoiceRoomProjection {
-    const host = row.host;
-    const isSelf = host.ownerUserId === viewerUserId;
-    const named =
-      host.publicProfileId !== null &&
-      host.alias !== null &&
-      (isSelf || !host.anonymousMode);
+    const host = livePerson(row.host, viewerUserId);
     return Object.freeze({
       voiceRoomId: row.voiceRoomId,
       communityId: row.communityId,
       communityName: row.communityName,
       communityLogoRef: row.communityLogoRef,
-      title: null,
-      host: Object.freeze({
-        publicProfileId: named ? host.publicProfileId : null,
-        displayName: named ? host.alias : null,
-        avatarRef: named ? host.avatarRef : null,
-      }),
+      title: row.title,
+      host,
+      speakersPreview: Object.freeze(
+        [
+          host,
+          ...row.speakers
+            .filter((speaker) => speaker.ownerUserId !== row.host.ownerUserId)
+            .map((speaker) => livePerson(speaker, viewerUserId)),
+        ].slice(0, liveVoiceRoomSpeakersPreviewLimit),
+      ),
       listenerCount: row.listenerCount,
       speakerCount: row.speakerCount,
       countsObservedAt: null,
@@ -963,14 +1020,19 @@ export function createVoiceRoomService(
       input: CreateVoiceRoomCommandInput,
     ): Promise<VoiceRoomResource> {
       const communityId = parseCommunicationOpaqueId(input.communityId);
+      const { title } = parseVoiceRoomCreateBody(input.body);
       const record = await repositoryCall(() =>
         options.repository.createVoiceRoom({
           ...commandInputs(input),
           communityId,
+          title,
           idempotencyKey: input.idempotencyKey,
-          requestSha256: communicationCommandDigest("voiceRoomCreate", [
-            communityId,
-          ]),
+          // An untitled create keeps the pre-0098 digest, so a same-key
+          // retry across the deploy still replays.
+          requestSha256: communicationCommandDigest(
+            "voiceRoomCreate",
+            title === null ? [communityId] : [communityId, "title", title],
+          ),
           requestId: input.requestId,
         }),
       );
@@ -1570,6 +1632,57 @@ export function createVoiceRoomService(
         record.room,
         providerSync,
         await observeAfterCommand(record.room, input.signal),
+      );
+    },
+
+    /**
+     * Decision 0098. LOOP commits the speaker -> listener transition first;
+     * then `send-audio` is revoked and the call member role reset to
+     * listener, exactly the host's remove-speaker writes. A no-op (the caller
+     * was not a joined speaker) writes nothing and reports `confirmed`.
+     */
+    async stepDown(input: VoiceRoomCommandInput): Promise<VoiceRoomResource> {
+      const voiceRoomId = parseCommunicationOpaqueId(input.voiceRoomId);
+      const record = await repositoryCall(() =>
+        options.repository.stepDownSpeaker({
+          ...commandInputs(input),
+          voiceRoomId,
+          idempotencyKey: input.idempotencyKey,
+          requestSha256: communicationCommandDigest(
+            "voiceRoomSpeakerStepDown",
+            [voiceRoomId],
+          ),
+          requestId: input.requestId,
+        }),
+      );
+      if (record.outcome === "no_op") {
+        return resource(record, confirmedSync, notObserved);
+      }
+      const providerSync = await attemptProviderWrite(
+        writeContext(record, input.requestId),
+        async () => {
+          await options.callGateway.updateUserPermissions({
+            callId: record.room.callId,
+            streamUserId: record.callerStreamUserId,
+            grantPermissions: [],
+            revokePermissions: [streamSendAudioPermission],
+            signal: input.signal,
+          });
+          await options.callGateway.updateCallMembers({
+            callId: record.room.callId,
+            addStreamUserIds: [record.callerStreamUserId],
+            removeStreamUserIds: [],
+            role: "listener",
+            signal: input.signal,
+          });
+        },
+        input.signal,
+        voiceRoomProviderSyncReasonCodes.permission,
+      );
+      return resource(
+        record,
+        providerSync,
+        await observeAfterCommand(record, input.signal),
       );
     },
 
