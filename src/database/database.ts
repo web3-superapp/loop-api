@@ -87,6 +87,8 @@ import {
   createPostgresVoiceRoomReaperRepository,
 } from "./communication-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
+import { createPostgresMemberBuyFeedRepository } from "./member-buy-feed-repository.js";
+import type { MemberBuyFeedRepository } from "../features/community/member-buy-feed-repository.js";
 import {
   createPostgresAlertRepository,
   type AlertRepository,
@@ -215,6 +217,8 @@ export interface PostgresDatabase extends Database {
   readonly communityChannelSync: CommunityChannelSyncRepository;
   /** `voice_room_reaper` lane (Decision 0094). */
   readonly voiceRoomReaper: VoiceRoomReaperRepository;
+  /** `community_member_buy_feed` lane (Decision 0097). */
+  readonly memberBuyFeed: MemberBuyFeedRepository;
   /** Decision 0055 community chat personas. */
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   readonly streamUserIdentities: StreamUserIdentityRepository;
@@ -369,6 +373,7 @@ export function createPostgresDatabase(
   const communityChannelSync =
     createPostgresCommunityChannelSyncRepository(pool);
   const voiceRoomReaper = createPostgresVoiceRoomReaperRepository(pool);
+  const memberBuyFeed = createPostgresMemberBuyFeedRepository(pool);
   const communityChannelPersonas =
     createPostgresCommunityChannelPersonaRepository(pool);
 
@@ -392,6 +397,7 @@ export function createPostgresDatabase(
     communication,
     communityChannelSync,
     voiceRoomReaper,
+    memberBuyFeed,
     communityChannelPersonas,
     watchlists,
     watchlistsV2,

@@ -372,7 +372,9 @@ Privy ID、Stream ID**：
 「媒体上传」；创建时必须是本人上传的 logo，编辑时上传者须是本人或该社区当前
 owner/admin，否则 `422 VALIDATION_FAILED` + `detailsSafe.reasonCode =
 MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boundAssetKey` 形如
-`eip155:56:0x…`（服务端转小写）。
+`eip155:56:0x…`（服务端转小写），且**必须是 Asset Registry 里已有的资产**（任意状态），
+否则 `422 VALIDATION_FAILED` + `detailsSafe.reasonCode = ASSET_NOT_REGISTERED`（决策 0097）；
+资产没有已注册池子不拒绝，资源里的 `boundAsset.hasRegisteredPool = false` 会说明。
 
 成功 `201`，返回社区资源，`verificationStatus` 恒为 `pending`，申请人即 owner。
 **API 没有自助认证路径**，`verified` 只能由运维脚本设置。
@@ -395,7 +397,8 @@ MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boun
 }
 ```
 
-校验规则与创建一致。`slug` 与 `verificationStatus` **不可通过本接口修改**
+校验规则与创建一致（`boundAssetKey` 的 `ASSET_NOT_REGISTERED` 只校验**有变化**的值：
+0097 之前绑定的旧值原样回传不会被拒）。`slug` 与 `verificationStatus` **不可通过本接口修改**
 （出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。仅 owner 可调用，
 admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，服务端写一条
 `community_profile_updated` 审计。`pending`/`rejected` 状态下同样可编辑，且编辑
@@ -1034,7 +1037,7 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 | `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                                 | 换新 key 重发                  |
 | `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                                   | 提示用户换 slug，不重试同值    |
 | `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                                    | 升级客户端                     |
-| `VALIDATION_FAILED`              | 422  | 归一化后长度越界                                                        | 提示用户改内容                 |
+| `VALIDATION_FAILED`              | 422  | 归一化后长度越界；`reasonCode=ASSET_NOT_REGISTERED`：绑定代币不在资产表 | 提示用户改内容 / 换代币        |
 | `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                                          | 提示换名，不重试同名           |
 | `ALIAS_BLOCKED`                  | 422  | 社区名撞运营屏蔽词                                                      | 同上                           |
 | `RATE_LIMITED`                   | 429  | 搜索配额耗尽                                                            | 退避后重试                     |
@@ -1195,3 +1198,76 @@ CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机�
 - 成员在频道里以 Stream user 的 `name`（别名）/ `image`（上传头像 URL）展示。旧版本
   写在 Stream 成员 custom 里的 `loop_group_alias` 等化名字段仍可能存在，开启时请忽略。
 - 关闭（运维设 `false`）恢复决策 0055 行为。
+
+## 群友买入与绑定代币（决策 0097，S108）
+
+### 社区资源新增 `boundAsset`
+
+`GET /v2/communities/{id}` 以及创建、编辑、加入、退出等返回社区资源（4.4）的接口，顶层
+新增必有字段 `boundAsset`（与 `community` 同级；列表行**不带**）：
+
+```json
+{
+  "community": {
+    "boundAssetKey": "eip155:56:0x1111111111111111111111111111111111111111"
+  },
+  "boundAsset": {
+    "assetId": "eip155:56:0x1111111111111111111111111111111111111111",
+    "symbol": "FROG",
+    "name": "Frog Token",
+    "logoUrl": "https://api-dev.example/v2/market/logos/eip155:56/0x1111111111111111111111111111111111111111.png",
+    "hasRegisteredPool": true
+  }
+}
+```
+
+- `null`：未绑定，或 0097 之前绑定了一个不在资产表里的 key。
+- `logoUrl`：本 API 的代币 logo 代理（决策 0089）；`market` 模块未启用时为 `null`，客户端画字母头像。
+- `hasRegisteredPool = false`：没有已注册池子，**群友买入动态不会出现**。管理中心提示文案：
+  「尚无已注册池子，群友买入动态不会出现」。
+
+### 群友买入消息（Stream 消息，无 REST 接口）
+
+后端 worker lane `community_member_buy_feed` 每 15 s 扫描已认证、已绑定代币的社区：成员的
+钱包（`account_wallets.status=active`，按 swap 的 `recipient` 优先、其次 `sender`）在已注册池子
+里**买入**该社区绑定代币，且该成员 `tradeHistory = everyone`、未开匿名模式，则 Stream 用户
+`loop_feed_bot`（`name: "LOOP"`，`custom.loop_bot = true`，无头像）在社区官方频道发一条
+`regular` 消息，**不推送**（`skip_push`）。卖出、隐私为 self 的成员、匿名成员不发，也不发匿名版本。
+每轮每社区最多 20 条，超出的不发。上线后只处理当时索引器位置之后的新交易，**不回放历史**。
+
+消息：
+
+- `id`：`loop_buy_` + 32 位十六进制（同一笔 swap、同一社区永远同一个 id；不会重复）。
+- `text`：`群友买入 · {SYMBOL}`（不含身份；旧客户端与通知回退用）。
+- 自定义字段（Flutter `message.extraData[...]`，全部总是下发）：
+
+| 字段              | 类型                 | 说明                                                                               |
+| ----------------- | -------------------- | ---------------------------------------------------------------------------------- |
+| `loop_schema`     | string               | 固定 `member_buy.v1`，据此分流到买入卡片                                           |
+| `loop_event_kind` | string               | 固定 `memberBuy`                                                                   |
+| `publicProfileId` | string (UUID)        | 买家；名字头像客户端实时取（Stream 用户 / `GET /v2/profiles/{id}`）                |
+| `assetId`         | string               | 绑定代币 `eip155:56:0x…`                                                           |
+| `symbol`          | string               | 绑定代币符号                                                                       |
+| `decimals`        | integer              | 绑定代币精度                                                                       |
+| `amountRaw`       | string（十进制整数） | 买入数量原始值（正数），显示 = `amountRaw / 10^decimals`                           |
+| `quoteAssetId`    | string               | 报价侧资产                                                                         |
+| `quoteSymbol`     | string               | 报价侧符号，如 `WBNB` / `USDT`                                                     |
+| `quoteDecimals`   | integer              | 报价侧精度                                                                         |
+| `quoteAmountRaw`  | string（十进制整数） | 付出的报价资产原始值（正数）                                                       |
+| `quoteIsStable`   | boolean              | 报价侧是 USDT/USDC/USD1：`true` 时显示 `≈ $x`，否则 `{x} {quoteSymbol}`            |
+| `txHash`          | string               | `0x` + 64 位十六进制                                                               |
+| `logIndex`        | integer              | 日志序号                                                                           |
+| `chainId`         | string               | `eip155:56`                                                                        |
+| `blockNumber`     | string（十进制整数） | 区块号                                                                             |
+| `blockTimestamp`  | string \| null       | **ISO-8601 UTC 字符串（带 `Z`，毫秒），不是秒数**；索引器未记录区块时间时为 `null` |
+
+金额永远是字符串，禁止按 JS number 解析；`decimals`、`quoteDecimals`、`logIndex` 是小整数。
+任一必需字段缺失或类型不符 → 显示「动态数据不完整」小卡，不显示 0。
+
+### unavailable 行为
+
+- Stream 未配置：lane 不启动（worker 日志 `MEMBER_BUY_FEED_STREAM_NOT_CONFIGURED`），频道里没有
+  买入消息；客户端无需特殊处理。
+- 索引器没跑（无 `pool_event` 检查点）：lane 空转（`MEMBER_BUY_FEED_INDEXER_NOT_STARTED`）。
+- Stream 暂时不可用：本轮停在出错的那笔，下一轮用同一个消息 id 重发，不会重复。
+- 已发出的消息在链重组后不撤回（索引器只提交已确认区块，见决策 0097）。

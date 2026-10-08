@@ -82,6 +82,15 @@ describe("loadReconciliationWorkerConfig", () => {
           apiSecret: "not-for-this-process",
         },
       },
+      // Decision 0097: default on; the Stream pair is the lane's own.
+      communityMemberBuyFeed: {
+        intervalMs: 15_000,
+        usd1Address: null,
+        stream: {
+          apiKey: "not-for-this-lane",
+          apiSecret: "not-for-this-process",
+        },
+      },
       walletIntentReconcile: null,
       miningSnapshotEnabled: false,
       push: null,
@@ -93,6 +102,51 @@ describe("loadReconciliationWorkerConfig", () => {
       serviceVersion: "0.1.0",
     });
     expect(Object.isFrozen(config)).toBe(true);
+  });
+
+  describe("community_member_buy_feed lane (Decision 0097)", () => {
+    it("is on by default at 15 s with no Stream pair and no USD1", () => {
+      expect(loadReconciliationWorkerConfig(validEnvironment())).toMatchObject({
+        communityMemberBuyFeed: {
+          intervalMs: 15_000,
+          usd1Address: null,
+          stream: null,
+        },
+      });
+    });
+
+    it("reads the interval and a verified USD1, and can be switched off", () => {
+      const environment = validEnvironment();
+      environment["COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS"] = "600000";
+      environment["BSC_USD1_TOKEN_ADDRESS"] =
+        "0x8D0D000Ee44948FC98c9B98A4FA4921476f08B0d";
+      expect(
+        loadReconciliationWorkerConfig(environment).communityMemberBuyFeed,
+      ).toMatchObject({ intervalMs: 600_000, usd1Address: null });
+      environment["BSC_USD1_VERIFIED"] = "true";
+      expect(
+        loadReconciliationWorkerConfig(environment).communityMemberBuyFeed,
+      ).toMatchObject({
+        usd1Address: "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+      });
+      environment["COMMUNITY_MEMBER_BUY_FEED_ENABLED"] = "false";
+      expect(
+        loadReconciliationWorkerConfig(environment).communityMemberBuyFeed,
+      ).toBeNull();
+    });
+
+    it.each([
+      ["COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS", "4999"],
+      ["COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS", "600001"],
+      ["COMMUNITY_MEMBER_BUY_FEED_ENABLED", "yes"],
+      ["BSC_USD1_TOKEN_ADDRESS", "0x123"],
+    ])("refuses %s=%s", (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+      expect(() => loadReconciliationWorkerConfig(environment)).toThrow(
+        ConfigurationError,
+      );
+    });
   });
 
   describe("voice_room_reaper lane (Decision 0094)", () => {

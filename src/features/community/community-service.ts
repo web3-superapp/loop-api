@@ -103,6 +103,7 @@ import {
   type CommunityViewerPermissions,
 } from "./community-policy.js";
 import {
+  CommunityBoundAssetNotRegisteredError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -277,8 +278,28 @@ export interface CommunityResource {
   readonly onlineCount: CommunityPresenceProjection;
   readonly announcements: UnavailableProjection;
   readonly officialLinks: UnavailableProjection;
+  /**
+   * Decision 0097: the Asset Registry row behind `community.boundAssetKey`,
+   * or null when unbound (or bound before 0097 to a key not in the
+   * registry). `hasRegisteredPool: false` means member buys cannot be
+   * observed, so no 群友买入 message will appear.
+   */
+  readonly boundAsset: CommunityBoundAssetProjection | null;
   readonly contractVersion: typeof v2ContractVersion;
 }
+
+export interface CommunityBoundAssetProjection {
+  readonly assetId: string;
+  readonly symbol: string;
+  readonly name: string;
+  readonly logoUrl: string | null;
+  readonly hasRegisteredPool: boolean;
+}
+
+/** Reason code of `422 VALIDATION_FAILED` for an unknown bound asset (0097). */
+export const communityBoundAssetReasonCodes = Object.freeze({
+  notRegistered: "ASSET_NOT_REGISTERED",
+} as const);
 
 export interface CommunityRecommendationProjection {
   readonly recommendationId: string;
@@ -601,6 +622,11 @@ function mapFailure(error: unknown): never {
   if (error instanceof CommunityLogoMediaRejectedError) {
     throw V2ApiError.fromCode("VALIDATION_FAILED", {
       reasonCode: mediaReasonCodes.notAuthorized,
+    });
+  }
+  if (error instanceof CommunityBoundAssetNotRegisteredError) {
+    throw V2ApiError.fromCode("VALIDATION_FAILED", {
+      reasonCode: communityBoundAssetReasonCodes.notRegistered,
     });
   }
   if (error instanceof CommunityPermissionDeniedError) {
@@ -936,11 +962,36 @@ function voiceProjection(
   });
 }
 
+function boundAssetProjection(
+  record: CommunityRecord,
+  tokenLogos: TokenLogoProjector,
+): CommunityBoundAssetProjection | null {
+  const asset = record.boundAsset ?? null;
+  if (asset === null || record.boundAssetKey === null) {
+    return null;
+  }
+  let logoUrl: string | null;
+  try {
+    const logo = tokenLogos.projectForAssetId(asset.assetId);
+    logoUrl = logo.status === "available" ? logo.url : null;
+  } catch {
+    logoUrl = null;
+  }
+  return Object.freeze({
+    assetId: asset.assetId,
+    symbol: asset.symbol,
+    name: asset.name,
+    logoUrl,
+    hasRegisteredPool: asset.hasRegisteredPool,
+  });
+}
+
 function communityResource(
   record: CommunityDetailRecord,
   channel: CommunityChannelViewerRecord | null,
   miningPower: MiningPowerProjection,
   onlineCount: CommunityPresenceProjection,
+  tokenLogos: TokenLogoProjector,
 ): CommunityResource {
   return Object.freeze({
     community: summary(record.community),
@@ -952,6 +1003,7 @@ function communityResource(
     onlineCount,
     announcements: unavailable(communityUnavailableReasonCodes.announcements),
     officialLinks: unavailable(communityUnavailableReasonCodes.officialLinks),
+    boundAsset: boundAssetProjection(record.community, tokenLogos),
     contractVersion: v2ContractVersion,
   });
 }
@@ -1670,6 +1722,7 @@ export function createCommunityService(
           await channelProjection(owner.userId, record.community.communityId),
           await communityMiningPower(record.community.communityId),
           communityPresenceNotObserved,
+          options.tokenLogos,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1700,6 +1753,7 @@ export function createCommunityService(
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
+          options.tokenLogos,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1725,7 +1779,13 @@ export function createCommunityService(
           communityMiningPower(communityId),
           channelPending.then(communityPresence),
         ]);
-        return communityResource(record, channel, miningPower, presence);
+        return communityResource(
+          record,
+          channel,
+          miningPower,
+          presence,
+          options.tokenLogos,
+        );
       } catch (error) {
         return mapFailure(error);
       }
@@ -1749,6 +1809,7 @@ export function createCommunityService(
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
+          options.tokenLogos,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1773,6 +1834,7 @@ export function createCommunityService(
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
+          options.tokenLogos,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1797,6 +1859,7 @@ export function createCommunityService(
           await channelProjection(owner.userId, communityId),
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
+          options.tokenLogos,
         );
       } catch (error) {
         return mapFailure(error);

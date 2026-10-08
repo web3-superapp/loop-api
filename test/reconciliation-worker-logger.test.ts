@@ -308,6 +308,53 @@ describe("reconciliation worker logger", () => {
     );
   });
 
+  it("passes the community_member_buy_feed fields (Decision 0097) through and drops malformed ones", () => {
+    const stdout = vi.fn<(line: string) => void>();
+    const logger = createReconciliationWorkerLogger({
+      level: "info",
+      serviceVersion: "0.1.0",
+      now: () => new Date("2026-10-08T10:00:00.000Z"),
+      writeStdout: stdout,
+      writeStderr: stdout,
+    });
+    const communityId = "0b6a3f0e-9f3c-4d7a-8c41-6a1e2b3c4d5e";
+    const messageId = `loop_buy_${"a".repeat(32)}`;
+    logger.warn(
+      {
+        lane: "community_member_buy_feed",
+        reasonCode: "MEMBER_BUY_FEED_TRUNCATED",
+        communityId,
+        truncatedCount: 3,
+      },
+      "LOOP member buy feed truncated a community's pass",
+    );
+    logger.info(
+      {
+        lane: "community_member_buy_feed",
+        communityId: "not-a-uuid",
+        messageId: "0x4444444444444444444444444444444444444444",
+      },
+      "LOOP member buy feed posted a message",
+    );
+    logger.info(
+      { lane: "community_member_buy_feed", communityId, messageId },
+      "LOOP member buy feed posted a message",
+    );
+
+    const lines = stdout.mock.calls.map(
+      ([line]) => JSON.parse(line) as Record<string, unknown>,
+    );
+    expect(lines[0]).toMatchObject({
+      lane: "community_member_buy_feed",
+      reasonCode: "MEMBER_BUY_FEED_TRUNCATED",
+      communityId,
+      truncatedCount: 3,
+    });
+    expect(lines[1]).not.toHaveProperty("communityId");
+    expect(lines[1]).not.toHaveProperty("messageId");
+    expect(lines[2]).toMatchObject({ communityId, messageId });
+  });
+
   it("emits nothing at the silent level", () => {
     const stdout = vi.fn<(line: string) => void>();
     const stderr = vi.fn<(line: string) => void>();

@@ -691,6 +691,13 @@ const reconciliationWorkerEnvironmentSchema = z
     VOICE_ROOM_REAPER_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
     VOICE_ROOM_IDLE_END_MINUTES: positiveIntegerString(1, 1_440),
     VOICE_ROOM_MAX_LIVE_HOURS: positiveIntegerString(1, 168),
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED: booleanString,
+    COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS: positiveIntegerString(
+      5_000,
+      600_000,
+    ),
+    BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
+    BSC_USD1_VERIFIED: booleanString,
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
     MINING_SNAPSHOT_ENABLED: booleanString,
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
@@ -1233,6 +1240,20 @@ export interface ReconciliationWorkerConfig {
     readonly intervalMs: number;
     readonly idleEndMinutes: number;
     readonly maxLiveHours: number;
+    readonly stream: StreamConfig | null;
+  } | null;
+  /**
+   * `community_member_buy_feed` lane (Decision 0097); default on. It turns
+   * swaps of a verified community's bound asset by its members into
+   * `loop_feed_bot` messages in the community channel. `stream` is the
+   * Stream credential pair, parsed independently of the
+   * community-channel-sync switch; without it the lane stays off.
+   * `usd1Address` is the verified USD1 (`BSC_USD1_TOKEN_ADDRESS` +
+   * `BSC_USD1_VERIFIED`), the same quote set as the public trades read.
+   */
+  readonly communityMemberBuyFeed: {
+    readonly intervalMs: number;
+    readonly usd1Address: string | null;
     readonly stream: StreamConfig | null;
   } | null;
   /**
@@ -2379,6 +2400,12 @@ export function loadReconciliationWorkerConfig(
     VOICE_ROOM_IDLE_END_MINUTES:
       environment["VOICE_ROOM_IDLE_END_MINUTES"] ?? "10",
     VOICE_ROOM_MAX_LIVE_HOURS: environment["VOICE_ROOM_MAX_LIVE_HOURS"] ?? "12",
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED:
+      environment["COMMUNITY_MEMBER_BUY_FEED_ENABLED"] ?? "true",
+    COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS:
+      environment["COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS"] ?? "15000",
+    BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
+    BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
@@ -2492,6 +2519,23 @@ export function loadReconciliationWorkerConfig(
           intervalMs: parsed.data.VOICE_ROOM_REAPER_INTERVAL_MS,
           idleEndMinutes: parsed.data.VOICE_ROOM_IDLE_END_MINUTES,
           maxLiveHours: parsed.data.VOICE_ROOM_MAX_LIVE_HOURS,
+          stream:
+            parsed.data.STREAM_API_KEY !== undefined &&
+            parsed.data.STREAM_API_SECRET !== undefined
+              ? Object.freeze({
+                  apiKey: parsed.data.STREAM_API_KEY,
+                  apiSecret: parsed.data.STREAM_API_SECRET,
+                })
+              : null,
+        })
+      : null,
+    communityMemberBuyFeed: parsed.data.COMMUNITY_MEMBER_BUY_FEED_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS,
+          usd1Address: parseVerifiedUsd1Address(
+            parsed.data.BSC_USD1_TOKEN_ADDRESS,
+            parsed.data.BSC_USD1_VERIFIED,
+          ),
           stream:
             parsed.data.STREAM_API_KEY !== undefined &&
             parsed.data.STREAM_API_SECRET !== undefined

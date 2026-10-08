@@ -5285,6 +5285,7 @@
                     ]
                   },
                   "boundAssetKey": {
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
                     "anyOf": [
                       {
                         "type": "string",
@@ -5355,6 +5356,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -5914,6 +5916,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -6584,6 +6631,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -7143,6 +7191,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -7635,6 +7728,7 @@
                     ]
                   },
                   "boundAssetKey": {
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
                     "anyOf": [
                       {
                         "type": "string",
@@ -7714,6 +7808,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -8273,6 +8368,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -8952,6 +9092,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -9511,6 +9652,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -10190,6 +10376,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -10749,6 +10936,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -11428,6 +11660,7 @@
                     "onlineCount",
                     "announcements",
                     "officialLinks",
+                    "boundAsset",
                     "contractVersion"
                   ],
                   "properties": {
@@ -11987,6 +12220,51 @@
                           "description": "Machine reason a fact is not published. It never becomes zero, an empty success, or a fixture."
                         }
                       }
+                    },
+                    "boundAsset": {
+                      "description": "Decision 0097: the Asset Registry row behind community.boundAssetKey, or null when the community is unbound (or was bound before 0097 to a key the registry does not hold). hasRegisteredPool=false means member buys of the asset cannot be observed, so no 群友买入 feed message appears.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "symbol",
+                            "name",
+                            "logoUrl",
+                            "hasRegisteredPool"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "logoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                            },
+                            "hasRegisteredPool": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }

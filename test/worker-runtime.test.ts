@@ -33,6 +33,8 @@ import type { WatchlistV2Repository } from "../src/database/watchlist-v2-reposit
 import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-sparkline-warm-worker.js";
 import type { CreateVoiceRoomReaperWorkerOptions } from "../src/voice-room-reaper-worker.js";
 import { createUnavailableStreamCallGateway } from "../src/integrations/stream/call-gateway.js";
+import type { CreateMemberBuyFeedWorkerOptions } from "../src/community-member-buy-feed-worker.js";
+import { createUnavailableStreamCommunityChannelGateway } from "../src/integrations/stream/channel-gateway.js";
 
 const workerId = "33b40904-4487-49cd-8481-7075d9025713";
 
@@ -1219,6 +1221,145 @@ describe("voice_room_reaper lane composition (Decision 0094)", () => {
         providerSyncStatus: "unconfirmed",
       }),
       "LOOP voice room reaper ended a room",
+    );
+  });
+});
+
+describe("community_member_buy_feed lane composition (Decision 0097)", () => {
+  function laneConfig(overrides: Readonly<Record<string, string>> = {}) {
+    return loadReconciliationWorkerConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "silent",
+      DATABASE_URL:
+        "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+      SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+      ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+      MARKET_SPARKLINE_WARM_ENABLED: "false",
+      VOICE_ROOM_REAPER_ENABLED: "false",
+      ...overrides,
+    });
+  }
+
+  const streamPair = {
+    STREAM_API_KEY: "stream-key-for-test",
+    STREAM_API_SECRET: "stream-secret-for-test",
+  };
+
+  function laneDatabase(events: string[]) {
+    return {
+      ...fakeDatabase(events),
+      memberBuyFeed: {
+        readPoolEventCheckpoint: vi.fn(() => Promise.resolve("100")),
+        readCursor: vi.fn(() => Promise.resolve(null)),
+        initializeCursor: vi.fn((_chainId: string, position) =>
+          Promise.resolve(position),
+        ),
+        advanceCursor: vi.fn(() => Promise.resolve()),
+        listCandidates: vi.fn(() => Promise.resolve([])),
+        recordEvent: vi.fn(() => Promise.resolve()),
+        settleEvent: vi.fn(() => Promise.resolve()),
+      },
+    } satisfies ReconciliationWorkerDatabase;
+  }
+
+  it("runs the lane with the configured interval and its own Stream pair", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const database = laneDatabase(events);
+    const createMemberBuyFeedGateway = vi.fn(
+      createUnavailableStreamCommunityChannelGateway,
+    );
+    const createMemberBuyFeedWorker = vi.fn(
+      (options: CreateMemberBuyFeedWorkerOptions) => {
+        expect(options.intervalMs).toBe(20_000);
+        return {
+          runOnce: (signal: AbortSignal) => options.service.runOnce(signal),
+          run: async (signal: AbortSignal) => {
+            await options.service.runOnce(signal);
+            events.push("run-member-buy-feed");
+          },
+        };
+      },
+    );
+
+    await runReconciliationWorker({
+      config: laneConfig({
+        ...streamPair,
+        COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS: "20000",
+      }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMemberBuyFeedWorker,
+      createMemberBuyFeedGateway,
+    });
+
+    expect(createMemberBuyFeedGateway).toHaveBeenCalledWith({
+      apiKey: "stream-key-for-test",
+      apiSecret: "stream-secret-for-test",
+    });
+    expect(database.memberBuyFeed.initializeCursor).toHaveBeenCalledWith(
+      "eip155:56",
+      { blockNumber: "100", logIndex: 2_147_483_647 },
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "community_member_buy_feed",
+        reasonCode: "MEMBER_BUY_FEED_CURSOR_INITIALIZED",
+        blockNumber: "100",
+      }),
+      "LOOP member buy feed cursor initialized at the indexer checkpoint",
+    );
+    expect(events).toEqual(["ping", "run-member-buy-feed", "close"]);
+  });
+
+  it("leaves the lane out and says so once without the Stream pair", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createMemberBuyFeedWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig(),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => laneDatabase(events),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMemberBuyFeedWorker,
+    });
+
+    expect(createMemberBuyFeedWorker).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "community_member_buy_feed",
+        reasonCode: "MEMBER_BUY_FEED_STREAM_NOT_CONFIGURED",
+      },
+      "LOOP member buy feed lane stays idle: Stream is not configured",
+    );
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("does not construct the lane when its switch is off", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createMemberBuyFeedWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig({
+        ...streamPair,
+        COMMUNITY_MEMBER_BUY_FEED_ENABLED: "false",
+      }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => laneDatabase(events),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMemberBuyFeedWorker,
+    });
+
+    expect(createMemberBuyFeedWorker).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lane: "community_member_buy_feed" }),
+      expect.anything(),
     );
   });
 });

@@ -728,6 +728,41 @@ export interface StreamCommunityMessage {
   readonly createdAt: string;
 }
 
+/** Decision 0097: the server-side Stream user that posts community feed messages. */
+export const communityFeedBotStreamUserId = "loop_feed_bot";
+export const communityFeedBotName = "LOOP";
+const feedMessageIdPattern = /^loop_buy_[0-9a-f]{32}$/;
+const maximumFeedMessageTextCodePoints = 200;
+const maximumFeedCustomKeys = 32;
+const feedCustomKeyPattern = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+const maximumFeedCustomStringLength = 256;
+
+/**
+ * A flat custom payload. Amounts travel as decimal strings; a number is only
+ * ever a small safe integer (decimals, log index).
+ */
+export type StreamFeedMessageCustom = Readonly<
+  Record<string, string | number | boolean | null>
+>;
+
+export interface SendStreamCommunityFeedMessageInput {
+  readonly streamChannelId: string;
+  /** Deterministic; a repeated send of the same ID is not a second message. */
+  readonly messageId: string;
+  readonly text: string;
+  readonly custom: StreamFeedMessageCustom;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * `sent`: Stream stored the message now. `duplicate`: a message with this ID
+ * already exists in Stream (an earlier attempt landed), which is success.
+ */
+export type SendStreamCommunityFeedMessageResult = Readonly<{
+  status: "sent" | "duplicate";
+  messageId: string;
+}>;
+
 export interface StreamCommunityChannelGateway {
   upsertCommunityChannel(
     input: UpsertStreamCommunityChannelInput,
@@ -785,6 +820,17 @@ export interface StreamCommunityChannelGateway {
   readCommunityChannelMessages(
     input: ReadStreamCommunityChannelMessagesInput,
   ): Promise<readonly StreamCommunityMessage[]>;
+  /**
+   * Decision 0097: posts one regular message as `loop_feed_bot` (upserted on
+   * first use, `name: "LOOP"`, `custom.loop_bot = true`) into an official
+   * community channel, without push. The bot is not added as a member; the
+   * server-side request is not subject to channel permissions. A message ID
+   * Stream already holds resolves `duplicate`. A deterministic 4xx is
+   * `StreamChannelRequestRejectedError`; anything else is unavailable.
+   */
+  sendCommunityFeedMessage(
+    input: SendStreamCommunityFeedMessageInput,
+  ): Promise<SendStreamCommunityFeedMessageResult>;
 }
 
 const maximumCommunityChannelMemberBatch = 100;
@@ -1536,6 +1582,78 @@ function reduceCommunityMessage(
   });
 }
 
+function isFeedCustom(value: unknown): value is StreamFeedMessageCustom {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const entries = Object.entries(value);
+  return (
+    entries.length >= 1 &&
+    entries.length <= maximumFeedCustomKeys &&
+    entries.every(
+      ([key, entry]) =>
+        feedCustomKeyPattern.test(key) &&
+        (entry === null ||
+          typeof entry === "boolean" ||
+          (typeof entry === "number" &&
+            Number.isSafeInteger(entry) &&
+            entry >= 0) ||
+          (typeof entry === "string" &&
+            entry.length <= maximumFeedCustomStringLength)),
+    )
+  );
+}
+
+function parseFeedMessageInput(
+  value: unknown,
+): SendStreamCommunityFeedMessageInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "streamChannelId",
+      "messageId",
+      "text",
+      "custom",
+      "signal",
+    ]) ||
+    !isCommunityChannelId(value["streamChannelId"]) ||
+    typeof value["messageId"] !== "string" ||
+    !feedMessageIdPattern.test(value["messageId"]) ||
+    !isCanonicalFeedText(value["text"]) ||
+    !isFeedCustom(value["custom"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    streamChannelId: value["streamChannelId"],
+    messageId: value["messageId"],
+    text: value["text"],
+    custom: Object.freeze({ ...value["custom"] }),
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+function isCanonicalFeedText(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const codePoints = Array.from(value).length;
+  return (
+    codePoints >= 1 &&
+    codePoints <= maximumFeedMessageTextCodePoints &&
+    value.trim() === value &&
+    !forbiddenGroupNameCharacters.test(value)
+  );
+}
+
+function readMessageId(response: unknown): string | undefined {
+  if (!isRecord(response) || !isRecord(response["message"])) {
+    return undefined;
+  }
+  const id = response["message"]["id"];
+  return typeof id === "string" ? id : undefined;
+}
+
 export function createUnavailableStreamCommunityChannelGateway(): StreamCommunityChannelGateway {
   return Object.freeze({
     upsertCommunityChannel: unavailablePromise,
@@ -1547,6 +1665,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     readCommunityChannelPresence: unavailablePromise,
     readCommunityChannelActivity: unavailablePromise,
     readCommunityChannelMessages: unavailablePromise,
+    sendCommunityFeedMessage: unavailablePromise,
   });
 }
 
@@ -1581,6 +1700,27 @@ export function createStreamCommunityChannelGateway(
     }
     const resolved = await identities.resolve(ids);
     return resolved.map((user) => ({ ...user }));
+  }
+
+  /**
+   * Decision 0097: the feed bot is upserted once per gateway, on first use.
+   * A failed upsert is retried on the next send.
+   */
+  let feedBotReady = false;
+  async function ensureFeedBot(signal: AbortSignal): Promise<void> {
+    if (feedBotReady) {
+      return;
+    }
+    const response = await client.upsertUsers([
+      {
+        id: communityFeedBotStreamUserId,
+        name: communityFeedBotName,
+        custom: { loop_bot: true },
+      },
+    ]);
+    signal.throwIfAborted();
+    validateUpsertedUsers(response, [communityFeedBotStreamUserId]);
+    feedBotReady = true;
   }
 
   async function assignRoles(
@@ -1970,6 +2110,63 @@ export function createStreamCommunityChannelGateway(
           throw error;
         }
         return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async sendCommunityFeedMessage(
+      rawInput: SendStreamCommunityFeedMessageInput,
+    ): Promise<SendStreamCommunityFeedMessageResult> {
+      const input = parseFeedMessageInput(rawInput);
+      const channel = client.chat.channel(
+        streamChannelType,
+        input.streamChannelId,
+      );
+      try {
+        input.signal.throwIfAborted();
+        await ensureFeedBot(input.signal);
+        const response = await channel.sendMessage({
+          message: {
+            id: input.messageId,
+            type: "regular",
+            text: input.text,
+            user_id: communityFeedBotStreamUserId,
+            custom: { ...input.custom },
+          },
+          skip_push: true,
+        });
+        input.signal.throwIfAborted();
+        if (readMessageId(response) !== input.messageId) {
+          return projectionMismatch();
+        }
+        return Object.freeze({
+          status: "sent" as const,
+          messageId: input.messageId,
+        });
+      } catch (error) {
+        if (error instanceof StreamChannelProjectionMismatchError) {
+          throw error;
+        }
+        input.signal.throwIfAborted();
+        if (!isDeterministicProviderRejection(error)) {
+          return unavailable();
+        }
+        // Stream answers a reused message ID with a 4xx. Whether that is
+        // "an earlier attempt already landed" is checked, not inferred from
+        // the error text: the ID is LOOP's own deterministic one.
+        let existing: unknown;
+        try {
+          existing = await client.chat.getMessage({ id: input.messageId });
+        } catch (lookupError) {
+          return sanitizeCommunityProviderFailure(lookupError, input.signal);
+        }
+        input.signal.throwIfAborted();
+        if (readMessageId(existing) === input.messageId) {
+          return Object.freeze({
+            status: "duplicate" as const,
+            messageId: input.messageId,
+          });
+        }
+        throw new StreamChannelRequestRejectedError();
       }
     },
   });
