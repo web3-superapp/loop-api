@@ -44,3 +44,4 @@ Changing behavior behind a `/v1` route conflicts with the standing "`/v1` frozen
 
 - Any activated account that has not turned `friendRequests` off and has not blocked (or been blocked by) the caller can be sent a friend request and can be followed, matching what the public profile page offers.
 - A user who wants to stop friend requests uses the `friendRequests` switch; there is no switch to refuse followers (a block remains the remedy). The privacy-center copy for `discoverable` should drop "关注你".
+- Confirmed by the product owner on 2026-10-08 (docs/09 B9): "无法拒绝关注，只能拉黑" is accepted as the product rule.
