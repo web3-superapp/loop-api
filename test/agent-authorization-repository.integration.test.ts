@@ -27,6 +27,7 @@ const agentAddress = "0x3333333333333333333333333333333333333333";
 
 const truncateAll = `
   truncate table
+    public.media_objects,
     public.community_ai_answer_reports,
     public.community_ai_answers,
     public.community_ai_usage,

@@ -31,6 +31,7 @@ import {
 import { registerV2CommunityAiRoutes } from "./community-ai.js";
 import type { V2RouteDependencies } from "./index.js";
 import { registerV2SocialRoutes } from "./social.js";
+import { registerV2PublicProfileRoutes } from "./public-profiles.js";
 
 /**
  * V2 community module routes (Decision 0031). Registered only when
@@ -457,4 +458,5 @@ export function registerV2CommunityRoutes(
 
   registerV2CommunityAiRoutes(app, dependencies);
   registerV2SocialRoutes(app, dependencies);
+  registerV2PublicProfileRoutes(app, dependencies);
 }

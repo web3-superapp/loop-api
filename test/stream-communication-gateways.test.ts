@@ -152,6 +152,54 @@ describe("Stream community channel gateway", () => {
     ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
   });
 
+  it("upserts the joiner with its real name, image and publicProfileId when an identity source is composed (Decision 0095)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId, name: "Bob" } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(channelResponse(communityChannelId, "community", 2_500)),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const resolve = vi.fn((ids: readonly string[]) =>
+      Promise.resolve(
+        ids.map((id) => ({
+          id,
+          name: "Bob",
+          image:
+            "https://api.test/v2/media/22222222-2222-4222-8222-222222222222.webp",
+          custom: { publicProfileId: "33333333-3333-4333-8333-333333333333" },
+        })),
+      ),
+    );
+    const gateway = createStreamCommunityChannelGateway(
+      { apiKey, apiSecret },
+      { identities: { resolve } },
+    );
+    await gateway.addMembers({
+      channelId: communityChannelId,
+      actingStreamUserId: hostUserId,
+      memberStreamUserIds: [memberUserId],
+      signal: signal(),
+    });
+    expect(resolve).toHaveBeenCalledWith([memberUserId]);
+    expect(requestBody(fetchMock, 0)).toEqual({
+      users: {
+        [memberUserId]: {
+          id: memberUserId,
+          name: "Bob",
+          image:
+            "https://api.test/v2/media/22222222-2222-4222-8222-222222222222.webp",
+          custom: { publicProfileId: "33333333-3333-4333-8333-333333333333" },
+        },
+      },
+    });
+  });
+
   it("upserts the joining Stream user before adding it to the channel", async () => {
     const fetchMock = vi
       .fn()

@@ -333,8 +333,13 @@ export interface WalletReadService {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly body: unknown;
   }): Promise<WalletListResource>;
+  /**
+   * Only `principal.userId` is read: the wallet must belong to that account.
+   * Decision 0095's public holdings read passes the profile owner's ID after
+   * its own visibility check.
+   */
   getBalances(input: {
-    readonly principal: AuthenticatedLoopPrincipal;
+    readonly principal: Pick<AuthenticatedLoopPrincipal, "userId">;
     readonly walletId: string;
     readonly signal: AbortSignal;
   }): Promise<WalletBalancesResource>;
@@ -1059,7 +1064,7 @@ export function createWalletReadService(
   }
 
   async function requireWallet(
-    principal: AuthenticatedLoopPrincipal,
+    principal: Pick<AuthenticatedLoopPrincipal, "userId">,
     walletId: string,
   ): Promise<AccountWalletRecord> {
     if (!isOpaqueId(walletId)) {
@@ -1307,7 +1312,7 @@ export function createWalletReadService(
       walletId,
       signal,
     }: {
-      readonly principal: AuthenticatedLoopPrincipal;
+      readonly principal: Pick<AuthenticatedLoopPrincipal, "userId">;
       readonly walletId: string;
       readonly signal: AbortSignal;
     }): Promise<WalletBalancesResource> {

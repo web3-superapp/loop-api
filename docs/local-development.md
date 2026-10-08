@@ -198,8 +198,14 @@ V2_ALIAS_BLOCKED_TERMS=scam,rug pull
 Comma-separated, NFKC-normalised and lower-cased, matched as substrings of the
 normalised alias (`ALIAS_BLOCKED`). Leave it blank to disable; the compiled
 reserved words (`loop admin official support system mod moderator team`) apply
-regardless (`ALIAS_RESERVED`). Avatar upload stays unavailable
-(`AVATAR_STORAGE_NOT_SELECTED`); only the preset references are accepted.
+regardless (`ALIAS_RESERVED`). Avatar upload (Decision 0095) stores a
+512x512 WebP in `media_objects` and needs `STREAM_TOKEN_QUOTA_HMAC_SECRET`
+for its rate limit; `avatarRef` accepts the presets and the caller's own
+`avatar:media/{mediaId}`. `PUBLIC_BASE_URL` must be the device-reachable API
+origin because it prefixes the Stream user `image` URL.
+`COMMUNITY_CHAT_REAL_IDENTITY` (default `true`) hides Decision 0055 personas;
+`RECOMMENDED_COMMUNITY_IDS` (comma-separated community UUIDs) feeds
+`GET /v2/communities/recommended`.
 
 `.env.local` is ignored. Provider secrets, Privy refresh tokens, wallet keys,
 agent keys, APNs private keys, Firebase service accounts, and Stream server

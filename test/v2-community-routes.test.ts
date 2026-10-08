@@ -2888,7 +2888,8 @@ describe("LOOP API V2 community, social, and search modules", () => {
         const { app } = await presenceApp(
           { provisioned: true, state: "created" },
           gateway,
-          {},
+          // Decision 0095: personas are shown only with real identity off.
+          { COMMUNITY_CHAT_REAL_IDENTITY: "false" },
           stored,
         );
         const detail = await app.inject({
@@ -2905,6 +2906,38 @@ describe("LOOP API V2 community, social, and search modules", () => {
           viewerPersona: expected,
         });
       }
+    });
+
+    it("hides the persona in real-identity mode, the default (Decision 0095)", async () => {
+      const gateway = presenceGateway(
+        vi.fn(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 1,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        gateway,
+        {},
+        { alias: "Harbor-4821", projectionState: "confirmed" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<{ chat: unknown }>().chat).toEqual({
+        status: "available",
+        channelCid: `messaging:${streamChannelId}`,
+        memberState: "synced",
+        reasonCode: null,
+        viewerPersona: null,
+      });
     });
 
     it("keeps the viewer's persona on the syncing and unavailable chat states too", async () => {
@@ -2939,7 +2972,12 @@ describe("LOOP API V2 community, social, and search modules", () => {
         ],
       ];
       for (const [channel, expected] of cases) {
-        const { app } = await presenceApp(channel, gateway, {}, stored);
+        const { app } = await presenceApp(
+          channel,
+          gateway,
+          { COMMUNITY_CHAT_REAL_IDENTITY: "false" },
+          stored,
+        );
         const detail = await app.inject({
           method: "GET",
           url: `/v2/communities/${communityId}`,

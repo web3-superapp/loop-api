@@ -156,6 +156,13 @@ describe("V2 error code catalog", () => {
       "errors.profile.activationRequired",
       false,
     ],
+    PROFILE_NOT_FOUND: [
+      404,
+      "validation",
+      false,
+      "errors.profile.notFound",
+      false,
+    ],
     PROVIDER_DISCONNECTED: [
       503,
       "availability",
@@ -246,7 +253,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(31);
+    expect(v2ErrorCodes).toHaveLength(32);
   });
 
   it("keeps the category enum at exactly eight values", () => {

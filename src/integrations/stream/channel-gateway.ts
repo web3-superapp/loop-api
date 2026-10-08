@@ -1,6 +1,12 @@
 import { StreamClient } from "@stream-io/node-sdk";
 
 import type { StreamConfig } from "../../config.js";
+import type { StreamUserIdentitySource } from "../../features/communication/stream-user-identity.js";
+
+/** Decision 0095: where a gateway reads the users it upserts. */
+export interface StreamGatewayIdentityOptions {
+  readonly identities?: StreamUserIdentitySource | null;
+}
 
 const streamChannelType = "messaging";
 const streamChannelSchemaVersion = 1;
@@ -420,6 +426,7 @@ export function createUnavailableStreamChannelGateway(): StreamChannelGateway {
 
 export function createStreamChannelGateway(
   config: StreamConfig,
+  options: StreamGatewayIdentityOptions = {},
 ): StreamChannelGateway {
   if (!isValidConfig(config)) {
     return createUnavailableStreamChannelGateway();
@@ -427,6 +434,28 @@ export function createStreamChannelGateway(
   const client = new StreamClient(config.apiKey, config.apiSecret, {
     timeout: streamProviderTimeoutMilliseconds,
   });
+
+  /**
+   * Decision 0095: the users an upsert sends. Stream replaces the whole user
+   * on upsert, so with an identity source every user carries its current
+   * `{id, name, image}`; without one (tests, scripts) the `{id}`-only shape
+   * of Decision 0032 is kept.
+   */
+  async function streamUsers(ids: readonly string[]): Promise<
+    {
+      id: string;
+      name?: string;
+      image?: string;
+      custom?: { publicProfileId: string };
+    }[]
+  > {
+    const identities = options.identities ?? null;
+    if (identities === null) {
+      return ids.map((id) => ({ id }));
+    }
+    const resolved = await identities.resolve(ids);
+    return resolved.map((user) => ({ ...user }));
+  }
 
   return Object.freeze({
     async upsertFixedMessagingChannel(
@@ -436,7 +465,7 @@ export function createStreamChannelGateway(
       try {
         input.signal.throwIfAborted();
         const usersResponse = await client.upsertUsers(
-          input.memberStreamUserIds.map((id) => ({ id })),
+          await streamUsers(input.memberStreamUserIds),
         );
         input.signal.throwIfAborted();
         validateUpsertedUsers(usersResponse, input.memberStreamUserIds);
@@ -1523,6 +1552,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
 
 export function createStreamCommunityChannelGateway(
   config: StreamConfig,
+  options: StreamGatewayIdentityOptions = {},
 ): StreamCommunityChannelGateway {
   if (!isValidConfig(config)) {
     return createUnavailableStreamCommunityChannelGateway();
@@ -1530,6 +1560,28 @@ export function createStreamCommunityChannelGateway(
   const client = new StreamClient(config.apiKey, config.apiSecret, {
     timeout: streamProviderTimeoutMilliseconds,
   });
+
+  /**
+   * Decision 0095: the users an upsert sends. Stream replaces the whole user
+   * on upsert, so with an identity source every user carries its current
+   * `{id, name, image}`; without one (tests, scripts) the `{id}`-only shape
+   * of Decision 0032 is kept.
+   */
+  async function streamUsers(ids: readonly string[]): Promise<
+    {
+      id: string;
+      name?: string;
+      image?: string;
+      custom?: { publicProfileId: string };
+    }[]
+  > {
+    const identities = options.identities ?? null;
+    if (identities === null) {
+      return ids.map((id) => ({ id }));
+    }
+    const resolved = await identities.resolve(ids);
+    return resolved.map((user) => ({ ...user }));
+  }
 
   async function assignRoles(
     input: AssignStreamCommunityChannelRolesInput,
@@ -1568,7 +1620,7 @@ export function createStreamCommunityChannelGateway(
         // with the same `{id}`-only shape used when the channel is created:
         // LOOP publishes no profile facts to Stream.
         const usersResponse = await client.upsertUsers(
-          input.memberStreamUserIds.map((id) => ({ id })),
+          await streamUsers(input.memberStreamUserIds),
         );
         input.signal.throwIfAborted();
         validateUpsertedUsers(usersResponse, input.memberStreamUserIds);
@@ -1638,9 +1690,9 @@ export function createStreamCommunityChannelGateway(
       const input = parseUpsertCommunityInput(rawInput);
       try {
         input.signal.throwIfAborted();
-        const usersResponse = await client.upsertUsers([
-          { id: input.createdByStreamUserId },
-        ]);
+        const usersResponse = await client.upsertUsers(
+          await streamUsers([input.createdByStreamUserId]),
+        );
         input.signal.throwIfAborted();
         validateUpsertedUsers(usersResponse, [input.createdByStreamUserId]);
 

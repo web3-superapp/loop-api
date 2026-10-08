@@ -52,6 +52,7 @@
     "start:local": "node --env-file-if-exists=.env.local dist/src/server.js",
     "stream:channel-type-audit": "node --env-file-if-exists=.env.local --import tsx scripts/stream-channel-type-audit.ts",
     "stream:channel-type-grants": "node --env-file-if-exists=.env.local --import tsx scripts/stream-channel-type-grants.ts",
+    "stream:users-backfill": "node --env-file-if-exists=.env.local --import tsx scripts/stream-users-backfill.ts",
     "stream:verify": "node --env-file-if-exists=.env.local --import tsx scripts/verify-stream-credentials.ts",
     "support:answer": "node --env-file-if-exists=.env.local --import tsx scripts/support-answer.ts",
     "voice-room:open": "node --env-file-if-exists=.env.local --import tsx scripts/voice-room-open.ts",
@@ -67,6 +68,7 @@
   },
   "dependencies": {
     "@fastify/helmet": "13.1.1",
+    "@fastify/multipart": "10.1.2",
     "@fastify/swagger": "9.8.1",
     "@nktkas/hyperliquid": "0.33.3",
     "@privy-io/node": "0.29.0",
@@ -74,6 +76,7 @@
     "fastify": "5.12.1",
     "lossless-json": "4.3.1",
     "pg": "8.23.0",
+    "sharp": "0.35.4",
     "undici": "7.29.0",
     "viem": "2.44.2",
     "zod": "4.4.3"

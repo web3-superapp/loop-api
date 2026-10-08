@@ -151,6 +151,11 @@ export interface V2ProductPolicyRuntime {
   /** `profile` module enabled, registrar delivered, and repository composed. */
   readonly profileRuntimeAvailable: boolean;
   /**
+   * Decision 0095: the profile runtime plus PostgreSQL media storage and the
+   * upload quota secret. Absent or false keeps `avatarUpload` unavailable.
+   */
+  readonly avatarUploadRuntimeAvailable?: boolean;
+  /**
    * `community` module enabled with the PostgreSQL community repository and
    * the V2 cursor codec composed (Decision 0031). Without a cursor secret the
    * owner-bound list pagination cannot be signed, so the module fails closed.
@@ -261,7 +266,7 @@ export const v2ProfileModuleDeferredReasonCode =
 export const v2ProfileRuntimeUnavailableReasonCode =
   "PROFILE_RUNTIME_UNAVAILABLE" as const;
 export const v2AvatarUploadUnavailableReasonCode =
-  "AVATAR_STORAGE_NOT_SELECTED" as const;
+  "AVATAR_STORAGE_UNAVAILABLE" as const;
 export const v2CommunityModuleDeferredReasonCode =
   "V2_COMMUNITY_RUNTIME_DEFERRED" as const;
 export const v2CommunityRuntimeUnavailableReasonCode =
@@ -1100,7 +1105,21 @@ export async function createV2CapabilitiesProjection(
       v2WatchlistModuleDeferredReasonCode,
       v2WatchlistRuntimeUnavailableReasonCode,
     ),
-    unavailableCapability("avatarUpload", v2AvatarUploadUnavailableReasonCode),
+    runtime.profileRuntimeAvailable &&
+    runtime.avatarUploadRuntimeAvailable === true
+      ? Object.freeze({
+          capabilityId: "avatarUpload",
+          availability: "available",
+          reasonCode: null,
+          evidence: Object.freeze({
+            status: "notApplicable",
+            reasonCode: null,
+          }),
+        })
+      : unavailableCapability(
+          "avatarUpload",
+          v2AvatarUploadUnavailableReasonCode,
+        ),
     // D20 (Decision 0037): security, settings, and support are local-only
     // modules. MFA, passkey, recovery, and key export are not capabilities
     // here; `GET /v2/security/capabilities` reports each one as unavailable

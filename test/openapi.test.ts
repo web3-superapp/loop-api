@@ -89,6 +89,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/chat/operations/{operationId}",
       "/v2/chat/token",
       "/v2/communities",
+      "/v2/communities/recommended",
       "/v2/communities/{communityId}",
       "/v2/communities/{communityId}/ai/answers/{answerId}/report",
       "/v2/communities/{communityId}/ai/ask",
@@ -109,6 +110,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/devices/push-token",
       "/v2/devices/revoke-all",
       "/v2/devices/{sessionId}/revoke",
+      "/v2/friends/{publicProfileId}",
       "/v2/launch/economy",
       "/v2/launch/overview",
       "/v2/launch/projects",
@@ -131,6 +133,9 @@ describe("committed OpenAPI artifact", () => {
       "/v2/market/new-pairs",
       "/v2/market/overview",
       "/v2/market/smart-money",
+      "/v2/media/avatars",
+      "/v2/media/community-logos",
+      "/v2/media/{mediaId}.webp",
       "/v2/message-requests",
       "/v2/message-requests/{messageRequestId}/decision",
       "/v2/meta/about",
@@ -150,6 +155,10 @@ describe("committed OpenAPI artifact", () => {
       "/v2/profile/avatars",
       "/v2/profile/loop-id",
       "/v2/profile/privacy",
+      "/v2/profiles/by-loop-id/{loopId}",
+      "/v2/profiles/{publicProfileId}",
+      "/v2/profiles/{publicProfileId}/holdings",
+      "/v2/profiles/{publicProfileId}/trades",
       "/v2/referral",
       "/v2/referral/claim",
       "/v2/search",
@@ -190,7 +199,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(139);
+    expect(operationIds).toHaveLength(148);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

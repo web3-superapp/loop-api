@@ -39,8 +39,9 @@ const assetLinksRelations = Object.freeze([
 export const wellKnownCacheControl = "public, max-age=3600";
 
 /**
- * Universal Link paths the app claims: shared LOOP IDs (Decision 0090) and
- * voice-room share links `/c/{communityId}/room` (Decision 0091).
+ * Universal Link paths the app claims: shared LOOP IDs (Decision 0090),
+ * voice-room share links `/c/{communityId}/room` (Decision 0091), and
+ * community links `/c/{communityId}` (Decision 0095).
  */
 export const appleAppLinkComponents = Object.freeze([
   Object.freeze({ "/": "/u/*" }),
@@ -258,6 +259,34 @@ export function registerWellKnownRoutes(
   );
 
   app.get<{ Params: { communityId: string } }>(
+    "/c/:communityId",
+    {
+      schema: {
+        hide: true,
+        operationId: "getCommunityLandingPage",
+        summary: "Landing page for a shared community link without the app",
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["communityId"],
+          properties: { communityId: { type: "string", maxLength: 64 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      setLandingHeaders(reply);
+      if (!landingCommunityIdPattern.test(request.params.communityId)) {
+        reply.header("cache-control", "no-store");
+        return reply.code(404).send(renderCommunityLandingPage(false, null));
+      }
+      reply.header("cache-control", wellKnownCacheControl);
+      return reply.send(
+        renderCommunityLandingPage(true, config.appLinks.downloadUrl),
+      );
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
     "/c/:communityId/room",
     {
       schema: {
@@ -336,6 +365,21 @@ export function renderVoiceRoomLandingPage(
   const body = valid
     ? `<p class="label">LOOP</p><h1>语音房邀请</h1><p>在 LOOP 里加入这个社区的语音房</p><p class="hint">安装 LOOP 后再次打开这个链接即可进入。</p>${downloadLink(downloadUrl)}`
     : `<p class="label">LOOP</p><h1>链接无效</h1><p>这个语音房链接无效。</p>`;
+  return renderLandingDocument(body);
+}
+
+/**
+ * Minimal static page for a shared community link `/c/{communityId}` opened
+ * without LOOP installed (Decision 0095). Like `/u/` and `/c/{id}/room`, it
+ * never reads the database and never echoes the community ID.
+ */
+export function renderCommunityLandingPage(
+  valid: boolean,
+  downloadUrl: string | null,
+): string {
+  const body = valid
+    ? `<p class="label">LOOP</p><h1>社区邀请</h1><p>在 LOOP 里查看并加入这个社区</p><p class="hint">安装 LOOP 后再次打开这个链接即可进入。</p>${downloadLink(downloadUrl)}`
+    : `<p class="label">LOOP</p><h1>链接无效</h1><p>这个社区链接无效。</p>`;
   return renderLandingDocument(body);
 }
 

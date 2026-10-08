@@ -23,6 +23,50 @@ function validEnvironment(): NodeJS.ProcessEnv {
 }
 
 describe("loadConfig", () => {
+  it("defaults real identity on and parses the recommended communities list (Decision 0095)", () => {
+    const defaults = loadConfig(validEnvironment());
+    expect(defaults.communityChatRealIdentity).toBe(true);
+    expect(defaults.recommendedCommunityIds).toEqual([]);
+
+    const a = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+    const b = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+    const configured = loadConfig({
+      ...validEnvironment(),
+      COMMUNITY_CHAT_REAL_IDENTITY: "false",
+      RECOMMENDED_COMMUNITY_IDS: ` ${a}, ${b},${a},`,
+    });
+    expect(configured.communityChatRealIdentity).toBe(false);
+    expect(configured.recommendedCommunityIds).toEqual([a, b]);
+    expect(
+      loadConfig({ ...validEnvironment(), RECOMMENDED_COMMUNITY_IDS: " " })
+        .recommendedCommunityIds,
+    ).toEqual([]);
+
+    for (const bad of [
+      "not-a-uuid",
+      a.toUpperCase(),
+      "3fa85f64-5717-1562-b3fc-2c963f66afa6",
+    ]) {
+      expect(() =>
+        loadConfig({ ...validEnvironment(), RECOMMENDED_COMMUNITY_IDS: bad }),
+      ).toThrow(ConfigurationError);
+    }
+    const tooMany = Array.from(
+      { length: 51 },
+      (_, index) =>
+        `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    ).join(",");
+    expect(() =>
+      loadConfig({ ...validEnvironment(), RECOMMENDED_COMMUNITY_IDS: tooMany }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({
+        ...validEnvironment(),
+        COMMUNITY_CHAT_REAL_IDENTITY: "yes",
+      }),
+    ).toThrow(ConfigurationError);
+  });
+
   it("parses strict booleans and numeric defaults", () => {
     const config = loadConfig(validEnvironment());
 

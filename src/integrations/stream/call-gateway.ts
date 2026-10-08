@@ -1,6 +1,7 @@
 import { StreamClient } from "@stream-io/node-sdk";
 
 import type { StreamConfig } from "../../config.js";
+import type { StreamGatewayIdentityOptions } from "./channel-gateway.js";
 
 /**
  * Stream Video `audio_room` boundary (Decision 0032). Every method performs at
@@ -476,6 +477,7 @@ export function createUnavailableStreamCallGateway(): StreamCallGateway {
 
 export function createStreamCallGateway(
   config: StreamConfig,
+  options: StreamGatewayIdentityOptions = {},
 ): StreamCallGateway {
   if (!isValidConfig(config)) {
     return createUnavailableStreamCallGateway();
@@ -483,6 +485,28 @@ export function createStreamCallGateway(
   const client = new StreamClient(config.apiKey, config.apiSecret, {
     timeout: streamProviderTimeoutMilliseconds,
   });
+
+  /**
+   * Decision 0095: the users an upsert sends. Stream replaces the whole user
+   * on upsert, so with an identity source every user carries its current
+   * `{id, name, image}`; without one (tests, scripts) the `{id}`-only shape
+   * of Decision 0032 is kept.
+   */
+  async function streamUsers(ids: readonly string[]): Promise<
+    {
+      id: string;
+      name?: string;
+      image?: string;
+      custom?: { publicProfileId: string };
+    }[]
+  > {
+    const identities = options.identities ?? null;
+    if (identities === null) {
+      return ids.map((id) => ({ id }));
+    }
+    const resolved = await identities.resolve(ids);
+    return resolved.map((user) => ({ ...user }));
+  }
 
   return Object.freeze({
     async createAudioRoom(
@@ -521,7 +545,7 @@ export function createStreamCallGateway(
         });
       try {
         signal.throwIfAborted();
-        await client.upsertUsers([{ id: createdByStreamUserId }]);
+        await client.upsertUsers(await streamUsers([createdByStreamUserId]));
         signal.throwIfAborted();
         let response: unknown;
         try {

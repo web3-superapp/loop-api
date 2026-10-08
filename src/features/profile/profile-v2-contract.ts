@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { loopIdPatternSource } from "../identity/loop-id.js";
 import type { v2ContractVersion } from "../meta/product-policy.js";
+import { avatarRefMediaId } from "../media/media-contract.js";
 import { isAvatarPresetRef } from "./avatar-presets.js";
 
 /**
@@ -79,10 +80,17 @@ function boundedText(maximumCodePoints: number) {
 
 const aliasSchema = boundedText(maximumAliasCodePoints);
 const bioSchema = boundedText(maximumBioCodePoints);
+/**
+ * A preset (Decision 0030) or an uploaded avatar `avatar:media/{mediaId}`
+ * (Decision 0095). Ownership of an uploaded avatar is checked by the
+ * service against media storage, not here.
+ */
 const avatarRefSchema = z
   .string()
   .max(160)
-  .refine((value) => isAvatarPresetRef(value));
+  .refine(
+    (value) => isAvatarPresetRef(value) || avatarRefMediaId(value) !== null,
+  );
 const interestsSchema = z
   .array(z.enum(profileInterestValues))
   .max(maximumInterests)
@@ -222,17 +230,19 @@ export const defaultProfileV2Values: ProfileV2Values = Object.freeze({
 
 /**
  * Version-0 defaults. Presentation flags fail closed (nothing is shown until
- * the owner opts in); the three social gates default open (Decision 0070) so
- * an account that never visited the privacy centre can still be reached.
+ * the owner opts in) except holdings and trades, which docs/09 B11 makes
+ * public by default (Decision 0095); the three social gates default open
+ * (Decision 0070) so an account that never visited the privacy centre can
+ * still be reached.
  */
 export const defaultPrivacyV2Values: PrivacyV2Values = Object.freeze({
   discoverable: false,
   anonymousMode: false,
   visibility: Object.freeze({
-    totalAssets: "self",
+    totalAssets: "everyone",
     miningPower: "self",
     communities: "self",
-    tradeHistory: "self",
+    tradeHistory: "everyone",
   }),
   friendRequests: "enabled",
   groupInvites: "friends",

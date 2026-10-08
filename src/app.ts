@@ -316,6 +316,26 @@ import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerWellKnownRoutes } from "./routes/well-known.js";
+import {
+  createStreamUserIdentitySource,
+  createStreamUserSync,
+  type StreamUserGateway,
+} from "./features/communication/stream-user-identity.js";
+import { createStreamUserGateway } from "./integrations/stream/user-gateway.js";
+import {
+  createMediaService,
+  type MediaService,
+} from "./features/media/media-service.js";
+import { createUnavailableMediaStorage } from "./features/media/media-storage.js";
+import {
+  createMediaUploadQuota,
+  createUnavailableMediaUploadQuota,
+} from "./features/media/media-upload-quota.js";
+import {
+  createPublicProfileService,
+  type PublicProfileService,
+} from "./features/profile/public-profile-service.js";
+import { createUnavailablePublicProfileRepository } from "./features/profile/public-profile-repository.js";
 import { registerPerpPrivateReadRoutes } from "./routes/perp-private-reads.js";
 import { registerPerpIntentRoutes } from "./routes/perp-intents.js";
 import { registerPerpWalletBindingRoutes } from "./routes/perp-wallet-binding.js";
@@ -440,6 +460,10 @@ export interface BuildAppOptions {
   readonly agentAuthorizationMutationGate?: AgentAuthorizationMutationGate;
   readonly profileService?: ProfileService;
   readonly profileV2Service?: ProfileV2Service;
+  /** Test seams for Decision 0095. */
+  readonly mediaService?: MediaService;
+  readonly publicProfileService?: PublicProfileService;
+  readonly streamUserGateway?: StreamUserGateway;
   readonly communityService?: CommunityService;
   readonly communityAiService?: CommunityAiService;
   readonly communityAiGateway?: CommunityAiGateway;
@@ -1014,11 +1038,33 @@ export async function buildApp(
             ttlSeconds: config.social.cursorTtlSeconds,
           }),
         }));
+  // Decision 0095: every server-side Stream user upsert carries the real
+  // `{id, name, image}` read from PostgreSQL, because Stream replaces the
+  // whole user on upsert.
+  const streamUserIdentitySource =
+    database.streamUserIdentities === undefined
+      ? null
+      : createStreamUserIdentitySource({
+          repository: database.streamUserIdentities,
+          publicBaseUrl: config.publicBaseUrl,
+        });
+  const streamGatewayIdentity = { identities: streamUserIdentitySource };
+  const streamUserGateway =
+    options.streamUserGateway ??
+    (config.stream === null ? null : createStreamUserGateway(config.stream));
+  const streamUserSync =
+    streamUserIdentitySource === null || streamUserGateway === null
+      ? null
+      : createStreamUserSync({
+          identities: streamUserIdentitySource,
+          gateway: streamUserGateway,
+          logger: app.log,
+        });
   const streamChannelGateway =
     options.streamChannelGateway ??
     (config.stream === null
       ? createUnavailableStreamChannelGateway()
-      : createStreamChannelGateway(config.stream));
+      : createStreamChannelGateway(config.stream, streamGatewayIdentity));
   const chatChannelService =
     options.chatChannelService ??
     (database.chatChannels === undefined ||
@@ -1090,6 +1136,28 @@ export async function buildApp(
     registeredV2ModuleIds(config).includes("profile") &&
     (options.profileV2Service !== undefined ||
       database.profilesV2 !== undefined);
+  // Decision 0095: uploaded media behind the MediaStorage port, rate
+  // limited with the alias-search HMAC secret; without either it fails
+  // closed and `avatarUpload` stays unavailable.
+  const mediaStorageComposed = database.media !== undefined;
+  const mediaService =
+    options.mediaService ??
+    createMediaService({
+      storage: database.media ?? createUnavailableMediaStorage(),
+      quota:
+        config.streamTokenQuota === null
+          ? createUnavailableMediaUploadQuota()
+          : createMediaUploadQuota({
+              repository: database.controlPlane,
+              hmacSecret: new TextEncoder().encode(
+                config.streamTokenQuota.hmacSecret,
+              ),
+            }),
+    });
+  const avatarUploadRuntimeAvailable =
+    profileV2RuntimeAvailable &&
+    (options.mediaService !== undefined ||
+      (mediaStorageComposed && config.streamTokenQuota !== null));
   const profileV2Service =
     options.profileV2Service ??
     createProfileV2Service({
@@ -1097,6 +1165,11 @@ export async function buildApp(
       aliasPolicy: createAliasPolicy({
         blockedTerms: config.v2AliasBlockedTerms,
       }),
+      media:
+        options.mediaService !== undefined || mediaStorageComposed
+          ? mediaService
+          : null,
+      streamUsers: streamUserSync,
     });
   const v2CursorCodec =
     config.v2Cursor === null
@@ -1120,7 +1193,10 @@ export async function buildApp(
     options.streamCommunityChannelGateway ??
     (config.stream === null
       ? createUnavailableStreamCommunityChannelGateway()
-      : createStreamCommunityChannelGateway(config.stream));
+      : createStreamCommunityChannelGateway(
+          config.stream,
+          streamGatewayIdentity,
+        ));
   // Decision 0047: the presence reader exists only when a Stream gateway
   // that can answer exists; otherwise `onlineCount` and the capability
   // report STREAM_PRESENCE_NOT_CONNECTED rather than a zero.
@@ -1162,12 +1238,13 @@ export async function buildApp(
       aliasPolicy: createAliasPolicy({
         blockedTerms: config.v2AliasBlockedTerms,
       }),
+      realIdentity: config.communityChatRealIdentity,
     });
   const streamCallGateway =
     options.streamCallGateway ??
     (config.stream === null
       ? createUnavailableStreamCallGateway()
-      : createStreamCallGateway(config.stream));
+      : createStreamCallGateway(config.stream, streamGatewayIdentity));
   const communicationRepositoryComposed =
     options.chatService !== undefined ||
     options.voiceRoomService !== undefined ||
@@ -1474,6 +1551,18 @@ export async function buildApp(
       chainId: bscChainId,
       staleGraceSeconds: config.market.staleGraceSeconds,
       tokenLogos,
+    });
+  const publicProfileService =
+    options.publicProfileService ??
+    createPublicProfileService({
+      repository:
+        database.publicProfiles ?? createUnavailablePublicProfileRepository(),
+      walletReadService: walletRuntimeAvailable ? walletReadService : null,
+      assets: chainRegistryRepository,
+      cursorCodec: v2CursorCodec,
+      chainId: bscChainId,
+      usd1Address: config.bscChain?.usd1TokenAddress?.toLowerCase() ?? null,
+      recommendedCommunityIds: config.recommendedCommunityIds,
     });
   const tokenLogoProxyService = createTokenLogoProxyService({
     cache: database.tokenLogoCache ?? null,
@@ -1947,6 +2036,7 @@ export async function buildApp(
       runtime: Object.freeze({
         sessionRuntimeAvailable: v2SessionRuntimeAvailable,
         profileRuntimeAvailable: profileV2RuntimeAvailable,
+        avatarUploadRuntimeAvailable,
         communityRuntimeAvailable,
         searchRuntimeAvailable,
         bscRpcConfigured,
@@ -1980,6 +2070,8 @@ export async function buildApp(
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
       sessionService: v2SessionService,
       profileService: profileV2Service,
+      mediaService,
+      publicProfileService,
       communityService,
       communityAiService,
       chainStatusService,

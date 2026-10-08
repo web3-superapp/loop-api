@@ -18,6 +18,7 @@ import {
   avatarPresetRefPatternSource,
   avatarPresets,
 } from "../../features/profile/avatar-presets.js";
+import { avatarMediaRefPatternSource } from "../../features/media/media-contract.js";
 import {
   maximumBioCodePoints,
   maximumInterests,
@@ -38,6 +39,7 @@ import {
   v2SessionWriteHeadersSchema,
 } from "../../features/session/session-contract.js";
 import type { V2ModuleRegistrar } from "./index.js";
+import { registerV2MediaRoutes } from "./media.js";
 
 const safeTextPattern =
   "^(?![\\s\\S]*[\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}])[\\s\\S]*\\S[\\s\\S]*$";
@@ -78,7 +80,14 @@ const nullableAvatarRefSchema = {
       pattern: avatarPresetRefPatternSource,
       maxLength: 64,
       description:
-        "One preset avatar reference from GET /v2/profile/avatars. Upload is unavailable (AVATAR_STORAGE_NOT_SELECTED), so no other reference is accepted.",
+        "One preset avatar reference from GET /v2/profile/avatars. The default is avatar:preset/monogram.",
+    },
+    {
+      type: "string",
+      pattern: avatarMediaRefPatternSource,
+      maxLength: 64,
+      description:
+        "An uploaded avatar `avatar:media/{mediaId}` from POST /v2/media/avatars (Decision 0095). It must be the caller's own upload; otherwise 422 VALIDATION_FAILED with detailsSafe.reasonCode MEDIA_NOT_OWNED.",
     },
     { type: "null" },
   ],
@@ -428,6 +437,7 @@ export const registerV2ProfileRoutes: V2ModuleRegistrar = (
   dependencies,
 ): void => {
   const { authenticateLoopBearer, profileService } = dependencies;
+  registerV2MediaRoutes(app, dependencies);
 
   app.get(
     "/v2/profile/avatars",
@@ -555,7 +565,7 @@ export const registerV2ProfileRoutes: V2ModuleRegistrar = (
         operationId: "getV2PrivacyPreferences",
         summary: "Get the authenticated LOOP privacy preferences",
         description:
-          "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, every visibility self) while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
+          "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, miningPower and communities self) except totalAssets and tradeHistory, which default to everyone (Decision 0095, docs/09 B11), while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
         tags: ["profile"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

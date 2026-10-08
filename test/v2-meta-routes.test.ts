@@ -361,7 +361,7 @@ describe("LOOP API V2 meta policy gates", () => {
     expect(capabilities["avatarUpload"]).toEqual({
       capabilityId: "avatarUpload",
       availability: "unavailable",
-      reasonCode: "AVATAR_STORAGE_NOT_SELECTED",
+      reasonCode: "AVATAR_STORAGE_UNAVAILABLE",
       evidence: { status: "notApplicable", reasonCode: null },
     });
     for (const capabilityId of ["communityMining", "communityPresence"]) {

@@ -270,9 +270,10 @@ describe("PostgreSQL Launch contract registry (migration 000041, Decision 0076)"
 
   it("refuses to roll back while chain facts exist, then rolls back cleanly", async () => {
     // 000042 (Decision 0077), 000043 (Decision 0080), 000044 (Decision
-    // 0087), and 000045 (Decision 0089, logo cache) sit on top and hold no
-    // lane facts, reconciled Intents, or claim / refund facts here.
-    await migrate(temporaryDatabaseUrl, "down", 4);
+    // 0087), 000045 (Decision 0089, logo cache), and 000046 (Decision 0095,
+    // social identity) sit on top and hold no lane facts, reconciled
+    // Intents, or claim / refund facts here.
+    await migrate(temporaryDatabaseUrl, "down", 5);
     await expect(migrate(temporaryDatabaseUrl, "down", 1)).rejects.toThrow(
       /refusing to roll back 000041/,
     );

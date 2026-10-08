@@ -152,6 +152,7 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `PERMISSION_DENIED`           | 403    | `authorization`  | no        | `errors.permission.denied`          |
 | `POLICY_BLOCKED`              | 403    | `authorization`  | no        | `errors.policy.blocked`             |
 | `PROFILE_ACTIVATION_REQUIRED` | 409    | `conflict`       | no        | `errors.profile.activationRequired` |
+| `PROFILE_NOT_FOUND`           | 404    | `validation`     | no        | `errors.profile.notFound`           |
 | `PROVIDER_DISCONNECTED`       | 503    | `availability`   | yes       | `errors.provider.disconnected`      |
 | `PROVIDER_UNREACHABLE`        | 502    | `availability`   | yes       | `errors.provider.unreachable`       |
 | `QUOTE_EXPIRED`               | 409    | `stale`          | no        | `errors.quote.expired`              |
@@ -302,8 +303,9 @@ operation needs a stronger, module-defined authentication step.
   because the contract and formula baselines do not exist.
   `communityMining` and `communityPresence` are not module-gated and stay
   `unavailable` (`MINING_FORMULA_BASELINE_PENDING`,
-  `STREAM_PRESENCE_NOT_CONNECTED`), as does `avatarUpload`
-  (`AVATAR_STORAGE_NOT_SELECTED`).
+  `STREAM_PRESENCE_NOT_CONNECTED`). `avatarUpload` (Decision 0095) is
+  `available` with the profile runtime, PostgreSQL media storage, and the
+  upload quota secret, otherwise `unavailable` (`AVATAR_STORAGE_UNAVAILABLE`).
 - Module registrars receive shared dependencies (config, authentication hooks,
   session service, and the optional `cursorCodec`) and never compose their
   own authentication or cursor boundary.

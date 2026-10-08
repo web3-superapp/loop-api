@@ -88,6 +88,10 @@ import {
 import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
 import { createCommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
+  createStreamUserIdentitySource,
+  type StreamUserIdentityRepository,
+} from "./features/communication/stream-user-identity.js";
+import {
   createVoiceRoomReaperService,
   type VoiceRoomReaperEvent,
 } from "./features/communication/voice-room-reaper-service.js";
@@ -170,6 +174,8 @@ export interface ReconciliationWorkerDatabase {
   readonly launchChain?: LaunchChainRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
+  /** Decision 0095: identities the channel sync upserts; absent keeps `{id}`. */
+  readonly streamUserIdentities?: StreamUserIdentityRepository;
   /** `voice_room_reaper` lane (Decision 0094); absent keeps it off. */
   readonly voiceRoomReaper?: VoiceRoomReaperRepository;
   readonly ping: () => Promise<void>;
@@ -860,6 +866,17 @@ export async function runReconciliationWorker(
         ? null
         : createStreamCommunityChannelGateway(
             options.config.communityChannelSync,
+            {
+              // Decision 0095: the joiner is upserted with its real
+              // `{id, name, image}` so a member add never erases them.
+              identities:
+                database.streamUserIdentities === undefined
+                  ? null
+                  : createStreamUserIdentitySource({
+                      repository: database.streamUserIdentities,
+                      publicBaseUrl: options.config.publicBaseUrl,
+                    }),
+            },
           );
     const communityChannelSyncWorker =
       communityChannelGateway === null
@@ -867,6 +884,7 @@ export async function runReconciliationWorker(
         : communityChannelSyncWorkerFactory({
             repository: database.communityChannelSync,
             gateway: communityChannelGateway,
+            realIdentity: options.config.communityChatRealIdentity,
             personas: createCommunityPersonaService({
               personas: database.communityChannelPersonas,
               gateway: communityChannelGateway,

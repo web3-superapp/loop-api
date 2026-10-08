@@ -1,4 +1,4 @@
-export const latestMigrationName = "000045_v2_token_logo_cache";
+export const latestMigrationName = "000046_v2_social_identity";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -115,4 +115,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch_round_allowlist_roots",
   "public.launch_settlement_records",
   "public.token_logo_cache",
+  "public.media_objects",
 ] as const);

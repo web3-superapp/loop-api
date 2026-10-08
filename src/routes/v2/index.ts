@@ -10,6 +10,8 @@ import type { V2ChatService } from "../../features/communication/v2-chat-service
 import type { VoiceRoomService } from "../../features/communication/voice-room-service.js";
 import type { V2ProductPolicyRuntime } from "../../features/meta/product-policy.js";
 import type { ProfileV2Service } from "../../features/profile/profile-v2-service.js";
+import type { PublicProfileService } from "../../features/profile/public-profile-service.js";
+import type { MediaService } from "../../features/media/media-service.js";
 import type { V2SessionService } from "../../features/session/session-service.js";
 import type { WalletReadService } from "../../features/wallet/wallet-read-service.js";
 import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-service.js";
@@ -63,6 +65,10 @@ export interface V2RouteDependencies {
   readonly authenticateLoopBearer: preHandlerAsyncHookHandler;
   readonly sessionService: V2SessionService;
   readonly profileService: ProfileV2Service;
+  /** Avatar / community logo upload and read (Decision 0095). */
+  readonly mediaService: MediaService;
+  /** Public profiles, friend removal, recommended communities (Decision 0095). */
+  readonly publicProfileService: PublicProfileService;
   readonly communityService: CommunityService;
   readonly communityAiService: CommunityAiService;
   readonly chainStatusService: ChainStatusService;

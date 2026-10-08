@@ -66,9 +66,9 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
     await pool.end();
   });
 
-  it("is created by the migration head with its primary key", async () => {
+  it("is created by migration 000045 with its primary key", async () => {
     const migration = await pool.query<{ name: string }>(
-      "select name from public.pgmigrations order by id desc limit 1",
+      "select name from public.pgmigrations where name = '000045_v2_token_logo_cache'",
     );
     expect(migration.rows[0]?.name).toBe("000045_v2_token_logo_cache");
     const key = await pool.query<{ column_name: string }>(`

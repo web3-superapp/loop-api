@@ -367,7 +367,11 @@ Privy ID、Stream ID**：
 
 五个字段全部必填（可为 `null` 的是后三个）。`name` 1–40 码点、与别名同一套字符
 安全与保留词规则；`slug` `^[a-z0-9-]{3,32}$` 且全局唯一；`description` ≤280 码点；
-`logoRef` 只接受 `avatar:preset/community-01..12`；`boundAssetKey` 形如
+`logoRef` 接受 `avatar:preset/community-01..12` 或上传的 `logo:media/{mediaId}`
+（`POST /v2/media/community-logos`，见 `docs/frontend-v2-profile-api.md`
+「媒体上传」；创建时必须是本人上传的 logo，编辑时上传者须是本人或该社区当前
+owner/admin，否则 `422 VALIDATION_FAILED` + `detailsSafe.reasonCode =
+MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boundAssetKey` 形如
 `eip155:56:0x…`（服务端转小写）。
 
 成功 `201`，返回社区资源，`verificationStatus` 恒为 `pending`，申请人即 owner。
@@ -1138,3 +1142,56 @@ CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机�
   `ownCapabilities` 是否含 `pin-message`（stream_chat_flutter 默认即如此）。
 - 好友群聊与私聊用同一个 `messaging` 类型（主代理 2026-09-28 裁决）：好友群**创建者**为 `channel_moderator`，
   可置顶；其他群成员不能置顶；私聊里双方都不能置顶。客户端同样只看 `ownCapabilities`。
+
+## 推荐社区、社区链接与真实身份（决策 0095，S107）
+
+### `GET /v2/communities/recommended` — `onboarding-communities` 页
+
+读 header（Bearer + contract/client），无 query/body。
+
+```json
+{
+  "items": [
+    {
+      "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "Frog Holders",
+      "slug": "frog-holders",
+      "description": null,
+      "logoRef": "logo:media/6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+      "verificationStatus": "verified",
+      "boundAssetKey": "eip155:56:0x1111111111111111111111111111111111111111",
+      "memberCount": 128,
+      "createdAt": "2026-09-01T00:00:00.000Z",
+      "configVersion": "communityV1"
+    }
+  ],
+  "defaultSelectedIds": ["3fa85f64-5717-4562-b3fc-2c963f66afa6"],
+  "contractVersion": "2.0"
+}
+```
+
+- 来源：运营配置 `RECOMMENDED_COMMUNITY_IDS`（逗号分隔，≤ 50，按配置顺序），只列
+  `verified` 社区，不存在/未认证的 ID 跳过。`defaultSelectedIds` = 列出的前 5 个。
+- 未配置 → `items: []`、`defaultSelectedIds: []`（不是错误）：页面直接接
+  `GET /v2/communities` 全目录或显示空态 +「进入 LOOP」。
+- 「进入 LOOP」= 对勾选的每个社区 `POST /v2/communities/{id}/join`（逐条处理失败，
+  不阻塞），频道免打扰在客户端对 Stream channel 调 `mute()`。
+- 错误：`400`、`401`、`409 ACCOUNT_BOOTSTRAP_REQUIRED`、`503`。
+
+### 社区链接 `/c/{communityId}`
+
+| 路径                   | 状态 | Cache-Control          | 内容                                                                                                      |
+| ---------------------- | ---- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /c/{communityId}` | 200  | `public, max-age=3600` | 未装 App 的落地页：「社区邀请」+「在 LOOP 里查看并加入这个社区」，有 `APP_DOWNLOAD_URL` 时多「下载 LOOP」 |
+| `GET /c/<格式不对>`    | 404  | `no-store`             | 「链接无效」页                                                                                            |
+
+规则同 `/c/{id}/room`：不查库、不回显 ID、不进 OpenAPI。AASA 已声明 `/c/*`；App 把
+`/c/{communityId}` 路由到社区详情（S109b）。
+
+### 社区聊天真实身份（`COMMUNITY_CHAT_REAL_IDENTITY`，默认开）
+
+- 开启时后端不再生成/写入社区化名，`GET /v2/communities/{id}` 的
+  `chat.viewerPersona` 恒为 `null`：客户端据此隐藏「你在这个社区显示为 …」提示。
+- 成员在频道里以 Stream user 的 `name`（别名）/ `image`（上传头像 URL）展示。旧版本
+  写在 Stream 成员 custom 里的 `loop_group_alias` 等化名字段仍可能存在，开启时请忽略。
+- 关闭（运维设 `false`）恢复决策 0055 行为。

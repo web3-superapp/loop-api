@@ -40,8 +40,12 @@ export const maximumCommunityNameCodePoints = 40;
 export const maximumCommunityDescriptionCodePoints = 280;
 export const maximumRawTextLength = 1_024;
 export const communitySlugPatternSource = "^[a-z0-9-]{3,32}$";
+/**
+ * A preset community logo (Decision 0031) or an uploaded logo
+ * `logo:media/{mediaId}` (Decision 0095, authorization checked on write).
+ */
 export const communityLogoRefPatternSource =
-  "^avatar:preset/community-(0[1-9]|1[0-2])$";
+  "^(avatar:preset/community-(0[1-9]|1[0-2])|logo:media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$";
 export const boundAssetKeyPatternSource =
   "^eip155:[1-9][0-9]{0,9}:0x[0-9a-fA-F]{40}$";
 export const canonicalBoundAssetKeyPatternSource =

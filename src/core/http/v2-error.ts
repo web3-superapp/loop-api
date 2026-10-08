@@ -165,6 +165,18 @@ export const v2ErrorCatalog = Object.freeze({
     userMessageKey: "errors.profile.activationRequired",
     includeBearerChallenge: false,
   },
+  /**
+   * Decision 0095: a public profile that does not exist, is not activated,
+   * or whose owner blocked the viewer. One code for all three so a block
+   * cannot be probed.
+   */
+  PROFILE_NOT_FOUND: {
+    statusCode: 404,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.profile.notFound",
+    includeBearerChallenge: false,
+  },
   PROVIDER_DISCONNECTED: {
     statusCode: 503,
     category: "availability",

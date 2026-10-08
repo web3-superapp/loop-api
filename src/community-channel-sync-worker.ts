@@ -67,6 +67,12 @@ export interface CreateCommunityChannelSyncWorkerOptions {
   readonly gateway: StreamCommunityChannelGateway;
   /** Decision 0055: generates and projects the member's community persona. */
   readonly personas: CommunityPersonaService;
+  /**
+   * Decision 0095 (`COMMUNITY_CHAT_REAL_IDENTITY`): when true no persona is
+   * generated, attached, reset, or re-projected; members show as their real
+   * Stream user. Default false keeps Decision 0055 behaviour.
+   */
+  readonly realIdentity?: boolean;
   /** Sanitized warn lines for persona bookkeeping that could not be recorded. */
   readonly logger?: CommunityChannelSyncWorkerLogger;
   readonly createUuid?: () => string;
@@ -159,6 +165,7 @@ export function createCommunityChannelSyncWorker(
   options: CreateCommunityChannelSyncWorkerOptions,
 ): CommunityChannelSyncWorker {
   const createUuid = options.createUuid ?? randomUUID;
+  const realIdentity = options.realIdentity ?? false;
   const workerId = createUuid();
   let inFlight: Promise<CommunityChannelSyncRunResult> | null = null;
   let loopRunning = false;
@@ -228,12 +235,14 @@ export function createCommunityChannelSyncWorker(
         });
         // Stream drops member custom data with the membership; the persona
         // row stays and is re-projected on the next add.
-        await recordPersonaOutcome(job, "reset", () =>
-          options.personas.resetProjectionForMember({
-            communityId: job.communityId,
-            ownerUserId: job.ownerUserId,
-          }),
-        );
+        if (!realIdentity) {
+          await recordPersonaOutcome(job, "reset", () =>
+            options.personas.resetProjectionForMember({
+              communityId: job.communityId,
+              ownerUserId: job.ownerUserId,
+            }),
+          );
+        }
         return "succeeded";
       }
 
@@ -258,21 +267,28 @@ export function createCommunityChannelSyncWorker(
       // The persona is generated (or resumed) before the single provider
       // call so the add carries it; a generation failure retries the job
       // without having touched Stream.
-      const lease = await options.personas.ensurePersona({
-        communityId: job.communityId,
-        ownerUserId: job.ownerUserId,
-      });
+      // Decision 0095: in real-identity mode the add carries no persona.
+      const lease = realIdentity
+        ? null
+        : await options.personas.ensurePersona({
+            communityId: job.communityId,
+            ownerUserId: job.ownerUserId,
+          });
       const projection = await options.gateway.addMembers({
         channelId: job.streamChannelId,
         actingStreamUserId: job.channelCreatedByStreamUserId,
         memberStreamUserIds: [job.memberStreamUserId],
-        memberPersonas: [
-          {
-            streamUserId: job.memberStreamUserId,
-            personaId: lease.persona.personaId,
-            alias: lease.persona.alias,
-          },
-        ],
+        ...(lease === null
+          ? {}
+          : {
+              memberPersonas: [
+                {
+                  streamUserId: job.memberStreamUserId,
+                  personaId: lease.persona.personaId,
+                  alias: lease.persona.alias,
+                },
+              ],
+            }),
         // Decision 0091: owner/admin moderate the channel, members do not.
         // The same add carries a promotion or a demotion.
         channelRole: job.memberChannelRole,
@@ -285,6 +301,9 @@ export function createCommunityChannelSyncWorker(
         memberState: "synced",
         channelState: "created",
       });
+      if (lease === null) {
+        return "succeeded";
+      }
       const echoed = projection.confirmedPersonaStreamUserIds.includes(
         job.memberStreamUserId,
       );
@@ -515,9 +534,11 @@ export function createCommunityChannelSyncWorker(
       readonly deferredCount: number;
     };
     try {
-      personaResult = await options.personas.syncPendingProjections({
-        signal: abortSignal,
-      });
+      personaResult = realIdentity
+        ? { claimedCount: 0, confirmedCount: 0, deferredCount: 0 }
+        : await options.personas.syncPendingProjections({
+            signal: abortSignal,
+          });
     } catch {
       if (isAborted(abortSignal)) {
         return Object.freeze({
